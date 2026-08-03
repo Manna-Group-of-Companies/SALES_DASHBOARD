@@ -43,7 +43,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
       final r = await Future.wait([Api.getCustomers(), Api.getSalesPersons()]);
       final all = r[0];
       final routes = all
-          .map((c) => (c['territory'] ?? '').toString())
+          .map((c) => (c['custom_sales_route'] ?? '').toString())
           .where((t) => t.isNotEmpty)
           .toSet()
           .toList()
@@ -69,11 +69,11 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
   }
 
   bool _match(Map<String, dynamic> c) {
-    if (_route != _allRoutes && '${c['territory'] ?? ''}' != _route) {
+    if (_route != _allRoutes && '${c['custom_sales_route'] ?? ''}' != _route) {
       return false;
     }
     if (_q.isEmpty) return true;
-    final hay = [c['customer_name'], c['name'], c['customer_group'], c['territory']]
+    final hay = [c['customer_name'], c['name'], c['customer_group'], c['custom_sales_route']]
         .map((e) => (e ?? '').toString().toLowerCase())
         .join(' ');
     return hay.contains(_q.toLowerCase());
@@ -203,7 +203,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
                         fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
                 row('Route',
-                    '${c['territory'] ?? ''}'.isEmpty ? '—' : '${c['territory']}'),
+                    '${c['custom_sales_route'] ?? ''}'.isEmpty ? '—' : '${c['territory']}'),
                 row(
                     'Group',
                     '${c['customer_group'] ?? ''}'.isEmpty
@@ -267,7 +267,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
     final lng = _num(c['custom_longitude']);
     final mappable = isMappableLatLng(lat, lng);
     final bal = _num(c['custom_outstanding_balance']);
-    final sub = [c['customer_group'], c['territory']]
+    final sub = [c['customer_group'], c['custom_sales_route']]
         .where((x) => x != null && '$x'.isNotEmpty)
         .join(' · ');
 

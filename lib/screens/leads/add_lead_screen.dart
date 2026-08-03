@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/route_picker.dart';
 
 class AddLeadScreen extends StatefulWidget {
   /// Pass an existing lead row to edit it; omit it to create a new one.
@@ -23,6 +24,8 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
   final _address = TextEditingController();
   String? _terms;
   String? _territory;
+  String? _route;
+  List<String> _routes = [];
   bool _busy = false;
 
   bool get _editing => widget.lead != null;
@@ -32,6 +35,15 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
     super.initState();
     _terrFut = Api.getRoutes();
     final l = widget.lead;
+    _route = ((l?['custom_sales_route'] ?? '').toString().isEmpty ||
+            '${l?['custom_sales_route']}' == 'null')
+        ? null
+        : '${l!['custom_sales_route']}';
+    // A lead needs a route for the same reason a customer does: once it starts
+    // ordering, production has nothing else to plan a delivery by.
+    loadSalesRoutes(current: _route).then((r) {
+      if (mounted) setState(() => _routes = r);
+    });
     if (l != null) {
       String s(String k) => (l[k] ?? '').toString();
       _name.text = s('lead_name');
@@ -67,7 +79,8 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
             gstin: _gstin.text,
             address: _address.text,
             paymentTerms: _terms,
-            territory: _territory);
+            territory: _territory,
+            salesRoute: _route);
         _snack('Lead updated ✓');
         await Future.delayed(const Duration(milliseconds: 500));
         if (mounted) Navigator.pop(context, updated);
@@ -80,7 +93,8 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
             gstin: _gstin.text,
             address: _address.text,
             paymentTerms: _terms,
-            territory: _territory);
+            territory: _territory,
+            salesRoute: _route);
         _snack('Lead created ✓  $n');
         await Future.delayed(const Duration(milliseconds: 500));
         if (mounted) Navigator.pop(context, true);
@@ -166,16 +180,13 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
               onChanged: (v) => setState(() => _terms = v),
             ),
             const SizedBox(height: 14),
-            DropdownButtonFormField<String>(
-              value: _territory,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                  labelText: 'Territory / Route (optional)',
-                  border: OutlineInputBorder()),
-              items: terrs
-                  .map((t) => DropdownMenuItem(value: t, child: Text(t)))
-                  .toList(),
-              onChanged: (v) => setState(() => _territory = v),
+            SalesRouteField(
+              value: _route,
+              routes: _routes,
+              enabled: !_busy,
+              emptyHint:
+                  'Production plans deliveries from this once the lead orders',
+              onChanged: (v) => setState(() => _route = v),
             ),
             const SizedBox(height: 12),
             if (!_editing)

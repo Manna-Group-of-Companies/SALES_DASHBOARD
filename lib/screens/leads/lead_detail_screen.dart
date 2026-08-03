@@ -8,6 +8,7 @@ import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
 import 'package:manna_field_sales/screens/leads/lead_order_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
+import 'package:manna_field_sales/widgets/route_picker.dart';
 import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
 import 'package:manna_field_sales/widgets/visit_punch_card.dart';
 
@@ -107,9 +108,13 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                 style:
                 const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
             const SizedBox(height: 4),
-            Text([l['company_name'], l['territory'], l['mobile_no']]
+            Text([l['company_name'], l['mobile_no']]
                 .where((x) => x != null && '$x'.isNotEmpty)
                 .join(' · ')),
+            const SizedBox(height: 4),
+            // Shown even when unset. A lead that converts with no route leaves
+            // production unable to plan its first delivery.
+            RouteChip(route: '${l['custom_sales_route'] ?? ''}'),
             if ('${l['email_id'] ?? ''}'.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),

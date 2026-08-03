@@ -5,12 +5,14 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/collections/collection_screen.dart';
+import 'package:manna_field_sales/screens/customers/customer_edit_screen.dart';
 import 'package:manna_field_sales/screens/complaints/complaint_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/map_service.dart';
 import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
+import 'package:manna_field_sales/widgets/route_picker.dart';
 import 'package:manna_field_sales/widgets/visit_punch_card.dart';
 
 class CustomerDetailScreen extends StatefulWidget {
@@ -37,6 +39,24 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
 
   void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(m), duration: const Duration(seconds: 4)));
+
+  /// Lets a rep fix the details while they are standing in the shop — above
+  /// all the route, which production needs before an order is worth taking.
+  /// The customer is re-read afterwards rather than patched locally, so the
+  /// screen shows what the server actually stored.
+  Future<void> _edit() async {
+    final saved = await Navigator.of(context).push<bool>(MaterialPageRoute(
+        builder: (_) => CustomerEditScreen(customer: c)));
+    if (saved != true) return;
+    setState(() => _busy = true);
+    try {
+      final fresh = await Api.getCustomerDoc(c['name'] as String);
+      if (mounted) setState(() => c = {...c, ...fresh});
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   String get _status =>
       (c['custom_location_status'] ?? 'Not Captured').toString();
@@ -198,11 +218,42 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               dense: true,
               leading: Icon(ic, color: col),
               title: Text('${s['site_name']}'),
-              subtitle: Text(st),
+              // Each site is its own drop. A customer's second yard can sit on
+              // a completely different run from their office, so the route is
+              // set per site rather than inherited from the customer.
+              subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(st),
+                    RouteChip(
+                      route: '${s['route'] ?? ''}',
+                      onTap: _busy ? null : () => _setSiteRoute(s),
+                    ),
+                  ]),
             ),
           );
         }),
     ]);
+  }
+
+  /// Puts one site on a route. Sites are separate places with separate runs,
+  /// so this never touches the customer's own route.
+  Future<void> _setSiteRoute(Map<String, dynamic> site) async {
+    final current = '${site['route'] ?? ''}';
+    final picked = await pickSalesRoute(context,
+        current: current.isEmpty || current == 'null' ? null : current,
+        title: 'Route for ${site['site_name']}');
+    if (picked == null) return;
+    setState(() => _busy = true);
+    try {
+      await Api.setSiteRoute('${site['name']}', picked);
+      setState(() => site['route'] = picked);
+      _snack('Site route set.');
+    } catch (e) {
+      _snack('Failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   static double _num(dynamic v) =>
@@ -376,7 +427,16 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(c['customer_name'] ?? c['name'])),
+      appBar: AppBar(
+        title: Text(c['customer_name'] ?? c['name']),
+        actions: [
+          IconButton(
+            tooltip: 'Edit customer',
+            icon: const Icon(Icons.edit),
+            onPressed: _busy ? null : _edit,
+          ),
+        ],
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child:
@@ -385,9 +445,26 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               style:
               const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
-          Text([c['customer_group'], c['territory']]
-              .where((x) => x != null && '$x'.isNotEmpty)
+          Text([c['customer_group'], c['custom_sales_route']]
+              .where((x) => x != null && '$x'.isNotEmpty && '$x' != 'null')
               .join(' - ')),
+          // The route is what production plans deliveries by, so its absence
+          // is worth saying out loud rather than showing an empty line.
+          if ('${c['custom_sales_route'] ?? ''}'.isEmpty ||
+              '${c['custom_sales_route']}' == 'null')
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(children: [
+                Icon(Icons.route, size: 14, color: Colors.orange.shade800),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text('No sales route set — production cannot plan a '
+                      'delivery for this customer.',
+                      style: TextStyle(
+                          fontSize: 11, color: Colors.orange.shade800)),
+                ),
+              ]),
+            ),
           const SizedBox(height: 16),
           _detailsSection(),
           const SizedBox(height: 16),
