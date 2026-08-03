@@ -83,6 +83,19 @@ Future<Uint8List> _richProforma(Map<String, dynamic> order,
   final custName = _pdfSafe(customer['customer_name'] ?? order['customer'] ?? '');
   final custPhone = _pdfSafe(customer['custom_phone'] ?? '');
   final custTerr = _pdfSafe(customer['territory'] ?? '');
+  // Billing address and GSTIN come off the Customer record, which is loaded
+  // from the same Excel import as the products. `gstin` is checked as well as
+  // the custom field so a site already running India Compliance keeps working.
+  // `custom_address` is the field the customer master has actually been filled
+  // in with; `custom_billing_address` exists as a print-specific override for
+  // the cases where the two should differ.
+  final custAddr = _pdfSafe(customer['custom_billing_address'] ??
+      customer['custom_address'] ??
+      customer['primary_address'] ??
+      '');
+  final custGst =
+      _pdfSafe(customer['custom_gstin'] ?? customer['gstin'] ?? '');
+  final custState = _pdfSafe(customer['custom_state'] ?? '');
 
   pw.TextStyle st(double sz, {bool b = false}) => pw.TextStyle(
       fontSize: sz,
@@ -152,12 +165,18 @@ Future<Uint8List> _richProforma(Map<String, dynamic> order,
                 children: [
                   pw.Text('Bill To :', style: st(8, b: true)),
                   pw.Text(custName, style: st(9)),
+                  if (custAddr.isNotEmpty) pw.Text(custAddr, style: st(7.5)),
                   if (custTerr.isNotEmpty) pw.Text(custTerr, style: st(7.5)),
                   if (custPhone.isNotEmpty)
                     pw.Text('Phone: $custPhone', style: st(7.5)),
+                  if (custGst.isNotEmpty)
+                    pw.Text('GSTIN : $custGst', style: st(7.5, b: true)),
+                  if (custState.isNotEmpty)
+                    pw.Text('State : $custState', style: st(7.5)),
                   pw.SizedBox(height: 4),
                   pw.Text('Ship To :', style: st(8, b: true)),
                   pw.Text(custName, style: st(7.5)),
+                  if (custAddr.isNotEmpty) pw.Text(custAddr, style: st(7.5)),
                 ]),
           ),
           pw.SizedBox(width: 10),
@@ -208,14 +227,37 @@ Future<Uint8List> _richProforma(Map<String, dynamic> order,
               pw.TableRow(children: [
                 cell('${k + 1}'),
                 cell(_pdfSafe(items[k]['item_code'])),
-                cell(_pdfSafe(items[k]['item_name'] ?? items[k]['item_code'])),
+                // The packing note is what the customer recognises — they
+                // ordered twelve rolls, not 270 kilograms, even though the
+                // kilograms are what they are billed for.
+                cell([
+                  _pdfSafe(items[k]['item_name'] ?? items[k]['item_code']),
+                  if ('${items[k]['custom_packing_note'] ?? ''}'.isNotEmpty &&
+                      '${items[k]['custom_packing_note']}' != 'null')
+                    _pdfSafe(items[k]['custom_packing_note']),
+                ].join('\n')),
                 cell((items[k]['gst_hsn_code']?.toString().isNotEmpty ?? false)
                     ? _pdfSafe(items[k]['gst_hsn_code'])
                     : kDefaultHSN),
                 cell('', a: pw.TextAlign.right),
-                cell('${_pdfNum(items[k]['qty'])}', a: pw.TextAlign.right),
-                cell('${_pdfNum(items[k]['rate'])}', a: pw.TextAlign.right),
-                cell(_pdfSafe(items[k]['uom'] ?? items[k]['stock_uom'])),
+                // Tread rubber is ordered in rolls but agreed by the kilogram,
+                // so the invoice is billed the way the customer was quoted:
+                // weight at the per-kg rate. The roll count is in the
+                // description above. Anything without a per-kg rate — solution,
+                // or an order raised before this existed — prints as stored.
+                cell(
+                    _pdfNum(items[k]['custom_rate_per_kg']) > 0
+                        ? '${_pdfNum(items[k]['custom_total_weight'])}'
+                        : '${_pdfNum(items[k]['qty'])}',
+                    a: pw.TextAlign.right),
+                cell(
+                    _pdfNum(items[k]['custom_rate_per_kg']) > 0
+                        ? '${_pdfNum(items[k]['custom_rate_per_kg'])}'
+                        : '${_pdfNum(items[k]['rate'])}',
+                    a: pw.TextAlign.right),
+                cell(_pdfNum(items[k]['custom_rate_per_kg']) > 0
+                    ? 'Kg'
+                    : _pdfSafe(items[k]['uom'] ?? items[k]['stock_uom'])),
                 cell('${_pdfNum(items[k]['amount']).toStringAsFixed(2)}',
                     a: pw.TextAlign.right),
               ]),

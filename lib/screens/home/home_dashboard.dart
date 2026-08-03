@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/app_bus.dart';
 import 'package:manna_field_sales/core/attendance_rules.dart';
+import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
@@ -22,6 +23,7 @@ import 'package:manna_field_sales/screens/manager/gm_approvals_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_dashboard_screen.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/screens/map/map_screen.dart';
+import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart';
 import 'package:manna_field_sales/screens/production/production_dashboard_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_orders_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_proforma_list_screen.dart';
@@ -454,7 +456,7 @@ class _HomeDashboardState extends State<HomeDashboard>
         _Tile('Leads', Icons.emoji_objects, () => _go(const LeadsScreen())),
         _Tile('My Visits', Icons.location_on, () => _go(const MyVisitsScreen())),
         _Tile('My Orders', Icons.shopping_cart,
-                () => _go(Session.I.company == 'Manna Tyre Retreads'
+                () => _go(Session.I.company == kUnitRetreads
                 ? const RetreadOrdersScreen()
                 : const MyOrdersScreen())),
         _Tile('Collections', Icons.payments,
@@ -463,10 +465,17 @@ class _HomeDashboardState extends State<HomeDashboard>
         _Tile('Trips', Icons.directions_car, () => _go(const TripsScreen())),
         _Tile('Leave', Icons.beach_access, () => _go(const LeaveScreen())),
       ],
-      if (isRep && Session.I.company == 'Manna Tyre Retreads')
+      // Minimum stock is how Treads sells; Retreads and UAE run a different
+      // process. The tile is absent for them rather than opening an empty list
+      // they would have to ask about. Managers get it too, so the Treads
+      // manager can see what their team is being told to clear.
+      if ((isRep || Session.I.isManager) && Session.I.isTreadsUnit)
+        _Tile('Min Stock', Icons.inventory_2,
+                () => _go(const AgingStockScreen())),
+      if (isRep && Session.I.company == kUnitRetreads)
         _Tile('Retread Rates', Icons.request_quote,
                 () => _go(const RetreadProformaListScreen())),
-      if (isRep && Session.I.company == 'Manna Tyre Retreads')
+      if (isRep && Session.I.company == kUnitRetreads)
         _Tile('Ready Tyres', Icons.checklist,
                 () => _go(const RetreadReadyTyresScreen())),
     ];

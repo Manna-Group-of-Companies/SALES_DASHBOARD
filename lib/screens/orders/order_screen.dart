@@ -2,90 +2,306 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/order_rules.dart';
+import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/models/min_stock.dart';
+import 'package:manna_field_sales/models/product_category.dart';
+import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
+import 'package:manna_field_sales/screens/orders/product_row.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class OrderScreen extends StatefulWidget {
   final Map<String, dynamic> customer;
-  const OrderScreen({super.key, required this.customer});
+
+  /// An order being changed rather than raised. The same screen does both so
+  /// there is only one copy of the rolls-and-belts maths and one set of
+  /// product rows to keep right.
+  final Map<String, dynamic>? existingOrder;
+
+  const OrderScreen({
+    super.key,
+    required this.customer,
+    this.existingOrder,
+  });
   @override
   State<OrderScreen> createState() => _OrderScreenState();
 }
 
 class _OrderScreenState extends State<OrderScreen> {
   late Future<void> _init;
-  List<Map<String, dynamic>> _items = [];
+
+  /// One line per sellable product, created up front and kept for the life of
+  /// the screen. Reps scroll back and forth between families while the
+  /// customer changes their mind, and rebuilding lines on every filter change
+  /// would throw away what they had already typed.
+  final List<OrderLine> _lines = [];
+
+  /// Keyed by item code. Absent means the item is not on the minimum-stock
+  /// list at all, which the row renders as "No minimum stock" rather than as
+  /// zero available.
+  Map<String, MinStock> _stock = {};
+
   String _company = '';
-  final Map<String, int> _qty = {};
-  bool _submitting = false;
   String _q = '';
   DateTime? _deliveryDate;
-
-  List<Map<String, dynamic>> get _filtered {
-    if (_q.trim().isEmpty) return _items;
-    final qq = _q.toLowerCase();
-    return _items
-        .where((it) => ('${it['item_name'] ?? ''} ${it['name'] ?? ''}')
-        .toLowerCase()
-        .contains(qq))
-        .toList();
-  }
+  bool _submitting = false;
+  Timer? _poll;
 
   @override
   void initState() {
     super.initState();
+    // The delivery date comes straight off the order that was passed in, so it
+    // is set here rather than after the product list finishes loading. The
+    // footer is built outside the FutureBuilder and would otherwise render
+    // "Tap to pick a date" for a second on an order that already has one.
+    final existing = widget.existingOrder;
+    if (existing != null) {
+      final d = existing['delivery_date'];
+      if (d != null) _deliveryDate = DateTime.tryParse('$d');
+    }
     _init = _load();
   }
 
-  Future<void> _load() async {
-    final results = await Future.wait([Api.getItems(), Api.getCompany()]);
-    _items = results[0] as List<Map<String, dynamic>>;
-    _company = results[1] as String;
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
   }
 
-  double get _total {
-    double t = 0;
-    for (final it in _items) {
-      final q = _qty[it['name']] ?? 0;
-      t += q * ((it['standard_rate'] ?? 0) as num).toDouble();
+  /// Minimum stock is a Treads process. For the other units the pool is never
+  /// read and never shown, so their rows carry no stock line at all rather
+  /// than a row of "No minimum stock" that means nothing to them.
+  bool get _usesMinimumStock => Session.I.isTreadsUnit;
+
+  bool get _isEdit => widget.existingOrder != null;
+
+  /// Whether the order as a whole has been approved. Before that a rep changes
+  /// whatever they like — the manager has not looked at it yet, so there is
+  /// nothing to protect. Afterwards, every change goes back to them.
+  bool get _wasApproved => _isEdit && ratesLocked(widget.existingOrder!);
+
+  /// Item codes whose price the manager has actually signed off, taken from
+  /// each line's own flag rather than from "it was on the order when I opened
+  /// it" — otherwise a line the rep added last night would come back locked
+  /// this morning without anyone having approved it.
+  final Set<String> _approvedLines = <String>{};
+
+  /// Copies an existing order's quantities onto the freshly built line list.
+  /// Matching is by item code, so a product that has since been disabled
+  /// simply drops off rather than breaking the screen.
+  void _applyExistingOrder() {
+    final byCode = {for (final l in _lines) l.product.code: l};
+    for (final raw in (widget.existingOrder!['items'] as List? ?? [])) {
+      final it = (raw as Map).cast<String, dynamic>();
+      final line = byCode['${it['item_code']}'];
+      if (line == null) continue;
+      int asInt(dynamic v) =>
+          v is num ? v.toInt() : (int.tryParse('${v ?? ''}') ?? 0);
+      line.rolls = asInt(it['custom_rolls']);
+      line.looseBelts = asInt(it['custom_loose_belts']);
+      line.boxes = asInt(it['custom_boxes']);
+      line.cans = asInt(it['custom_cans']);
+      final perKg = it['custom_rate_per_kg'];
+      line.rate = perKg is num
+          ? perKg.toDouble()
+          : (double.tryParse('${perKg ?? ''}') ?? 0);
+      final batch = it['custom_aged_batch'];
+      if (batch is String && batch.isNotEmpty) line.agedBatch = batch;
+      // Whether the manager has already signed off *this* line's price. A line
+      // added since is not approved just because it is now on the order.
+      if ((it['custom_rate_approved'] ?? 0) == 1) {
+        _approvedLines.add(line.product.code);
+      }
+      _openedWith.add(line.product.code);
     }
-    return t;
   }
+
+  Future<void> _load() async {
+    final results = await Future.wait([
+      Api.getItems(),
+      Api.getCompany(),
+      if (_usesMinimumStock) Api.getMinimumStock(),
+    ]);
+    _lines
+      ..clear()
+      ..addAll((results[0] as List<Map<String, dynamic>>)
+          .map((doc) => OrderLine(product: Product(doc))));
+    _company = results[1] as String;
+    if (_usesMinimumStock) {
+      _stock = results[2] as Map<String, MinStock>;
+      _startPolling();
+    }
+    if (_isEdit) _applyExistingOrder();
+  }
+
+  /// Minimum stock is shared with every other rep in the field, so what this
+  /// screen showed when it opened goes stale the moment someone else commits.
+  /// Re-reading on a timer is what keeps a row from offering rolls that are
+  /// already gone. The server still has the final say at submit time.
+  void _startPolling() {
+    _poll?.cancel();
+    _poll = Timer.periodic(kStockRefreshInterval, (_) async {
+      if (!mounted || _submitting) return;
+      try {
+        final fresh = await Api.getMinimumStock();
+        if (mounted) setState(() => _stock = fresh);
+      } catch (_) {
+        // A rep in a basement should not get an error banner every ten
+        // seconds. The next tick tries again.
+      }
+    });
+  }
+
+  // ------------------------------------------------------------ filter ---
+
+  List<OrderLine> get _filtered {
+    final qq = _q.trim().toLowerCase();
+    if (qq.isEmpty) return _lines;
+    return _lines
+        .where((l) =>
+            '${l.product.name} ${l.product.code}'.toLowerCase().contains(qq))
+        .toList();
+  }
+
+  /// Item codes that were on the order when this edit began.
+  ///
+  /// Fixed at open rather than recomputed as the user types: a manager who
+  /// zeroes a line should see it stay where it is so they can put it back,
+  /// not watch it jump down into the catalogue mid-edit.
+  final Set<String> _openedWith = <String>{};
+
+  /// The lines already on the order, so a manager opening an edit sees what
+  /// they came to change before several hundred products they did not.
+  List<OrderLine> get _onOrder => _filtered
+      .where((l) => _openedWith.contains(l.product.code))
+      .toList();
+
+  /// Grouped for display, in the order the families are normally sold. Lines
+  /// already on the order are pulled out into their own section above.
+  Map<ProductCategory, List<OrderLine>> get _grouped {
+    const order = [
+      ProductCategory.pctr,
+      ProductCategory.ctr,
+      ProductCategory.bondingGum,
+      ProductCategory.vulcanizingSolution,
+      ProductCategory.other,
+    ];
+    final out = <ProductCategory, List<OrderLine>>{};
+    for (final c in order) {
+      final rows = _filtered
+          .where((l) =>
+              l.product.category == c && !_openedWith.contains(l.product.code))
+          .toList();
+      if (rows.isNotEmpty) out[c] = rows;
+    }
+    return out;
+  }
+
+  List<OrderLine> get _picked => _lines.where((l) => !l.isEmpty).toList();
+
+  double get _total => _picked.fold<double>(0, (t, l) => t + l.amount);
 
   void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(m), duration: const Duration(seconds: 4)));
 
-  Future<void> _submit() async {
-    final lines = <Map<String, dynamic>>[];
-    for (final it in _items) {
-      final q = _qty[it['name']] ?? 0;
-      if (q > 0) {
-        lines.add({
-          'item_code': it['name'],
-          'qty': q,
-          'rate': ((it['standard_rate'] ?? 0) as num).toDouble(),
-        });
+  // ------------------------------------------------------------ submit ---
+
+  /// Everything that has to be true before an order can leave the phone.
+  /// Returned as a message rather than a bool so the rep is told which one
+  /// they tripped.
+  String? _validate() {
+    if (_picked.isEmpty) return 'Add at least one product.';
+    if (_deliveryDate == null) return 'Pick a required delivery date.';
+    final unpriced = _picked.where((l) => l.needsRate).toList();
+    if (unpriced.isNotEmpty) {
+      return 'Enter a rate for ${unpriced.first.product.name}.';
+    }
+    final broken = _picked.where((l) => l.product.isMisconfigured).toList();
+    if (broken.isNotEmpty) {
+      return '${broken.first.product.name} is missing its packing details.';
+    }
+    for (final l in _picked) {
+      final s = _stock[l.product.code];
+      if (s == null) continue;
+      if (l.reserveQty > s.availableQty + s.myReservedQty + 0.0001) {
+        return 'Only ${trimQty(s.availableQty)} ${l.product.category.stockUnit} '
+            'of ${l.product.name} left in minimum stock.';
+      }
+      if (l.reserveBelts > s.availableLooseBelts + s.myReservedLooseBelts) {
+        return 'Only ${s.availableLooseBelts} loose belts of '
+            '${l.product.name} left in minimum stock.';
       }
     }
-    if (lines.isEmpty) {
-      _snack('Add at least one item (use + ).');
-      return;
-    }
-    if (_deliveryDate == null) {
-      _snack('Pick a required delivery date.');
-      return;
-    }
+    return null;
+  }
+
+  Future<void> _submit() async {
+    final problem = _validate();
+    if (problem != null) return _snack(problem);
+
     setState(() => _submitting = true);
     try {
-      final dd =
-          '${_deliveryDate!.year}-${_deliveryDate!.month.toString().padLeft(2, '0')}-${_deliveryDate!.day.toString().padLeft(2, '0')}';
-      final name = await Api.createSalesOrder(
-          customer: widget.customer['name'],
+      final d = _deliveryDate!;
+      final dd = '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+          '${d.day.toString().padLeft(2, '0')}';
+
+      // Only lines that draw on the shared pool need booking. Everything else
+      // is made to order and has nothing to race over.
+      // Booked in the pool's own units — whole rolls and whole belts, not the
+      // fractional roll the order line carries.
+      final reservations = <Map<String, dynamic>>[
+        for (final l in _picked)
+          if (_stock.containsKey(l.product.code))
+            {
+              'item_code': l.product.code,
+              'qty': double.parse(l.reserveQty.toStringAsFixed(3)),
+              'loose_belts': l.reserveBelts,
+              if (l.agedBatch != null) 'batch': l.agedBatch,
+            }
+      ];
+
+      final String name;
+      if (_isEdit) {
+        name = '${widget.existingOrder!['name']}';
+        await Api.updateOrderLines(
+          orderName: name,
+          items: [
+            for (final l in _picked)
+              l.toSalesOrderItem()
+                ..['custom_rate_approved'] =
+                    _approvedLines.contains(l.product.code) ? 1 : 0
+          ],
+          deliveryDate: dd,
+          reservations: reservations,
+          // Nothing has been signed off yet on an unapproved order, so the rep
+          // simply saves. Once it has been approved, any change at all — a
+          // quantity, a new product, even the delivery date — goes back to the
+          // manager, because what they approved is no longer what will ship.
+          returnForApproval: _wasApproved,
+        );
+        _snack(_wasApproved
+            ? 'Order updated ✓ — sent back to your manager'
+            : 'Order updated ✓  $name');
+        // Back where the edit started, rather than onward into the rep's order
+        // screen. A manager who edits from the review is not being sent to a
+        // page offering to print a proforma.
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (mounted) Navigator.pop(context, true);
+        return;
+      } else {
+        name = await Api.placeOrder(
+          customer: widget.customer['name'] as String,
           company: _company,
-          items: lines,
-          deliveryDate: dd);
-      _snack('Order saved ✓  $name');
-      await Future.delayed(const Duration(milliseconds: 500));
+          items: [for (final l in _picked) l.toSalesOrderItem()],
+          deliveryDate: dd,
+          reservations: reservations,
+        );
+        _snack('Order sent for approval ✓  $name');
+      }
+
+      await Future.delayed(const Duration(milliseconds: 400));
       if (mounted) {
         Navigator.pushReplacement(
             context,
@@ -93,18 +309,39 @@ class _OrderScreenState extends State<OrderScreen> {
                 builder: (_) => OrderDetailScreen(orderName: name)));
       }
     } catch (e) {
+      // The most likely failure is someone else getting there first, so the
+      // screen refreshes before the rep looks at it again.
       _snack('Failed: $e');
+      try {
+        final fresh = await Api.getMinimumStock();
+        if (mounted) setState(() => _stock = fresh);
+      } catch (_) {}
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
   }
 
+  // ------------------------------------------------------------- build ---
+
   @override
   Widget build(BuildContext context) {
+    final name =
+        widget.customer['customer_name'] ?? widget.customer['name'] ?? '';
     return Scaffold(
       appBar: AppBar(
-          title: Text(
-              'Order — ${widget.customer['customer_name'] ?? widget.customer['name']}')),
+        title: Text(_isEdit
+            ? 'Edit ${widget.existingOrder!['name']}'
+            : 'Order — $name'),
+        actions: [
+          if (_usesMinimumStock)
+            IconButton(
+              tooltip: 'Slow movers',
+              icon: const Icon(Icons.trending_down),
+              onPressed: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const AgingStockScreen())),
+            ),
+        ],
+      ),
       body: Column(children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
@@ -128,59 +365,97 @@ class _OrderScreenState extends State<OrderScreen> {
               if (snap.hasError) {
                 return Center(child: Text('Error: ${snap.error}'));
               }
-              if (_items.isEmpty) {
+              if (_lines.isEmpty) {
                 return const Center(child: Text('No sellable items found.'));
               }
-              final shown = _filtered;
-              if (shown.isEmpty) {
+              final groups = _grouped;
+              if (groups.isEmpty) {
                 return const Center(child: Text('No matching products.'));
               }
-              return ListView.separated(
-                itemCount: shown.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (_, i) {
-                  final it = shown[i];
-                  final code = it['name'] as String;
-                  final rate = ((it['standard_rate'] ?? 0) as num).toDouble();
-                  final q = _qty[code] ?? 0;
-                  return ListTile(
-                    title: Text(it['item_name'] ?? code),
-                    subtitle:
-                    Text('₹${rate.toStringAsFixed(2)} / ${it['stock_uom'] ?? ''}'),
-                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                      IconButton(
-                          icon: const Icon(Icons.remove_circle_outline),
-                          onPressed:
-                          q > 0 ? () => setState(() => _qty[code] = q - 1) : null),
-                      Text('$q', style: const TextStyle(fontSize: 16)),
-                      IconButton(
-                          icon: const Icon(Icons.add_circle_outline),
-                          onPressed: () => setState(() => _qty[code] = q + 1)),
-                    ]),
-                  );
-                },
+              final onOrder = _onOrder;
+              return ListView(
+                children: [
+                  if (onOrder.isNotEmpty) ...[
+                    Container(
+                      width: double.infinity,
+                      color: const Color(0xFFFFF3E0),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      child: Text('ALREADY ON THIS ORDER  (${onOrder.length})',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.4,
+                              color: Colors.orange.shade900)),
+                    ),
+                    for (final line in onOrder)
+                      ProductRow(
+                        key: ValueKey(line.product.code),
+                        line: line,
+                        stock: _stock[line.product.code],
+                        showMinimumStock: _usesMinimumStock,
+                        rateLocked: _approvedLines.contains(line.product.code),
+                        onChanged: () => setState(() {}),
+                      ),
+                  ],
+                  for (final entry in groups.entries) ...[
+                    _sectionHeader(entry.key, entry.value.length),
+                    for (final line in entry.value)
+                      ProductRow(
+                        // Keyed by item so a filter change re-uses the same
+                        // row state instead of resetting the typed rate.
+                        key: ValueKey(line.product.code),
+                        line: line,
+                        stock: _stock[line.product.code],
+                        showMinimumStock: _usesMinimumStock,
+                        // Only the lines the manager actually signed off are
+                        // frozen. A product added since still needs pricing.
+                        rateLocked: _approvedLines.contains(line.product.code),
+                        onChanged: () => setState(() {}),
+                      ),
+                  ],
+                  const SizedBox(height: 12),
+                ],
               );
             },
           ),
         ),
       ]),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.all(16),
+      bottomNavigationBar: _footer(),
+    );
+  }
+
+  Widget _sectionHeader(ProductCategory c, int count) => Container(
+        width: double.infinity,
+        color: const Color(0xFFF5F5F5),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Text('${c.label}  ($count)',
+            style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.4,
+                color: Colors.black54)),
+      );
+
+  Widget _footer() {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           InkWell(
             onTap: _submitting
                 ? null
                 : () async {
-              final now = DateTime.now();
-              final d = await showDatePicker(
-                context: context,
-                initialDate:
-                _deliveryDate ?? now.add(const Duration(days: 7)),
-                firstDate: now,
-                lastDate: now.add(const Duration(days: 365)),
-              );
-              if (d != null) setState(() => _deliveryDate = d);
-            },
+                    final now = DateTime.now();
+                    final d = await showDatePicker(
+                      context: context,
+                      initialDate:
+                          _deliveryDate ?? now.add(const Duration(days: 7)),
+                      firstDate: now,
+                      lastDate: now.add(const Duration(days: 365)),
+                    );
+                    if (d != null) setState(() => _deliveryDate = d);
+                  },
             child: InputDecorator(
               decoration: const InputDecoration(
                   labelText: 'Required delivery date',
@@ -199,21 +474,21 @@ class _OrderScreenState extends State<OrderScreen> {
           const SizedBox(height: 10),
           Row(children: [
             Expanded(
-                child: Text('Total: ₹${_total.toStringAsFixed(2)}',
+                child: Text('Total: Rs ${_total.toStringAsFixed(2)}',
                     style: const TextStyle(
                         fontSize: 18, fontWeight: FontWeight.bold))),
             FilledButton(
               onPressed: _submitting ? null : _submit,
               child: Padding(
                 padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: _submitting
                     ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                    : const Text('Submit Order'),
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : Text(_isEdit ? 'Save Changes' : 'Send for Approval'),
               ),
             ),
           ]),
