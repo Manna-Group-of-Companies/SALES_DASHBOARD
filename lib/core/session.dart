@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 
 import 'package:manna_field_sales/core/app_bus.dart';
+import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 
 class Session {
@@ -24,9 +25,27 @@ class Session {
   bool isGM = false;
   bool isHR = false;
   String? company;
+
+  /// The unit the team this login manages belongs to, read off that team's own
+  /// reps. A manager who is not themselves a Sales Person has no [company] of
+  /// their own, and hardcoding which team belongs to which unit would go stale
+  /// the first time a manager changes.
+  String? managedTeamCompany;
+
   bool isProductionManager = false;
   String? productionCompany;
   bool get isManager => managedTeam != null && managedTeam!.isNotEmpty;
+
+  /// True when this login is on the Manna Treads side of the business, either
+  /// as a rep or as the manager of a Treads team.
+  ///
+  /// Everything Phase 1 added — the product families, minimum stock, the
+  /// slow-mover list — is how Treads sells. Retreads and UAE work a different
+  /// way, so those screens are hidden from them entirely rather than shown
+  /// empty, which would only invite questions about data that will never
+  /// arrive.
+  bool get isTreadsUnit =>
+      company == kUnitTreads || managedTeamCompany == kUnitTreads;
   bool get hasToken => apiKey.isNotEmpty && apiSecret.isNotEmpty;
   late Dio dio;
 

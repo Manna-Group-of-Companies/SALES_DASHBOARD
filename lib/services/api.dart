@@ -5,10 +5,15 @@ import 'package:dio/dio.dart';
 
 import 'package:manna_field_sales/core/attendance_rules.dart';
 import 'package:manna_field_sales/core/auth_store.dart';
+import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
+import 'package:manna_field_sales/models/min_stock.dart';
+import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
+import 'package:manna_field_sales/services/stock_service.dart';
 
 /// Builds the REST path for an ERPNext doctype. Private to this library —
 /// only [Api] ever needs it.
@@ -240,7 +245,7 @@ class Api {
         : '[["custom_assigned_reps","like","%|$rep|%"]]';
     return _list('Customer',
         fields:
-        '["name","customer_name","customer_group","territory","custom_latitude","custom_longitude","custom_location_status","custom_verified_latitude","custom_verified_longitude","custom_outstanding_balance","custom_credit_limit","custom_phone"]',
+        '["name","customer_name","customer_group","territory","custom_sales_route","custom_latitude","custom_longitude","custom_location_status","custom_verified_latitude","custom_verified_longitude","custom_outstanding_balance","custom_credit_limit","custom_phone"]',
         filters: filters,
         orderBy: 'customer_name asc');
   }
@@ -281,6 +286,7 @@ class Api {
   // -------- Manager context --------
   static Future<void> resolveManagerContext() async {
     Session.I.managedTeam = null;
+    Session.I.managedTeamCompany = null;
     Session.I.teamReps = [];
     Session.I.isGM = false;
     Session.I.isHR = false;
@@ -306,10 +312,21 @@ class Api {
       if (team is String && team.isNotEmpty) {
         Session.I.managedTeam = team;
         final reps = await _list('Sales Person',
-            fields: '["name"]',
+            fields: '["name","custom_company"]',
             filters: '[["custom_team_manager","=","$team"]]',
             orderBy: 'name asc');
         Session.I.teamReps = reps.map((e) => e['name'] as String).toList();
+        // Which unit this manager belongs to, taken from their own team rather
+        // than from a hardcoded list that would go stale the first time a
+        // manager moves. A manager who is also a Sales Person already has a
+        // company of their own; this covers the ones who are not.
+        for (final r in reps) {
+          final c = r['custom_company'];
+          if (c is String && c.isNotEmpty) {
+            Session.I.managedTeamCompany = c;
+            break;
+          }
+        }
       }
     } catch (_) {}
   }
@@ -340,15 +357,47 @@ class Api {
         orderBy: 'creation desc');
   }
 
+  /// Orders waiting on this manager.
+  ///
+  /// Reps no longer scan a signed purchase order, so an order lands here the
+  /// moment it is raised. `PO Uploaded - Pending Approval` is still matched so
+  /// that anything raised under the old flow, before the scan step was removed,
+  /// does not get stranded in a queue nobody reads.
   static Future<List<Map<String, dynamic>>> getPendingSalesOrderPOs() {
     final team = Session.I.teamReps;
     if (team.isEmpty) return Future.value([]);
+    const waiting =
+        '["Pending Approval","Pending Rate Approval","PO Uploaded - Pending Approval"]';
     return _list('Sales Order',
         fields:
         '["name","customer","custom_sales_person","grand_total","custom_po_status","custom_po_number"]',
         filters:
-        '[["custom_po_status","=","PO Uploaded - Pending Approval"],["custom_sales_person","in",${_inList(team)}]]',
+        '[["custom_po_status","in",$waiting],["custom_sales_person","in",${_inList(team)}]]',
         orderBy: 'creation desc');
+  }
+
+  /// Every order this manager's team raised in a date range, whatever its
+  /// state.
+  ///
+  /// The approvals queue only ever shows work outstanding, so an order used to
+  /// vanish the moment it was approved and there was nowhere to see what had
+  /// happened to it. This is that view: decided and undecided together, with
+  /// the production status the factory has since put on it.
+  static Future<List<Map<String, dynamic>>> getTeamOrders({
+    required String from,
+    required String to,
+  }) {
+    final team = Session.I.teamReps;
+    if (team.isEmpty) return Future.value([]);
+    return _list('Sales Order',
+        fields: '["name","customer","custom_sales_person","grand_total",'
+            '"transaction_date","delivery_date","custom_po_status",'
+            '"custom_rate_approved","custom_production_status",'
+            '"custom_production_finish_date","custom_proforma_status"]',
+        filters: '[["custom_sales_person","in",${_inList(team)}],'
+            '["transaction_date",">=","$from"],'
+            '["transaction_date","<=","$to"]]',
+        orderBy: 'transaction_date desc');
   }
 
   static Future<List<Map<String, dynamic>>> getPendingProformaReleases() {
@@ -382,18 +431,208 @@ class Api {
     }
   }
 
-  static Future<void> approveLeadOrder(String name, bool approve) =>
-      _put('Lead Order', name, {'status': approve ? 'Approved' : 'Rejected'});
+  /// Turns a lead into a customer at the moment its first order is approved.
+  ///
+  /// This is the point the business already treats as conversion — a lead
+  /// becomes a customer when it is first invoiced, and approval is what makes
+  /// the invoice inevitable. Doing it here rather than at order-taking keeps
+  /// unapproved prospects out of the customer master entirely.
+  ///
+  /// GSTIN is the join key. Accounts will create the same party in SAP by hand
+  /// afterwards, and the eventual sync matches ERPNext to SAP on the GST
+  /// number — so two customers sharing one GSTIN would make that match
+  /// ambiguous. An existing customer with the same GSTIN is therefore reused
+  /// rather than duplicated, which also makes this safe to call twice.
+  ///
+  /// Returns the customer's name.
+  static Future<String> convertLeadToCustomer(String leadName) async {
+    final lead = await getLeadDoc(leadName);
+
+    final missing = missingLeadDetails(lead);
+    if (missing.isNotEmpty) {
+      throw Exception(
+          'Lead is missing ${missing.join(', ')} — cannot convert.');
+    }
+
+    final gstin = '${lead['custom_gstin']}'.trim().toUpperCase();
+    final existing = await _list('Customer',
+        fields: '["name"]',
+        filters: '[["custom_gstin","=","$gstin"]]',
+        limit: 1);
+    if (existing.isNotEmpty) {
+      await _put('Lead', leadName, {'status': 'Converted'});
+      return '${existing.first['name']}';
+    }
+
+    final rep = '${lead['custom_sales_person'] ?? Session.I.salesPerson ?? ''}';
+    final body = <String, dynamic>{
+      'customer_name':
+          '${lead['company_name'] ?? ''}'.trim().isNotEmpty
+              ? '${lead['company_name']}'.trim()
+              : '${lead['lead_name']}'.trim(),
+      'customer_type': 'Company',
+      // Records where the customer came from, so the trail survives even
+      // though the Lead keeps existing.
+      'lead_name': leadName,
+      'custom_gstin': gstin,
+      'custom_address': '${lead['custom_address'] ?? ''}',
+      'custom_sales_route': '${lead['custom_sales_route'] ?? ''}',
+      'custom_phone': '${lead['mobile_no'] ?? ''}',
+      'custom_assigned_reps': rep.isEmpty ? '' : '|$rep|',
+      // The shop location the rep captured against the lead should not have to
+      // be captured again just because the record changed type.
+      'custom_latitude': lead['custom_latitude'],
+      'custom_longitude': lead['custom_longitude'],
+      'custom_verified_latitude': lead['custom_verified_latitude'],
+      'custom_verified_longitude': lead['custom_verified_longitude'],
+      'custom_location_status':
+          '${lead['custom_location_status'] ?? 'Not Captured'}',
+    };
+
+    final territory = '${lead['territory'] ?? ''}';
+    if (territory.isNotEmpty && territory != 'null') {
+      body['territory'] = territory;
+    }
+    // customer_group is mandatory and the lead has none, so fall back to
+    // whatever the site's first group is rather than failing the conversion.
+    try {
+      final groups = await getCustomerGroups();
+      if (groups.isNotEmpty) body['customer_group'] = groups.first;
+    } catch (_) {}
+
+    final r = await Session.I.dio.post(_res('Customer'), data: body);
+    if (r.statusCode != 200 && r.statusCode != 201) {
+      throw Exception(_frappeError(r));
+    }
+    final created = '${r.data['data']['name']}';
+    await _put('Lead', leadName, {'status': 'Converted'});
+    return created;
+  }
+
+  /// Approves a lead order, converting the lead to a customer as it goes.
+  ///
+  /// The conversion happens first. If it fails there is no approval, which is
+  /// the safer order: an approved order against a lead that never became a
+  /// customer is an order nobody can invoice.
+  static Future<String?> approveLeadOrder(String name, bool approve) async {
+    if (!approve) {
+      await _put('Lead Order', name, {'status': 'Rejected'});
+      return null;
+    }
+
+    final order = await _list('Lead Order',
+        fields: '["name","lead"]', filters: '[["name","=","$name"]]', limit: 1);
+    final leadName = order.isEmpty ? '' : '${order.first['lead'] ?? ''}';
+
+    String? customer;
+    if (leadName.isNotEmpty && leadName != 'null') {
+      customer = await convertLeadToCustomer(leadName);
+    }
+
+    await _put('Lead Order', name, {
+      'status': 'Approved',
+      if (customer != null)
+        'approval_remarks': 'Lead converted to customer: $customer',
+    });
+    return customer;
+  }
 
   static Future<void> approveLeadOrderPO(String name, bool approve) => _put(
       'Lead Order',
       name,
       {'status': approve ? 'PO Approved - Ready for SAP' : 'Rejected'});
 
-  static Future<void> approveSalesOrderPO(String name, bool approve) => _put(
-      'Sales Order',
-      name,
-      {'custom_po_status': approve ? 'PO Approved - Ready for SAP' : 'Rejected'});
+  /// The manager's decision on an order.
+  ///
+  /// Approving also stamps `custom_rate_approved`, which is what locks the
+  /// manually typed rates on the rep's phone — approving an order *is*
+  /// approving what it is being sold at.
+  ///
+  /// The approved value is still `PO Approved - Ready for SAP`. Nothing scans a
+  /// purchase order any more, but that string is what the production dashboard,
+  /// the monthly sales figures and every existing record already key off, so it
+  /// is left alone and only the label the rep sees has changed.
+  /// How the sales manager decided one line will be served.
+  ///
+  /// The decision belongs to the line, not the order: an order can hold six
+  /// products that are all on the minimum-stock list, and the manager may want
+  /// two of them out of the pool now and the rest made to order.
+  ///
+  /// Both directions take effect immediately. The whole booking set for the
+  /// order is recomputed from the lines and handed to [StockService.rebook],
+  /// which works out the difference — so switching a line to production
+  /// releases exactly that line, and switching it back books exactly that line,
+  /// without disturbing the others.
+  static Future<void> setLineFulfilmentMode({
+    required String orderName,
+    required String itemCode,
+    required String mode,
+  }) async {
+    final order = await getOrder(orderName);
+    final items = ((order['items'] as List?) ?? [])
+        .map((e) => (e as Map).cast<String, dynamic>())
+        .toList();
+
+    for (final it in items) {
+      if ('${it['item_code']}' == itemCode) it['custom_fulfilment_mode'] = mode;
+    }
+
+    // Only the lines the manager wants out of the pool should hold anything.
+    final wanted = <Map<String, dynamic>>[
+      for (final it in items)
+        if ('${it['custom_fulfilment_mode'] ?? ''}' == kFulfilMinimumStock)
+          {
+            'item_code': '${it['item_code']}',
+            'qty': _rollsOf(it),
+            'loose_belts': (it['custom_loose_belts'] as num?)?.toInt() ?? 0,
+            if (it['custom_aged_batch'] != null)
+              'batch': it['custom_aged_batch'],
+          }
+    ];
+
+    await StockService.rebook(orderName, wanted);
+    await _put('Sales Order', orderName, {'items': items});
+  }
+
+  /// What a line books against the pool: whole rolls for tread rubber, and the
+  /// stored quantity for everything else. The fractional roll that loose belts
+  /// create is not part of it — belts are booked on their own counter.
+  static double _rollsOf(Map<String, dynamic> item) {
+    final rolls = (item['custom_rolls'] as num?)?.toDouble() ?? 0;
+    if (rolls > 0) return rolls;
+    return (item['qty'] as num?)?.toDouble() ?? 0;
+  }
+
+  static Future<void> approveSalesOrderPO(String name, bool approve) async {
+    final body = <String, dynamic>{
+      'custom_po_status': approve ? 'PO Approved - Ready for SAP' : 'Rejected',
+      'custom_rate_approved': approve ? 1 : 0,
+    };
+
+    // Approval is per line as well as per order. Stamping each line is what
+    // lets the app tell an approved price from one the rep added afterwards,
+    // and it is the only reason a new line can still be typed into an order
+    // whose other rates are frozen.
+    if (approve) {
+      try {
+        final order = await getOrder(name);
+        final items = (order['items'] as List?) ?? [];
+        body['items'] = [
+          for (final raw in items)
+            {
+              ...(raw as Map).cast<String, dynamic>(),
+              'custom_rate_approved': 1,
+            }
+        ];
+      } catch (_) {
+        // Falling back to the order-level flag alone still locks the rates —
+        // it just cannot distinguish a line added later. Better than refusing
+        // to record the manager's decision.
+      }
+    }
+
+    await _put('Sales Order', name, body);
+  }
 
   static Future<void> releaseProforma(String name, bool approve) => _put(
       'Sales Order',
@@ -623,10 +862,107 @@ class Api {
           orderBy: 'creation desc');
 
 
-  static Future<List<Map<String, dynamic>>> getItems() => _list('Item',
-      fields: '["name","item_name","stock_uom","standard_rate"]',
-      filters: '[["disabled","=",0],["is_sales_item","=",1]]',
-      orderBy: 'item_name asc');
+  // `item_group` is what sorts an Item into a product family, and the custom
+  // fields alongside it are what each family's order row needs to turn rolls
+  // and belts into a weight. `standard_rate` is still read, but only ever as a
+  // hint on screen — reps price every line by hand.
+  /// Sellable items, narrowed to the ones this rep's unit actually sells.
+  ///
+  /// Manna Treads, Manna Tyre Retreads and Manna Tyres UAE do not share a
+  /// catalogue, and a rep shown another unit's products will eventually sell
+  /// one. The unit list lives on the Item as a pipe-wrapped string, matching
+  /// how `custom_assigned_reps` already works on Customer.
+  ///
+  /// Filtering happens here rather than in the query because an item with no
+  /// units set has to stay visible to everyone — that is the state every
+  /// existing item is in today, and dropping them would empty the catalogue.
+  static Future<List<Map<String, dynamic>>> getItems() async {
+    final all = await _list('Item',
+        fields: '["name","item_name","stock_uom","standard_rate","item_group",'
+            '"custom_units","custom_avg_weight_per_roll",'
+            '"custom_belts_per_roll","custom_weight_per_roll",'
+            '"custom_pack_litres"]',
+        filters: '[["disabled","=",0],["is_sales_item","=",1]]',
+        orderBy: 'item_name asc');
+    final unit = Session.I.company;
+    if (unit == null || unit.trim().isEmpty) return all;
+    return all.where((it) => sellsInUnit(it['custom_units'], unit)).toList();
+  }
+
+  /// True when an item belongs to [unit]. An item with no units recorded
+  /// belongs to all of them, so an incomplete product import degrades to the
+  /// old behaviour rather than to an empty product list.
+  static bool sellsInUnit(dynamic units, String unit) {
+    final s = '${units ?? ''}'.trim();
+    if (s.isEmpty || s == 'null') return true;
+    return s.toLowerCase().contains('|${unit.trim().toLowerCase()}|');
+  }
+
+  // ------------------------------------------------------ minimum stock ---
+  //
+  // All of this used to go through Server Script APIs. The site's plan no
+  // longer runs server scripts, so it is plain resource-API work now, and the
+  // booking protocol that keeps two reps from overselling the same rolls lives
+  // in `services/stock_service.dart`. Read the note at the top of that file
+  // before changing anything here.
+
+  /// Current minimum-stock position for every item on the list, including how
+  /// much of it other reps have already booked.
+  static Future<Map<String, MinStock>> getMinimumStock() =>
+      StockService.load();
+
+  /// Books stock against an order that already exists.
+  static Future<void> reserveMinimumStock({
+    required String itemCode,
+    required double qty,
+    required String salesOrder,
+    int looseBelts = 0,
+    String? batch,
+  }) =>
+      StockService.book(
+          itemCode: itemCode,
+          qty: qty,
+          belts: looseBelts,
+          salesOrder: salesOrder,
+          batch: batch);
+
+  /// Hands back everything an order was holding. Called when an order fails to
+  /// save after some of its lines were already booked, so a half-written order
+  /// never strands stock that nobody can sell.
+  static Future<void> releaseReservations(String salesOrder) =>
+      StockService.release(salesOrder);
+
+  /// The minimum-stock list with each item's product record alongside it,
+  /// ordered by what most needs attention: items that have stopped selling
+  /// first, then the ones whose stock has sat longest.
+  ///
+  /// The product join runs through [getItems], so the same unit filter applies
+  /// — a rep is not shown another unit's stock position any more than they are
+  /// shown its catalogue. A pooled item with no matching product record is
+  /// dropped rather than rendered as a bare code.
+  static Future<List<MinStockDetail>> getMinimumStockDetailed() async {
+    final results = await Future.wait([StockService.load(), getItems()]);
+    final stock = results[0] as Map<String, MinStock>;
+    if (stock.isEmpty) return [];
+    final items = results[1] as List<Map<String, dynamic>>;
+
+    final out = <MinStockDetail>[];
+    for (final doc in items) {
+      final s = stock['${doc['name']}'];
+      if (s != null) out.add(MinStockDetail(stock: s, product: Product(doc)));
+    }
+
+    out.sort((a, b) {
+      // Never-sold sorts as worst; after that, longest since a sale wins.
+      final da = a.stock.daysSinceSold < 0 ? 1 << 30 : a.stock.daysSinceSold;
+      final db = b.stock.daysSinceSold < 0 ? 1 << 30 : b.stock.daysSinceSold;
+      if (da != db) return db.compareTo(da);
+      final oa = a.stock.oldestOpenBatch?.ageDays ?? 0;
+      final ob = b.stock.oldestOpenBatch?.ageDays ?? 0;
+      return ob.compareTo(oa);
+    });
+    return out;
+  }
 
   static Future<List<String>> getCustomerGroups() async {
     final l = await _list('Customer Group',
@@ -913,12 +1249,19 @@ class Api {
 
   static Future<List<Map<String, dynamic>>> getMyOrders() => _list('Sales Order',
       fields:
-      '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_po_status","custom_production_status","custom_production_finish_date"]',
+      '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_proforma_required","custom_order_placed_at","custom_po_status","custom_production_status","custom_production_finish_date"]',
       filters: _mineFilter('custom_sales_person'),
       limit: 50);
 
   static Future<Map<String, dynamic>> getOrder(String name) async {
     final r = await Session.I.dio.get(_res('Sales Order') + '/$name');
+    final d = (r.data is Map) ? r.data['data'] : null;
+    if (d is Map<String, dynamic>) return d;
+    throw Exception(_frappeError(r));
+  }
+
+  static Future<Map<String, dynamic>> getLeadDoc(String name) async {
+    final r = await Session.I.dio.get('${_res('Lead')}/$name');
     final d = (r.data is Map) ? r.data['data'] : null;
     if (d is Map<String, dynamic>) return d;
     throw Exception(_frappeError(r));
@@ -940,24 +1283,49 @@ class Api {
     }
   }
 
-  static Future<void> uploadSignedPO({
+  /// Replaces an order's lines and re-books whatever minimum stock the new
+  /// line-up needs.
+  ///
+  /// Customers change their minds, and until 1 pm on the delivery date the
+  /// factory can still act on it, so the whole line-up is rewritten rather than
+  /// patched — adding, removing and requantifying are one operation as far as
+  /// the rep is concerned.
+  ///
+  /// [returnForApproval] is set when the order had already been approved.
+  /// Anything the rep changes after that point — a quantity, a new product, the
+  /// delivery date — means what the manager signed off is not what will ship,
+  /// so it goes back to them.
+  ///
+  /// The two `custom_rate_approved` flags do different jobs and are cleared
+  /// differently. The **order-level** one means "this order has a decision on
+  /// it" and is cleared here, so a re-submitted order shows up to the manager
+  /// as something to decide rather than as already approved. The **per-line**
+  /// ones mean "this price is final", are carried through untouched, and are
+  /// what keep an approved rate locked while the order goes round again.
+  static Future<void> updateOrderLines({
     required String orderName,
-    required String filePath,
-    String? poNumber,
+    required List<Map<String, dynamic>> items,
+    required List<Map<String, dynamic>> reservations,
+    required bool returnForApproval,
+    String? deliveryDate,
   }) async {
-    await uploadPhoto(
-        docname: orderName,
-        fieldname: 'custom_po_attachment',
-        filePath: filePath,
-        doctype: 'Sales Order',
-        filename: 'signed_po.jpg');
-    final body = <String, dynamic>{
-      'custom_po_status': 'PO Uploaded - Pending Approval'
-    };
-    if (poNumber != null && poNumber.trim().isNotEmpty) {
-      body['custom_po_number'] = poNumber.trim();
+    await StockService.rebook(orderName, reservations);
+
+    final body = <String, dynamic>{'items': items};
+    if (deliveryDate != null) body['delivery_date'] = deliveryDate;
+    if (returnForApproval) {
+      body['custom_po_status'] = 'Pending Rate Approval';
+      body['custom_rate_approved'] = 0;
+      // Production has already seen this order. A change nobody tells the
+      // floor about is a batch made to the wrong spec, so the order is flagged
+      // until the production manager acknowledges it.
+      body['custom_changed_after_approval'] = 1;
     }
-    await setOrderField(orderName, body);
+    final r =
+        await Session.I.dio.put('${_res('Sales Order')}/$orderName', data: body);
+    if (r.statusCode != 200 && r.statusCode != 201) {
+      throw Exception(_frappeError(r));
+    }
   }
 
   // -------- Leads --------
@@ -968,7 +1336,7 @@ class Api {
         : '[["custom_sales_person","=","$rep"]]';
     return _list('Lead',
         fields:
-        '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","status"]',
+        '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status"]',
         filters: filters,
         orderBy: 'creation desc');
   }
@@ -982,6 +1350,7 @@ class Api {
     String? address,
     String? paymentTerms,
     String? territory,
+    String? salesRoute,
   }) async {
     final body = <String, dynamic>{
       'lead_name': leadName,
@@ -998,6 +1367,7 @@ class Api {
     put('custom_address', address);
     put('custom_payment_terms', paymentTerms);
     put('territory', territory);
+    put('custom_sales_route', salesRoute);
     final r = await Session.I.dio.post(_res('Lead'), data: body);
     if (r.statusCode == 200 || r.statusCode == 201) {
       return r.data['data']['name'] as String;
@@ -1017,6 +1387,7 @@ class Api {
     String? address,
     String? paymentTerms,
     String? territory,
+    String? salesRoute,
   }) async {
     final body = <String, dynamic>{'lead_name': leadName.trim()};
     void put(String key, String? v) => body[key] = (v ?? '').trim();
@@ -1027,6 +1398,7 @@ class Api {
     put('custom_address', address);
     put('custom_payment_terms', paymentTerms);
     put('territory', territory);
+    put('custom_sales_route', salesRoute);
     final r = await Session.I.dio.put(_res('Lead') + '/$name', data: body);
     if (r.statusCode == 200 || r.statusCode == 201) {
       final d = (r.data is Map) ? r.data['data'] : null;
@@ -1101,11 +1473,27 @@ class Api {
       filters: _mineFilter(),
       limit: 50);
 
+  /// The ERPNext Company this rep's orders belong to.
+  ///
+  /// This used to return whichever Company was created most recently, which
+  /// meant every rep — Treads, Retreads and UAE alike — booked into the same
+  /// one. On a site with an Indian company and a UAE company that quietly ran
+  /// rupee orders through a dirham conversion and into the wrong cost centre.
+  /// It follows the rep's unit now.
+  ///
+  /// The fallbacks matter: if the expected company has been renamed the app
+  /// should still take the order rather than refuse to sell.
   static Future<String> getCompany() async {
     final list = await _list('Company', fields: '["name"]');
     final names = list.map((e) => e['name'] as String).toList();
-    return names.firstWhere((n) => !n.toLowerCase().contains('demo'),
-        orElse: () => names.isNotEmpty ? names.first : '');
+    if (names.isEmpty) return '';
+    final wanted = companyForUnit(Session.I.company);
+    return names.firstWhere(
+      (n) => n == wanted,
+      orElse: () => names.firstWhere(
+          (n) => !n.toLowerCase().contains('demo'),
+          orElse: () => names.first),
+    );
   }
 
   static Future<List<String>> getModesOfPayment() async {
@@ -1222,6 +1610,19 @@ class Api {
     return mins;
   }
 
+  /// Raises a Sales Order.
+  ///
+  /// Reps are no longer asked whether they want a proforma. Raising the order
+  /// sends it for approval, and a proforma is something they print afterwards
+  /// if the customer wants one — so it is a button on the order, not a
+  /// decision to make before the order exists.
+  ///
+  /// The placed-at stamp used to be written by a Before Save script so that it
+  /// could not come off a phone. Without server scripts the app has to write
+  /// it, so it is taken from [nowStamp] — the server's clock as last seen on a
+  /// response header, not the handset's. That keeps a rep with a wrong date
+  /// from backdating their own order, but it is no longer *impossible* to
+  /// forge, and nothing now stops a later edit from moving it.
   static Future<String> createSalesOrder({
     required String customer,
     required String company,
@@ -1239,6 +1640,14 @@ class Api {
               .add(const Duration(days: 7))
               .toIso8601String()
               .substring(0, 10),
+      'custom_proforma_required': 1,
+      'custom_proforma_status': 'Ready',
+      // Straight into the manager's queue. Reps used to have to get the
+      // proforma signed and scan it back before an order counted as pending;
+      // that step is gone, so raising the order is the request for approval.
+      'custom_po_status': 'Pending Approval',
+      'custom_rate_approved': 0,
+      'custom_order_placed_at': nowStamp(),
       'items': items,
     };
     final r = await Session.I.dio.post(_res('Sales Order'), data: body);
@@ -1246,6 +1655,63 @@ class Api {
       return r.data['data']['name'] as String;
     }
     throw Exception(_frappeError(r));
+  }
+
+  /// Raises an order and books its minimum-stock lines.
+  ///
+  /// These used to commit together inside one server transaction. Without
+  /// server scripts they cannot, so the order is written first and the stock
+  /// booked immediately after — and if any booking is refused, the order is
+  /// unwound rather than left standing against stock it never got.
+  ///
+  /// The order of the two matters. A reservation has to name the order it is
+  /// held against, so the order has to exist first; the alternative is stock
+  /// held against nothing, which nobody would ever notice was stranded.
+  static Future<String> placeOrder({
+    required String customer,
+    required String company,
+    required List<Map<String, dynamic>> items,
+    required String deliveryDate,
+    required List<Map<String, dynamic>> reservations,
+  }) async {
+    final name = await createSalesOrder(
+        customer: customer,
+        company: company,
+        items: items,
+        deliveryDate: deliveryDate);
+
+    if (reservations.isEmpty) return name;
+
+    try {
+      for (final r in reservations) {
+        await StockService.book(
+          itemCode: '${r['item_code']}',
+          qty: (r['qty'] as num?)?.toDouble() ?? 0,
+          belts: (r['loose_belts'] as num?)?.toInt() ?? 0,
+          salesOrder: name,
+          batch: r['batch'] as String?,
+        );
+      }
+      return name;
+    } catch (_) {
+      // Someone else got the last of it. Hand back whatever this order managed
+      // to book and take the order away again, so the rep can re-price against
+      // what is actually left instead of owning a half-supplied order.
+      await StockService.release(name);
+      await _discardDraftOrder(name);
+      rethrow;
+    }
+  }
+
+  /// Removes an order that could not get its stock. Only ever called on an
+  /// order this call just created, and only while it is still a draft.
+  static Future<void> _discardDraftOrder(String name) async {
+    try {
+      await Session.I.dio.delete('${_res('Sales Order')}/$name');
+    } catch (_) {
+      // If it will not delete, leaving a draft behind is the lesser problem —
+      // the stock is already released, which is the part that mattered.
+    }
   }
 
   static Future<String> createComplaint({
@@ -2102,27 +2568,45 @@ class Api {
       String customer) =>
       _list('Customer Site',
           fields:
-          '["name","site_name","latitude","longitude","verified_latitude","verified_longitude","location_status"]',
+          '["name","site_name","route","latitude","longitude","verified_latitude","verified_longitude","location_status"]',
           filters: '[["customer","=","$customer"]]',
           orderBy: 'creation asc',
           limit: 0);
 
+  /// Sites belonging to a lead. A lead can have several premises before it is
+  /// ever converted, and each one is a separate drop with its own route.
+  static Future<List<Map<String, dynamic>>> getLeadSites(String lead) =>
+      _list('Customer Site',
+          fields:
+          '["name","site_name","route","latitude","longitude","verified_latitude","verified_longitude","location_status"]',
+          filters: '[["lead","=","$lead"]]',
+          orderBy: 'creation asc',
+          limit: 0);
+
+  /// Every location that is captured can carry its own route, because every
+  /// one of them is a separate place a van has to reach. A customer's second
+  /// yard may be on an entirely different run from their office.
+  static Future<void> setSiteRoute(String siteName, String route) =>
+      _put('Customer Site', siteName, {'route': route});
+
   static Future<String> createCustomerSite({
-    required String customer,
+    String? customer,
+    String? lead,
     required String siteName,
     required double lat,
     required double lng,
+    String? route,
   }) async {
-    final stamp =
-    DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
     final body = {
-      'customer': customer,
+      if (customer != null && customer.isNotEmpty) 'customer': customer,
+      if (lead != null && lead.isNotEmpty) 'lead': lead,
       'site_name': siteName,
       'latitude': lat,
       'longitude': lng,
+      if (route != null && route.isNotEmpty) 'route': route,
       'location_status': 'Pending Verification',
       'captured_by': Session.I.salesPerson,
-      'captured_on': stamp,
+      'captured_on': nowStamp(),
     };
     final r = await Session.I.dio.post(_res('Customer Site'), data: body);
     if (r.statusCode == 200 || r.statusCode == 201) {
@@ -2155,17 +2639,184 @@ class Api {
   }
 
   // Approved POs (ready for SAP) for the logged-in production manager's unit.
-  static Future<List<Map<String, dynamic>>> getApprovedPOsForProduction() {
+  /// Approved orders for the production floor, with the customer's identity
+  /// left out.
+  ///
+  /// `customer` and `customer_name` are deliberately not fetched. Production
+  /// plans and routes; who the order is for is billing's business. What they
+  /// get instead is the territory, which is enough to plan a van and cannot
+  /// name a shop.
+  static Future<List<Map<String, dynamic>>> getApprovedPOsForProduction() async {
     final unit = Session.I.productionCompany;
-    if (unit == null || unit.isEmpty) return Future.value([]);
-    return _list('Sales Order',
-        fields:
-        '["name","customer","customer_name","grand_total","transaction_date","delivery_date","custom_po_number","custom_sales_person","custom_production_status","custom_production_finish_date"]',
+    if (unit == null || unit.isEmpty) return [];
+    final orders = await _list('Sales Order',
+        fields: '["name","customer","grand_total","transaction_date",'
+            '"delivery_date","custom_sales_person","custom_production_status",'
+            '"custom_production_finish_date","custom_changed_after_approval"]',
         filters:
-        '[["custom_company","=","$unit"],["custom_po_status","=","PO Approved - Ready for SAP"]]',
+            '[["custom_company","=","$unit"],["custom_po_status","=","PO Approved - Ready for SAP"]]',
         orderBy: 'transaction_date desc',
         limit: 100);
+    if (orders.isEmpty) return orders;
+
+    // Swap each customer for its route, then drop the name entirely. The link
+    // is resolved here and never handed to the screen, so a production widget
+    // cannot accidentally render an identity it was never given.
+    final codes = orders
+        .map((o) => '${o['customer'] ?? ''}')
+        .where((c) => c.isNotEmpty)
+        .toSet();
+    final routes = <String, String>{};
+    if (codes.isNotEmpty) {
+      final rows = await _list('Customer',
+          fields: '["name","custom_sales_route","territory"]',
+          filters: '[["name","in",${_inList(codes.toList())}]]');
+      for (final r in rows) {
+        routes['${r['name']}'] = destinationOf(r);
+      }
+    }
+    for (final o in orders) {
+      o['destination'] = routes['${o['customer']}'] ?? 'No route set';
+      o.remove('customer');
+    }
+    return orders;
   }
+
+  /// Where an order is going, as production should see it.
+  ///
+  /// The Sales Route is the answer. Territory is only a fallback, and only
+  /// because the routes are still being created — a customer who has not been
+  /// put on one yet would otherwise reach the floor as "No route set" and
+  /// nobody could plan a van. Once every customer carries a route the fallback
+  /// stops being reached on its own.
+  static String destinationOf(Map<String, dynamic> customer) {
+    final route = '${customer['custom_sales_route'] ?? ''}';
+    if (route.isNotEmpty && route != 'null') return route;
+    final t = '${customer['territory'] ?? ''}';
+    if (t.isNotEmpty && t != 'null') return '$t (no route set)';
+    return 'No route set';
+  }
+
+  /// One order for the production floor, with the customer stripped out the
+  /// same way. Returns the raw document plus a `destination`.
+  static Future<Map<String, dynamic>> getOrderForProduction(String name) async {
+    final o = await getOrder(name);
+    final code = '${o['customer'] ?? ''}';
+    var destination = 'No route set';
+    if (code.isNotEmpty) {
+      try {
+        final rows = await _list('Customer',
+            fields: '["name","custom_sales_route","territory"]',
+            filters: '[["name","=","$code"]]',
+            limit: 1);
+        if (rows.isNotEmpty) destination = destinationOf(rows.first);
+      } catch (_) {}
+    }
+    o['destination'] = destination;
+    o.remove('customer');
+    o.remove('customer_name');
+    o.remove('company_address_display');
+    return o;
+  }
+
+  /// Moves one line along its process cycle.
+  static Future<void> setItemStage({
+    required String orderName,
+    required String itemRowName,
+    required String stage,
+  }) async {
+    final order = await getOrder(orderName);
+    final items = ((order['items'] as List?) ?? [])
+        .map((e) => (e as Map).cast<String, dynamic>())
+        .toList();
+    for (final it in items) {
+      if ('${it['name']}' == itemRowName) it['custom_production_stage'] = stage;
+    }
+    await _put('Sales Order', orderName, {'items': items});
+  }
+
+  /// The production manager moving a delivery date, forwards or back.
+  ///
+  /// The date the customer originally asked for is captured the first time it
+  /// moves, and never overwritten after that. Without it the new date is just
+  /// a number — nobody, including the person who moved it, can see that it was
+  /// moved or what from.
+  ///
+  /// Only the delivery date is sent. `custom_order_placed_at` never is: the
+  /// moment the order was raised is not production's to move, and it is what
+  /// every deadline on the order is measured from.
+  static Future<void> setProductionDeliveryDate(
+      String orderName, String deliveryDate) async {
+    final order = await getOrder(orderName);
+    final body = <String, dynamic>{'delivery_date': deliveryDate};
+
+    final original = '${order['custom_original_delivery_date'] ?? ''}';
+    if (original.isEmpty || original == 'null') {
+      final current = '${order['delivery_date'] ?? ''}';
+      if (current.isNotEmpty && current != 'null') {
+        body['custom_original_delivery_date'] = current.substring(0, 10);
+      }
+    }
+    await _put('Sales Order', orderName, body);
+  }
+
+  /// The routes a rep can put a customer on.
+  ///
+  /// Sales Route replaces Territory as the routing unit. Routes are named per
+  /// rep ("Jaimon D - Adoor"), so a rep is offered their own — but they are
+  /// still being created, and a rep with none yet would otherwise be shown an
+  /// empty dropdown and be unable to set a route at all. In that case every
+  /// active route is offered instead.
+  static Future<List<String>> getSalesRoutes({String? forRep}) async {
+    Future<List<Map<String, dynamic>>> fetch(String filters) => _list(
+        'Sales Route',
+        fields: '["name"]',
+        filters: filters,
+        orderBy: 'name asc');
+
+    if (forRep != null && forRep.isNotEmpty) {
+      final mine = await fetch(
+          '[["is_active","=",1],["sales_person","=","$forRep"]]');
+      if (mine.isNotEmpty) {
+        return mine.map((e) => '${e['name']}').toList();
+      }
+    }
+    final all = await fetch('[["is_active","=",1]]');
+    return all.map((e) => '${e['name']}').toList();
+  }
+
+  /// Updates the details a rep can correct in the field.
+  ///
+  /// The sales route is the important one: it is the only thing production is
+  /// given to plan a delivery by. An order taken against a customer with no
+  /// route reaches the floor as "No route set".
+  static Future<void> updateCustomer({
+    required String name,
+    String? salesRoute,
+    String? customerGroup,
+    String? phone,
+    String? address,
+    String? gstin,
+    String? state,
+  }) async {
+    final body = <String, dynamic>{};
+    if (salesRoute != null && salesRoute.isNotEmpty) {
+      body['custom_sales_route'] = salesRoute;
+    }
+    if (customerGroup != null && customerGroup.isNotEmpty) {
+      body['customer_group'] = customerGroup;
+    }
+    if (phone != null) body['custom_phone'] = phone.trim();
+    if (address != null) body['custom_address'] = address.trim();
+    if (gstin != null) body['custom_gstin'] = gstin.trim().toUpperCase();
+    if (state != null) body['custom_state'] = state.trim();
+    if (body.isEmpty) return;
+    await _put('Customer', name, body);
+  }
+
+  /// The production manager confirming they have seen a post-approval change.
+  static Future<void> acknowledgeOrderChange(String orderName) =>
+      _put('Sales Order', orderName, {'custom_changed_after_approval': 0});
 
   static Future<void> setProductionStatus({
     required String orderName,
