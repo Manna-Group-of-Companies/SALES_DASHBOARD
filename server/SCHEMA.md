@@ -1,0 +1,298 @@
+# ERPNext schema for Phase 1 — order taking
+
+**Status: built on the live site** (`mannarubber.m.frappe.cloud`) on 31 Jul 2026
+via the `integration@mannarubber.com` account. This file records what exists,
+not what someone still has to create — except for the two open items at the
+bottom, which do need you.
+
+## 0. Read this first — no server scripts
+
+The site's plan does not run Frappe Server Scripts. The seven that were
+installed have been **disabled** and their source removed from this repo; every
+rule they held now lives in the app. See [README.md](README.md) for what that
+costs and how the oversell race is closed without them.
+
+`trip_single_active` is still on the site and still disabled at the platform
+level — it has never run.
+
+## 1. Item groups
+
+The order screen picks a rep's row from the Item's `item_group`. Matching is
+case-insensitive, and any other group still sells through a plain
+quantity-and-rate row.
+
+| Item Group | Status | Row the rep gets |
+| --- | --- | --- |
+| `Precured` | already existed, 130 items | rolls + loose belts, average weight |
+| `Hot Rubber` | already existed, 88 items | rolls only, exact weight |
+| `Bonding Gum` | **created** | boxes + loose rolls, fixed 5 kg steps |
+| `Vulcanizing Solution` | **created** | number of cans |
+
+`Precured` and `Hot Rubber` are PCTR and CTR under the names your item master
+already uses. Renaming them would have meant re-tagging 218 live items to gain
+nothing, so [lib/core/constants.dart](../lib/core/constants.dart) points at the
+real names instead.
+
+## 2. Units, and why `qty` is not kilograms
+
+A `Roll` UOM was **created** and is the stock UOM for tread rubber.
+
+Tread rubber is counted in rolls but *priced* by the kilogram. ERPNext has one
+`qty` and one `rate` and multiplies them, so both cannot be stored as typed.
+What is stored:
+
+```
+qty   = rolls                        (fractional when loose belts are involved)
+rate  = ratePerKg x weightPerRoll    (so qty x rate is the real amount)
+
+custom_rate_per_kg   = what the rep actually quoted
+custom_total_weight  = the kilograms the customer is billed on
+```
+
+A loose belt is a known fraction of a roll, so 2 rolls + 3 belts on a 4-belt
+roll is `qty = 2.75`, and the amount comes out identical to pricing those belts
+by weight. The `Roll` UOM is deliberately **not** whole-number-only for this
+reason. Bonding gum stays in kilograms and solution in tins, where the rep's
+rate already matches the quantity unit.
+
+## 3. Custom fields on `Item` — created
+
+| Fieldname | Type | Used by | Meaning |
+| --- | --- | --- | --- |
+| `custom_avg_weight_per_roll` | Float(3) | PCTR | Average kg a roll weighs. |
+| `custom_belts_per_roll` | Int | PCTR | Belts per roll. |
+| `custom_weight_per_roll` | Float(3) | CTR | Exact kg a roll weighs. |
+| `custom_pack_litres` | Float(2) | Solution | Tin size, 10 or 30. |
+
+**These are empty and are yours to fill.** A PCTR item with no average weight or
+belt count, or a CTR item with no roll weight, is shown to the rep as
+misconfigured rather than silently priced at zero.
+
+## 4. Custom fields on `Customer` — created
+
+| Fieldname | Type | Meaning |
+| --- | --- | --- |
+| `custom_gstin` | Data | Customer GSTIN. Empty everywhere today. |
+| `custom_billing_address` | Small Text | Print-specific override. |
+| `custom_state` | Data | Place-of-supply line. |
+
+The proforma reads `custom_billing_address`, then falls back to the existing
+**`custom_address`**, which is already populated on most customers — so
+addresses print today without any import.
+
+## 5. Custom fields on `Sales Order` — created
+
+| Fieldname | Type | Meaning |
+| --- | --- | --- |
+| `custom_proforma_required` | Check, default 1 | Clear means the order went for approval without a proforma. |
+| `custom_order_placed_at` | Datetime, read-only | When the order was raised. Audit trail. |
+| `custom_rate_approved` | Check | Set when the manager approves. Order-level marker that rates are final. |
+| `custom_fulfilment_mode` | Select | Blank / `From Minimum Stock` / `New Production`. The manager's priority call. |
+
+And on **`Sales Order Item`**:
+
+| Fieldname | Type | Meaning |
+| --- | --- | --- |
+| `custom_rate_approved` | Check | This line's price is final. Locked for everyone, permanently. |
+
+Rate finalisation is **per line**, not per order. That is what lets a rep add a
+product to an approved order and price it, while every rate the manager already
+signed off stays frozen — including for the manager. Nothing in the app clears
+a line's flag once set; rejecting an order does not clear it either, because a
+rejection is not a finalisation and the flag is only ever set on approval.
+
+`custom_fulfilment_mode` is a priority decision, not a logistics one: an
+important customer is served out of minimum stock and gets their order sooner,
+everyone else waits for a run. Choosing **New Production** also **releases the
+order's minimum-stock bookings**, since the order will not draw on the pool and
+leaving stock held against it would starve whoever needs it next.
+
+`custom_proforma_status` already existed; `Not Required` was **appended**.
+
+`custom_po_status` was relabelled **Approval Status**, its default changed to
+`Pending Approval`, and two values appended:
+
+```
+No PO Yet
+Pending Approval            <- new, and the default
+Pending Rate Approval       <- new
+PO Uploaded - Pending Approval
+Pending GM Approval
+PO Approved - Ready for SAP
+Rejected
+```
+
+**The stored values were not renamed.** `PO Approved - Ready for SAP` is what
+the production dashboard, `getMonthSales` and every existing record key off, so
+it stays; only the label reps see changed. `approvalLabel()` in
+[lib/core/order_rules.dart](../lib/core/order_rules.dart) does that mapping, and
+a test asserts no PO wording leaks to a rep.
+
+### The order lifecycle now
+
+Reps no longer scan a signed purchase order — that step and its camera flow are
+gone. An order goes straight into the manager's queue when it is raised.
+
+```
+raised ──> Pending Approval ──> manager approves ──> PO Approved - Ready for SAP
+                 │                                    + custom_rate_approved = 1
+                 │                                      (rates lock on the phone)
+                 └── rep adds a product after approval
+                        └──> Pending Rate Approval  (rates unlock for that line)
+```
+
+**Editing window:** everything about an order — products added, removed,
+requantified — stays open until **1 pm on the required delivery date**, for the
+rep who raised it and for their manager. After that it is frozen. The rule is
+in [lib/core/order_rules.dart](../lib/core/order_rules.dart) and is judged
+against the server's clock.
+
+Note this is enforced in the app only. Without server scripts nothing re-checks
+the deadline on write, so it stops an honest mistake, not a determined one.
+
+Two consequences worth knowing:
+
+- A rep can move the **required delivery date** forward, which moves their own
+  deadline with it. That is a real loophole, but changing the date is also a
+  legitimate customer request, and the manager sees the order either way.
+- Editing an order **adjusts its minimum-stock bookings by difference** rather
+  than releasing and re-taking them — otherwise a rep changing one line would
+  put the rest of their stock back on offer and could lose it mid-edit.
+
+## 6. Custom fields on `Sales Order Item` — created
+
+| Fieldname | Type | Meaning |
+| --- | --- | --- |
+| `custom_product_category` | Data | `PCTR` / `CTR` / `Bonding Gum` / `Vulcanizing Solution`. |
+| `custom_rolls` | Int | Whole rolls. |
+| `custom_loose_belts` | Int | PCTR only. |
+| `custom_boxes` | Int | Bonding gum only. |
+| `custom_cans` | Int | Solution only. |
+| `custom_total_weight` | Float(3) | Derived kg. Zero for solution. |
+| `custom_rate_per_kg` | Currency | What the rep quoted. |
+| `custom_packing_note` | Small Text | "12 rolls + 3 loose belts · 274.50 kg (avg)". |
+| `custom_aged_batch` | Link → Manna Minimum Stock Batch | Pins a line to one batch. **Nothing sets this** — see below. |
+
+### Old stock is a sales prompt, not a substitution
+
+An earlier version let a rep pick an older batch and asked them to confirm the
+swap with the customer. That was wrong. The oldest stock of a product goes out
+first regardless — the drawdown is oldest-first — and the shelf life is long
+enough that age is not a quality question anyone needs to agree to.
+
+Ages are surfaced for a different reason: stock that has been sitting is stock
+to **push harder in the market** before it becomes dead. So the app ranks and
+highlights it and offers nothing to decide. `custom_aged_batch` and the
+batch-pinning path in `StockService` remain because the reservation model
+supports them, but no screen writes to them.
+
+## 7. New doctypes — created
+
+Named with a `Manna` prefix because ERPNext ships its own `Stock Reservation
+Entry`, and two things called "Stock Reservation" in one Desk is a trap.
+
+### `Manna Minimum Stock Item` — the pool
+
+`item_code` (Link Item, autoname `field:item_code`), `qty` (Float — rolls, kg or
+cans depending on the family), `loose_belts` (Int, PCTR only), `disabled`
+(Check).
+
+An Item with no row here reads as "No minimum stock", which is deliberately
+different from "none left".
+
+### `Manna Minimum Stock Batch` — the aging list
+
+`item_code`, `batch_date` (Date), `qty`, `loose_belts`, `original_qty`,
+`original_loose_belts`. Naming `MSB-.#####`.
+
+Restocking **adds a row**; it does not edit `qty` upward. That is what makes
+"8 of the original 10 from March, plus 2 restocked last week" two rows rather
+than one number.
+
+### `Manna Stock Reservation` — one booking
+
+`item_code`, `qty`, `loose_belts`, `sales_order`, `sales_person`, `batch`
+(Link → batch), `status` (`Active`/`Released`/`Consumed`, default `Active`),
+`reserved_on`. Naming `MSR-.#####`.
+
+Only `Active` rows count against a pool. Releasing sets the status rather than
+deleting, so a stranded booking leaves a trail. Sales User has create+write.
+
+Rolls and belts are checked **independently**. Nothing cuts a whole roll into
+belts to cover a belt shortfall — whether that is allowed is a shop-floor
+decision, not one for a script. Say the word if it should.
+
+## 8. Server scripts — all disabled
+
+Seven were installed and are now disabled; the plan cannot run them. They are
+left in place rather than deleted so there is a record of what they did, and so
+they can be re-enabled unchanged if scripting ever comes back. Nothing in the
+app calls them.
+
+| Name | Replaced by |
+| --- | --- |
+| `manna_stock_reservation_rules` | `StockService.book` compare-and-swap |
+| `manna_sales_order_timestamp` | `Api.createSalesOrder` writing `nowStamp()` |
+| `manna_place_order` | `Api.placeOrder` — create, book, unwind on refusal |
+| `manna_minimum_stock` | `StockService.load` |
+| `manna_reserve_min_stock` | `StockService.book` |
+| `manna_release_reservations` | `StockService.release` |
+| `manna_aging_stock` | `Api.getAgingStock`, sorted client-side |
+
+## 8a. Business units on `Item` — created
+
+| Fieldname | Type | Meaning |
+| --- | --- | --- |
+| `custom_units` | Small Text | Pipe-wrapped list of units that sell this item, e.g. `\|Manna Treads\|Manna Tyres UAE\|` |
+
+Matches the convention `Customer.custom_assigned_reps` already uses. **Empty
+means every unit sees the item**, which is the state all 218 existing items are
+in — so an incomplete import degrades to the old behaviour rather than to an
+empty product list.
+
+The unit a rep belongs to is `Sales Person.custom_company`, which the app
+already reads into `Session.I.company`. The valid values are the three options
+on `Sales Order.custom_company`: **Manna Tyre Retreads**, **Manna Treads**,
+**Manna Tyres UAE**. Note these are business units, not ERPNext Companies — the
+Company doctype only has *Manna Rubber Products Private Limited* and *Manna
+Rubber UAE*.
+
+## 8b. Dead-stock tracking on `Manna Minimum Stock Item` — created
+
+| Fieldname | Type | Meaning |
+| --- | --- | --- |
+| `custom_reserved_qty` | Float(3) | Running total booked by all reps. Machine-owned — do not hand-edit while reps are ordering. |
+| `custom_reserved_loose_belts` | Int | Same, for belts. |
+| `custom_last_sold_on` | Date | Last time the item went on an order. |
+
+The minimum-stock list is a **high-demand, high-lead-time** list — items
+management wants permanently on the shelf. It is not a list of old stock. What
+needs watching is an item on that list that has *stopped* selling, because the
+rule that put it there will keep stock sitting against its name until someone
+notices. `custom_last_sold_on` is what the app measures that from; the
+thresholds are `kSlowMovingDays` (60) and `kDeadStockDays` (120) in
+[lib/core/constants.dart](../lib/core/constants.dart).
+
+## 9. What is still open
+
+1. **Finish the UOM migration.** 46 of 218 items are on `Roll`; **84 Precured
+   and 88 Hot Rubber items are still on `Nos`**. Rather than 172 more API
+   writes, add a `stock_uom` column set to `Roll` to the product import you are
+   already going to run for the average weights — same operation, no extra work.
+
+2. **Product data.** `custom_avg_weight_per_roll` + `custom_belts_per_roll` for
+   PCTR, `custom_weight_per_roll` for CTR, `custom_pack_litres` for solution,
+   `custom_units` for every item, and the Bonding Gum and Vulcanizing Solution
+   items themselves, which do not exist yet — both groups are empty.
+
+4. **Test fixture left in place.** `TREAD RUBBER PRECURED BLACK PEARL 120 IR 66`
+   has a **fabricated** 22.5 kg / 4 belts on it, plus a `Manna Minimum Stock
+   Item` of 10 rolls + 4 belts and one batch `MSB-00001` dated 2026-03-15. It is
+   there so you can verify the oversell guard the moment scripting is on.
+   Delete or correct it before it is mistaken for real data.
+
+5. **Consuming a reservation.** Nothing moves a booking from `Active` to
+   `Consumed` on delivery, because delivery is not in Phase 1.
+
+6. **Restock entry.** Adding a dated batch is a Desk task; there is no app
+   screen for it.
