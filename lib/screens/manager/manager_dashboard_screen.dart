@@ -6,9 +6,9 @@ import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/attendance/regularization_approvals_screen.dart';
 import 'package:manna_field_sales/screens/leave/leave_approvals_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_approvals_screen.dart';
+import 'package:manna_field_sales/screens/manager/manager_orders_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_limits_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_targets_screen.dart';
-import 'package:manna_field_sales/screens/trips/trip_rates_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class ManagerDashboardScreen extends StatefulWidget {
@@ -69,6 +69,25 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
               );
             }),
         const SizedBox(height: 12),
+        // The approvals inbox only ever holds what is outstanding, so an order
+        // vanishes from it the moment it is decided. This is where it goes.
+        Card(
+          child: ListTile(
+            leading:
+                const Icon(Icons.receipt_long, color: Color(0xFFF46A21)),
+            title: const Text('Team Orders',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: const Text(
+                'Approve orders, and see what happened to the ones you already '
+                'decided — by week'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(context,
+                    MaterialPageRoute(
+                        builder: (_) => const ManagerOrdersScreen()))
+                .then((_) => setState(() { _pending = _countPending(); })),
+          ),
+        ),
+        const SizedBox(height: 12),
         Card(
           child: ListTile(
             leading: const Icon(Icons.flag, color: Color(0xFFF46A21)),
@@ -126,19 +145,8 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                     builder: (_) => const LeaveApprovalsScreen(forHR: false))),
           ),
         ),
-        const SizedBox(height: 12),
-        Card(
-          child: ListTile(
-            leading:
-            const Icon(Icons.payments_outlined, color: Color(0xFFF46A21)),
-            title: const Text('Trip Rates',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: const Text('Set ₹/km reimbursement rates'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const TripRatesScreen())),
-          ),
-        ),
+        // Trip rates are an HR setting, not a sales one — they live on the HR
+        // dashboard so one person owns what reps get reimbursed.
         const SizedBox(height: 20),
         const Text('Team', style: TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),

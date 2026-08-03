@@ -1,6 +1,7 @@
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/history_list.dart';
@@ -23,7 +24,7 @@ class MyOrdersScreen extends StatelessWidget {
         final statusLine = approved
             ? 'Production: ${prod.isEmpty ? 'Not Started' : prod}'
             '${(fin.isNotEmpty && fin != 'null') ? '  ·  est. finish $fin' : ''}'
-            : 'PO: $po';
+            : approvalLabel(po);
         return ListTile(
           leading: const Icon(Icons.shopping_cart),
           title: Text(r['customer'] ?? r['name']),

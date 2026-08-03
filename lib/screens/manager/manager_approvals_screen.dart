@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/models/approval.dart';
+import 'package:manna_field_sales/screens/manager/manager_order_review_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class ManagerApprovalsScreen extends StatefulWidget {
@@ -102,11 +104,65 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
     return out;
   }
 
+  /// Opens the full review. The decision is made there, so the list only has
+  /// to refresh afterwards.
+  Future<void> _review(Approval a) async {
+    final decided = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+          builder: (_) => ManagerOrderReviewScreen(
+                orderName: a.name,
+                escalates: a.escalate,
+              )),
+    );
+    if (decided == true) _reload();
+  }
+
+  /// A lead order cannot be approved until the lead carries what an invoice
+  /// will need. Checked at the moment of approval, against the live lead
+  /// rather than whatever the list was loaded with.
+  Future<bool> _leadIsComplete(Approval a) async {
+    final leadName = '${a.party ?? ''}';
+    if (leadName.isEmpty) return true;
+    List<String> missing;
+    try {
+      final lead = await Api.getLeadDoc(leadName);
+      missing = missingLeadDetails(lead);
+    } catch (_) {
+      return true; // Do not block a decision on a failed lookup.
+    }
+    if (missing.isEmpty) return true;
+    if (!mounted) return false;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Lead details missing'),
+        content: Text(
+            'This lead becomes a customer as soon as it is invoiced, and an '
+            'invoice needs:\n\n'
+            '${missing.map((m) => '  •  $m').join('\n')}\n\n'
+            'Ask ${a.rep ?? 'the rep'} to complete the lead, then approve.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK')),
+        ],
+      ),
+    );
+    return false;
+  }
+
   Future<void> _act(Approval a, bool approve) async {
     try {
       switch (a.kind) {
         case 'lead_order':
-          await Api.approveLeadOrder(a.name, approve);
+          if (approve && !await _leadIsComplete(a)) return;
+          final customer = await Api.approveLeadOrder(a.name, approve);
+          if (customer != null && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('Lead converted to customer: $customer'),
+                duration: const Duration(seconds: 5)));
+          }
           break;
         case 'so_po':
           if (approve && a.escalate) {
@@ -262,21 +318,36 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
                             ),
                           ),
                         const SizedBox(height: 8),
-                        Row(children: [
-                          Expanded(
-                              child: FilledButton.icon(
-                                  onPressed: () => _act(a, true),
-                                  icon: const Icon(Icons.check),
-                                  label: const Text('Approve'))),
-                          const SizedBox(width: 8),
-                          Expanded(
-                              child: OutlinedButton.icon(
-                                  style: OutlinedButton.styleFrom(
-                                      foregroundColor: Colors.red),
-                                  onPressed: () => _act(a, false),
-                                  icon: const Icon(Icons.close),
-                                  label: const Text('Reject'))),
-                        ]),
+                        // A Sales Order is not a yes/no on a card. Approving it
+                        // fixes the price permanently and commits stock, so it
+                        // goes through the review screen where the manager can
+                        // actually see what they are agreeing to.
+                        if (a.kind == 'so_po')
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                                onPressed: () => _review(a),
+                                icon: const Icon(Icons.fact_check_outlined),
+                                label: const Padding(
+                                    padding: EdgeInsets.all(6),
+                                    child: Text('Review order'))),
+                          )
+                        else
+                          Row(children: [
+                            Expanded(
+                                child: FilledButton.icon(
+                                    onPressed: () => _act(a, true),
+                                    icon: const Icon(Icons.check),
+                                    label: const Text('Approve'))),
+                            const SizedBox(width: 8),
+                            Expanded(
+                                child: OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                        foregroundColor: Colors.red),
+                                    onPressed: () => _act(a, false),
+                                    icon: const Icon(Icons.close),
+                                    label: const Text('Reject'))),
+                          ]),
                       ]),
                 ),
               );
