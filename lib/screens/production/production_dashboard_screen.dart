@@ -26,9 +26,13 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
   void _reload() =>
       setState(() => _future = Api.getApprovedPOsForProduction());
 
+  /// Searches the order number and the route only. The customer is never
+  /// loaded for production, so there is nothing else to match on — and a
+  /// search box that quietly matched a hidden field would be a way of
+  /// confirming who an order belongs to by guessing.
   bool _match(Map<String, dynamic> r) {
     if (_q.isEmpty) return true;
-    final hay = [r['customer_name'], r['customer'], r['name'], r['custom_po_number']]
+    final hay = [r['name'], r['destination']]
         .map((e) => (e ?? '').toString().toLowerCase())
         .join(' ');
     return hay.contains(_q.toLowerCase());
@@ -48,7 +52,7 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
           child: TextField(
             decoration: const InputDecoration(
               prefixIcon: Icon(Icons.search),
-              hintText: 'Search customer / PO…',
+              hintText: 'Search order no. / route…',
               isDense: true,
               border: OutlineInputBorder(),
             ),
@@ -82,19 +86,41 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (ctx, i) {
                   final r = rows[i];
-                  final po = '${r['custom_po_number'] ?? ''}';
-                  final pstatus = '${r['custom_production_status'] ?? ''}'.isEmpty
-                      ? 'Not Started'
-                      : '${r['custom_production_status']}';
-                  final fin = '${r['custom_production_finish_date'] ?? ''}';
+                  final changed =
+                      (r['custom_changed_after_approval'] ?? 0) == 1;
+                  final delivery = '${r['delivery_date'] ?? ''}';
                   return ListTile(
                     isThreeLine: true,
-                    leading: const Icon(Icons.receipt_long,
-                        color: Color(0xFF7C3AED)),
-                    title: Text('${r['customer_name'] ?? r['customer'] ?? ''}'),
-                    subtitle: Text('${r['name']}  ·  ${r['transaction_date'] ?? ''}'
-                        '${po.isNotEmpty ? '  ·  PO $po' : ''}'
-                        '\n$pstatus${(fin.isNotEmpty && fin != 'null') ? '  ·  finish $fin' : ''}'),
+                    leading: Icon(
+                        changed ? Icons.priority_high : Icons.receipt_long,
+                        color: changed
+                            ? Colors.red
+                            : const Color(0xFF7C3AED)),
+                    // The route, not the customer. Production never receives
+                    // the identity — see Api.getApprovedPOsForProduction.
+                    title: Row(children: [
+                      Expanded(
+                        child: Text('${r['destination'] ?? 'No route set'}',
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w600)),
+                      ),
+                      if (changed)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                              color: Colors.red.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(4)),
+                          child: Text('CHANGED',
+                              style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.red.shade700)),
+                        ),
+                    ]),
+                    subtitle: Text(
+                        '${r['name']}  ·  raised ${r['transaction_date'] ?? ''}'
+                        '\nDeliver by ${delivery.isEmpty || delivery == 'null' ? 'not set' : delivery}'),
                     trailing: Text('₹${(r['grand_total'] ?? 0)}',
                         style: const TextStyle(fontWeight: FontWeight.bold)),
                     onTap: () async {
