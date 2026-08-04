@@ -58,6 +58,45 @@ Desk while reps are ordering, or a future integration that writes reservations
 without following the protocol. Neither is checked by anything. Treat the
 reserved counters as machine-owned.
 
+This is the part of the system most worth not breaking, so it is the part with
+the most tests. [test/stock_service_test.dart](../test/stock_service_test.dart)
+runs against an in-memory Frappe that enforces `modified` exactly as the real
+one does, and simulates a competing rep by landing a write in the gap between
+our read and our write. The assertion that matters: two reps racing for the last
+three rolls leaves **three** booked, not six.
+
+## The other build problem: version skew
+
+Because every rule above runs on the phone, a rep still carrying an older APK
+does not know the reserved counters exist and writes straight past them. Nothing
+on the server notices; it shows up as a warehouse that is short.
+
+`Manna App Settings` names the oldest build allowed to write, and the app checks
+it at sign-in. Two things to understand about that gate:
+
+- It only binds builds that contain the check, so it protects the fleet from
+  1.1.0 onward and not before. Getting everyone onto 1.1.0 is a one-time manual
+  push.
+- It fails open. A rep in a shop with a backend that will not answer keeps
+  working; the gate closes on a definite answer and never on silence. Clearing
+  `minimum_app_version` turns it off entirely.
+
+## Working without signal
+
+Reads are cached ([lib/services/offline_cache.dart](../lib/services/offline_cache.dart)) —
+customers and routes survive a dead network, and every cached answer carries its
+age so a rep never quotes a three-day-old outstanding balance believing it is
+current. A rejected request is never answered from cache; only a network failure
+falls back.
+
+Writes are **not** queued, deliberately. An order that draws on minimum stock is
+only real once the pool has been decremented on the server, so accepting one
+offline would mean telling a rep "saved" while another rep in signal takes the
+last rolls. Orders typed with no signal are held as clearly-labelled drafts
+([lib/services/pending_orders.dart](../lib/services/pending_orders.dart)) that
+say plainly no stock is held for them, and the booking happens when they are
+sent.
+
 ## Ordering and unwinding
 
 A reservation names the order it is held against, so the order has to be written

@@ -273,23 +273,59 @@ notices. `custom_last_sold_on` is what the app measures that from; the
 thresholds are `kSlowMovingDays` (60) and `kDeadStockDays` (120) in
 [lib/core/constants.dart](../lib/core/constants.dart).
 
+## 8c. `Manna App Settings` — created
+
+A Single doctype holding `minimum_app_version` (Data) and `update_message`
+(Small Text). The app reads it at sign-in and refuses to go further on a build
+older than the minimum — see [lib/core/app_version.dart](../lib/core/app_version.dart)
+for why that gate exists and what it cannot do.
+
+Set to `1.1.0`, the first build that carries the check. Permissions are
+deliberately lopsided: System Manager writes, Sales User / Sales Manager /
+Employee only read. Frappe defaults new roles to full write, so those three
+were explicitly set back to read-only — a version gate the reps being gated can
+switch off is not a gate.
+
+Clearing `minimum_app_version` turns the gate off entirely. That is the intended
+escape hatch if a bad minimum ever locks the field team out.
+
+## 8d. `sales_order` on `Lead Order` — created
+
+Link → Sales Order, read-only. Approving a lead order now raises a real Sales
+Order, because the production dashboard reads Sales Orders and nothing else;
+before this an approved lead order was a dead end that never reached the floor.
+This field records which order it became.
+
 ## 9. What is still open
 
-1. **Finish the UOM migration.** 46 of 218 items are on `Roll`; **84 Precured
-   and 88 Hot Rubber items are still on `Nos`**. Rather than 172 more API
-   writes, add a `stock_uom` column set to `Roll` to the product import you are
-   already going to run for the average weights — same operation, no extra work.
+1. **Finish the UOM migration.** 218 tread-rubber items: 50 were already on
+   `Roll`, 11 were corrected by API, and **157 are still on `Nos`**.
+   [server/item_uom_fix.csv](item_uom_fix.csv) covers all 168 that needed it and
+   is safe to re-run — Data Import > Item > Update Existing Records. Doing it by
+   API is possible but pointless: each write returns the whole item document,
+   and there are 157 of them.
+
+   These are all `is_stock_item: 0`, which is why the UOM change is allowed at
+   all — Frappe refuses it once an item has stock ledger entries.
 
 2. **Product data.** `custom_avg_weight_per_roll` + `custom_belts_per_roll` for
    PCTR, `custom_weight_per_roll` for CTR, `custom_pack_litres` for solution,
    `custom_units` for every item, and the Bonding Gum and Vulcanizing Solution
    items themselves, which do not exist yet — both groups are empty.
 
-4. **Test fixture left in place.** `TREAD RUBBER PRECURED BLACK PEARL 120 IR 66`
-   has a **fabricated** 22.5 kg / 4 belts on it, plus a `Manna Minimum Stock
-   Item` of 10 rolls + 4 belts and one batch `MSB-00001` dated 2026-03-15. It is
-   there so you can verify the oversell guard the moment scripting is on.
-   Delete or correct it before it is mistaken for real data.
+4. **Fabricated data still in place, and it is load-bearing.** Six real items
+   carry **invented** weights — 120 IR 66 (22.5 kg / 4 belts), 124 ZT 67 (24.8 /
+   4), 130 AJAX 99 (31.2 / 5), 145 DR 87 (28.4 / 4), PLATINUM 120 AJAX 69 (21.6 /
+   4), PLATINUM 150 SL 96 (33.5 / 5) — alongside 12 `Manna Minimum Stock Item`
+   rows, 14 batches (`MSB-00001`–`MSB-00014`) and 12 reservations
+   (`MSR-00001`–`MSR-00012`, all against test order `SAL-ORD-2026-00096`).
+
+   The weights cannot simply be zeroed. A PCTR line prices as
+   `ratePerKg × rollWeight`, so an item with weight 0 prices at **zero** — the
+   fabricated numbers are wrong, but deleting them without replacing them is
+   worse than leaving them. Replace them with the real weights in the same
+   product import as item 2; the pools, batches and reservations can go
+   independently once minimum stock is loaded with real figures.
 
 5. **Consuming a reservation.** Nothing moves a booking from `Active` to
    `Consumed` on delivery, because delivery is not in Phase 1.
