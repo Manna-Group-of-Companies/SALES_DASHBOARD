@@ -100,16 +100,18 @@ class MinStock {
     return !isDeadStockRisk && d >= kSlowMovingDays;
   }
 
-  /// What is physically on the shelf, from the dated batches.
+  /// What is physically in the plant — everything that has not been dispatched.
   ///
-  /// The batches are the live record, not [minimumQty]: restocking **adds a
-  /// batch row** and never edits the pool upward, so the moment stock arrives
-  /// the two diverge. `minimumQty` is the "keep at least this much" threshold
-  /// that drives the dead-stock warnings, and nothing more.
+  /// Summed from the dated batches, which are the live record. [minimumQty] is
+  /// not: restocking **adds a batch row** and never edits the pool upward, so
+  /// the two diverge the moment stock arrives. `minimumQty` is the "keep at
+  /// least this much" threshold that drives the dead-stock warnings, and
+  /// nothing more.
   ///
-  /// Already net of bookings — a batch is drawn down when stock is booked, so
-  /// this is what is left to sell. Subtracting [reservedQty] from it as well
-  /// would count every booking twice and refuse orders that could be filled.
+  /// **A booking does not reduce this.** Stock a rep has booked is still on the
+  /// floor until it ships, and that is exactly the number a rep needs when
+  /// asking the manager to have some of it allotted to them. It falls only on
+  /// dispatch.
   double get onHandQty =>
       batches.fold<double>(0, (t, b) => t + (b.qty > 0 ? b.qty : 0));
 
@@ -125,23 +127,25 @@ class MinStock {
   /// cautious.
   bool get _noBatchRecord => batches.isEmpty;
 
-  /// What a rep can still commit to. Never below zero, because a pool
-  /// over-reserved by a race the server rejected should read as empty rather
-  /// than as a negative number.
+  /// What a rep can still commit to: what is in the plant, less what is already
+  /// booked against it.
+  ///
+  /// This is the number that moves when somebody books. [onHandQty] does not —
+  /// the two together answer different questions, and a rep needs both: "how
+  /// much exists" and "how much can I promise".
+  ///
+  /// Never below zero, because a pool over-reserved by a race the server
+  /// rejected should read as empty rather than as a negative number.
   double get availableQty {
-    if (_noBatchRecord) {
-      final fallback = minimumQty - reservedQty;
-      return fallback < 0 ? 0 : fallback;
-    }
-    return onHandQty;
+    final base = _noBatchRecord ? minimumQty : onHandQty;
+    final left = base - reservedQty;
+    return left < 0 ? 0 : left;
   }
 
   int get availableLooseBelts {
-    if (_noBatchRecord) {
-      final fallback = minimumLooseBelts - reservedLooseBelts;
-      return fallback < 0 ? 0 : fallback;
-    }
-    return onHandLooseBelts;
+    final base = _noBatchRecord ? minimumLooseBelts : onHandLooseBelts;
+    final left = base - reservedLooseBelts;
+    return left < 0 ? 0 : left;
   }
 
   /// Total belts a rep could take, counting whole rolls that would be cut.

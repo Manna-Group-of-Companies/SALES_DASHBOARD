@@ -196,21 +196,25 @@ class StockService {
             '$itemCode is not on the minimum stock list, so it cannot be booked.');
       }
 
-      // What is actually on the shelf, from the dated batches — not from the
-      // pool's `qty`, which is only the "keep at least this much" threshold and
-      // never moves when stock is restocked. Read inside the attempt so a
-      // retry after a lost race sees what the winner took.
+      // What is in the plant, from the dated batches — not from the pool's
+      // `qty`, which is only the "keep at least this much" threshold and never
+      // moves when stock is restocked.
+      //
+      // Batches hold gross stock: a booking does not touch them, because the
+      // rolls are still on the floor until they ship. So the headroom is that
+      // gross figure less what is already booked, and the reserved counter on
+      // the pool — read in the same attempt as the CAS — is what makes that
+      // subtraction safe against another rep booking at the same moment.
       final shelf = await _shelf(itemCode);
-      var headroomQty = shelf.qty;
-      var headroomBelts = shelf.belts;
       // No batch rows at all: a pool with a threshold but no recorded stock.
-      // Fall back to the old arithmetic rather than taking the item off the
-      // market — it is the lower number, so it can only be cautious.
-      if (shelf.empty) {
-        headroomQty = _num(pool['qty']) - _num(pool['custom_reserved_qty']);
-        headroomBelts = _int(pool['loose_belts']) -
-            _int(pool['custom_reserved_loose_belts']);
-      }
+      // Fall back to the threshold rather than taking the item off the market —
+      // it is the lower number, so it can only be cautious.
+      final grossQty = shelf.empty ? _num(pool['qty']) : shelf.qty;
+      final grossBelts =
+          shelf.empty ? _int(pool['loose_belts']) : shelf.belts;
+      final headroomQty = grossQty - _num(pool['custom_reserved_qty']);
+      final headroomBelts =
+          grossBelts - _int(pool['custom_reserved_loose_belts']);
 
       // Belts are cut from whole rolls. Ordering three belts from a twelve-belt
       // roll opens one roll: three go out and nine come back as loose stock for
@@ -249,12 +253,11 @@ class StockService {
       });
 
       if (won) {
-        // Rolls leaving the shelf include any opened for belts. The belt figure
-        // is what the customer takes less what the opened rolls put back, so it
-        // goes negative when opening a roll leaves a remainder — which is the
-        // remainder returning to stock.
-        await _drawDownBatches(itemCode, qty + rollsOpened,
-            belts - (rollsOpened * perRoll), batch);
+        // The batches are deliberately left alone. Booking does not move any
+        // rubber — the rolls stay in the plant, and a roll is only cut and a
+        // batch only drawn down when the order is dispatched. Reducing them
+        // here would make "actual stock" mean "unbooked stock", which is the
+        // one thing it must not mean.
         return _audit(
             itemCode: itemCode,
             qty: qty,
@@ -348,7 +351,8 @@ class StockService {
       if (won) break;
     }
 
-    await _restoreBatch(itemCode, qty, belts, null);
+    // Batches are untouched: a booking never reduced them, so releasing one has
+    // nothing to put back. The reserved counter above is the whole story.
 
     // Shrink the audit rows for this item so they still add up to what is
     // actually held. Oldest first, so the batch a rep deliberately chose on the
@@ -419,7 +423,7 @@ class StockService {
         if (won) break;
       }
 
-      await _restoreBatch(code, qty, belts, r['batch'] as String?);
+      // Nothing to restore — see _giveBack. The batch never moved.
       // Released rather than deleted, so a stranded booking leaves a trail.
       try {
         await Session.I.dio.put('${_res(kReservationDoctype)}/${r['name']}',
@@ -577,85 +581,13 @@ class StockService {
     }
   }
 
-  /// Oldest batch first, so the stock that has been sitting longest is the
-  /// stock that leaves. Best-effort by design: the pool counter is what
-  /// guarantees the customer gets served, and a batch list that has drifted is
-  /// a reporting problem, not a reason to refuse an order at the counter.
-  ///
-  /// [belts] may be **negative**, which is how opening a roll puts its
-  /// remainder back: the roll is taken out of [qty] and the belts it yielded
-  /// beyond what the customer wanted go onto the same batch it came from.
-  static Future<void> _drawDownBatches(
-      String itemCode, double qty, int belts, String? preferred) async {
-    try {
-      final batches = await _list(kBatchDoctype,
-          fields: '["name","qty","loose_belts"]',
-          filters: '[["item_code","=","$itemCode"]]',
-          orderBy: 'batch_date asc');
-      if (batches.isEmpty) return;
-      if (preferred != null) {
-        batches.sort((a, b) => a['name'] == preferred
-            ? -1
-            : (b['name'] == preferred ? 1 : 0));
-      }
-
-      // A remainder from an opened roll goes back to the batch the roll was
-      // taken from — the oldest — so it stays with its own age rather than
-      // quietly becoming new stock.
-      if (belts < 0) {
-        final target = batches.first;
-        await Session.I.dio
-            .put('${_res(kBatchDoctype)}/${target['name']}', data: {
-          'loose_belts': _int(target['loose_belts']) - belts,
-        });
-        target['loose_belts'] = _int(target['loose_belts']) - belts;
-        belts = 0;
-      }
-
-      var remainingQty = qty;
-      var remainingBelts = belts;
-      for (final b in batches) {
-        if (remainingQty <= 0.0001 && remainingBelts <= 0) break;
-        final haveQty = _num(b['qty']);
-        final haveBelts = _int(b['loose_belts']);
-        final takeQty = remainingQty > haveQty ? haveQty : remainingQty;
-        final takeBelts = remainingBelts > haveBelts ? haveBelts : remainingBelts;
-        if (takeQty <= 0 && takeBelts <= 0) continue;
-        await Session.I.dio.put('${_res(kBatchDoctype)}/${b['name']}', data: {
-          'qty': haveQty - takeQty,
-          'loose_belts': haveBelts - takeBelts,
-        });
-        remainingQty -= takeQty;
-        remainingBelts -= takeBelts;
-      }
-    } catch (_) {}
-  }
-
-  /// Puts a released quantity back where it came from when we know, and onto
-  /// the oldest open batch when we do not — which keeps the aging order intact
-  /// instead of quietly making returned stock look new.
-  static Future<void> _restoreBatch(
-      String itemCode, double qty, int belts, String? batch) async {
-    try {
-      var target = batch;
-      if (target == null) {
-        final oldest = await _list(kBatchDoctype,
-            fields: '["name"]',
-            filters: '[["item_code","=","$itemCode"]]',
-            orderBy: 'batch_date asc',
-            limit: 1);
-        if (oldest.isEmpty) return;
-        target = '${oldest.first['name']}';
-      }
-      final r = await Session.I.dio.get('${_res(kBatchDoctype)}/$target');
-      final d = (r.data is Map) ? r.data['data'] : null;
-      if (d is! Map) return;
-      await Session.I.dio.put('${_res(kBatchDoctype)}/$target', data: {
-        'qty': _num(d['qty']) + qty,
-        'loose_belts': _int(d['loose_belts']) + belts,
-      });
-    } catch (_) {}
-  }
+  // The batch drawdown and restore that used to live here are gone.
+  //
+  // They ran at booking time, which made the batch total mean "stock nobody
+  // has booked" rather than "stock in the plant" — and those are different
+  // numbers a rep needs to see side by side. Batches now move only when stock
+  // physically leaves, which the app does not yet do: dispatch is not built,
+  // so today they change only when the office edits them in Desk.
 
   /// A read that falls back to the last sync when the network is down.
   ///

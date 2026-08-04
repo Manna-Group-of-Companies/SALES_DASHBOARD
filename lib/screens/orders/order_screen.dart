@@ -170,26 +170,37 @@ class _OrderScreenState extends State<OrderScreen> {
   /// of the wrong kind to reach them is the slowest part of taking an order.
   ProductCategory? _categoryFilter;
 
-  /// The families this catalogue actually contains, in selling order. Built
-  /// from the loaded products rather than from the enum, so a unit that never
-  /// sells solution is not offered a filter that would come back empty.
-  List<ProductCategory> get _availableCategories {
-    const order = [
-      ProductCategory.pctr,
-      ProductCategory.ctr,
-      ProductCategory.bondingGum,
-      ProductCategory.vulcanizingSolution,
-      ProductCategory.other,
-    ];
-    final present = _lines.map((l) => l.product.category).toSet();
-    return order.where(present.contains).toList();
-  }
+  /// Whether to show only items on the minimum-stock list, only items off it,
+  /// or everything. Null means everything.
+  ///
+  /// Minimum stock is what a rep can promise today; everything else is made to
+  /// order. Being able to see just the first is how a rep answers "what can you
+  /// give me this week" without reading every row.
+  bool? _stockFilter;
+
+  /// The families offered in the picker.
+  ///
+  /// Fixed, not derived from the loaded catalogue. Deriving it meant the
+  /// dropdown appeared blank and then popped into existence a second later when
+  /// the products arrived, which read as the screen still loading. A family
+  /// with nothing in it simply filters to an empty list, and the empty state
+  /// says so.
+  static const List<ProductCategory> _categories = [
+    ProductCategory.pctr,
+    ProductCategory.ctr,
+    ProductCategory.bondingGum,
+    ProductCategory.vulcanizingSolution,
+  ];
 
   List<OrderLine> get _filtered {
     final qq = _q.trim().toLowerCase();
     return _lines.where((l) {
       if (_categoryFilter != null && l.product.category != _categoryFilter) {
         return false;
+      }
+      if (_stockFilter != null) {
+        final onList = _stock.containsKey(l.product.code);
+        if (onList != _stockFilter) return false;
       }
       if (qq.isEmpty) return true;
       return '${l.product.name} ${l.product.code}'.toLowerCase().contains(qq);
@@ -445,32 +456,53 @@ class _OrderScreenState extends State<OrderScreen> {
     }
   }
 
-  /// The family filter.
-  ///
-  /// Only appears once the catalogue has loaded and holds more than one
-  /// family — on a unit that sells a single kind of product it would be a
-  /// control with one option, which is just clutter.
-  Widget _categoryPicker() {
-    final families = _availableCategories;
-    if (families.length < 2) return const SizedBox.shrink();
+  /// The family filter. Built from a fixed list so it is on screen from the
+  /// first frame rather than arriving with the catalogue.
+  Widget _categoryPicker() => DropdownButtonHideUnderline(
+        child: DropdownButton<ProductCategory?>(
+          value: _categoryFilter,
+          isDense: true,
+          borderRadius: BorderRadius.circular(12),
+          // The collapsed label stays short so the search field keeps its
+          // width; the full family name is on each menu entry.
+          selectedItemBuilder: (_) => [
+            _pickerLabel('All'),
+            for (final c in _categories) _pickerLabel(c.shortLabel),
+          ],
+          items: [
+            const DropdownMenuItem<ProductCategory?>(
+                value: null, child: Text('All products')),
+            for (final c in _categories)
+              DropdownMenuItem<ProductCategory?>(
+                  value: c, child: Text(c.label)),
+          ],
+          onChanged: (v) => setState(() => _categoryFilter = v),
+        ),
+      );
+
+  /// The minimum-stock filter. Only offered to units that keep a pool at all —
+  /// for the others every product would be "no minimum stock" and the control
+  /// would sort nothing.
+  Widget _stockPicker() {
+    if (!_usesMinimumStock) return const SizedBox.shrink();
     return DropdownButtonHideUnderline(
-      child: DropdownButton<ProductCategory?>(
-        value: _categoryFilter,
+      child: DropdownButton<bool?>(
+        value: _stockFilter,
         isDense: true,
         borderRadius: BorderRadius.circular(12),
-        // The label stays short so the search field keeps its width; the full
-        // family name is on each menu entry.
         selectedItemBuilder: (_) => [
-          _pickerLabel('All'),
-          for (final c in families) _pickerLabel(c.shortLabel),
+          _pickerLabel('Any stock'),
+          _pickerLabel('Min stock'),
+          _pickerLabel('Made to order'),
         ],
-        items: [
-          const DropdownMenuItem<ProductCategory?>(
-              value: null, child: Text('All products')),
-          for (final c in families)
-            DropdownMenuItem<ProductCategory?>(value: c, child: Text(c.label)),
+        items: const [
+          DropdownMenuItem<bool?>(value: null, child: Text('Any stock')),
+          DropdownMenuItem<bool?>(
+              value: true, child: Text('On minimum stock')),
+          DropdownMenuItem<bool?>(
+              value: false, child: Text('Made to order only')),
         ],
-        onChanged: (v) => setState(() => _categoryFilter = v),
+        onChanged: (v) => setState(() => _stockFilter = v),
       ),
     );
   }
@@ -513,20 +545,22 @@ class _OrderScreenState extends State<OrderScreen> {
       body: Column(children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-          child: Row(children: [
-            Expanded(
-              child: TextField(
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: 'Search products…',
-                  isDense: true,
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (v) => setState(() => _q = v),
+          child: Column(children: [
+            TextField(
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                hintText: 'Search products…',
+                isDense: true,
+                border: OutlineInputBorder(),
               ),
+              onChanged: (v) => setState(() => _q = v),
             ),
-            const SizedBox(width: 8),
-            _categoryPicker(),
+            const SizedBox(height: 4),
+            Row(children: [
+              _categoryPicker(),
+              const SizedBox(width: 12),
+              _stockPicker(),
+            ]),
           ]),
         ),
         Expanded(

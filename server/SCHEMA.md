@@ -234,32 +234,49 @@ never edits the pool upward, so the two diverge the moment stock arrives.
 Reading availability off the pool pinned it near the minimum while the batch
 list showed the real, larger figure.
 
-Two things that are easy to get wrong here:
+Three numbers, three questions:
 
-- **The batch total is already net of bookings.** A batch is drawn down when
-  stock is booked, so available *is* the batch total. Subtracting
-  `custom_reserved_qty` as well counts every booking twice and refuses orders
-  that could be filled.
-- **An item with no batch rows falls back to `qty − reserved`.** A threshold
-  declared with no stock recorded is not the same as "none left", and reading
-  it as zero would take every un-batched item off the market overnight. The
-  fallback is the lower number, so it can only ever be cautious.
+| Shown as | Source | Answers |
+| --- | --- | --- |
+| Minimum stock | pool `qty` | what *should* be here |
+| Actual stock | sum of batches | what *is* here, undispatched |
+| Available to sell | batches − `custom_reserved_qty` | what can be promised |
+
+**A booking does not touch the batches.** Booked stock is still on the floor
+until it ships, so "actual stock" means *not yet dispatched* — which is the
+figure a rep quotes when asking the manager to have some of it reallocated to
+them. Only availability moves when somebody books.
+
+That is why the booking guard subtracts `custom_reserved_qty` itself. It used to
+get that subtraction for free because batches were drawn down at booking time;
+they are not any more, and a test pins that a second order cannot take what the
+first one booked.
+
+**An item with no batch rows falls back to `qty − reserved`.** A threshold
+declared with no stock recorded is not the same as "none left", and reading it
+as zero would take every un-batched item off the market overnight. The fallback
+is the lower number, so it can only ever be cautious.
+
+**Dispatch is not built.** Nothing in the app reduces a batch, so today `Actual
+stock` falls only when the office edits the batch rows in Desk. That is the
+missing half of this model and it is the next thing worth building — see the
+open list.
 
 ### Belts are cut from whole rolls
 
-Ordering belts opens a roll. Three belts from a twelve-belt roll takes one roll
-off the shelf, sends three out, and puts **nine back as loose belts** on the
-same batch the roll came from — so the remainder keeps its own age rather than
-quietly becoming new stock.
+A rep can book belts with no loose ones on the shelf, provided there is a roll
+to cut: the belt ceiling is `loose + (rolls × belts_per_roll)`, and any roll
+needed for belts counts against the roll headroom. So an order for two rolls
+plus one belt needs **three** rolls available and is refused with two.
 
 The pack size is `custom_belts_per_roll` on the Item, read only when a belt
-order actually needs a roll opened. An item without it set cannot have belts
-cut and the order is refused with that reason, rather than a pack size being
-guessed.
+order actually needs a roll opened. An item without it set cannot have belts cut
+and the order is refused with that reason, rather than a pack size being guessed.
 
-Releasing a belt booking returns the **belts**, not the roll — a cut roll
-cannot be re-formed. That conserves the count: 10 rolls × 12 = 120 belts before,
-9 × 12 + 9 loose + 3 sold = 120 after.
+**Nothing is actually cut at booking time.** The roll is opened when the order
+is dispatched, which is also when the remainder — nine belts from a twelve-belt
+roll on a three-belt order — becomes loose stock. Since dispatch is not built,
+that step is currently manual.
 
 ### `Manna Minimum Stock Batch` — the aging list
 

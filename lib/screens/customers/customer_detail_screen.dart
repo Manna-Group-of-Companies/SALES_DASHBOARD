@@ -302,8 +302,16 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         child: Column(children: [
-          row(Icons.alt_route, 'Route',
-              '${c['territory'] ?? ''}'.isEmpty ? '—' : '${c['territory']}'),
+          // Reads the Sales Route, not the Territory. This row was left on
+          // `territory` when routes moved to their own doctype, so it stayed
+          // blank however carefully the route was assigned.
+          row(
+              Icons.alt_route,
+              'Route',
+              ('${c['custom_sales_route'] ?? ''}'.isEmpty ||
+                      '${c['custom_sales_route']}' == 'null')
+                  ? 'Not set'
+                  : '${c['custom_sales_route']}'),
           row(
               Icons.category_outlined,
               'Group',
@@ -447,9 +455,12 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               style:
               const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
-          Text([c['customer_group'], c['custom_sales_route']]
-              .where((x) => x != null && '$x'.isNotEmpty && '$x' != 'null')
-              .join(' - ')),
+          // Group only. The route lives in the details card below — showing it
+          // twice invited exactly the confusion it caused, where the card read
+          // blank while the line under the name read fine.
+          Text(('${c['customer_group'] ?? ''}' == 'null')
+              ? ''
+              : '${c['customer_group'] ?? ''}'),
           // The route is what production plans deliveries by, so its absence
           // is worth saying out loud rather than showing an empty line.
           if ('${c['custom_sales_route'] ?? ''}'.isEmpty ||

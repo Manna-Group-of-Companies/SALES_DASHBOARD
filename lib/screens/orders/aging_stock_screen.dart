@@ -335,12 +335,11 @@ Future<void> showMinStockDetail(
           const Text('Stock details',
               style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          // The threshold, not the shelf. Kept first because it is what the
-          // list is *for*; the shelf figure sits under it so the two read as a
-          // pair rather than as one number contradicting the other.
+          // Three numbers that answer three different questions, in the order a
+          // rep asks them: what should be here, what is here, what can I sell.
           _kv('Minimum stock',
               s.describe(s.minimumQty, s.minimumLooseBelts, unit)),
-          _kv('Actual stock',
+          _kv('Actual stock (not dispatched)',
               s.describe(s.onHandQty, s.onHandLooseBelts, unit)),
           _kv('Booked by reps',
               s.bookings.isEmpty
@@ -364,8 +363,20 @@ Future<void> showMinStockDetail(
                             fontSize: 12, fontWeight: FontWeight.w600)),
                   ]),
             ),
-          _kv('Available',
+          _kv('Available to sell',
               s.describe(s.availableQty, s.availableLooseBelts, unit)),
+          // The gap between the two is what a rep argues over with the manager:
+          // the stock is in the plant, somebody else is holding it, and it can
+          // be reassigned. Only shown when there is a gap to argue about.
+          if (s.reservedQty > 0 || s.reservedLooseBelts > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Booked stock is still in the plant until it is dispatched. '
+                'Ask your manager if you need some of it allotted to you.',
+                style: TextStyle(fontSize: 12, color: Colors.blueGrey.shade700),
+              ),
+            ),
           _kv('Last sold', lastSoldLabel(s)),
           if (p.isMisconfigured)
             Padding(

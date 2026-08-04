@@ -291,18 +291,31 @@ void main() {
       expect(s.availableQty, 27);
     });
 
-    test('bookings are not subtracted twice', () {
-      // Batches are drawn down when stock is booked, so the batch total is
-      // already net. Subtracting the reserved figure again would refuse orders
-      // that could be filled.
+    test('a booking lowers what can be sold, not what is in the plant', () {
+      // The two answer different questions. Booked stock has not moved — it is
+      // still on the floor until it ships — which is exactly the number a rep
+      // quotes when asking the manager to reassign some of it.
       final s = MinStock(
         itemCode: 'PCTR-100',
         minimumQty: 20,
         reservedQty: 3,
         myReservedQty: 3,
-        batches: [_batch('MSB-1', qty: 17)],
+        batches: [_batch('MSB-1', qty: 20)],
       );
+      expect(s.onHandQty, 20, reason: 'nothing has been dispatched');
       expect(s.availableQty, 17);
+    });
+
+    test('a pool booked out entirely still shows its stock', () {
+      final s = MinStock(
+        itemCode: 'PCTR-100',
+        minimumQty: 20,
+        reservedQty: 20,
+        myReservedQty: 0,
+        batches: [_batch('MSB-1', qty: 20)],
+      );
+      expect(s.onHandQty, 20);
+      expect(s.availableQty, 0);
     });
 
     test('an item with no batch rows falls back to the pool arithmetic', () {
@@ -377,7 +390,7 @@ void main() {
   });
 
   group('Opening a roll on a real booking', () {
-    test('three belts from an unopened pool costs a roll and returns nine',
+    test('belts can be booked with no loose ones, because a roll can be cut',
         () async {
       fake.seedPool('PCTR-100', qty: 10);
       fake.seedItem('PCTR-100', beltsPerRoll: 12);
@@ -389,27 +402,30 @@ void main() {
           belts: 3,
           order: const OrderRef('SO-1'));
 
+      expect(fake.pools['PCTR-100']!['custom_reserved_loose_belts'], 3);
+      // Nothing is cut yet. The roll is only opened when the order ships, so
+      // the plant still holds ten whole rolls.
       final b = fake.batches.values.first;
-      expect(b['qty'], 9, reason: 'one roll was opened');
-      expect(b['loose_belts'], 9, reason: 'the remainder went back on the shelf');
-      // Belt count is conserved: 10x12 = 120 before, 9x12 + 9 + 3 sold = 120.
-      expect((b['qty'] as num) * 12 + (b['loose_belts'] as num) + 3, 120);
+      expect(b['qty'], 10);
+      expect(b['loose_belts'], 0);
     });
 
-    test('loose belts are used before any roll is opened', () async {
+    test('booking does not move any rubber', () async {
       fake.seedPool('PCTR-100', qty: 10);
       fake.seedItem('PCTR-100', beltsPerRoll: 12);
       fake.seedBatch('PCTR-100', qty: 10, belts: 5);
 
       await StockService.book(
           itemCode: 'PCTR-100',
-          qty: 0,
+          qty: 2,
           belts: 4,
           order: const OrderRef('SO-1'));
 
+      expect(fake.putCount('Manna Minimum Stock Batch'), 0,
+          reason: 'batches change on dispatch, never on a booking');
       final b = fake.batches.values.first;
-      expect(b['qty'], 10, reason: 'no roll should have been cut');
-      expect(b['loose_belts'], 1);
+      expect(b['qty'], 10);
+      expect(b['loose_belts'], 5);
     });
 
     test('a belt order refuses when no roll is left to open', () async {
@@ -466,9 +482,37 @@ void main() {
           belts: 0,
           order: const OrderRef('SO-1'));
 
-      final left = fake.batches.values
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 20);
+      // Still 27 in the plant — none of it has shipped.
+      final inPlant = fake.batches.values
           .fold<double>(0, (t, b) => t + (b['qty'] as num).toDouble());
-      expect(left, 7);
+      expect(inPlant, 27);
+    });
+
+    test('a second order cannot take what the first one booked', () async {
+      // The guard now has to subtract bookings itself, because the batches no
+      // longer do it. This is the test that would catch getting that wrong.
+      fake.seedPool('PCTR-100', qty: 10);
+      fake.seedBatch('PCTR-100', qty: 27);
+
+      await StockService.book(
+          itemCode: 'PCTR-100',
+          qty: 20,
+          belts: 0,
+          order: const OrderRef('SO-1'));
+
+      await expectLater(
+        StockService.book(
+            itemCode: 'PCTR-100', qty: 8, belts: 0, order: const OrderRef('SO-2')),
+        throwsA(isA<StockUnavailable>()),
+      );
+      // 7 left, so 7 is fine.
+      await StockService.book(
+          itemCode: 'PCTR-100',
+          qty: 7,
+          belts: 0,
+          order: const OrderRef('SO-3'));
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 27);
     });
   });
 

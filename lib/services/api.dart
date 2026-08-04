@@ -1454,12 +1454,51 @@ class Api {
     });
   }
 
-  static Future<List<Map<String, dynamic>>> getMyOrders() =>
-      _cachedRows(CacheKeys.orders, () => _list('Sales Order',
-          fields:
-              '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_proforma_required","custom_order_placed_at","custom_po_status","custom_production_status","custom_production_finish_date"]',
-          filters: _mineFilter('custom_sales_person'),
-          limit: 50));
+  /// Every order this rep has raised — against customers and against leads.
+  ///
+  /// A lead order is an order. Leaving it out of My Orders meant a rep could
+  /// take one and then have nowhere to see what became of it, which is the
+  /// screen's whole job.
+  ///
+  /// The two doctypes are mapped onto one shape here rather than in the widget:
+  /// a Lead Order names its party in `lead_name` and its state in `status`,
+  /// where a Sales Order uses `customer` and `custom_po_status`.
+  static Future<List<Map<String, dynamic>>> getMyOrders() => _cachedRows(
+        CacheKeys.orders,
+        () async {
+          final results = await Future.wait([
+            _list('Sales Order',
+                fields:
+                    '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_proforma_required","custom_order_placed_at","custom_po_status","custom_production_status","custom_production_finish_date"]',
+                filters: _mineFilter('custom_sales_person'),
+                limit: 50),
+            // A rep's own lead orders. Failing here must not cost them their
+            // customer orders, so it is caught rather than propagated.
+            _list('Lead Order',
+                fields:
+                    '["name","lead","lead_name","order_date","delivery_date","total_amount","status","custom_order_placed_at","sales_person"]',
+                filters: _mineFilter('sales_person'),
+                limit: 50).catchError(
+                (_) => <Map<String, dynamic>>[]),
+          ]);
+
+          final rows = <Map<String, dynamic>>[...results[0]];
+          for (final l in results[1]) {
+            rows.add({
+              ...l,
+              'is_lead': true,
+              'customer': l['lead_name'] ?? l['lead'],
+              'transaction_date': l['order_date'],
+              'grand_total': l['total_amount'],
+            });
+          }
+          // Newest first across both, so the list reads as one history rather
+          // than as two lists stapled together.
+          rows.sort((a, b) => '${b['transaction_date'] ?? ''}'
+              .compareTo('${a['transaction_date'] ?? ''}'));
+          return rows;
+        },
+      );
 
   static Future<Map<String, dynamic>> getOrder(String name) async {
     final r = await Session.I.dio.get(_res('Sales Order') + '/$name');
