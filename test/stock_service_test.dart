@@ -17,8 +17,19 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/stock_service.dart';
+
+StockBatch _batch(String name, {double qty = 0, int belts = 0}) => StockBatch(
+      name: name,
+      itemCode: 'PCTR-100',
+      batchDate: '2026-01-01',
+      qty: qty,
+      looseBelts: belts,
+      originalQty: qty,
+      ageDays: 30,
+    );
 
 void main() {
   late _FakeFrappe fake;
@@ -260,6 +271,207 @@ void main() {
     });
   });
 
+  group('Availability comes from the shelf, not the threshold', () {
+    test('a restock is sellable even though the threshold did not move', () {
+      // The bug this fixes: restocking adds a batch row and never edits the
+      // pool, so availability read off the pool stayed pinned at the minimum
+      // while the shelf held far more.
+      final s = MinStock(
+        itemCode: 'PCTR-100',
+        minimumQty: 10,
+        reservedQty: 0,
+        myReservedQty: 0,
+        batches: [
+          _batch('MSB-1', qty: 12),
+          _batch('MSB-2', qty: 15),
+        ],
+      );
+      expect(s.minimumQty, 10);
+      expect(s.onHandQty, 27);
+      expect(s.availableQty, 27);
+    });
+
+    test('bookings are not subtracted twice', () {
+      // Batches are drawn down when stock is booked, so the batch total is
+      // already net. Subtracting the reserved figure again would refuse orders
+      // that could be filled.
+      final s = MinStock(
+        itemCode: 'PCTR-100',
+        minimumQty: 20,
+        reservedQty: 3,
+        myReservedQty: 3,
+        batches: [_batch('MSB-1', qty: 17)],
+      );
+      expect(s.availableQty, 17);
+    });
+
+    test('an item with no batch rows falls back to the pool arithmetic', () {
+      // A threshold declared with no stock recorded is not the same as "none
+      // left" — reading zero would take the item off the market overnight.
+      final s = MinStock(
+        itemCode: 'PCTR-100',
+        minimumQty: 10,
+        reservedQty: 4,
+        myReservedQty: 0,
+      );
+      expect(s.availableQty, 6);
+    });
+
+    test('an empty shelf reads as nothing available', () {
+      final s = MinStock(
+        itemCode: 'PCTR-100',
+        minimumQty: 10,
+        reservedQty: 0,
+        myReservedQty: 0,
+        batches: [_batch('MSB-1', qty: 0)],
+      );
+      expect(s.availableQty, 0);
+    });
+  });
+
+  group('Belts are cut from whole rolls', () {
+    test('the belt ceiling counts every belt in the pool, not just loose ones',
+        () {
+      final s = MinStock(
+        itemCode: 'PCTR-100',
+        minimumQty: 10,
+        reservedQty: 0,
+        myReservedQty: 0,
+        batches: [_batch('MSB-1', qty: 9, belts: 3)],
+      );
+      // 9 rolls x 12 belts, plus 3 loose.
+      expect(s.beltCeiling(12), 111);
+    });
+
+    test('with belts-per-roll unset only the loose ones can be sold', () {
+      final s = MinStock(
+        itemCode: 'PCTR-100',
+        minimumQty: 10,
+        reservedQty: 0,
+        myReservedQty: 0,
+        batches: [_batch('MSB-1', qty: 9, belts: 3)],
+      );
+      expect(s.beltCeiling(0), 3);
+    });
+
+    test('enough loose belts opens nothing', () {
+      expect(MinStock.rollsToOpen(3, 5, 12), 0);
+      expect(MinStock.rollsToOpen(5, 5, 12), 0);
+    });
+
+    test('one roll covers a shortfall inside its pack size', () {
+      expect(MinStock.rollsToOpen(3, 0, 12), 1);
+      expect(MinStock.rollsToOpen(12, 0, 12), 1);
+      expect(MinStock.rollsToOpen(7, 5, 12), 1);
+    });
+
+    test('a shortfall past one pack opens as many rolls as it takes', () {
+      expect(MinStock.rollsToOpen(13, 0, 12), 2);
+      expect(MinStock.rollsToOpen(25, 0, 12), 3);
+      expect(MinStock.rollsToOpen(30, 6, 12), 2);
+    });
+
+    test('nothing is opened when the pack size is unknown', () {
+      expect(MinStock.rollsToOpen(5, 0, 0), 0);
+    });
+  });
+
+  group('Opening a roll on a real booking', () {
+    test('three belts from an unopened pool costs a roll and returns nine',
+        () async {
+      fake.seedPool('PCTR-100', qty: 10);
+      fake.seedItem('PCTR-100', beltsPerRoll: 12);
+      fake.seedBatch('PCTR-100', qty: 10, belts: 0);
+
+      await StockService.book(
+          itemCode: 'PCTR-100',
+          qty: 0,
+          belts: 3,
+          order: const OrderRef('SO-1'));
+
+      final b = fake.batches.values.first;
+      expect(b['qty'], 9, reason: 'one roll was opened');
+      expect(b['loose_belts'], 9, reason: 'the remainder went back on the shelf');
+      // Belt count is conserved: 10x12 = 120 before, 9x12 + 9 + 3 sold = 120.
+      expect((b['qty'] as num) * 12 + (b['loose_belts'] as num) + 3, 120);
+    });
+
+    test('loose belts are used before any roll is opened', () async {
+      fake.seedPool('PCTR-100', qty: 10);
+      fake.seedItem('PCTR-100', beltsPerRoll: 12);
+      fake.seedBatch('PCTR-100', qty: 10, belts: 5);
+
+      await StockService.book(
+          itemCode: 'PCTR-100',
+          qty: 0,
+          belts: 4,
+          order: const OrderRef('SO-1'));
+
+      final b = fake.batches.values.first;
+      expect(b['qty'], 10, reason: 'no roll should have been cut');
+      expect(b['loose_belts'], 1);
+    });
+
+    test('a belt order refuses when no roll is left to open', () async {
+      fake.seedPool('PCTR-100', qty: 10);
+      fake.seedItem('PCTR-100', beltsPerRoll: 12);
+      fake.seedBatch('PCTR-100', qty: 0, belts: 2);
+
+      await expectLater(
+        StockService.book(
+            itemCode: 'PCTR-100', qty: 0, belts: 5, order: const OrderRef('SO-1')),
+        throwsA(predicate(
+            (e) => e is StockUnavailable && '$e'.contains('belts left'))),
+      );
+    });
+
+    test('a belt order refuses when belts-per-roll is not set', () async {
+      fake.seedPool('PCTR-100', qty: 10);
+      fake.seedItem('PCTR-100', beltsPerRoll: 0);
+      fake.seedBatch('PCTR-100', qty: 10, belts: 0);
+
+      await expectLater(
+        StockService.book(
+            itemCode: 'PCTR-100', qty: 0, belts: 3, order: const OrderRef('SO-1')),
+        throwsA(predicate((e) =>
+            e is StockUnavailable && '$e'.contains('belts-per-roll is not set'))),
+      );
+    });
+
+    test('rolls opened for belts count against the roll headroom', () async {
+      // 2 rolls on the shelf. An order for 2 rolls plus 1 belt needs a third
+      // roll to cut, and there is not one.
+      fake.seedPool('PCTR-100', qty: 10);
+      fake.seedItem('PCTR-100', beltsPerRoll: 12);
+      fake.seedBatch('PCTR-100', qty: 2, belts: 0);
+
+      await expectLater(
+        StockService.book(
+            itemCode: 'PCTR-100', qty: 2, belts: 1, order: const OrderRef('SO-1')),
+        throwsA(isA<StockUnavailable>()),
+      );
+      expect(fake.batches.values.first['qty'], 2, reason: 'nothing moved');
+    });
+
+    test('a restocked shelf can be sold beyond the threshold', () async {
+      // The end-to-end version of the reporting fix: pool threshold 10,
+      // shelf 27 after a restock, and an order for 20 goes through.
+      fake.seedPool('PCTR-100', qty: 10);
+      fake.seedBatch('PCTR-100', qty: 12);
+      fake.seedBatch('PCTR-100', qty: 15);
+
+      await StockService.book(
+          itemCode: 'PCTR-100',
+          qty: 20,
+          belts: 0,
+          order: const OrderRef('SO-1'));
+
+      final left = fake.batches.values
+          .fold<double>(0, (t, b) => t + (b['qty'] as num).toDouble());
+      expect(left, 7);
+    });
+  });
+
   group('A lead books from the same pool as a customer', () {
     test('a lead order books against lead_order, not sales_order', () async {
       fake.seedPool('PCTR-100', qty: 10);
@@ -415,6 +627,7 @@ class _FakeFrappe implements HttpClientAdapter {
   final Map<String, Map<String, dynamic>> pools = {};
   final Map<String, Map<String, dynamic>> batches = {};
   final Map<String, Map<String, dynamic>> reservations = {};
+  final Map<String, Map<String, dynamic>> items = {};
   final List<_Write> writes = [];
 
   /// Set to simulate another client committing between our read and our write.
@@ -441,6 +654,30 @@ class _FakeFrappe implements HttpClientAdapter {
       'custom_reserved_loose_belts': reservedBelts,
       'disabled': 0,
       'modified': 'm${_seq++}',
+    };
+  }
+
+  /// A dated slice of physical stock. This — not the pool — is what the app
+  /// now reads availability from.
+  String seedBatch(String item, {double qty = 0, int belts = 0}) {
+    final name = 'MSB-${_rows.toString().padLeft(3, '0')}';
+    batches[name] = {
+      'name': name,
+      'item_code': item,
+      'batch_date': '2026-01-0${(_rows % 9) + 1}',
+      'qty': qty,
+      'loose_belts': belts,
+      'creation': _rows++,
+    };
+    return name;
+  }
+
+  /// The Item master row, for its belts-per-roll.
+  void seedItem(String item, {int beltsPerRoll = 0}) {
+    items[item] = {
+      'name': item,
+      'item_code': item,
+      'custom_belts_per_roll': beltsPerRoll,
     };
   }
 
@@ -547,6 +784,7 @@ class _FakeFrappe implements HttpClientAdapter {
   Map<String, Map<String, dynamic>> _store(String doctype) {
     if (doctype == kPoolDoctype) return pools;
     if (doctype == kBatchDoctype) return batches;
+    if (doctype == 'Item') return items;
     return reservations;
   }
 

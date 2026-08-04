@@ -48,13 +48,78 @@ void main() {
       onChanged: () {},
     )));
 
-    // The pool is counted in rolls, which is the item's stock UOM — not in the
-    // kilograms the rate is quoted against.
-    expect(find.textContaining('6 of 10 rolls available'), findsOneWidget);
+    // No batch rows, so this falls back to the pool arithmetic: 10 - 4.
+    // Counted in rolls, the item's stock UOM — not the kilograms the rate is
+    // quoted against.
+    expect(find.textContaining('6 rolls available'), findsOneWidget);
     expect(find.textContaining('4 booked'), findsOneWidget);
   });
 
-  testWidgets('a fully booked pool does not read as an empty shelf',
+  testWidgets('a restocked shelf reads above the minimum, not pinned to it',
+      (tester) async {
+    // The reporting bug: restocking adds batch rows and never moves the pool,
+    // so availability read off the pool stayed stuck at the threshold.
+    await tester.pumpWidget(_host(ProductRow(
+      line: OrderLine(product: _pctr()),
+      stock: MinStock(
+        itemCode: 'PCTR-100',
+        minimumQty: 10,
+        reservedQty: 0,
+        myReservedQty: 0,
+        batches: [
+          StockBatch(
+              name: 'MSB-1',
+              itemCode: 'PCTR-100',
+              batchDate: '2026-01-01',
+              qty: 12,
+              looseBelts: 0,
+              originalQty: 12,
+              ageDays: 40),
+          StockBatch(
+              name: 'MSB-2',
+              itemCode: 'PCTR-100',
+              batchDate: '2026-02-01',
+              qty: 15,
+              looseBelts: 0,
+              originalQty: 15,
+              ageDays: 5),
+        ],
+      ),
+      onChanged: () {},
+    )));
+
+    expect(find.textContaining('27 rolls available'), findsOneWidget);
+    // The threshold is not quoted when the shelf is comfortably above it.
+    expect(find.textContaining('below minimum'), findsNothing);
+  });
+
+  testWidgets('a shelf under the minimum says so', (tester) async {
+    await tester.pumpWidget(_host(ProductRow(
+      line: OrderLine(product: _pctr()),
+      stock: MinStock(
+        itemCode: 'PCTR-100',
+        minimumQty: 10,
+        reservedQty: 0,
+        myReservedQty: 0,
+        batches: [
+          StockBatch(
+              name: 'MSB-1',
+              itemCode: 'PCTR-100',
+              batchDate: '2026-01-01',
+              qty: 3,
+              looseBelts: 0,
+              originalQty: 12,
+              ageDays: 40),
+        ],
+      ),
+      onChanged: () {},
+    )));
+
+    expect(find.textContaining('3 rolls available'), findsOneWidget);
+    expect(find.textContaining('below minimum 10'), findsOneWidget);
+  });
+
+  testWidgets('an empty shelf does not read as an item with no pool at all',
       (tester) async {
     await tester.pumpWidget(_host(ProductRow(
       line: OrderLine(product: _pctr()),
@@ -67,7 +132,9 @@ void main() {
       onChanged: () {},
     )));
 
-    expect(find.textContaining('fully booked'), findsOneWidget);
+    expect(find.textContaining('None left'), findsOneWidget);
+    // "No minimum stock" means the item is not on the list at all, which is a
+    // different thing from being on it and sold out.
     expect(find.text('No minimum stock'), findsNothing);
   });
 

@@ -200,6 +200,44 @@ cans depending on the family), `loose_belts` (Int, PCTR only), `disabled`
 An Item with no row here reads as "No minimum stock", which is deliberately
 different from "none left".
 
+### The batches are the stock record; `qty` is only the threshold
+
+`Manna Minimum Stock Item.qty` is the **minimum to keep on the shelf** and
+nothing else. Availability — on screen and in the booking guard — is summed
+from the open batch rows.
+
+That follows from how restocking already works: it **adds a batch row** and
+never edits the pool upward, so the two diverge the moment stock arrives.
+Reading availability off the pool pinned it near the minimum while the batch
+list showed the real, larger figure.
+
+Two things that are easy to get wrong here:
+
+- **The batch total is already net of bookings.** A batch is drawn down when
+  stock is booked, so available *is* the batch total. Subtracting
+  `custom_reserved_qty` as well counts every booking twice and refuses orders
+  that could be filled.
+- **An item with no batch rows falls back to `qty − reserved`.** A threshold
+  declared with no stock recorded is not the same as "none left", and reading
+  it as zero would take every un-batched item off the market overnight. The
+  fallback is the lower number, so it can only ever be cautious.
+
+### Belts are cut from whole rolls
+
+Ordering belts opens a roll. Three belts from a twelve-belt roll takes one roll
+off the shelf, sends three out, and puts **nine back as loose belts** on the
+same batch the roll came from — so the remainder keeps its own age rather than
+quietly becoming new stock.
+
+The pack size is `custom_belts_per_roll` on the Item, read only when a belt
+order actually needs a roll opened. An item without it set cannot have belts
+cut and the order is refused with that reason, rather than a pack size being
+guessed.
+
+Releasing a belt booking returns the **belts**, not the roll — a cut roll
+cannot be re-formed. That conserves the count: 10 rolls × 12 = 120 belts before,
+9 × 12 + 9 loose + 3 sold = 120 after.
+
 ### `Manna Minimum Stock Batch` — the aging list
 
 `item_code`, `batch_date` (Date), `qty`, `loose_belts`, `original_qty`,

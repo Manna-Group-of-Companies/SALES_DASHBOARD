@@ -332,8 +332,13 @@ Future<void> showMinStockDetail(
           const Text('Stock details',
               style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
+          // The threshold, not the shelf. Kept first because it is what the
+          // list is *for*; the shelf figure sits under it so the two read as a
+          // pair rather than as one number contradicting the other.
           _kv('Minimum stock',
               s.describe(s.minimumQty, s.minimumLooseBelts, unit)),
+          _kv('Actual stock',
+              s.describe(s.onHandQty, s.onHandLooseBelts, unit)),
           _kv('Booked by reps',
               s.bookings.isEmpty
                   ? 'Nothing booked'
@@ -356,7 +361,7 @@ Future<void> showMinStockDetail(
                             fontSize: 12, fontWeight: FontWeight.w600)),
                   ]),
             ),
-          _kv('Still available',
+          _kv('Available',
               s.describe(s.availableQty, s.availableLooseBelts, unit)),
           _kv('Last sold', lastSoldLabel(s)),
           if (p.isMisconfigured)

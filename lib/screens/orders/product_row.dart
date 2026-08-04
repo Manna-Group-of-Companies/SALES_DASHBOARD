@@ -218,9 +218,13 @@ class _ProductRowState extends State<ProductRow> {
     final avail = s.availableQty;
     final belts = s.availableLooseBelts;
     final unit = p.category.stockUnit;
+    // Below the minimum is the state worth colouring: the shelf is meant to
+    // hold at least that much, and dropping under it is what replenishment
+    // exists to catch. Above it is simply healthy.
+    final belowMinimum = s.minimumQty > 0 && avail < s.minimumQty;
     final colour = (avail <= 0 && belts <= 0)
         ? Colors.red
-        : (avail < s.minimumQty * 0.34 ? Colors.orange.shade800 : Colors.green);
+        : (belowMinimum ? Colors.orange.shade800 : Colors.green);
     // Belts are only mentioned when there are some — on CTR, bonding gum and
     // solution the counter is always zero and saying so would be noise.
     final beltSuffix = belts > 0 ? ' + $belts loose belt${belts == 1 ? '' : 's'}' : '';
@@ -230,9 +234,12 @@ class _ProductRowState extends State<ProductRow> {
       Expanded(
         child: Text(
           (avail <= 0 && belts <= 0)
-              ? 'Minimum stock fully booked (${trimQty(s.minimumQty)} $unit)'
-              : 'Min stock: ${trimQty(avail)} of ${trimQty(s.minimumQty)} $unit'
-                  '$beltSuffix available'
+              ? 'None left (minimum ${trimQty(s.minimumQty)} $unit)'
+              // Available first, because that is what the rep can sell. The
+              // minimum only earns a mention when the shelf has fallen under
+              // it — quoting a threshold nobody is near is noise.
+              : '${trimQty(avail)} $unit$beltSuffix available'
+                  '${belowMinimum ? '  ·  below minimum ${trimQty(s.minimumQty)}' : ''}'
                   '${s.reservedQty > 0 ? '  ·  ${trimQty(s.reservedQty)} booked' : ''}',
           style: TextStyle(
               fontSize: 12, color: colour, fontWeight: FontWeight.w500),

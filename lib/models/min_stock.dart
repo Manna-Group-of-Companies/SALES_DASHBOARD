@@ -100,15 +100,66 @@ class MinStock {
     return !isDeadStockRisk && d >= kSlowMovingDays;
   }
 
-  /// What this rep can still commit to. Never below zero, because a pool that
-  /// has been over-reserved by a race the server rejected should read as empty
-  /// rather than as a negative number.
-  double get availableQty =>
-      (minimumQty - reservedQty) < 0 ? 0 : minimumQty - reservedQty;
+  /// What is physically on the shelf, from the dated batches.
+  ///
+  /// The batches are the live record, not [minimumQty]: restocking **adds a
+  /// batch row** and never edits the pool upward, so the moment stock arrives
+  /// the two diverge. `minimumQty` is the "keep at least this much" threshold
+  /// that drives the dead-stock warnings, and nothing more.
+  ///
+  /// Already net of bookings — a batch is drawn down when stock is booked, so
+  /// this is what is left to sell. Subtracting [reservedQty] from it as well
+  /// would count every booking twice and refuse orders that could be filled.
+  double get onHandQty =>
+      batches.fold<double>(0, (t, b) => t + (b.qty > 0 ? b.qty : 0));
 
-  int get availableLooseBelts => (minimumLooseBelts - reservedLooseBelts) < 0
-      ? 0
-      : minimumLooseBelts - reservedLooseBelts;
+  int get onHandLooseBelts =>
+      batches.fold<int>(0, (t, b) => t + (b.looseBelts > 0 ? b.looseBelts : 0));
+
+  /// True when this item has no batch rows at all.
+  ///
+  /// A pool set up without a batch list has declared a threshold but recorded
+  /// no stock. Reading that as zero available would take every such item off
+  /// the market overnight, so those fall back to the old pool arithmetic —
+  /// which is a lower number than the real shelf, so it can only ever be
+  /// cautious.
+  bool get _noBatchRecord => batches.isEmpty;
+
+  /// What a rep can still commit to. Never below zero, because a pool
+  /// over-reserved by a race the server rejected should read as empty rather
+  /// than as a negative number.
+  double get availableQty {
+    if (_noBatchRecord) {
+      final fallback = minimumQty - reservedQty;
+      return fallback < 0 ? 0 : fallback;
+    }
+    return onHandQty;
+  }
+
+  int get availableLooseBelts {
+    if (_noBatchRecord) {
+      final fallback = minimumLooseBelts - reservedLooseBelts;
+      return fallback < 0 ? 0 : fallback;
+    }
+    return onHandLooseBelts;
+  }
+
+  /// Total belts a rep could take, counting whole rolls that would be cut.
+  ///
+  /// Ordering belts opens a roll: the belts asked for go out and the rest of
+  /// that roll comes back as loose stock. So the belt ceiling is not just the
+  /// loose ones — it is every belt in the pool.
+  int beltCeiling(int beltsPerRoll) {
+    if (beltsPerRoll <= 0) return availableLooseBelts;
+    return availableLooseBelts + (availableQty.floor() * beltsPerRoll);
+  }
+
+  /// How many whole rolls would have to be cut to fill [belts].
+  static int rollsToOpen(int belts, int looseAvailable, int beltsPerRoll) {
+    final shortfall = belts - looseAvailable;
+    if (shortfall <= 0 || beltsPerRoll <= 0) return 0;
+    return (shortfall + beltsPerRoll - 1) ~/ beltsPerRoll;
+  }
 
   MinStock({
     required this.itemCode,

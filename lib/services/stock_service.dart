@@ -61,6 +61,18 @@ const String kStockBookingsKey = 'minstock:bookings';
 String _res(String doctype) =>
     '/api/resource/${Uri.encodeComponent(doctype)}';
 
+/// What an item has physically on the shelf, summed from its batches.
+class _Shelf {
+  final double qty;
+  final int belts;
+
+  /// True when the item has no batch rows at all — a threshold declared with
+  /// no stock recorded against it, which is not the same as "none left".
+  final bool empty;
+
+  const _Shelf(this.qty, this.belts, {this.empty = false});
+}
+
 /// Raised when the pool genuinely cannot cover what was asked for — as opposed
 /// to a transient collision, which is retried rather than surfaced.
 class StockUnavailable implements Exception {
@@ -184,19 +196,49 @@ class StockService {
             '$itemCode is not on the minimum stock list, so it cannot be booked.');
       }
 
-      final headroomQty = _num(pool['qty']) - _num(pool['custom_reserved_qty']);
-      final headroomBelts =
-          _int(pool['loose_belts']) - _int(pool['custom_reserved_loose_belts']);
+      // What is actually on the shelf, from the dated batches — not from the
+      // pool's `qty`, which is only the "keep at least this much" threshold and
+      // never moves when stock is restocked. Read inside the attempt so a
+      // retry after a lost race sees what the winner took.
+      final shelf = await _shelf(itemCode);
+      var headroomQty = shelf.qty;
+      var headroomBelts = shelf.belts;
+      // No batch rows at all: a pool with a threshold but no recorded stock.
+      // Fall back to the old arithmetic rather than taking the item off the
+      // market — it is the lower number, so it can only be cautious.
+      if (shelf.empty) {
+        headroomQty = _num(pool['qty']) - _num(pool['custom_reserved_qty']);
+        headroomBelts = _int(pool['loose_belts']) -
+            _int(pool['custom_reserved_loose_belts']);
+      }
 
-      if (qty > headroomQty + 0.0001) {
+      // Belts are cut from whole rolls. Ordering three belts from a twelve-belt
+      // roll opens one roll: three go out and nine come back as loose stock for
+      // the next rep. So a belt order can succeed with no loose belts at all,
+      // provided there is a roll to open — and it costs that roll.
+      var rollsOpened = 0;
+      var perRoll = 0;
+      if (belts > headroomBelts) {
+        perRoll = await _beltsPerRoll(itemCode);
+        if (perRoll <= 0) {
+          throw StockUnavailable(
+              'Only ${headroomBelts < 0 ? 0 : headroomBelts} loose belts left '
+              'of $itemCode, and its belts-per-roll is not set, so a roll '
+              'cannot be opened.');
+        }
+        rollsOpened = MinStock.rollsToOpen(belts, headroomBelts, perRoll);
+        if (qty + rollsOpened > headroomQty + 0.0001) {
+          final ceiling = headroomBelts + (headroomQty.floor() * perRoll);
+          throw StockUnavailable(
+              'Only ${ceiling < 0 ? 0 : ceiling} belts left of $itemCode, '
+              'counting rolls that would be opened.');
+        }
+      }
+
+      if (qty + rollsOpened > headroomQty + 0.0001) {
         throw StockUnavailable(
             'Only ${trimQty(headroomQty < 0 ? 0 : headroomQty)} left of '
             '$itemCode — another rep booked the rest.');
-      }
-      if (belts > headroomBelts) {
-        throw StockUnavailable(
-            'Only ${headroomBelts < 0 ? 0 : headroomBelts} loose belts left of '
-            '$itemCode.');
       }
 
       final won = await _commit(pool, {
@@ -207,7 +249,12 @@ class StockService {
       });
 
       if (won) {
-        await _drawDownBatches(itemCode, qty, belts, batch);
+        // Rolls leaving the shelf include any opened for belts. The belt figure
+        // is what the customer takes less what the opened rolls put back, so it
+        // goes negative when opening a roll leaves a remainder — which is the
+        // remainder returning to stock.
+        await _drawDownBatches(itemCode, qty + rollsOpened,
+            belts - (rollsOpened * perRoll), batch);
         return _audit(
             itemCode: itemCode,
             qty: qty,
@@ -486,10 +533,58 @@ class StockService {
     return moved;
   }
 
+  /// What is physically on the shelf for an item, summed across its batches.
+  ///
+  /// This is the live stock record. The pool's `qty` is only the threshold —
+  /// restocking adds a batch row and never edits the pool upward, so anything
+  /// that reads the pool for availability under-reports the moment stock
+  /// arrives.
+  static Future<_Shelf> _shelf(String itemCode) async {
+    try {
+      final rows = await _list(kBatchDoctype,
+          fields: '["qty","loose_belts"]',
+          filters: '[["item_code","=","$itemCode"]]');
+      if (rows.isEmpty) return const _Shelf(0, 0, empty: true);
+      var qty = 0.0;
+      var belts = 0;
+      for (final b in rows) {
+        final q = _num(b['qty']);
+        final l = _int(b['loose_belts']);
+        if (q > 0) qty += q;
+        if (l > 0) belts += l;
+      }
+      return _Shelf(qty, belts);
+    } catch (_) {
+      // Treated as "no record", which falls back to the pool arithmetic rather
+      // than refusing every order because one read failed.
+      return const _Shelf(0, 0, empty: true);
+    }
+  }
+
+  /// How many belts one roll of this item cuts into, from the Item master.
+  ///
+  /// Only read when a belt order actually needs a roll opened, so the common
+  /// path costs nothing. Zero — the value for an item whose master is
+  /// incomplete — disables splitting rather than guessing a pack size.
+  static Future<int> _beltsPerRoll(String itemCode) async {
+    try {
+      final r = await Session.I.dio
+          .get('/api/resource/Item/${Uri.encodeComponent(itemCode)}');
+      final d = (r.data is Map) ? r.data['data'] : null;
+      return d is Map ? _int(d['custom_belts_per_roll']) : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   /// Oldest batch first, so the stock that has been sitting longest is the
   /// stock that leaves. Best-effort by design: the pool counter is what
   /// guarantees the customer gets served, and a batch list that has drifted is
   /// a reporting problem, not a reason to refuse an order at the counter.
+  ///
+  /// [belts] may be **negative**, which is how opening a roll puts its
+  /// remainder back: the roll is taken out of [qty] and the belts it yielded
+  /// beyond what the customer wanted go onto the same batch it came from.
   static Future<void> _drawDownBatches(
       String itemCode, double qty, int belts, String? preferred) async {
     try {
@@ -497,11 +592,26 @@ class StockService {
           fields: '["name","qty","loose_belts"]',
           filters: '[["item_code","=","$itemCode"]]',
           orderBy: 'batch_date asc');
+      if (batches.isEmpty) return;
       if (preferred != null) {
         batches.sort((a, b) => a['name'] == preferred
             ? -1
             : (b['name'] == preferred ? 1 : 0));
       }
+
+      // A remainder from an opened roll goes back to the batch the roll was
+      // taken from — the oldest — so it stays with its own age rather than
+      // quietly becoming new stock.
+      if (belts < 0) {
+        final target = batches.first;
+        await Session.I.dio
+            .put('${_res(kBatchDoctype)}/${target['name']}', data: {
+          'loose_belts': _int(target['loose_belts']) - belts,
+        });
+        target['loose_belts'] = _int(target['loose_belts']) - belts;
+        belts = 0;
+      }
+
       var remainingQty = qty;
       var remainingBelts = belts;
       for (final b in batches) {

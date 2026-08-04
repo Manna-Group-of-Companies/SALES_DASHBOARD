@@ -232,13 +232,31 @@ class _OrderScreenState extends State<OrderScreen> {
     for (final l in _picked) {
       final s = _stock[l.product.code];
       if (s == null) continue;
-      if (l.reserveQty > s.availableQty + s.myReservedQty + 0.0001) {
-        return 'Only ${trimQty(s.availableQty)} ${l.product.category.stockUnit} '
-            'of ${l.product.name} left in minimum stock.';
+
+      // This rep's own booking is already inside the reserved figures, so it
+      // has to be added back or editing an order would refuse the quantity it
+      // already holds.
+      final rollsFree = s.availableQty + s.myReservedQty;
+      final looseFree = s.availableLooseBelts + s.myReservedLooseBelts;
+      final perRoll = l.product.beltsPerRoll;
+
+      // Belts come out of whole rolls, so the ceiling is every belt in the
+      // pool — and any roll opened to reach them costs a roll. Both have to
+      // agree with the server or a rep is refused here for an order it would
+      // have accepted, or accepted here and refused there.
+      if (l.reserveBelts > 0) {
+        final ceiling = s.beltCeiling(perRoll) + s.myReservedLooseBelts;
+        if (l.reserveBelts > ceiling) {
+          return 'Only $ceiling belts of ${l.product.name} left in minimum '
+              'stock, counting rolls that would be opened.';
+        }
       }
-      if (l.reserveBelts > s.availableLooseBelts + s.myReservedLooseBelts) {
-        return 'Only ${s.availableLooseBelts} loose belts of '
-            '${l.product.name} left in minimum stock.';
+      final opened =
+          MinStock.rollsToOpen(l.reserveBelts, looseFree.toInt(), perRoll);
+      if (l.reserveQty + opened > rollsFree + 0.0001) {
+        return 'Only ${trimQty(s.availableQty)} ${l.product.category.stockUnit} '
+            'of ${l.product.name} left in minimum stock'
+            '${opened > 0 ? ', and this order needs $opened more to cut belts from' : ''}.';
       }
     }
     return null;
