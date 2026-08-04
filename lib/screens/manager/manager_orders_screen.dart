@@ -94,8 +94,10 @@ class _ManagerOrdersScreenState extends State<ManagerOrdersScreen> {
     final decided = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-          builder: (_) =>
-              ManagerOrderReviewScreen(orderName: '${r['name']}')),
+          builder: (_) => ManagerOrderReviewScreen(
+                orderName: '${r['name']}',
+                isLead: r['is_lead'] == true,
+              )),
     );
     if (decided == true) _reload();
   }
@@ -218,6 +220,22 @@ class _ManagerOrdersScreenState extends State<ManagerOrdersScreen> {
                   child: Text('${r['customer'] ?? r['name']}',
                       style: const TextStyle(
                           fontSize: 14, fontWeight: FontWeight.w600))),
+              // Approving a lead order also converts the lead, so the manager
+              // should know which kind they are opening before they open it.
+              if (r['is_lead'] == true)
+                Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                      color: const Color(0xFFE0E7FF),
+                      borderRadius: BorderRadius.circular(4)),
+                  child: const Text('LEAD',
+                      style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF3949AB))),
+                ),
               Text('Rs ${_num(r['grand_total']).toStringAsFixed(0)}',
                   style: const TextStyle(fontWeight: FontWeight.bold)),
             ]),

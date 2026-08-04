@@ -466,21 +466,63 @@ class Api {
   /// vanish the moment it was approved and there was nowhere to see what had
   /// happened to it. This is that view: decided and undecided together, with
   /// the production status the factory has since put on it.
+  /// Every order the team raised in a week — against customers and leads.
+  ///
+  /// Lead orders were missing here, and this is the screen a manager actually
+  /// uses to approve: they only appeared in the general approvals inbox, so a
+  /// lead order sat waiting where nobody was looking for it.
+  ///
+  /// Mapped onto the Sales Order shape, because the card and the "waiting on
+  /// you" count both read `custom_po_status`. A Lead Order's `status` carries
+  /// the same three states under different names.
   static Future<List<Map<String, dynamic>>> getTeamOrders({
     required String from,
     required String to,
-  }) {
+  }) async {
     final team = Session.I.teamReps;
-    if (team.isEmpty) return Future.value([]);
-    return _list('Sales Order',
-        fields: '["name","customer","custom_sales_person","grand_total",'
-            '"transaction_date","delivery_date","custom_po_status",'
-            '"custom_rate_approved","custom_production_status",'
-            '"custom_production_finish_date","custom_proforma_status"]',
-        filters: '[["custom_sales_person","in",${_inList(team)}],'
-            '["transaction_date",">=","$from"],'
-            '["transaction_date","<=","$to"]]',
-        orderBy: 'transaction_date desc');
+    if (team.isEmpty) return [];
+
+    final results = await Future.wait([
+      _list('Sales Order',
+          fields: '["name","customer","custom_sales_person","grand_total",'
+              '"transaction_date","delivery_date","custom_po_status",'
+              '"custom_rate_approved","custom_production_status",'
+              '"custom_production_finish_date","custom_proforma_status"]',
+          filters: '[["custom_sales_person","in",${_inList(team)}],'
+              '["transaction_date",">=","$from"],'
+              '["transaction_date","<=","$to"]]',
+          orderBy: 'transaction_date desc'),
+      // A lead order failing must not cost the manager their Sales Orders.
+      _list('Lead Order',
+          fields: '["name","lead","lead_name","sales_person","total_amount",'
+              '"order_date","delivery_date","status","custom_rate_approved"]',
+          filters: '[["sales_person","in",${_inList(team)}],'
+              '["order_date",">=","$from"],'
+              '["order_date","<=","$to"]]',
+          orderBy: 'order_date desc').catchError(
+          (_) => <Map<String, dynamic>>[]),
+    ]);
+
+    final rows = <Map<String, dynamic>>[...results[0]];
+    for (final l in results[1]) {
+      final status = '${l['status'] ?? ''}';
+      rows.add({
+        ...l,
+        'is_lead': true,
+        'customer': l['lead_name'] ?? l['lead'],
+        'custom_sales_person': l['sales_person'],
+        'grand_total': l['total_amount'],
+        'transaction_date': l['order_date'],
+        // `orderApproved` reads this exact string, and it is what decides
+        // whether the card counts as still waiting on the manager.
+        'custom_po_status': status == 'Approved'
+            ? 'PO Approved - Ready for SAP'
+            : status,
+      });
+    }
+    rows.sort((a, b) => '${b['transaction_date'] ?? ''}'
+        .compareTo('${a['transaction_date'] ?? ''}'));
+    return rows;
   }
 
   static Future<List<Map<String, dynamic>>> getPendingProformaReleases() {
