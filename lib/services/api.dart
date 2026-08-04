@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
+import 'package:manna_field_sales/core/app_version.dart';
 import 'package:manna_field_sales/core/attendance_rules.dart';
 import 'package:manna_field_sales/core/auth_store.dart';
 import 'package:manna_field_sales/core/constants.dart';
@@ -13,6 +14,8 @@ import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
+import 'package:manna_field_sales/services/offline_cache.dart';
+import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/services/stock_service.dart';
 
 /// Builds the REST path for an ERPNext doctype. Private to this library —
@@ -212,6 +215,11 @@ class Api {
     } catch (_) {}
     Session.I.clearAuth();
     await AuthStore.clear();
+    // Handsets get shared and reassigned. Cached customers and unsent orders
+    // belong to whoever was signed in, so they go with the session rather than
+    // sitting there for the next person.
+    await OfflineCache.clear();
+    await PendingOrders.clear();
   }
 
   static Future<List<Map<String, dynamic>>> _list(String doctype,
@@ -231,6 +239,25 @@ class Api {
     throw Exception(_frappeError(r));
   }
 
+  /// Asks the backend whether this build is still allowed to write.
+  ///
+  /// Answers [VersionVerdict.unknown] on any failure — a missing settings row,
+  /// no permission, no signal — because a rep in a shop must not be locked out
+  /// of the app by a settings lookup. See `app_version.dart` for why the gate
+  /// only ever closes on a definite answer.
+  static Future<VersionGate> appVersionGate() async {
+    try {
+      final r = await Session.I.dio
+          .get('${_res('Manna App Settings')}/Manna App Settings');
+      final d = (r.data is Map) ? r.data['data'] : null;
+      if (d is! Map) return const VersionGate(VersionVerdict.unknown);
+      return checkVersion(kAppVersion, d['minimum_app_version'],
+          messageRaw: d['update_message']);
+    } catch (_) {
+      return const VersionGate(VersionVerdict.unknown);
+    }
+  }
+
   static Future<int> getCount(String doctype, String filters) async {
     final r = await Session.I.dio.get('/api/method/frappe.client.get_count',
         queryParameters: {'doctype': doctype, 'filters': filters});
@@ -238,16 +265,31 @@ class Api {
     return (m is num) ? m.toInt() : 0;
   }
 
-  static Future<List<Map<String, dynamic>>> getCustomers() {
+  static Future<List<Map<String, dynamic>>> getCustomers() async =>
+      (await getCustomersCached()).value;
+
+  /// The rep's customers, falling back to the last synced copy when the
+  /// network is down.
+  ///
+  /// A rep standing in a shop needs the phone number, the route and the
+  /// outstanding balance whether or not there is signal, and none of those
+  /// move much between visits. The result carries when it was fetched so the
+  /// list can say so — an outstanding balance quoted to a customer is exactly
+  /// the sort of figure nobody should read off a stale screen unknowingly.
+  static Future<Cached<List<Map<String, dynamic>>>> getCustomersCached() {
     final rep = Session.I.salesPerson;
     final filters = (rep == null || rep.isEmpty)
         ? null
         : '[["custom_assigned_reps","like","%|$rep|%"]]';
-    return _list('Customer',
-        fields:
-        '["name","customer_name","customer_group","territory","custom_sales_route","custom_latitude","custom_longitude","custom_location_status","custom_verified_latitude","custom_verified_longitude","custom_outstanding_balance","custom_credit_limit","custom_phone"]',
-        filters: filters,
-        orderBy: 'customer_name asc');
+    return OfflineCache.read<List<Map<String, dynamic>>>(
+      'customers:${rep ?? 'all'}',
+      () => _list('Customer',
+          fields:
+              '["name","customer_name","customer_group","territory","custom_sales_route","custom_latitude","custom_longitude","custom_location_status","custom_verified_latitude","custom_verified_longitude","custom_outstanding_balance","custom_credit_limit","custom_phone"]',
+          filters: filters,
+          orderBy: 'customer_name asc'),
+      decode: decodeRows,
+    );
   }
 
   static Future<String?> _loggedUser() async {
@@ -509,32 +551,109 @@ class Api {
     return created;
   }
 
-  /// Approves a lead order, converting the lead to a customer as it goes.
+  /// Approves a lead order: converts the lead, then raises the real Sales Order.
   ///
-  /// The conversion happens first. If it fails there is no approval, which is
-  /// the safer order: an approved order against a lead that never became a
-  /// customer is an order nobody can invoice.
+  /// The third step is the one that was missing. A Lead Order is an app-only
+  /// record — the production dashboard reads Sales Orders and nothing else — so
+  /// an approved lead order used to be a dead end: the lead became a customer,
+  /// the order said Approved, and the factory never heard about it. Approval
+  /// now produces the Sales Order that carries the work to the floor.
+  ///
+  /// The sequence is deliberate. Convert first, because a Sales Order needs a
+  /// customer to belong to; raise the order second; mark the lead order
+  /// approved last, so its status is only ever set once there is something
+  /// real behind it. A failure part-way leaves the lead order pending and
+  /// re-approvable — which is recoverable, unlike an order marked approved with
+  /// nothing downstream.
   static Future<String?> approveLeadOrder(String name, bool approve) async {
     if (!approve) {
       await _put('Lead Order', name, {'status': 'Rejected'});
       return null;
     }
 
-    final order = await _list('Lead Order',
-        fields: '["name","lead"]', filters: '[["name","=","$name"]]', limit: 1);
-    final leadName = order.isEmpty ? '' : '${order.first['lead'] ?? ''}';
+    final doc = await getLeadOrder(name);
+    final leadName = '${doc['lead'] ?? ''}';
 
     String? customer;
     if (leadName.isNotEmpty && leadName != 'null') {
       customer = await convertLeadToCustomer(leadName);
     }
 
+    String? salesOrder;
+    if (customer != null) {
+      salesOrder = await _salesOrderFromLeadOrder(doc, customer);
+    }
+
     await _put('Lead Order', name, {
       'status': 'Approved',
+      if (salesOrder != null) 'sales_order': salesOrder,
       if (customer != null)
-        'approval_remarks': 'Lead converted to customer: $customer',
+        'approval_remarks': 'Converted to customer $customer'
+            '${salesOrder != null ? ', raised as $salesOrder' : ''}',
     });
     return customer;
+  }
+
+  /// Raises the Sales Order behind an approved lead order.
+  ///
+  /// Created already approved, because the manager approving the lead order is
+  /// the same decision they would make on a Sales Order — sending it back to
+  /// their own queue would ask them to approve the same order twice.
+  ///
+  /// Two things a rep's order carries that this one cannot yet: the per-family
+  /// roll and belt breakdown, and minimum-stock bookings. `Lead Order Item`
+  /// holds only item_code, qty and rate, so there is nothing to map them from
+  /// and no reservation to move across. A lead order therefore always reads as
+  /// new production. Widening `Lead Order Item` to match `Sales Order Item` is
+  /// what closes that gap; until then this is honest about what it knows.
+  static Future<String?> _salesOrderFromLeadOrder(
+      Map<String, dynamic> leadOrder, String customer) async {
+    final rows = (leadOrder['items'] as List?) ?? const [];
+    final items = <Map<String, dynamic>>[];
+    for (final r in rows) {
+      if (r is! Map) continue;
+      final code = '${r['item_code'] ?? ''}'.trim();
+      final qty = (r['qty'] as num?)?.toDouble() ?? 0;
+      if (code.isEmpty || qty <= 0) continue;
+      items.add({
+        'item_code': code,
+        'qty': qty,
+        'rate': (r['rate'] as num?)?.toDouble() ?? 0,
+      });
+    }
+    // An order with no usable lines would create an empty Sales Order that
+    // production could do nothing with.
+    if (items.isEmpty) return null;
+
+    final company = await getCompany();
+    final unit = Session.I.company ?? Session.I.managedTeamCompany;
+    final body = <String, dynamic>{
+      'customer': customer,
+      'company': company,
+      'custom_sales_person': leadOrder['sales_person'] ?? Session.I.salesPerson,
+      if (unit != null && unit.isNotEmpty) 'custom_company': unit,
+      'delivery_date': serverNow()
+          .add(const Duration(days: 7))
+          .toIso8601String()
+          .substring(0, 10),
+      'custom_proforma_required': 1,
+      'custom_proforma_status': 'Ready',
+      // Straight to approved — see above.
+      'custom_po_status': 'PO Approved - Ready for SAP',
+      'custom_rate_approved': 1,
+      // The moment the order was raised against the lead, not the moment it was
+      // approved. This is what settles who ordered first when stock is short,
+      // so it has to be the rep's timestamp rather than the manager's.
+      'custom_order_placed_at':
+          '${leadOrder['creation'] ?? nowStamp()}'.substring(0, 19),
+      'items': items,
+    };
+
+    final r = await Session.I.dio.post(_res('Sales Order'), data: body);
+    if (r.statusCode != 200 && r.statusCode != 201) {
+      throw Exception(_frappeError(r));
+    }
+    return '${r.data['data']['name']}';
   }
 
   static Future<void> approveLeadOrderPO(String name, bool approve) => _put(
@@ -2767,6 +2886,8 @@ class Api {
   /// still being created, and a rep with none yet would otherwise be shown an
   /// empty dropdown and be unable to set a route at all. In that case every
   /// active route is offered instead.
+  /// Cached, because a route list that will not load blocks the rep from
+  /// saving a customer at all — and routes change about once a quarter.
   static Future<List<String>> getSalesRoutes({String? forRep}) async {
     Future<List<Map<String, dynamic>>> fetch(String filters) => _list(
         'Sales Route',
@@ -2774,15 +2895,22 @@ class Api {
         filters: filters,
         orderBy: 'name asc');
 
-    if (forRep != null && forRep.isNotEmpty) {
-      final mine = await fetch(
-          '[["is_active","=",1],["sales_person","=","$forRep"]]');
-      if (mine.isNotEmpty) {
-        return mine.map((e) => '${e['name']}').toList();
-      }
-    }
-    final all = await fetch('[["is_active","=",1]]');
-    return all.map((e) => '${e['name']}').toList();
+    final cached = await OfflineCache.read<List<String>>(
+      'routes:${forRep ?? 'all'}',
+      () async {
+        if (forRep != null && forRep.isNotEmpty) {
+          final mine = await fetch(
+              '[["is_active","=",1],["sales_person","=","$forRep"]]');
+          if (mine.isNotEmpty) {
+            return mine.map((e) => '${e['name']}').toList();
+          }
+        }
+        final all = await fetch('[["is_active","=",1]]');
+        return all.map((e) => '${e['name']}').toList();
+      },
+      decode: (j) => (j as List? ?? []).map((e) => '$e').toList(),
+    );
+    return cached.value;
   }
 
   /// Updates the details a rep can correct in the field.
