@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/retread/retread_order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
@@ -40,7 +41,7 @@ class _RetreadOrdersScreenState extends State<RetreadOrdersScreen> {
           if (snap.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snap.hasError) return Center(child: Text('Error: ${snap.error}'));
+          if (snap.hasError) return Center(child: Text(humanError(snap.error)));
           final tyres = snap.data ?? [];
           if (tyres.isEmpty) {
             return const Center(

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/retread/new_retread_proforma_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_proforma_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -45,7 +46,7 @@ class _RetreadProformaListScreenState extends State<RetreadProformaListScreen> {
           if (snap.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snap.hasError) return Center(child: Text('Error: ${snap.error}'));
+          if (snap.hasError) return Center(child: Text(humanError(snap.error)));
           final items = snap.data ?? [];
           if (items.isEmpty) {
             return const Center(

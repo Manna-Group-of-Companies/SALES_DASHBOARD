@@ -130,7 +130,7 @@ class _ProductionOrderDetailScreenState
             return Center(
                 child: Padding(
                     padding: const EdgeInsets.all(20),
-                    child: Text('Could not load: ${snap.error}')));
+                    child: Text(humanError(snap.error))));
           }
           return ListView(padding: const EdgeInsets.all(16), children: [
             if (_changed) _changeAlert(),

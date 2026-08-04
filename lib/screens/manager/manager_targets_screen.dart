@@ -153,7 +153,7 @@ class _ManagerTargetsScreenState extends State<ManagerTargetsScreen> {
             return Center(
                 child: Padding(
                     padding: const EdgeInsets.all(20),
-                    child: Text('Error: ${snap.error}')));
+                    child: Text(humanError(snap.error))));
           }
           final rows = snap.data!;
           return ListView(

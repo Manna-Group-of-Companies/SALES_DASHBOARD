@@ -11,6 +11,7 @@
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/screens/manager/manager_order_review_screen.dart';
@@ -146,7 +147,7 @@ class _ManagerOrdersScreenState extends State<ManagerOrdersScreen> {
                 return Center(
                     child: Padding(
                         padding: const EdgeInsets.all(20),
-                        child: Text('Could not load: ${snap.error}')));
+                        child: Text(humanError(snap.error))));
               }
               final rows = snap.data ?? [];
               if (rows.isEmpty) {

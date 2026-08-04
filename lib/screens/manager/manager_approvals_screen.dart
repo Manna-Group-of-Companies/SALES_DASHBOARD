@@ -224,7 +224,7 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
             return Center(
                 child: Padding(
                     padding: const EdgeInsets.all(20),
-                    child: Text('Error: ${snap.error}')));
+                    child: Text(humanError(snap.error))));
           }
           final items = snap.data!;
           if (items.isEmpty) {

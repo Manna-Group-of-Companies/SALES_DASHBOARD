@@ -94,7 +94,7 @@ class _ManagerLimitsScreenState extends State<ManagerLimitsScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Center(child: Text('Error: ${snap.error}'));
+            return Center(child: Text(humanError(snap.error)));
           }
           final rows = snap.data!;
           return ListView(

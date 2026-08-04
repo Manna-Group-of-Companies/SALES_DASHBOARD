@@ -118,7 +118,7 @@ class _LeadOrderScreenState extends State<LeadOrderScreen> {
                 return const Center(child: CircularProgressIndicator());
               }
               if (snap.hasError) {
-                return Center(child: Text('Error: ${snap.error}'));
+                return Center(child: Text(humanError(snap.error)));
               }
               if (_items.isEmpty) {
                 return const Center(child: Text('No sellable items found.'));

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/production/production_order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -70,7 +71,7 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
                 return Center(
                     child: Padding(
                         padding: const EdgeInsets.all(20),
-                        child: Text('Error: ${snap.error}')));
+                        child: Text(humanError(snap.error))));
               }
               final all = snap.data ?? [];
               final rows = all.where(_match).toList();

@@ -176,7 +176,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           if (snap.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snap.hasError) return Center(child: Text('Error: ${snap.error}'));
+          if (snap.hasError) return Center(child: Text(humanError(snap.error)));
           final pf = '${_order['custom_proforma_status'] ?? 'Ready'}';
           final po = '${_order['custom_po_status'] ?? 'No PO Yet'}';
           final items = (_order['items'] as List?) ?? [];

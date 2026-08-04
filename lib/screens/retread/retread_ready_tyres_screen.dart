@@ -96,7 +96,7 @@ class _RetreadReadyTyresScreenState extends State<RetreadReadyTyresScreen> {
           if (snap.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snap.hasError) return Center(child: Text('Error: ${snap.error}'));
+          if (snap.hasError) return Center(child: Text(humanError(snap.error)));
           final tyres = snap.data ?? [];
           if (tyres.isEmpty) {
             return const Center(

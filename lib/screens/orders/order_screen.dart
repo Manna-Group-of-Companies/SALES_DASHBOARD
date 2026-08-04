@@ -424,7 +424,7 @@ class _OrderScreenState extends State<OrderScreen> {
                 return const Center(child: CircularProgressIndicator());
               }
               if (snap.hasError) {
-                return Center(child: Text('Error: ${snap.error}'));
+                return Center(child: Text(humanError(snap.error)));
               }
               if (_lines.isEmpty) {
                 return const Center(child: Text('No sellable items found.'));

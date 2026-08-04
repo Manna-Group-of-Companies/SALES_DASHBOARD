@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/expenses/add_expense_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
@@ -63,7 +64,7 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> {
                 if (snap.connectionState != ConnectionState.done) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                if (snap.hasError) return Center(child: Text('Error: ${snap.error}'));
+                if (snap.hasError) return Center(child: Text(humanError(snap.error)));
                 final all = snap.data!;
                 final rows = all.where(_match).toList();
                 if (all.isEmpty) {

@@ -106,7 +106,7 @@ class _LeadOrderDetailScreenState extends State<LeadOrderDetailScreen> {
           if (snap.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snap.hasError) return Center(child: Text('Error: ${snap.error}'));
+          if (snap.hasError) return Center(child: Text(humanError(snap.error)));
           final status = '${_order['status'] ?? ''}';
           final items = (_order['items'] as List?) ?? [];
           final total = items.fold<double>(

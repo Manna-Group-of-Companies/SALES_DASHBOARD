@@ -69,7 +69,7 @@ class _RegularizationApprovalsScreenState
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Center(child: Text('Error: ${snap.error}'));
+            return Center(child: Text(humanError(snap.error)));
           }
           final items = snap.data ?? [];
           if (items.isEmpty) {

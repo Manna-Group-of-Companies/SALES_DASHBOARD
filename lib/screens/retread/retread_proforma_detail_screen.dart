@@ -64,7 +64,7 @@ class _RetreadProformaDetailScreenState
           if (snap.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snap.hasError) return Center(child: Text('Error: ${snap.error}'));
+          if (snap.hasError) return Center(child: Text(humanError(snap.error)));
           final p = snap.data!;
           final rates = (p['rates'] as List?) ?? [];
           final superseded = '${p['status']}' == 'Superseded';

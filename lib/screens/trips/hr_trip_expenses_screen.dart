@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/trips/trip_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
@@ -41,7 +42,7 @@ class _HRTripExpensesScreenState extends State<HRTripExpensesScreen> {
           if (snap.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snap.hasError) return Center(child: Text('Error: ${snap.error}'));
+          if (snap.hasError) return Center(child: Text(humanError(snap.error)));
           final trips = snap.data ?? [];
           if (trips.isEmpty) return const Center(child: Text('No trips yet.'));
           return ListView.builder(

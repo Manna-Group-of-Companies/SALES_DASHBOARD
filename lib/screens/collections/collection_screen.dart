@@ -81,7 +81,7 @@ class _CollectionScreenState extends State<CollectionScreen> {
           if (snap.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snap.hasError) return Center(child: Text('Error: ${snap.error}'));
+          if (snap.hasError) return Center(child: Text(humanError(snap.error)));
           return Padding(
             padding: const EdgeInsets.all(20),
             child: ListView(children: [
