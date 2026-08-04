@@ -108,37 +108,58 @@ class Product {
   String get name => '${doc['item_name'] ?? doc['name']}';
   String get uom => '${doc['stock_uom'] ?? ''}';
 
-  /// PCTR only: the average a roll weighs. An average is all PCTR can offer —
-  /// a precured roll is cut to length, so no two weigh quite the same.
-  double get avgWeightPerRoll => _num(doc['custom_avg_weight_per_roll']);
+  /// What one **belt** weighs.
+  ///
+  /// The field is named `custom_avg_weight_per_roll`, which is a
+  /// misnomer inherited from the item master — it holds the per-belt weight,
+  /// not the per-roll one. The live data settles it: 174 MLG 120 reads 10.1
+  /// with 4 belts and a roll weight of 40.4, and 102 AJAX 60 reads 2.4 with 14
+  /// belts and 33.6. In both cases `field x belts = roll weight`, so the field
+  /// is per belt.
+  ///
+  /// Renaming it in ERPNext would break every existing import sheet, so the
+  /// name stays wrong on the backend and is corrected here, once.
+  double get weightPerBelt {
+    final stored = _num(doc['custom_avg_weight_per_roll']);
+    if (stored > 0) return stored;
+    // Derived when only the roll weight was filled in, so a half-complete item
+    // still prices belts rather than refusing them.
+    return beltsPerRoll > 0 ? weightPerRoll / beltsPerRoll : 0;
+  }
 
-  /// PCTR only: how many belts come off one roll.
+  /// How many belts come off one roll. PCTR only.
   int get beltsPerRoll => _int(doc['custom_belts_per_roll']);
 
-  /// CTR only: the exact weight of a roll. CTR is moulded to a fixed size, so
-  /// this is a real number rather than an average, and there is no belt.
-  double get weightPerRoll => _num(doc['custom_weight_per_roll']);
+  /// What one **roll** weighs. Used by PCTR and CTR alike — the field means the
+  /// same thing for both, and it is the number a roll is priced by.
+  double get weightPerRoll {
+    final stored = _num(doc['custom_weight_per_roll']);
+    if (stored > 0) return stored;
+    // Derived when only the belt weight was filled in. Belts x belt weight is
+    // exactly how the roll figure is arrived at in the master anyway.
+    final perBelt = _num(doc['custom_avg_weight_per_roll']);
+    return (perBelt > 0 && beltsPerRoll > 0) ? perBelt * beltsPerRoll : 0;
+  }
 
   /// Vulcanizing solution only: tin size in litres, 10 or 30.
   double get packLitres => _num(doc['custom_pack_litres']);
 
-  /// What one roll of this product weighs, whichever field holds it.
+  /// What one roll of this product weighs, for pricing. Both tread rubber
+  /// families now read the same field.
   double get rollWeight => switch (category) {
-        ProductCategory.pctr => avgWeightPerRoll,
-        ProductCategory.ctr => weightPerRoll,
+        ProductCategory.pctr || ProductCategory.ctr => weightPerRoll,
         _ => 0,
       };
-
-  /// Weight of a single loose belt. Guards the divide, because an Item imported
-  /// without a belt count would otherwise make every line NaN.
-  double get weightPerBelt =>
-      beltsPerRoll > 0 ? avgWeightPerRoll / beltsPerRoll : 0;
 
   /// True when the Item is missing the custom fields its category needs. The
   /// row shows this instead of pretending the maths worked, so a bad product
   /// import surfaces at the point of sale rather than on the proforma.
+  ///
+  /// PCTR needs a belt count as well as a weight, because it is sold in belts
+  /// and the pool cuts rolls into them. Either weight field satisfies the
+  /// weight requirement — each derives the other given the belt count.
   bool get isMisconfigured => switch (category) {
-        ProductCategory.pctr => avgWeightPerRoll <= 0 || beltsPerRoll <= 0,
+        ProductCategory.pctr => weightPerRoll <= 0 || beltsPerRoll <= 0,
         ProductCategory.ctr => weightPerRoll <= 0,
         ProductCategory.vulcanizingSolution => packLitres <= 0,
         _ => false,
@@ -211,7 +232,7 @@ class OrderLine {
   double get totalWeightKg {
     switch (product.category) {
       case ProductCategory.pctr:
-        return rolls * product.avgWeightPerRoll +
+        return rolls * product.weightPerRoll +
             looseBelts * product.weightPerBelt;
       case ProductCategory.ctr:
         return rolls * product.weightPerRoll;

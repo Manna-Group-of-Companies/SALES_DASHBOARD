@@ -159,6 +159,29 @@ Two consequences worth knowing:
   than releasing and re-taking them — otherwise a rep changing one line would
   put the rest of their stock back on offer and could lose it mid-edit.
 
+### `custom_avg_weight_per_roll` is the weight of a **belt**
+
+The field name is wrong and the app corrects for it. Two rows from the master
+settle it beyond doubt:
+
+| Item | `custom_avg_weight_per_roll` | `custom_belts_per_roll` | `custom_weight_per_roll` |
+| --- | --- | --- | --- |
+| TREAD RUBBER 174 MLG 120 ''LW | 10.1 | 4 | **40.4** |
+| ...BLACK PEARL 102 AJAX 60 | 2.4 | 14 | **33.6** |
+
+`field x belts = roll weight` in both. So `custom_avg_weight_per_roll` holds the
+per-belt weight and `custom_weight_per_roll` holds the per-roll weight — for
+PCTR **and** CTR, which now read the same field.
+
+Read as a roll weight, it priced a whole roll at one belt's worth: a 40.4 kg
+roll quoted at 10.1 kg, about a quarter of the money.
+
+The name is left alone on the backend because every import sheet already uses
+it. `Product.weightPerBelt` / `Product.weightPerRoll` in
+[lib/models/product_category.dart](../lib/models/product_category.dart) are the
+only place the correction lives, and each derives the other from the belt count
+when only one is filled in.
+
 ## 6. Custom fields on `Sales Order Item` — created
 
 | Fieldname | Type | Meaning |

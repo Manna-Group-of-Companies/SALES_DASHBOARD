@@ -16,11 +16,75 @@ Product _item(Map<String, dynamic> overrides) => Product({
     });
 
 void main() {
+  group('Which field holds which weight', () {
+    // The item master calls the per-belt weight `custom_avg_weight_per_roll`.
+    // The live data settles it: 174 MLG 120 reads 10.1 with 4 belts and a roll
+    // weight of 40.4; 102 AJAX 60 reads 2.4 with 14 belts and 33.6. In both
+    // cases field x belts = roll weight, so the field is per belt. Reading it
+    // as a roll weight priced a roll at one belt's worth.
+    Product product({double? perBelt, double? perRoll, int belts = 4}) =>
+        Product({
+          'name': 'PCTR-1',
+          'item_group': 'Precured',
+          if (perBelt != null) 'custom_avg_weight_per_roll': perBelt,
+          if (perRoll != null) 'custom_weight_per_roll': perRoll,
+          'custom_belts_per_roll': belts,
+        });
+
+    test('the misnamed field is read as the belt weight', () {
+      final p = product(perBelt: 10.1, perRoll: 40.4);
+      expect(p.weightPerBelt, 10.1);
+      expect(p.weightPerRoll, 40.4);
+      expect(p.rollWeight, 40.4, reason: 'a roll is priced by the roll weight');
+    });
+
+    test('the real numbers from the item master hold together', () {
+      final p = product(perBelt: 2.4, perRoll: 33.6, belts: 14);
+      expect(p.weightPerBelt * p.beltsPerRoll, closeTo(p.weightPerRoll, 0.001));
+    });
+
+    test('a roll weight is derived when only the belt weight is filled in', () {
+      final p = product(perBelt: 10.1);
+      expect(p.weightPerRoll, closeTo(40.4, 0.001));
+      expect(p.isMisconfigured, isFalse);
+    });
+
+    test('a belt weight is derived when only the roll weight is filled in', () {
+      final p = product(perRoll: 40.4);
+      expect(p.weightPerBelt, closeTo(10.1, 0.001));
+    });
+
+    test('neither weight leaves the item unpriceable', () {
+      expect(product().isMisconfigured, isTrue);
+    });
+
+    test('a weight with no belt count is still not orderable as PCTR', () {
+      // PCTR is sold in belts as well as rolls, and the pool cuts rolls into
+      // them, so the count is not optional.
+      final p = Product({
+        'name': 'PCTR-1',
+        'item_group': 'Precured',
+        'custom_weight_per_roll': 40.4,
+      });
+      expect(p.isMisconfigured, isTrue);
+    });
+
+    test('CTR reads the same roll-weight field', () {
+      final p = Product({
+        'name': 'CTR-1',
+        'item_group': 'Hot Rubber',
+        'custom_weight_per_roll': 30.5,
+      });
+      expect(p.rollWeight, 30.5);
+      expect(p.isMisconfigured, isFalse);
+    });
+  });
+
   group('PCTR', () {
     // 22 kg to a roll, 4 belts to a roll, so a belt is 5.5 kg.
     final pctr = _item({
       'item_group': 'Precured',
-      'custom_avg_weight_per_roll': 22.0,
+      'custom_weight_per_roll': 22.0,
       'custom_belts_per_roll': 4,
     });
 
@@ -63,7 +127,7 @@ void main() {
         () {
       final broken = _item({
         'item_group': 'Precured',
-        'custom_avg_weight_per_roll': 22.0,
+        'custom_weight_per_roll': 22.0,
       });
       expect(broken.isMisconfigured, isTrue);
       expect(OrderLine(product: broken, rolls: 1, looseBelts: 2).qty, 1);
@@ -154,7 +218,7 @@ void main() {
       final line = OrderLine(
         product: _item({
           'item_group': 'Precured',
-          'custom_avg_weight_per_roll': 22.0,
+          'custom_weight_per_roll': 22.0,
           'custom_belts_per_roll': 4,
         }),
         rolls: 5,

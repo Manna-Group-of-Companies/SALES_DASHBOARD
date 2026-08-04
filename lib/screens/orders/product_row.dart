@@ -179,8 +179,13 @@ class _ProductRowState extends State<ProductRow> {
     final bits = <String>[p.category.shortLabel];
     switch (p.category) {
       case ProductCategory.pctr:
-        if (p.avgWeightPerRoll > 0) {
-          bits.add('avg ${trimQty(p.avgWeightPerRoll)} kg/roll');
+        // Both weights, because a rep sells in both units and each is the
+        // number they need to sanity-check a price against.
+        if (p.weightPerRoll > 0) {
+          bits.add('${trimQty(p.weightPerRoll)} kg/roll');
+        }
+        if (p.weightPerBelt > 0) {
+          bits.add('${trimQty(p.weightPerBelt)} kg/belt');
         }
         if (p.beltsPerRoll > 0) bits.add('${p.beltsPerRoll} belts/roll');
         break;

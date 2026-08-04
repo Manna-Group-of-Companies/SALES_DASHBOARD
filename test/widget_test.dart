@@ -20,7 +20,7 @@ Product _pctr() => Product({
       'item_name': 'Precured 100mm',
       'item_group': 'Precured',
       'stock_uom': 'Kg',
-      'custom_avg_weight_per_roll': 22.0,
+      'custom_weight_per_roll': 22.0,
       'custom_belts_per_roll': 4,
     });
 
@@ -194,7 +194,7 @@ void main() {
         'name': 'PCTR-BAD',
         'item_name': 'Precured, half-imported',
         'item_group': 'Precured',
-        'custom_avg_weight_per_roll': 22.0,
+        'custom_weight_per_roll': 22.0,
       })),
       stock: null,
       onChanged: () {},

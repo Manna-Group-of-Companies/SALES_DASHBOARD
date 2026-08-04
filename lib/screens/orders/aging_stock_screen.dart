@@ -257,8 +257,11 @@ String specLine(MinStockDetail d) {
   final bits = <String>[p.category.shortLabel];
   switch (p.category) {
     case ProductCategory.pctr:
-      if (p.avgWeightPerRoll > 0) {
-        bits.add('avg ${trimQty(p.avgWeightPerRoll)} kg/roll');
+      if (p.weightPerRoll > 0) {
+        bits.add('${trimQty(p.weightPerRoll)} kg/roll');
+      }
+      if (p.weightPerBelt > 0) {
+        bits.add('${trimQty(p.weightPerBelt)} kg/belt');
       }
       if (p.beltsPerRoll > 0) bits.add('${p.beltsPerRoll} belts/roll');
       break;
@@ -315,12 +318,12 @@ Future<void> showMinStockDetail(
           _kv('Item code', s.itemCode),
           _kv('Stock unit', p.uom.isEmpty ? '—' : p.uom),
           if (p.category == ProductCategory.pctr) ...[
-            _kv('Average weight per roll',
-                p.avgWeightPerRoll > 0 ? '${trimQty(p.avgWeightPerRoll)} kg' : 'not set'),
+            _kv('Weight per roll',
+                p.weightPerRoll > 0 ? '${trimQty(p.weightPerRoll)} kg' : 'not set'),
+            _kv('Weight per belt',
+                p.weightPerBelt > 0 ? '${trimQty(p.weightPerBelt)} kg' : 'not set'),
             _kv('Belts per roll',
                 p.beltsPerRoll > 0 ? '${p.beltsPerRoll}' : 'not set'),
-            _kv('Weight per belt',
-                p.weightPerBelt > 0 ? '${trimQty(p.weightPerBelt)} kg' : '—'),
           ],
           if (p.category == ProductCategory.ctr)
             _kv('Weight per roll',
