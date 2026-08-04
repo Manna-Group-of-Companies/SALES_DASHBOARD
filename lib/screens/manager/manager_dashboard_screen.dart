@@ -19,21 +19,41 @@ class ManagerDashboardScreen extends StatefulWidget {
 
 class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
   late Future<int> _pending;
+  late Future<int> _orders;
+
   @override
   void initState() {
     super.initState();
     _pending = _countPending();
+    _orders = _countOrders();
   }
 
+  void _refresh() => setState(() {
+        _pending = _countPending();
+        _orders = _countOrders();
+      });
+
+  /// What the approvals inbox holds — everything except orders.
   Future<int> _countPending() async {
     final r = await Future.wait([
-      Api.getPendingLeadOrderApprovals(),
-      Api.getPendingLeadOrderPOs(),
-      Api.getPendingSalesOrderPOs(),
       Api.getPendingProformaReleases(),
       Api.getPendingLocationVerifications(),
       Api.getPendingSiteVerifications(),
       Api.getPendingLeadLocationVerifications(),
+    ]);
+    return r.fold<int>(0, (s, l) => s + l.length);
+  }
+
+  /// Orders waiting on a decision, of either kind.
+  ///
+  /// Counted here rather than left to the Team Orders screen, which only shows
+  /// one week at a time — an order pending from three weeks ago would otherwise
+  /// be invisible until somebody thought to scroll back for it.
+  Future<int> _countOrders() async {
+    final r = await Future.wait([
+      Api.getPendingSalesOrderPOs(),
+      Api.getPendingLeadOrderApprovals(),
+      Api.getPendingLeadOrderPOs(),
     ]);
     return r.fold<int>(0, (s, l) => s + l.length);
   }
@@ -63,30 +83,43 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                       context,
                       MaterialPageRoute(
                           builder: (_) => const ManagerApprovalsScreen()))
-                      .then((_) =>
-                      setState(() { _pending = _countPending(); })),
+                      .then((_) => _refresh()),
                 ),
               );
             }),
         const SizedBox(height: 12),
-        // The approvals inbox only ever holds what is outstanding, so an order
-        // vanishes from it the moment it is decided. This is where it goes.
-        Card(
-          child: ListTile(
-            leading:
-                const Icon(Icons.receipt_long, color: Color(0xFFF46A21)),
-            title: const Text('Team Orders',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: const Text(
-                'Approve orders, and see what happened to the ones you already '
-                'decided — by week'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(context,
-                    MaterialPageRoute(
-                        builder: (_) => const ManagerOrdersScreen()))
-                .then((_) => setState(() { _pending = _countPending(); })),
-          ),
-        ),
+        // Every order decision lives here and nowhere else. The inbox above
+        // carries verifications and credit releases; orders were also appearing
+        // there, which meant two places to look and two places to miss one.
+        FutureBuilder<int>(
+            future: _orders,
+            builder: (_, snap) {
+              final n = snap.data;
+              final waiting = (n ?? 0) > 0;
+              return Card(
+                child: ListTile(
+                  leading:
+                      const Icon(Icons.receipt_long, color: Color(0xFFF46A21)),
+                  title: const Text('Team Orders',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text(
+                      n == null
+                          ? 'Loading…'
+                          : waiting
+                              ? '$n order${n == 1 ? '' : 's'} waiting on you'
+                              : 'All orders decided — see what happened to them',
+                      style: TextStyle(
+                          color: waiting ? Colors.orange.shade800 : null,
+                          fontWeight:
+                              waiting ? FontWeight.w600 : FontWeight.normal)),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(context,
+                          MaterialPageRoute(
+                              builder: (_) => const ManagerOrdersScreen()))
+                      .then((_) => _refresh()),
+                ),
+              );
+            }),
         const SizedBox(height: 12),
         Card(
           child: ListTile(

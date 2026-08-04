@@ -6,7 +6,6 @@ import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/models/approval.dart';
-import 'package:manna_field_sales/screens/manager/manager_order_review_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class ManagerApprovalsScreen extends StatefulWidget {
@@ -25,11 +24,15 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
 
   void _reload() => setState(() { _future = _load(); });
 
+  /// Everything the manager owes a decision on **except orders**.
+  ///
+  /// Orders live in Team Orders and only there. Approving one fixes a price
+  /// permanently, commits stock, and — for a lead — converts the party, so it
+  /// belongs on a screen built to show what that decision rests on, not mixed
+  /// in with location photos to verify. Two places to look was two places to
+  /// miss one.
   Future<List<Approval>> _load() async {
     final res = await Future.wait([
-      Api.getPendingLeadOrderApprovals(),
-      Api.getPendingLeadOrderPOs(),
-      Api.getPendingSalesOrderPOs(),
       Api.getPendingProformaReleases(),
       Api.getPendingLocationVerifications(),
       Api.getPendingSiteVerifications(),
@@ -37,26 +40,11 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
     ]);
     final out = <Approval>[];
     for (final r in res[0]) {
-      out.add(Approval('Lead Order — needs approval', r['name'],
-          r['sales_person'], r['lead_name'], (r['total_amount'] ?? 0),
-          'lead_order'));
-    }
-    for (final r in res[1]) {
-      out.add(Approval('Lead PO — needs approval', r['name'],
-          r['sales_person'], r['lead_name'], (r['total_amount'] ?? 0),
-          'lead_po'));
-    }
-    for (final r in res[2]) {
-      out.add(Approval('Customer PO — needs approval', r['name'],
-          r['custom_sales_person'], r['customer'], (r['grand_total'] ?? 0),
-          'so_po'));
-    }
-    for (final r in res[3]) {
       out.add(Approval('Proforma credit release', r['name'],
           r['custom_sales_person'], r['customer'], (r['grand_total'] ?? 0),
           'proforma'));
     }
-    for (final r in res[4]) {
+    for (final r in res[1]) {
       out.add(Approval(
           'Location verification', r['name'],
           r['custom_location_captured_by'],
@@ -64,13 +52,13 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
           lat: r['custom_latitude'], lng: r['custom_longitude'],
           image: r['custom_banner_photo']?.toString()));
     }
-    for (final r in res[5]) {
+    for (final r in res[2]) {
       out.add(Approval('Site: ${r['site_name']} (${r['customer']})', r['name'],
           r['captured_by'], r['customer'], null, 'site',
           lat: r['latitude'], lng: r['longitude'],
           image: r['banner_photo']?.toString()));
     }
-    for (final r in res[6]) {
+    for (final r in res[3]) {
       out.add(Approval(
           'Lead location verification', r['name'],
           r['custom_location_captured_by'],
@@ -79,46 +67,14 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
           image: r['custom_banner_photo']?.toString()));
     }
 
-    // Enrich PO approvals with outstanding context + escalation flag.
-    final poApprovals =
-    out.where((a) => a.kind == 'so_po' || a.kind == 'lead_po').toList();
-    final reps = poApprovals
-        .map((a) => (a.rep ?? '').toString())
-        .where((s) => s.isNotEmpty)
-        .toSet();
-    final repOut = <String, double>{};
-    final repLim = <String, double>{};
-    await Future.wait(reps.map((rep) async {
-      repOut[rep] = await Api.getRepOutstanding(rep);
-      repLim[rep] = await Api.getRepOutstandingLimit(rep);
-    }));
-    for (final a in poApprovals) {
-      final rep = (a.rep ?? '').toString();
-      a.repOutstanding = repOut[rep] ?? 0;
-      a.repLimit = repLim[rep] ?? 0;
-      a.escalate = a.repLimit > 0 && a.repOutstanding > a.repLimit;
-      if (a.kind == 'so_po') {
-        a.custOutstanding =
-        await Api.getCustomerOutstanding((a.party ?? '').toString());
-      }
-    }
+    // The outstanding-limit enrichment and escalation flag that used to run
+    // here went with the orders. Nothing left on this screen turns on a rep's
+    // credit position.
     return out;
   }
 
-  /// Opens the full review. The decision is made there, so the list only has
-  /// to refresh afterwards.
-  Future<void> _review(Approval a) async {
-    final decided = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-          builder: (_) => ManagerOrderReviewScreen(
-                orderName: a.name,
-                escalates: a.escalate,
-                isLead: a.kind == 'lead_order',
-              )),
-    );
-    if (decided == true) _reload();
-  }
+  // The order review lived here. It is reached from Team Orders now, which is
+  // the only place an order is decided.
 
   /// A lead order cannot be approved until the lead carries what an invoice
   /// will need. Checked at the moment of approval, against the live lead
@@ -328,18 +284,7 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
                         // same rates as a customer order, and approving it
                         // converts the lead as well — even less of a yes/no on
                         // a card than a Sales Order is.
-                        if (a.kind == 'so_po' || a.kind == 'lead_order')
-                          SizedBox(
-                            width: double.infinity,
-                            child: FilledButton.icon(
-                                onPressed: () => _review(a),
-                                icon: const Icon(Icons.fact_check_outlined),
-                                label: const Padding(
-                                    padding: EdgeInsets.all(6),
-                                    child: Text('Review order'))),
-                          )
-                        else
-                          Row(children: [
+                        Row(children: [
                             Expanded(
                                 child: FilledButton.icon(
                                     onPressed: () => _act(a, true),
