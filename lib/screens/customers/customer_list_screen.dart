@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/customers/customer_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/map_service.dart';
@@ -25,6 +26,11 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
   bool _loading = true;
   String? _error;
 
+  /// Set when the list came off the phone rather than the server. Shown, never
+  /// hidden — an outstanding balance a rep quotes to a customer should not be
+  /// silently three days old.
+  String _staleNotice = '';
+
   String _q = '';
   String _route = _allRoutes;
 
@@ -40,8 +46,16 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
       _error = null;
     });
     try {
-      final r = await Future.wait([Api.getCustomers(), Api.getSalesPersons()]);
-      final all = r[0];
+      final cached = await Api.getCustomersCached();
+      final all = cached.value;
+      // Sales persons only decorate the list, so a failure there must not cost
+      // the rep their customers when the cached copy would have served.
+      List<Map<String, dynamic>> reps;
+      try {
+        reps = await Api.getSalesPersons();
+      } catch (_) {
+        reps = _reps;
+      }
       final routes = all
           .map((c) => (c['custom_sales_route'] ?? '').toString())
           .where((t) => t.isNotEmpty)
@@ -51,7 +65,8 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
       if (!mounted) return;
       setState(() {
         _all = all;
-        _reps = r[1];
+        _reps = reps;
+        _staleNotice = cached.ageLabel;
         _routes = routes;
         if (_route != _allRoutes && !routes.contains(_route)) {
           _route = _allRoutes;
@@ -61,7 +76,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = '$e';
+          _error = humanError(e);
           _loading = false;
         });
       }
@@ -340,6 +355,21 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
       ]),
       body: Column(children: [
         _filters(),
+        if (_staleNotice.isNotEmpty && !_loading)
+          Container(
+            width: double.infinity,
+            color: const Color(0xFFFFF4E5),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(children: [
+              const Icon(Icons.cloud_off, size: 15, color: Color(0xFFB35309)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(_staleNotice,
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFFB35309))),
+              ),
+            ]),
+          ),
         if (!_loading && _error == null)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),

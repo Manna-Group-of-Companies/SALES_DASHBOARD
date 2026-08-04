@@ -2,7 +2,9 @@ name: manna_field_sales
 description: "Manna Group field sales application."
 publish_to: 'none'
 
-version: 1.0.0+1
+# Must stay in step with kAppVersion in lib/core/app_version.dart — the backend
+# compares that value against Manna App Settings > Minimum App Version.
+version: 1.1.0+2
 
 environment:
   sdk: ^3.12.0

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/auth_store.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/screens/auth/update_required_screen.dart';
 import 'package:manna_field_sales/screens/home/home_dashboard.dart';
 import 'package:manna_field_sales/services/api.dart';
 
@@ -48,8 +49,22 @@ class _LoginScreenState extends State<LoginScreen> {
       Session.I.isHR ||
       Session.I.isProductionManager;
 
-  void _goHome() => Navigator.of(context)
-      .pushReplacement(MaterialPageRoute(builder: (_) => const HomeDashboard()));
+  /// The one door into the app, for both the resume path and a fresh login.
+  ///
+  /// The version check sits here rather than on the dashboard so a build the
+  /// backend has retired never reaches a screen that can write. It fails open:
+  /// a settings row that will not load leaves the rep working.
+  Future<void> _goHome() async {
+    final gate = await Api.appVersionGate();
+    if (!mounted) return;
+    if (gate.blocked) {
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+          builder: (_) => UpdateRequiredScreen(gate: gate, onRetry: _goHome)));
+      return;
+    }
+    Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const HomeDashboard()));
+  }
 
   Future<AuthState> _restoreSession() async {
     final state = await Api.restore();
@@ -110,7 +125,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
       if (!mounted) return;
       if (state == AuthState.ok) {
-        _goHome();
+        await _goHome();
         return;
       }
       if (state == AuthState.rejected) {
@@ -165,7 +180,7 @@ class _LoginScreenState extends State<LoginScreen> {
         throw Exception(
             'This login is not linked to a Sales Person or team. Contact admin.');
       }
-      if (mounted) _goHome();
+      if (mounted) await _goHome();
     } catch (e) {
       // Back to the form with the reason spelled out.
       if (mounted) {

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/app_bus.dart';
 import 'package:manna_field_sales/core/attendance_rules.dart';
 import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
@@ -31,7 +32,9 @@ import 'package:manna_field_sales/screens/retread/retread_ready_tyres_screen.dar
 import 'package:manna_field_sales/screens/trips/hr_trip_expenses_screen.dart';
 import 'package:manna_field_sales/screens/trips/trip_rates_screen.dart';
 import 'package:manna_field_sales/screens/trips/trips_screen.dart';
+import 'package:manna_field_sales/screens/orders/unsent_orders_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/trip_tracker.dart';
 
@@ -49,10 +52,21 @@ class _HomeDashboardState extends State<HomeDashboard>
   bool _attLoading = true;
   bool _attBusy = false;
 
+  /// Orders typed with no signal and not yet sent. The tile only appears when
+  /// there are some — a permanent "Unsent Orders (0)" would train reps to
+  /// ignore the one thing on this screen that means work is outstanding.
+  int _unsent = 0;
+
   void _refreshAll() {
     if (!mounted) return;
     setState(() { _counts = _loadCounts(); _activeTrip = _loadActiveTrip(); });
     _loadAtt();
+    _loadUnsent();
+  }
+
+  Future<void> _loadUnsent() async {
+    final n = await PendingOrders.count();
+    if (mounted && n != _unsent) setState(() => _unsent = n);
   }
 
   @override
@@ -63,6 +77,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     _counts = _loadCounts();
     _activeTrip = _loadActiveTrip();
     _loadAtt();
+    _loadUnsent();
   }
 
   @override
@@ -109,7 +124,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     } on AttendanceWindowError catch (e) {
       await _outsidePunchHours(e);
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _attBusy = false);
     }
@@ -135,7 +150,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     } on AttendanceWindowError catch (e) {
       await _outsidePunchHours(e);
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _attBusy = false);
     }
@@ -451,6 +466,11 @@ class _HomeDashboardState extends State<HomeDashboard>
                 () => _go(const GMApprovalsScreen())),
       if (isRep || Session.I.isManager || Session.I.isGM || Session.I.isHR)
         _Tile('Day Map', Icons.pin_drop, () => _go(const DayMapScreen())),
+      // Sits above everything else a rep does: an order nobody has received is
+      // the most urgent thing on this screen.
+      if (isRep && _unsent > 0)
+        _Tile('Unsent Orders ($_unsent)', Icons.cloud_off,
+            () => _go(const UnsentOrdersScreen())),
       if (isRep) ...[
         _Tile('Customers', Icons.store, () => _go(const CustomerListScreen())),
         _Tile('Leads', Icons.emoji_objects, () => _go(const LeadsScreen())),
@@ -706,7 +726,12 @@ class _HomeDashboardState extends State<HomeDashboard>
   void _go(Widget screen) {
     Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => screen))
-        .then((_) => setState(() { _counts = _loadCounts(); }));
+        .then((_) {
+      setState(() { _counts = _loadCounts(); });
+      // An order taken — or sent — while that screen was open changes whether
+      // the Unsent tile belongs here at all.
+      _loadUnsent();
+    });
   }
 }
 

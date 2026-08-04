@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
@@ -11,6 +12,7 @@ import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
 import 'package:manna_field_sales/screens/orders/product_row.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/pending_orders.dart';
 
 class OrderScreen extends StatefulWidget {
   final Map<String, dynamic> customer;
@@ -237,31 +239,82 @@ class _OrderScreenState extends State<OrderScreen> {
     return null;
   }
 
+  /// Offers to hold an order that could not be sent for want of signal.
+  ///
+  /// The wording is careful on purpose. Nothing has been reserved and no order
+  /// number exists, so the rep must not walk away believing the customer is
+  /// covered — particularly on minimum-stock lines, where another rep in signal
+  /// can take the same rolls before this draft is ever sent.
+  Future<void> _offerDraft(
+      String deliveryDate, List<Map<String, dynamic>> reservations) async {
+    if (!mounted) return;
+    setState(() => _submitting = false);
+
+    final keep = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('No signal'),
+        content: Text(
+          reservations.isEmpty
+              ? 'This order has not been sent. Keep it on the phone and send it '
+                  'when you have signal?'
+              : 'This order has not been sent, and the minimum stock on it is '
+                  'not held for you. Another rep with signal can still take it.\n\n'
+                  'Keep the order on the phone and send it when you have signal?',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Discard')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Keep it')),
+        ],
+      ),
+    );
+
+    if (keep != true) return;
+
+    await PendingOrders.save(
+      customer: widget.customer['name'] as String,
+      customerName: '${widget.customer['customer_name'] ?? ''}',
+      deliveryDate: deliveryDate,
+      items: [for (final l in _picked) l.toSalesOrderItem()],
+      reservations: reservations,
+    );
+    if (!mounted) return;
+    _snack('Saved on your phone — not sent yet. Send it from Unsent Orders.');
+    await Future.delayed(const Duration(milliseconds: 600));
+    if (mounted) Navigator.pop(context, true);
+  }
+
   Future<void> _submit() async {
     final problem = _validate();
     if (problem != null) return _snack(problem);
 
     setState(() => _submitting = true);
+
+    final d = _deliveryDate!;
+    final dd = '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
+
+    // Only lines that draw on the shared pool need booking. Everything else
+    // is made to order and has nothing to race over.
+    // Booked in the pool's own units — whole rolls and whole belts, not the
+    // fractional roll the order line carries.
+    // Built outside the try so the offline path can still hand them to a draft.
+    final reservations = <Map<String, dynamic>>[
+      for (final l in _picked)
+        if (_stock.containsKey(l.product.code))
+          {
+            'item_code': l.product.code,
+            'qty': double.parse(l.reserveQty.toStringAsFixed(3)),
+            'loose_belts': l.reserveBelts,
+            if (l.agedBatch != null) 'batch': l.agedBatch,
+          }
+    ];
+
     try {
-      final d = _deliveryDate!;
-      final dd = '${d.year}-${d.month.toString().padLeft(2, '0')}-'
-          '${d.day.toString().padLeft(2, '0')}';
-
-      // Only lines that draw on the shared pool need booking. Everything else
-      // is made to order and has nothing to race over.
-      // Booked in the pool's own units — whole rolls and whole belts, not the
-      // fractional roll the order line carries.
-      final reservations = <Map<String, dynamic>>[
-        for (final l in _picked)
-          if (_stock.containsKey(l.product.code))
-            {
-              'item_code': l.product.code,
-              'qty': double.parse(l.reserveQty.toStringAsFixed(3)),
-              'loose_belts': l.reserveBelts,
-              if (l.agedBatch != null) 'batch': l.agedBatch,
-            }
-      ];
-
       final String name;
       if (_isEdit) {
         name = '${widget.existingOrder!['name']}';
@@ -309,9 +362,17 @@ class _OrderScreenState extends State<OrderScreen> {
                 builder: (_) => OrderDetailScreen(orderName: name)));
       }
     } catch (e) {
+      // No signal is the one failure worth offering a way out of: the rep is
+      // standing in front of the customer and the order is already typed.
+      // Every other failure means the server considered this order and said no,
+      // so a draft would only defer the same answer.
+      if (isOffline(e) && !_isEdit) {
+        await _offerDraft(dd, reservations);
+        return;
+      }
       // The most likely failure is someone else getting there first, so the
       // screen refreshes before the rep looks at it again.
-      _snack('Failed: $e');
+      _snack(humanError(e));
       try {
         final fresh = await Api.getMinimumStock();
         if (mounted) setState(() => _stock = fresh);
