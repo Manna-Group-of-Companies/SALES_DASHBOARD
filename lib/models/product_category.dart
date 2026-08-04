@@ -319,6 +319,12 @@ class OrderLine {
         'item_code': product.code,
         'qty': double.parse(qty.toStringAsFixed(4)),
         'rate': double.parse(lineRate.toStringAsFixed(4)),
+        // Sent explicitly rather than left to the server. ERPNext derives
+        // `amount` for a Sales Order Item, but `Lead Order Item` is our own
+        // child table and nothing calculates it — so a lead order's lines
+        // arrived worth zero, and the manager reviewing it saw a nil order
+        // against rates the rep had entered correctly.
+        'amount': double.parse(amount.toStringAsFixed(2)),
         'custom_product_category': product.category.shortLabel,
         'custom_rolls': rolls,
         'custom_loose_belts': looseBelts,

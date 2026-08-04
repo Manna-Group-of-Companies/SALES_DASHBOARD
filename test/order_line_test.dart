@@ -234,6 +234,51 @@ void main() {
       // qty x rate must equal weight x rate-per-kg, or the invoice is wrong.
       expect((payload['qty'] as double) * (payload['rate'] as double),
           closeTo(110.0 * 210, 0.0001));
+
+      // Sent explicitly. ERPNext derives `amount` for a Sales Order Item but
+      // not for our own `Lead Order Item`, so leaving it off made every lead
+      // order worth nothing on the manager's review while the rep's own screen
+      // showed the right figure.
+      expect(payload['amount'], closeTo(110.0 * 210, 0.01));
+    });
+
+    test('every family sends a line amount that matches its own arithmetic',
+        () {
+      final cases = <String, OrderLine>{
+        'PCTR': OrderLine(
+            product: _item({
+              'item_group': 'Precured',
+              'custom_weight_per_roll': 22.0,
+              'custom_belts_per_roll': 4,
+            }),
+            rolls: 2,
+            looseBelts: 1,
+            rate: 100),
+        'CTR': OrderLine(
+            product: _item({
+              'item_group': 'Hot Rubber',
+              'custom_weight_per_roll': 30.0,
+            }),
+            rolls: 3,
+            rate: 90),
+        'Bonding Gum': OrderLine(
+            product: _item({'item_group': 'Bonding Gum'}), boxes: 2, rate: 80),
+        'Solution': OrderLine(
+            product: _item({
+              'item_group': 'Vulcanizing Solution',
+              'custom_pack_litres': 10.0,
+            }),
+            cans: 4,
+            rate: 250),
+      };
+
+      cases.forEach((label, line) {
+        final p = line.toSalesOrderItem();
+        expect(p['amount'], closeTo(line.amount, 0.01), reason: label);
+        expect((p['qty'] as double) * (p['rate'] as double),
+            closeTo(line.amount, 0.01),
+            reason: '$label: amount must be qty x rate');
+      });
     });
 
     test('an aged batch is only sent when the rep chose one', () {

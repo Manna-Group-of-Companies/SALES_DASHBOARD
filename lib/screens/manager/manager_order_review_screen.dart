@@ -104,8 +104,20 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
 
   double get _outstanding => _num(_customer['custom_outstanding_balance']);
   double get _limit => _num(_customer['custom_credit_limit']);
+  /// What a line is worth.
+  ///
+  /// Falls back to qty x rate when `amount` is missing or zero. Lead orders
+  /// written before the app started sending `amount` have it as zero — nothing
+  /// on a custom child table derives it — and a manager must never be shown a
+  /// nil order against rates the rep entered correctly.
+  static double _lineAmount(Map<String, dynamic> it) {
+    final stored = _num(it['amount']);
+    if (stored > 0) return stored;
+    return _num(it['qty']) * _num(it['rate']);
+  }
+
   double get _orderTotal =>
-      _items.fold<double>(0, (s, it) => s + _num(it['amount']));
+      _items.fold<double>(0, (s, it) => s + _lineAmount(it));
 
   /// What the customer would owe if this order shipped. The limit question is
   /// not "do they owe too much now" but "will they after this".
@@ -393,6 +405,32 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
       );
 
   Widget _creditCard() {
+    // A lead has no trading history and no limit, so there is nothing to be
+    // within. A green "Within credit limit" against a party who has never been
+    // invoiced is a reassurance nobody earned, and the manager might read it as
+    // a check that passed rather than one that was never run.
+    if (_isLead) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: const Color(0xFFF1F3F4),
+            borderRadius: BorderRadius.circular(8)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Icon(Icons.receipt_long, size: 18, color: Colors.black54),
+            const SizedBox(width: 6),
+            Text('Rs ${_orderTotal.toStringAsFixed(0)}',
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold, fontSize: 16)),
+          ]),
+          const SizedBox(height: 4),
+          const Text(
+              'New party — no trading history or credit limit to check against.',
+              style: TextStyle(fontSize: 12, color: Colors.black54)),
+        ]),
+      );
+    }
+
     final colour = _overLimit ? Colors.red : Colors.green;
     return Container(
       padding: const EdgeInsets.all(12),
@@ -436,7 +474,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                 child: Text('${it['item_name'] ?? code}',
                     style: const TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w600))),
-            Text('Rs ${_num(it['amount']).toStringAsFixed(2)}',
+            Text('Rs ${_lineAmount(it).toStringAsFixed(2)}',
                 style: const TextStyle(fontWeight: FontWeight.w600)),
           ]),
           const SizedBox(height: 2),
