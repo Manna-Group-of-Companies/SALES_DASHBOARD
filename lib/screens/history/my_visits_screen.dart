@@ -13,6 +13,7 @@ class MyVisitsScreen extends StatelessWidget {
     return HistoryList(
       title: 'My Visits',
       loader: Api.getMyVisitsIncludingTagged,
+      cacheKey: CacheKeys.visits,
       tileBuilder: (_, r) {
         final by = '${r['sales_person'] ?? ''}';
         final shared = by.isNotEmpty && by != me;

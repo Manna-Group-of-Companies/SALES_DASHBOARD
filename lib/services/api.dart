@@ -22,6 +22,34 @@ import 'package:manna_field_sales/services/stock_service.dart';
 /// only [Api] ever needs it.
 String _res(String doctype) => '/api/resource/${Uri.encodeComponent(doctype)}';
 
+/// Cache keys for the lists a rep opens in the field.
+///
+/// Every one of these used to fail with a raw Dio exception the moment the
+/// signal went, on screens whose whole job is to show what already happened —
+/// visits made, orders placed, leave taken. None of that needs a network to be
+/// worth reading, so all of it is served from the last sync when there is no
+/// connection. Screens quote [OfflineCache.ageLabel] so nobody mistakes an old
+/// figure for a current one.
+///
+/// Keyed per rep, because handsets get shared.
+class CacheKeys {
+  static String get _me => Session.I.salesPerson ?? 'all';
+
+  static String get leads => 'leads:$_me';
+  static String get visits => 'visits:$_me';
+  static String get orders => 'orders:$_me';
+  static String get collections => 'collections:$_me';
+  static String get trips => 'trips:$_me';
+  static String get leaves => 'leaves:$_me';
+  static String get leaveBalance => 'leaveBalance:$_me';
+  static String get items => 'items';
+
+  /// Minimum stock is composed from three reads plus the item list, so it is
+  /// only as fresh as its stalest part.
+  static List<String> get minimumStock =>
+      [kStockPoolsKey, kStockBatchesKey, kStockBookingsKey, items];
+}
+
 /// Outcome of a silent authentication attempt.
 enum AuthState {
   /// Authenticated — carry on.
@@ -257,6 +285,18 @@ class Api {
       return const VersionGate(VersionVerdict.unknown);
     }
   }
+
+  /// A read that falls back to the last sync when the network is down.
+  ///
+  /// For lists a rep needs to *look at* — what they visited, what they
+  /// ordered, what leave they have left. None of it changes the world, so
+  /// serving yesterday's copy beats an error screen. Anything that writes goes
+  /// straight to the server, always.
+  static Future<List<Map<String, dynamic>>> _cachedRows(
+          String key, Future<List<Map<String, dynamic>>> Function() fetch) =>
+      OfflineCache.read<List<Map<String, dynamic>>>(key, fetch,
+              decode: decodeRows)
+          .then((c) => c.value);
 
   static Future<int> getCount(String doctype, String filters) async {
     final r = await Session.I.dio.get('/api/method/frappe.client.get_count',
@@ -996,13 +1036,19 @@ class Api {
   /// units set has to stay visible to everyone — that is the state every
   /// existing item is in today, and dropping them would empty the catalogue.
   static Future<List<Map<String, dynamic>>> getItems() async {
-    final all = await _list('Item',
-        fields: '["name","item_name","stock_uom","standard_rate","item_group",'
-            '"custom_units","custom_avg_weight_per_roll",'
-            '"custom_belts_per_roll","custom_weight_per_roll",'
-            '"custom_pack_litres"]',
-        filters: '[["disabled","=",0],["is_sales_item","=",1]]',
-        orderBy: 'item_name asc');
+    // The catalogue is the slowest-changing thing the app reads and the thing
+    // every order screen needs, so it is cached under one key for all units —
+    // the per-unit filter below is applied after, on whatever copy we have.
+    final all = await _cachedRows(
+        CacheKeys.items,
+        () => _list('Item',
+            fields:
+                '["name","item_name","stock_uom","standard_rate","item_group",'
+                    '"custom_units","custom_avg_weight_per_roll",'
+                    '"custom_belts_per_roll","custom_weight_per_roll",'
+                    '"custom_pack_litres"]',
+            filters: '[["disabled","=",0],["is_sales_item","=",1]]',
+            orderBy: 'item_name asc'));
     final unit = Session.I.company;
     if (unit == null || unit.trim().isEmpty) return all;
     return all.where((it) => sellsInUnit(it['custom_units'], unit)).toList();
@@ -1343,34 +1389,40 @@ class Api {
 
   // My visits + visits on trips I'm tagged on (auto-shared).
   static Future<List<Map<String, dynamic>>> getMyVisitsIncludingTagged() async {
-    const f = '[$_visitFields,"sales_person","custom_trip"]';
-    final own =
-    await _list('Sales Visit', fields: f, filters: _mineFilter(), limit: 50);
-    final byName = <String, Map<String, dynamic>>{};
-    for (final v in own) {
-      byName['${v['name']}'] = v;
-    }
-    final tagged = await _tripsTaggedForMe();
-    if (tagged.isNotEmpty) {
-      final inClause = '["${tagged.join('","')}"]';
-      final shared = await _list('Sales Visit',
-          fields: f,
-          filters: '[["custom_trip","in",$inClause]]',
-          limit: 50);
-      for (final v in shared) {
+    // Cached as one composed list rather than per-query: the merge of a rep's
+    // own visits with the ones tagged to them through a shared trip is what the
+    // screen actually shows, and half of it would be misleading.
+    return _cachedRows(CacheKeys.visits, () async {
+      const f = '[$_visitFields,"sales_person","custom_trip"]';
+      final own = await _list('Sales Visit',
+          fields: f, filters: _mineFilter(), limit: 50);
+      final byName = <String, Map<String, dynamic>>{};
+      for (final v in own) {
         byName['${v['name']}'] = v;
       }
-    }
-    final list = byName.values.toList();
-    list.sort((a, b) => '${b['visit_date']}'.compareTo('${a['visit_date']}'));
-    return _withLeadNames(list);
+      final tagged = await _tripsTaggedForMe();
+      if (tagged.isNotEmpty) {
+        final inClause = '["${tagged.join('","')}"]';
+        final shared = await _list('Sales Visit',
+            fields: f,
+            filters: '[["custom_trip","in",$inClause]]',
+            limit: 50);
+        for (final v in shared) {
+          byName['${v['name']}'] = v;
+        }
+      }
+      final list = byName.values.toList();
+      list.sort((a, b) => '${b['visit_date']}'.compareTo('${a['visit_date']}'));
+      return _withLeadNames(list);
+    });
   }
 
-  static Future<List<Map<String, dynamic>>> getMyOrders() => _list('Sales Order',
-      fields:
-      '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_proforma_required","custom_order_placed_at","custom_po_status","custom_production_status","custom_production_finish_date"]',
-      filters: _mineFilter('custom_sales_person'),
-      limit: 50);
+  static Future<List<Map<String, dynamic>>> getMyOrders() =>
+      _cachedRows(CacheKeys.orders, () => _list('Sales Order',
+          fields:
+              '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_proforma_required","custom_order_placed_at","custom_po_status","custom_production_status","custom_production_finish_date"]',
+          filters: _mineFilter('custom_sales_person'),
+          limit: 50));
 
   static Future<Map<String, dynamic>> getOrder(String name) async {
     final r = await Session.I.dio.get(_res('Sales Order') + '/$name');
@@ -1453,11 +1505,13 @@ class Api {
     final filters = (rep == null || rep.isEmpty)
         ? null
         : '[["custom_sales_person","=","$rep"]]';
-    return _list('Lead',
-        fields:
-        '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status"]',
-        filters: filters,
-        orderBy: 'creation desc');
+    return _cachedRows(
+        CacheKeys.leads,
+        () => _list('Lead',
+            fields:
+                '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status"]',
+            filters: filters,
+            orderBy: 'creation desc'));
   }
 
   static Future<String> createLead({
@@ -1586,11 +1640,14 @@ class Api {
     }
   }
 
-  static Future<List<Map<String, dynamic>>> getMyCollections() => _list(
-      'Collection Entry',
-      fields: '["name","customer","amount","mode_of_payment","collection_date"]',
-      filters: _mineFilter(),
-      limit: 50);
+  static Future<List<Map<String, dynamic>>> getMyCollections() =>
+      _cachedRows(
+          CacheKeys.collections,
+          () => _list('Collection Entry',
+              fields:
+                  '["name","customer","amount","mode_of_payment","collection_date"]',
+              filters: _mineFilter(),
+              limit: 50));
 
   /// The ERPNext Company this rep's orders belong to.
   ///
@@ -1882,34 +1939,39 @@ class Api {
 
   // -------- Trips (rich model) --------
   static Future<List<Map<String, dynamic>>> getMyTrips() async {
-    final me = Session.I.salesPerson;
-    const f =
-        '["name","trip_date","purpose","status","total_distance_km","odometer_distance_km","primary_mode","start_odometer","end_odometer","sales_person"]';
-    final owned = await _list('Trip',
-        fields: f,
-        filters: '[["sales_person","=","$me"],["status","!=","Cancelled"]]',
-        orderBy: 'trip_date desc',
-        limit: 100);
-    final byName = <String, Map<String, dynamic>>{};
-    for (final t in owned) {
-      t['_shared'] = false;
-      byName['${t['name']}'] = t;
-    }
-    final shared = await _list('Trip',
-        fields: f,
-        filters: '[["tagged_csv","like","%|$me|%"],["status","!=","Cancelled"]]',
-        orderBy: 'trip_date desc',
-        limit: 100);
-    for (final t in shared) {
-      final n = '${t['name']}';
-      if (!byName.containsKey(n)) {
-        t['_shared'] = true;
-        byName[n] = t;
+    // Own trips merged with ones this rep was tagged into — cached together for
+    // the same reason visits are: either half alone reads as a missing trip.
+    return _cachedRows(CacheKeys.trips, () async {
+      final me = Session.I.salesPerson;
+      const f =
+          '["name","trip_date","purpose","status","total_distance_km","odometer_distance_km","primary_mode","start_odometer","end_odometer","sales_person"]';
+      final owned = await _list('Trip',
+          fields: f,
+          filters: '[["sales_person","=","$me"],["status","!=","Cancelled"]]',
+          orderBy: 'trip_date desc',
+          limit: 100);
+      final byName = <String, Map<String, dynamic>>{};
+      for (final t in owned) {
+        t['_shared'] = false;
+        byName['${t['name']}'] = t;
       }
-    }
-    final list = byName.values.toList();
-    list.sort((a, b) => '${b['trip_date']}'.compareTo('${a['trip_date']}'));
-    return list;
+      final shared = await _list('Trip',
+          fields: f,
+          filters:
+              '[["tagged_csv","like","%|$me|%"],["status","!=","Cancelled"]]',
+          orderBy: 'trip_date desc',
+          limit: 100);
+      for (final t in shared) {
+        final n = '${t['name']}';
+        if (!byName.containsKey(n)) {
+          t['_shared'] = true;
+          byName[n] = t;
+        }
+      }
+      final list = byName.values.toList();
+      list.sort((a, b) => '${b['trip_date']}'.compareTo('${a['trip_date']}'));
+      return list;
+    });
   }
 
   static Future<Map<String, dynamic>?> getTrip(String name) async {
@@ -2553,22 +2615,28 @@ class Api {
   }
 
   // -------- Leave (financial-year allowance of 12 days) --------
-  static Future<List<Map<String, dynamic>>> getMyLeaves() => _list(
-      'Leave Request',
-      fields:
-      '["name","leave_date","half_day","half_day_period","leave_days","reason","status","approver_type","is_hr_entry"]',
-      filters: _mineFilter('sales_person'),
-      orderBy: 'leave_date desc',
-      limit: 100);
+  static Future<List<Map<String, dynamic>>> getMyLeaves() => _cachedRows(
+      CacheKeys.leaves,
+      () => _list('Leave Request',
+          fields:
+              '["name","leave_date","half_day","half_day_period","leave_days","reason","status","approver_type","is_hr_entry"]',
+          filters: _mineFilter('sales_person'),
+          orderBy: 'leave_date desc',
+          limit: 100));
 
   // Balance in the current financial year: allowance 12 minus approved days.
   static Future<Map<String, double>> getLeaveBalance(String rep) async {
     final fy = financialYear(DateTime.now());
-    final list = await _list('Leave Request',
-        fields: '["leave_days","status"]',
-        filters:
-        '[["sales_person","=","$rep"],["leave_date","between",["${fy.start}","${fy.end}"]]]',
-        limit: 0);
+    // The rows are cached, not the computed balance — the arithmetic is cheap
+    // and doing it on the way out means the shape can change without stale
+    // totals surviving in storage.
+    final list = await _cachedRows(
+        CacheKeys.leaveBalance,
+        () => _list('Leave Request',
+            fields: '["leave_days","status"]',
+            filters:
+                '[["sales_person","=","$rep"],["leave_date","between",["${fy.start}","${fy.end}"]]]',
+            limit: 0));
     double taken = 0, pending = 0;
     for (final e in list) {
       final d = ((e['leave_days'] ?? 0) as num).toDouble();

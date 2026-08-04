@@ -72,6 +72,27 @@ class OfflineCache {
   static Future<SharedPreferences> get _prefs =>
       SharedPreferences.getInstance();
 
+  /// How the most recent read of each key turned out, so a screen can say the
+  /// data is old without every fetcher having to change shape to carry it.
+  ///
+  /// In-memory and per-run on purpose: this describes what *this* screen just
+  /// got, not what is on disk. Empty for a live read.
+  static final Map<String, String> _lastAge = <String, String>{};
+
+  /// The staleness line for the last read of [key], or empty if it was live.
+  /// Safe to call before anything has been read — an unknown key is not stale.
+  static String ageLabel(String key) => _lastAge[key] ?? '';
+
+  /// True when any of [keys] came from the cache. Used where one screen is
+  /// built from several reads and is only as fresh as its stalest part.
+  static String worstAge(List<String> keys) {
+    for (final k in keys) {
+      final label = _lastAge[k] ?? '';
+      if (label.isNotEmpty) return label;
+    }
+    return '';
+  }
+
   /// Runs [fetch], caching what comes back under [key].
   ///
   /// On a network failure the last good copy is returned instead, marked
@@ -87,11 +108,13 @@ class OfflineCache {
     try {
       final live = await fetch();
       await write(key, encode != null ? encode(live) : live);
+      _lastAge[key] = '';
       return Cached(live);
     } catch (e) {
       if (!isOffline(e)) rethrow;
       final fallback = await peek<T>(key, decode);
       if (fallback == null) rethrow;
+      _lastAge[key] = fallback.ageLabel;
       return fallback;
     }
   }
@@ -135,6 +158,7 @@ class OfflineCache {
   /// Drops everything cached. Called on sign-out so one rep's customers are
   /// never served to the next person to use the handset.
   static Future<void> clear() async {
+    _lastAge.clear();
     final p = await _prefs;
     for (final k in p.getKeys().where((k) => k.startsWith(_prefix)).toList()) {
       await p.remove(k);

@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/trips/new_trip_screen.dart';
 import 'package:manna_field_sales/screens/trips/trip_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/offline_banner.dart';
 
 class TripsScreen extends StatefulWidget {
   const TripsScreen({super.key});
@@ -46,11 +48,25 @@ class _TripsScreenState extends State<TripsScreen> {
           if (snap.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snap.hasError) return Center(child: Text('Error: ${snap.error}'));
+          if (snap.hasError) return Center(child: Text(humanError(snap.error)));
           final trips = snap.data ?? [];
           if (trips.isEmpty) {
-            return const Center(child: Text('No trips yet. Tap New Trip.'));
+            return Column(children: [
+              OfflineBanner.forKey(CacheKeys.trips),
+              const Expanded(
+                  child: Center(child: Text('No trips yet. Tap New Trip.'))),
+            ]);
           }
+          return Column(children: [
+            OfflineBanner.forKey(CacheKeys.trips),
+            Expanded(child: _tripList(trips)),
+          ]);
+        },
+      ),
+    );
+  }
+
+  Widget _tripList(List<Map<String, dynamic>> trips) {
           return ListView.separated(
             itemCount: trips.length,
             separatorBuilder: (_, __) => const Divider(height: 1),
@@ -85,9 +101,6 @@ class _TripsScreenState extends State<TripsScreen> {
               );
             },
           );
-        },
-      ),
-    );
   }
 }
 

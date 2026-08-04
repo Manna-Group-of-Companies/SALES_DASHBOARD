@@ -13,6 +13,7 @@ class MyOrdersScreen extends StatelessWidget {
     return HistoryList(
       title: 'My Orders',
       loader: Api.getMyOrders,
+      cacheKey: CacheKeys.orders,
       tileBuilder: (ctx, r) {
         final po = '${r['custom_po_status'] ?? '—'}';
         final approved = po == 'PO Approved - Ready for SAP';

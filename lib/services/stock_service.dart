@@ -40,10 +40,22 @@ import 'package:dio/dio.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
+import 'package:manna_field_sales/services/offline_cache.dart';
 
 const String kPoolDoctype = 'Manna Minimum Stock Item';
 const String kBatchDoctype = 'Manna Minimum Stock Batch';
 const String kReservationDoctype = 'Manna Stock Reservation';
+
+// Cache keys for the three reads behind [StockService.load].
+//
+// Only reads are cached, and only for display. Booking still goes to the
+// server every time — the compare-and-swap is what protects the pool, and a
+// cached headroom figure could not be allowed to authorise anything. A rep
+// offline can see what the minimum stock was at the last sync; they cannot
+// take any of it until they have signal.
+const String kStockPoolsKey = 'minstock:pools';
+const String kStockBatchesKey = 'minstock:batches';
+const String kStockBookingsKey = 'minstock:bookings';
 
 String _res(String doctype) =>
     '/api/resource/${Uri.encodeComponent(doctype)}';
@@ -73,22 +85,28 @@ class StockService {
   /// else's competition.
   static Future<Map<String, MinStock>> load() async {
     final results = await Future.wait([
-      _list(kPoolDoctype,
-          fields: '["item_code","qty","loose_belts","custom_reserved_qty",'
-              '"custom_reserved_loose_belts","custom_last_sold_on"]',
-          filters: '[["disabled","=",0]]'),
-      _list(kBatchDoctype,
-          fields:
-              '["name","item_code","batch_date","qty","loose_belts","original_qty"]',
-          orderBy: 'batch_date asc'),
+      _cached(
+          kStockPoolsKey,
+          () => _list(kPoolDoctype,
+              fields: '["item_code","qty","loose_belts","custom_reserved_qty",'
+                  '"custom_reserved_loose_belts","custom_last_sold_on"]',
+              filters: '[["disabled","=",0]]')),
+      _cached(
+          kStockBatchesKey,
+          () => _list(kBatchDoctype,
+              fields:
+                  '["name","item_code","batch_date","qty","loose_belts","original_qty"]',
+              orderBy: 'batch_date asc')),
       // Every live booking, not just this rep's. "4 booked" tells a rep
       // nothing useful; knowing it is Amjad holding three of them tells them
       // who to ring.
-      _list(kReservationDoctype,
-          fields:
-              '["item_code","qty","loose_belts","sales_person","sales_order"]',
-          filters: '[["status","=","Active"]]',
-          orderBy: 'creation asc'),
+      _cached(
+          kStockBookingsKey,
+          () => _list(kReservationDoctype,
+              fields:
+                  '["item_code","qty","loose_belts","sales_person","sales_order"]',
+              filters: '[["status","=","Active"]]',
+              orderBy: 'creation asc')),
     ]);
 
     final pools = results[0];
@@ -494,6 +512,17 @@ class StockService {
       });
     } catch (_) {}
   }
+
+  /// A read that falls back to the last sync when the network is down.
+  ///
+  /// Used only by [load]. The booking path deliberately does not go through
+  /// here: `book` re-reads the pool live every attempt, because a stale
+  /// `modified` is exactly what the compare-and-swap exists to reject.
+  static Future<List<Map<String, dynamic>>> _cached(
+          String key, Future<List<Map<String, dynamic>>> Function() fetch) =>
+      OfflineCache.read<List<Map<String, dynamic>>>(key, fetch,
+              decode: decodeRows)
+          .then((c) => c.value);
 
   static Future<List<Map<String, dynamic>>> _list(String doctype,
       {required String fields,

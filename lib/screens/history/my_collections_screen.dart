@@ -12,6 +12,7 @@ class MyCollectionsScreen extends StatelessWidget {
     return HistoryList(
       title: 'My Collections',
       loader: Api.getMyCollections,
+      cacheKey: CacheKeys.collections,
       tileBuilder: (ctx, r) => ListTile(
         leading: const Icon(Icons.payments),
         title: Text(r['customer'] ?? r['name']),

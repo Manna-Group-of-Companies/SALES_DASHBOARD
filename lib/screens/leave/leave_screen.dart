@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/leave/apply_leave_screen.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/offline_banner.dart';
 
 class LeaveScreen extends StatefulWidget {
   const LeaveScreen({super.key});
@@ -109,11 +111,14 @@ class _LeaveScreenState extends State<LeaveScreen> {
             return Center(
                 child: Padding(
                     padding: const EdgeInsets.all(20),
-                    child: Text('Error: ${snap.error}')));
+                    child: Text(humanError(snap.error))));
           }
           final balance = snap.data![0] as Map<String, double>;
           final leaves = snap.data![1] as List<Map<String, dynamic>>;
           return ListView(padding: const EdgeInsets.all(12), children: [
+            // A remaining-days figure is exactly the sort of number somebody
+            // acts on without checking, so say when it is not current.
+            OfflineBanner.forKeys([CacheKeys.leaveBalance, CacheKeys.leaves]),
             _balanceCard(balance),
             const SizedBox(height: 8),
             const Padding(

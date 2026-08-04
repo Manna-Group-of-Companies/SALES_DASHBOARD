@@ -17,9 +17,11 @@
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/offline_banner.dart';
 
 class AgingStockScreen extends StatefulWidget {
   const AgingStockScreen({super.key});
@@ -69,7 +71,7 @@ class _AgingStockScreenState extends State<AgingStockScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return _message('Could not load: ${snap.error}');
+            return _message(humanError(snap.error));
           }
           final all = snap.data ?? [];
           if (all.isEmpty) {
@@ -82,6 +84,12 @@ class _AgingStockScreenState extends State<AgingStockScreen> {
           final shown = _filter(all);
 
           return Column(children: [
+            // Matters more here than anywhere else: these figures are what a
+            // rep decides whether to promise stock on, and offline they cannot
+            // see bookings other reps have made since. Nothing can actually be
+            // taken until the order is sent, but the rep should know that the
+            // numbers in front of them are a snapshot.
+            OfflineBanner.forKeys(CacheKeys.minimumStock),
             _header(all.length, atRisk, slowing),
             Expanded(
               child: RefreshIndicator(

@@ -128,6 +128,56 @@ void main() {
     });
   });
 
+  group('Telling a screen how old its data is', () {
+    test('a live read reports no staleness', () async {
+      await _read(() async => _rows);
+      expect(OfflineCache.ageLabel('customers'), isEmpty);
+    });
+
+    test('a cached read reports it', () async {
+      await _read(() async => _rows);
+      await _read(() async => throw _offline());
+      expect(OfflineCache.ageLabel('customers'), contains('Offline'));
+    });
+
+    test('coming back online clears the notice', () async {
+      await _read(() async => _rows);
+      await _read(() async => throw _offline());
+      expect(OfflineCache.ageLabel('customers'), isNotEmpty);
+
+      await _read(() async => _rows);
+      expect(OfflineCache.ageLabel('customers'), isEmpty,
+          reason: 'a stale banner must not outlive the network coming back');
+    });
+
+    test('a key never read is not stale', () {
+      expect(OfflineCache.ageLabel('never-touched'), isEmpty);
+    });
+
+    test('a screen built from several reads is as stale as its worst', () async {
+      await OfflineCache.read<List<Map<String, dynamic>>>(
+          'a', () async => _rows,
+          decode: decodeRows);
+      await OfflineCache.read<List<Map<String, dynamic>>>(
+          'b', () async => _rows,
+          decode: decodeRows);
+      // 'a' still live, 'b' falls back.
+      await OfflineCache.read<List<Map<String, dynamic>>>(
+          'b', () async => throw _offline(),
+          decode: decodeRows);
+
+      expect(OfflineCache.worstAge(['a', 'b']), contains('Offline'));
+      expect(OfflineCache.worstAge(['a']), isEmpty);
+    });
+
+    test('clearing on sign-out drops the notices too', () async {
+      await _read(() async => _rows);
+      await _read(() async => throw _offline());
+      await OfflineCache.clear();
+      expect(OfflineCache.ageLabel('customers'), isEmpty);
+    });
+  });
+
   group('Age wording', () {
     test('reads in minutes, hours then days', () {
       String label(Duration ago) => Cached(
