@@ -5,6 +5,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
@@ -132,7 +133,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
       }
     }
   }
@@ -165,7 +166,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
       }
     }
   }
@@ -197,7 +198,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
       }
     }
   }
@@ -212,7 +213,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
       }
     }
   }
@@ -826,7 +827,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
       }
     }
   }
@@ -1292,7 +1293,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
       }
     }
   }

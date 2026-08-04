@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class ComplaintScreen extends StatefulWidget {
@@ -42,7 +43,7 @@ class _ComplaintScreenState extends State<ComplaintScreen> {
       await Future.delayed(const Duration(milliseconds: 500));
       if (mounted) Navigator.pop(context);
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

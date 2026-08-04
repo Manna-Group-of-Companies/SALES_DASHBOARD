@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/models/approval.dart';
@@ -202,7 +203,7 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
       }
     }
   }

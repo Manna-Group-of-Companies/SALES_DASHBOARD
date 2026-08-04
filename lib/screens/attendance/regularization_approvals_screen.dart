@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class RegularizationApprovalsScreen extends StatefulWidget {
@@ -48,7 +49,7 @@ class _RegularizationApprovalsScreenState
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
       }
     }
   }

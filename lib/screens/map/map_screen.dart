@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/map_service.dart';
 
@@ -36,7 +37,7 @@ class _MapScreenState extends State<MapScreen> {
               _num(c['custom_latitude']), _num(c['custom_longitude'])))
           .toList();
     } catch (e) {
-      _error = '$e';
+      _error = humanError(e);
     }
     if (mounted) setState(() => _loading = false);
   }

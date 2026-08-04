@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/pdf/proforma_pdf.dart';
@@ -115,7 +116,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       _snack('Release requested — your manager will approve.');
       setState(() {});
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/pdf/proforma_pdf.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/info_box.dart';
@@ -69,7 +70,7 @@ class _LeadOrderDetailScreenState extends State<LeadOrderDetailScreen> {
       _snack('Signed PO uploaded ✓ — awaiting manager PO approval.');
       setState(() {});
     } catch (e) {
-      _snack('Upload failed: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

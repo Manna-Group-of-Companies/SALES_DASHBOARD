@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/map_service.dart';
@@ -82,7 +83,7 @@ class _DayMapScreenState extends State<DayMapScreen> {
         }
         if (mounted) setState(() {});
       } catch (e) {
-        if (mounted) setState(() => _error = '$e');
+        if (mounted) setState(() => _error = humanError(e));
       }
     }
     _loadRoutes();
@@ -135,7 +136,7 @@ class _DayMapScreenState extends State<DayMapScreen> {
       }
       if (mounted) setState(() => _routePoints = pts);
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = humanError(e));
     } finally {
       if (mounted) setState(() => _loadingRoute = false);
     }
@@ -174,7 +175,7 @@ class _DayMapScreenState extends State<DayMapScreen> {
       }
       if (mounted) setState(() => _leadPoints = pts);
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = humanError(e));
     } finally {
       if (mounted) setState(() => _loadingLeads = false);
     }
@@ -219,7 +220,7 @@ class _DayMapScreenState extends State<DayMapScreen> {
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = humanError(e));
     } finally {
       if (mounted) setState(() => _loadingLayers = false);
     }
@@ -334,7 +335,7 @@ class _DayMapScreenState extends State<DayMapScreen> {
       }
       if (mounted) setState(() => _points = pts);
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = humanError(e));
     } finally {
       if (mounted) setState(() => _loading = false);
     }

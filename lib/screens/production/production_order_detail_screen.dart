@@ -15,6 +15,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -81,7 +82,7 @@ class _ProductionOrderDetailScreenState
       _snack(done);
       setState(() => _init = _load());
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

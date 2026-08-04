@@ -19,6 +19,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
@@ -161,7 +162,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
           : 'Released — this line waits for production.');
       setState(() => _init = _load());
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -194,7 +195,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
       }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(humanError(e));
       if (mounted) setState(() => _busy = false);
     }
   }

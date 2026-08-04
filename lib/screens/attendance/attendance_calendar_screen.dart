@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/leave/apply_leave_screen.dart';
@@ -417,7 +418,7 @@ class _AttendanceCalendarScreenState extends State<AttendanceCalendarScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
       }
     }
   }

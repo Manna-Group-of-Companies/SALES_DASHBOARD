@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class LeaveApprovalsScreen extends StatefulWidget {
@@ -73,7 +74,7 @@ class _LeaveApprovalsScreenState extends State<LeaveApprovalsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
       }
     }
   }

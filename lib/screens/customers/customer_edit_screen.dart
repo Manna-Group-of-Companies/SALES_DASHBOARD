@@ -12,6 +12,7 @@
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
 
@@ -100,7 +101,7 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
       _snack('Customer updated ✓');
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _saving = false);
     }

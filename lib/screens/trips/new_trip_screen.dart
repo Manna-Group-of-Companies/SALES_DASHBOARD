@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/trips/trip_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
@@ -72,7 +73,7 @@ class _NewTripScreenState extends State<NewTripScreen> {
             builder: (_) => TripDetailScreen(tripName: name)));
       }
     } catch (e) {
-      setState(() => _error = '$e');
+      setState(() => _error = humanError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

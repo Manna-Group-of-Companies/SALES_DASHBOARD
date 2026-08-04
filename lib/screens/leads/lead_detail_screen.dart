@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/leads/add_lead_screen.dart';
 import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
@@ -78,7 +79,7 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
       });
       _snack('Captured - sent for manager verification.');
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

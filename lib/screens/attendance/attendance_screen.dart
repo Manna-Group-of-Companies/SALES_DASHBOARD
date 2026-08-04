@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 
@@ -37,7 +38,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       final list = await Api.getTodayAttendance(_rep!);
       setState(() => today = list.isNotEmpty ? list.first : null);
     } catch (e) {
-      _snack('Failed to load: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _loadingToday = false);
     }
@@ -53,7 +54,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       _snack('Punched in ✓');
       await _loadToday();
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -74,7 +75,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       _snack('Punched out ✓  ${hours.toStringAsFixed(2)} h');
       await _loadToday();
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

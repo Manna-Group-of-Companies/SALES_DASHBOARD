@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
@@ -84,7 +85,7 @@ class _LeadOrderScreenState extends State<LeadOrderScreen> {
                     orderName: name, lead: widget.lead)));
       }
     } catch (e) {
-      _snack('Failed: $e');
+      _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
