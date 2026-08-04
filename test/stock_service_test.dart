@@ -1,0 +1,485 @@
+// The booking guard, tested against a server that actually enforces `modified`.
+//
+// StockService replaced a database row lock with a compare-and-swap, because
+// the plan no longer runs Server Scripts. That trade is only worth anything if
+// the swap really is conditional, so these tests do not mock the outcome — they
+// run against an in-memory Frappe that refuses a stale `modified` exactly the
+// way the real one does, and a competing rep is simulated by landing a write in
+// the gap between our read and our write.
+//
+// The property under test throughout is the one the warehouse cares about:
+// whatever happens, the pool is never reserved beyond what it holds.
+
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:dio/dio.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/services/stock_service.dart';
+
+void main() {
+  late _FakeFrappe fake;
+
+  setUp(() {
+    fake = _FakeFrappe();
+    Session.I.baseUrl = 'https://test.local';
+    Session.I.apiKey = 'k';
+    Session.I.apiSecret = 's';
+    Session.I.salesPerson = 'Test Rep';
+    Session.I.init();
+    Session.I.dio.httpClientAdapter = fake;
+  });
+
+  tearDown(() => Session.I.salesPerson = null);
+
+  group('Booking what is there', () {
+    test('a booking that fits is taken out of the pool', () async {
+      fake.seedPool('PCTR-100', qty: 10, belts: 8);
+
+      await StockService.book(
+          itemCode: 'PCTR-100', qty: 3, belts: 2, salesOrder: 'SO-1');
+
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 3);
+      expect(fake.pools['PCTR-100']!['custom_reserved_loose_belts'], 2);
+    });
+
+    test('it leaves an audit row naming the order and the rep', () async {
+      fake.seedPool('PCTR-100', qty: 10);
+
+      final name = await StockService.book(
+          itemCode: 'PCTR-100', qty: 3, belts: 0, salesOrder: 'SO-1');
+
+      expect(name, isNotEmpty);
+      final row = fake.reservations[name]!;
+      expect(row['item_code'], 'PCTR-100');
+      expect(row['qty'], 3);
+      expect(row['sales_order'], 'SO-1');
+      expect(row['sales_person'], 'Test Rep');
+      expect(row['status'], 'Active');
+    });
+
+    test('rolls and loose belts are counted against separate headroom',
+        () async {
+      // 2 rolls but 20 belts: a belt-heavy order must not be refused for
+      // running out of rolls, and vice versa.
+      fake.seedPool('PCTR-100', qty: 2, belts: 20);
+
+      await StockService.book(
+          itemCode: 'PCTR-100', qty: 0, belts: 15, salesOrder: 'SO-1');
+      expect(fake.pools['PCTR-100']!['custom_reserved_loose_belts'], 15);
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 0);
+
+      await expectLater(
+        StockService.book(
+            itemCode: 'PCTR-100', qty: 5, belts: 0, salesOrder: 'SO-2'),
+        throwsA(isA<StockUnavailable>()),
+      );
+    });
+
+    test('an item that is not on the list cannot be booked', () async {
+      await expectLater(
+        StockService.book(
+            itemCode: 'NOT-STOCKED', qty: 1, belts: 0, salesOrder: 'SO-1'),
+        throwsA(predicate((e) =>
+            e is StockUnavailable && '$e'.contains('not on the minimum'))),
+      );
+    });
+
+    test('a refusal leaves the pool exactly as it was', () async {
+      fake.seedPool('PCTR-100', qty: 3, reserved: 1);
+
+      await expectLater(
+        StockService.book(
+            itemCode: 'PCTR-100', qty: 5, belts: 0, salesOrder: 'SO-1'),
+        throwsA(isA<StockUnavailable>()),
+      );
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 1);
+      expect(fake.reservations, isEmpty);
+    });
+  });
+
+  group('Two reps racing', () {
+    test('the last three rolls go to exactly one of them', () async {
+      fake.seedPool('PCTR-100', qty: 3);
+
+      // The other rep lands their write while we are between read and write.
+      fake.beforePut = fake.once((doc) {
+        doc['custom_reserved_qty'] = 3;
+        fake.touch(doc);
+      });
+
+      await expectLater(
+        StockService.book(
+            itemCode: 'PCTR-100', qty: 3, belts: 0, salesOrder: 'SO-MINE'),
+        throwsA(isA<StockUnavailable>()),
+      );
+
+      // The whole point: 3 booked, not 6.
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 3);
+      expect(fake.reservations, isEmpty);
+    });
+
+    test('the loser is told the stock went, not that something broke',
+        () async {
+      fake.seedPool('PCTR-100', qty: 3);
+      fake.beforePut = fake.once((doc) {
+        doc['custom_reserved_qty'] = 3;
+        fake.touch(doc);
+      });
+
+      try {
+        await StockService.book(
+            itemCode: 'PCTR-100', qty: 3, belts: 0, salesOrder: 'SO-MINE');
+        fail('expected a refusal');
+      } on StockUnavailable catch (e) {
+        expect('$e', contains('another rep booked the rest'));
+      }
+    });
+
+    test('losing a race with room to spare retries and succeeds', () async {
+      fake.seedPool('PCTR-100', qty: 10);
+      fake.beforePut = fake.once((doc) {
+        doc['custom_reserved_qty'] = 2;
+        fake.touch(doc);
+      });
+
+      await StockService.book(
+          itemCode: 'PCTR-100', qty: 3, belts: 0, salesOrder: 'SO-1');
+
+      // 2 from the other rep, 3 from us — the retry re-read rather than
+      // clobbering what landed in between.
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 5);
+      expect(fake.putCount('Manna Minimum Stock Item'), 2);
+    });
+
+    test('the write really is conditional on the modified we read', () async {
+      fake.seedPool('PCTR-100', qty: 10);
+
+      await StockService.book(
+          itemCode: 'PCTR-100', qty: 1, belts: 0, salesOrder: 'SO-1');
+
+      final put = fake.writes
+          .firstWhere((w) => w.doctype == 'Manna Minimum Stock Item');
+      expect(put.body['modified'], isNotNull,
+          reason: 'without modified the write is a blind overwrite');
+    });
+
+    test('endless collisions give up instead of spinning', () async {
+      fake.seedPool('PCTR-100', qty: 100);
+      // Somebody else wins every single time.
+      fake.beforePut = (doc) => fake.touch(doc);
+
+      await expectLater(
+        StockService.book(
+            itemCode: 'PCTR-100', qty: 1, belts: 0, salesOrder: 'SO-1'),
+        throwsA(predicate((e) =>
+            e is StockUnavailable && '$e'.contains('too many reps'))),
+      );
+      expect(fake.putCount('Manna Minimum Stock Item'), 4,
+          reason: 'the retry cap is what stops a pathological spin');
+    });
+  });
+
+  group('Rebooking an edited order', () {
+    setUp(() {
+      fake.seedPool('ITEM-A', qty: 20, reserved: 5);
+      fake.seedPool('ITEM-B', qty: 20, reserved: 5);
+      fake.seedReservation('SO-1', 'ITEM-A', qty: 5);
+      fake.seedReservation('SO-1', 'ITEM-B', qty: 5);
+    });
+
+    test('an unchanged line-up touches nothing at all', () async {
+      await StockService.rebook('SO-1', [
+        {'item_code': 'ITEM-A', 'qty': 5.0, 'loose_belts': 0},
+        {'item_code': 'ITEM-B', 'qty': 5.0, 'loose_belts': 0},
+      ]);
+
+      expect(fake.putCount('Manna Minimum Stock Item'), 0);
+      expect(fake.pools['ITEM-A']!['custom_reserved_qty'], 5);
+      expect(fake.pools['ITEM-B']!['custom_reserved_qty'], 5);
+    });
+
+    test('increases are booked before decreases are released', () async {
+      await StockService.rebook('SO-1', [
+        {'item_code': 'ITEM-A', 'qty': 8.0, 'loose_belts': 0},
+        {'item_code': 'ITEM-B', 'qty': 2.0, 'loose_belts': 0},
+      ]);
+
+      final pool =
+          fake.writes.where((w) => w.doctype == 'Manna Minimum Stock Item');
+      expect(pool.first.name, 'ITEM-A',
+          reason: 'releasing first would put stock back on offer mid-edit');
+
+      expect(fake.pools['ITEM-A']!['custom_reserved_qty'], 8);
+      expect(fake.pools['ITEM-B']!['custom_reserved_qty'], 2);
+    });
+
+    test('a refused increase leaves the rest of the order holding its stock',
+        () async {
+      await expectLater(
+        StockService.rebook('SO-1', [
+          {'item_code': 'ITEM-A', 'qty': 999.0, 'loose_belts': 0},
+          {'item_code': 'ITEM-B', 'qty': 2.0, 'loose_belts': 0},
+        ]),
+        throwsA(isA<StockUnavailable>()),
+      );
+
+      // B was due to shrink, but the failure came first and nothing was given
+      // back — the rep still has the order they had.
+      expect(fake.pools['ITEM-B']!['custom_reserved_qty'], 5);
+      expect(fake.activeFor('SO-1', 'ITEM-B'), 5);
+    });
+
+    test('dropping a line hands that stock back and keeps the other', () async {
+      await StockService.rebook('SO-1', [
+        {'item_code': 'ITEM-A', 'qty': 5.0, 'loose_belts': 0},
+      ]);
+
+      expect(fake.pools['ITEM-B']!['custom_reserved_qty'], 0);
+      expect(fake.activeFor('SO-1', 'ITEM-B'), 0);
+      expect(fake.pools['ITEM-A']!['custom_reserved_qty'], 5);
+      expect(fake.activeFor('SO-1', 'ITEM-A'), 5);
+    });
+
+    test('a partial give-back shrinks the oldest booking first', () async {
+      // Two bookings for the same item, made at different times.
+      fake.seedPool('ITEM-C', qty: 20, reserved: 5);
+      final older = fake.seedReservation('SO-2', 'ITEM-C', qty: 3);
+      final newer = fake.seedReservation('SO-2', 'ITEM-C', qty: 2);
+
+      await StockService.rebook('SO-2', [
+        {'item_code': 'ITEM-C', 'qty': 2.0, 'loose_belts': 0},
+      ]);
+
+      expect(fake.reservations[older]!['status'], 'Released');
+      expect(fake.reservations[newer]!['status'], 'Active');
+      expect(fake.reservations[newer]!['qty'], 2);
+    });
+  });
+
+  group('Releasing a dead order', () {
+    test('everything goes back to the pool and the trail is kept', () async {
+      fake.seedPool('ITEM-A', qty: 20, reserved: 5, reservedBelts: 3);
+      final row = fake.seedReservation('SO-1', 'ITEM-A', qty: 5, belts: 3);
+
+      final n = await StockService.release('SO-1');
+
+      expect(n, 1);
+      expect(fake.pools['ITEM-A']!['custom_reserved_qty'], 0);
+      expect(fake.pools['ITEM-A']!['custom_reserved_loose_belts'], 0);
+      // Released, not deleted — a stranded booking should leave a trace.
+      expect(fake.reservations[row]!['status'], 'Released');
+    });
+
+    test('a release never throws, because nothing in the field would retry it',
+        () async {
+      fake.seedPool('ITEM-A', qty: 20, reserved: 5);
+      fake.seedReservation('SO-1', 'ITEM-A', qty: 5);
+      fake.failEverything = true;
+
+      await expectLater(StockService.release('SO-1'), completion(0));
+    });
+
+    test('releasing an order that holds nothing is harmless', () async {
+      await expectLater(StockService.release('SO-NOTHING'), completion(0));
+    });
+
+    test('a pool cannot be driven negative by a double release', () async {
+      fake.seedPool('ITEM-A', qty: 20, reserved: 5);
+      fake.seedReservation('SO-1', 'ITEM-A', qty: 5);
+
+      await StockService.release('SO-1');
+      await StockService.release('SO-1');
+
+      expect(fake.pools['ITEM-A']!['custom_reserved_qty'], 0);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// A Frappe that enforces optimistic concurrency, and can be told to lose.
+// ---------------------------------------------------------------------------
+
+class _Write {
+  final String doctype;
+  final String name;
+  final Map<String, dynamic> body;
+  _Write(this.doctype, this.name, this.body);
+}
+
+class _FakeFrappe implements HttpClientAdapter {
+  final Map<String, Map<String, dynamic>> pools = {};
+  final Map<String, Map<String, dynamic>> batches = {};
+  final Map<String, Map<String, dynamic>> reservations = {};
+  final List<_Write> writes = [];
+
+  /// Set to simulate another client committing between our read and our write.
+  /// Called with the stored document, just before the timestamp is checked.
+  void Function(Map<String, dynamic> doc)? beforePut;
+
+  bool failEverything = false;
+  int _seq = 0;
+  int _rows = 0;
+
+  // -- seeding ---------------------------------------------------------------
+
+  void seedPool(String item,
+      {double qty = 0,
+      int belts = 0,
+      double reserved = 0,
+      int reservedBelts = 0}) {
+    pools[item] = {
+      'name': item,
+      'item_code': item,
+      'qty': qty,
+      'loose_belts': belts,
+      'custom_reserved_qty': reserved,
+      'custom_reserved_loose_belts': reservedBelts,
+      'disabled': 0,
+      'modified': 'm${_seq++}',
+    };
+  }
+
+  String seedReservation(String order, String item,
+      {double qty = 0, int belts = 0}) {
+    final name = 'RES-${_rows.toString().padLeft(3, '0')}';
+    reservations[name] = {
+      'name': name,
+      'sales_order': order,
+      'item_code': item,
+      'qty': qty,
+      'loose_belts': belts,
+      'status': 'Active',
+      'creation': _rows++,
+    };
+    return name;
+  }
+
+  /// Bumps a document's timestamp the way a real save would.
+  void touch(Map<String, dynamic> doc) => doc['modified'] = 'm${_seq++}';
+
+  /// Wraps a hook so it fires on the first PUT only.
+  void Function(Map<String, dynamic>) once(
+      void Function(Map<String, dynamic>) fn) {
+    var fired = false;
+    return (doc) {
+      if (fired) return;
+      fired = true;
+      fn(doc);
+    };
+  }
+
+  // -- inspection ------------------------------------------------------------
+
+  int putCount(String doctype) =>
+      writes.where((w) => w.doctype == doctype).length;
+
+  /// How much of an item an order is still actively holding.
+  double activeFor(String order, String item) => reservations.values
+      .where((r) =>
+          r['sales_order'] == order &&
+          r['item_code'] == item &&
+          r['status'] == 'Active')
+      .fold(0.0, (sum, r) => sum + (r['qty'] as num).toDouble());
+
+  // -- transport -------------------------------------------------------------
+
+  @override
+  Future<ResponseBody> fetch(RequestOptions options,
+      Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
+    if (failEverything) throw DioException(requestOptions: options);
+
+    // pathSegments are decoded, so a doctype with spaces arrives intact.
+    final seg = options.uri.pathSegments;
+    if (seg.length < 3) return _json({'data': null}, 404);
+    final doctype = seg[2];
+    final name = seg.length > 3 ? seg[3] : null;
+    final store = _store(doctype);
+
+    switch (options.method.toUpperCase()) {
+      case 'GET':
+        if (name != null) {
+          final doc = store[name];
+          if (doc == null) return _json({'data': null}, 404);
+          return _json({'data': doc}, 200);
+        }
+        return _json({'data': _query(store, options.queryParameters)}, 200);
+
+      case 'PUT':
+        final doc = store[name];
+        if (doc == null) return _json({'data': null}, 404);
+        final body = Map<String, dynamic>.from(options.data as Map);
+        // Recorded as a copy: the timestamp is stripped below, and the
+        // assertions need to see the request as it was actually sent.
+        writes.add(_Write(doctype, name!, Map<String, dynamic>.from(body)));
+
+        beforePut?.call(doc);
+
+        final sent = body.remove('modified');
+        if (sent != null && sent != doc['modified']) {
+          return _json({
+            'exception': 'frappe.exceptions.TimestampMismatchError: '
+                'Document has been modified after you have opened it'
+          }, 409);
+        }
+        doc.addAll(body);
+        touch(doc);
+        return _json({'data': doc}, 200);
+
+      case 'POST':
+        final body = Map<String, dynamic>.from(options.data as Map);
+        final id = 'RES-${_rows.toString().padLeft(3, '0')}';
+        body['name'] = id;
+        body['creation'] = _rows++;
+        store[id] = body;
+        return _json({'data': body}, 200);
+    }
+    return _json({'data': null}, 405);
+  }
+
+  Map<String, Map<String, dynamic>> _store(String doctype) {
+    if (doctype == kPoolDoctype) return pools;
+    if (doctype == kBatchDoctype) return batches;
+    return reservations;
+  }
+
+  /// Equality filters and ordering — all StockService asks of a list call.
+  List<Map<String, dynamic>> _query(
+      Map<String, Map<String, dynamic>> store, Map<String, dynamic> qp) {
+    var rows = store.values.toList();
+
+    final raw = qp['filters'];
+    if (raw is String && raw.isNotEmpty) {
+      for (final f in jsonDecode(raw) as List) {
+        final parts = f as List;
+        final field = '${parts[0]}';
+        final want = parts[2];
+        rows = rows.where((r) {
+          final have = r[field];
+          if (have is num && want is num) return have == want;
+          return '${have ?? ''}' == '$want';
+        }).toList();
+      }
+    }
+
+    final order = '${qp['order_by'] ?? ''}';
+    if (order.startsWith('creation')) {
+      rows.sort((a, b) =>
+          (a['creation'] as int? ?? 0).compareTo(b['creation'] as int? ?? 0));
+    }
+    return rows;
+  }
+
+  ResponseBody _json(Object body, int status) => ResponseBody.fromString(
+        jsonEncode(body),
+        status,
+        headers: {
+          Headers.contentTypeHeader: ['application/json']
+        },
+      );
+
+  @override
+  void close({bool force = false}) {}
+}
