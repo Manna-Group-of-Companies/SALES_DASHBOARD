@@ -12,6 +12,7 @@ import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
+import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/services/offline_cache.dart';
@@ -655,10 +656,27 @@ class Api {
       final code = '${r['item_code'] ?? ''}'.trim();
       final qty = (r['qty'] as num?)?.toDouble() ?? 0;
       if (code.isEmpty || qty <= 0) continue;
+      // Everything the rep entered comes across. `Lead Order Item` now carries
+      // the same per-family breakdown as `Sales Order Item`, so a converted
+      // order reaches production knowing it is 12 rolls and 3 loose belts —
+      // not just a quantity of 12.75.
       items.add({
         'item_code': code,
         'qty': qty,
         'rate': (r['rate'] as num?)?.toDouble() ?? 0,
+        'custom_product_category': r['custom_product_category'],
+        'custom_rolls': r['custom_rolls'],
+        'custom_loose_belts': r['custom_loose_belts'],
+        'custom_boxes': r['custom_boxes'],
+        'custom_cans': r['custom_cans'],
+        'custom_total_weight': r['custom_total_weight'],
+        'custom_rate_per_kg': r['custom_rate_per_kg'],
+        'custom_packing_note': r['custom_packing_note'],
+        'custom_fulfilment_mode': r['custom_fulfilment_mode'],
+        if (r['custom_aged_batch'] != null)
+          'custom_aged_batch': r['custom_aged_batch'],
+        // The manager has just approved, so every line's price is final.
+        'custom_rate_approved': 1,
       });
     }
     // An order with no usable lines would create an empty Sales Order that
@@ -667,15 +685,20 @@ class Api {
 
     final company = await getCompany();
     final unit = Session.I.company ?? Session.I.managedTeamCompany;
+    final delivery = '${leadOrder['delivery_date'] ?? ''}';
     final body = <String, dynamic>{
       'customer': customer,
       'company': company,
       'custom_sales_person': leadOrder['sales_person'] ?? Session.I.salesPerson,
       if (unit != null && unit.isNotEmpty) 'custom_company': unit,
-      'delivery_date': serverNow()
-          .add(const Duration(days: 7))
-          .toIso8601String()
-          .substring(0, 10),
+      // The date the customer actually asked for, carried across rather than
+      // invented — the rep agreed it with them when the order was taken.
+      'delivery_date': delivery.length >= 10
+          ? delivery.substring(0, 10)
+          : serverNow()
+              .add(const Duration(days: 7))
+              .toIso8601String()
+              .substring(0, 10),
       'custom_proforma_required': 1,
       'custom_proforma_status': 'Ready',
       // Straight to approved — see above.
@@ -685,7 +708,8 @@ class Api {
       // approved. This is what settles who ordered first when stock is short,
       // so it has to be the rep's timestamp rather than the manager's.
       'custom_order_placed_at':
-          '${leadOrder['creation'] ?? nowStamp()}'.substring(0, 19),
+          '${leadOrder['custom_order_placed_at'] ?? leadOrder['creation'] ?? nowStamp()}'
+              .substring(0, 19),
       'items': items,
     };
 
@@ -693,7 +717,16 @@ class Api {
     if (r.statusCode != 200 && r.statusCode != 201) {
       throw Exception(_frappeError(r));
     }
-    return '${r.data['data']['name']}';
+    final created = '${r.data['data']['name']}';
+
+    // The stock this order was already holding follows it, rather than being
+    // released and re-taken. Handing it back even momentarily would put it on
+    // offer, and a customer could lose at the instant of approval the rolls
+    // they were promised days ago.
+    await StockService.movePool(
+        OrderRef.lead('${leadOrder['name']}'), OrderRef(created));
+
+    return created;
   }
 
   static Future<void> approveLeadOrderPO(String name, bool approve) => _put(
@@ -722,12 +755,16 @@ class Api {
   /// which works out the difference — so switching a line to production
   /// releases exactly that line, and switching it back books exactly that line,
   /// without disturbing the others.
+  /// Works for an order against a customer or against a lead — both draw on the
+  /// same pool, so the manager makes the same decision either way.
   static Future<void> setLineFulfilmentMode({
     required String orderName,
     required String itemCode,
     required String mode,
+    bool isLead = false,
   }) async {
-    final order = await getOrder(orderName);
+    final ref = OrderRef(orderName, isLead: isLead);
+    final order = isLead ? await getLeadOrder(orderName) : await getOrder(orderName);
     final items = ((order['items'] as List?) ?? [])
         .map((e) => (e as Map).cast<String, dynamic>())
         .toList();
@@ -749,8 +786,8 @@ class Api {
           }
     ];
 
-    await StockService.rebook(orderName, wanted);
-    await _put('Sales Order', orderName, {'items': items});
+    await StockService.rebook(ref, wanted);
+    await _put(ref.doctype, orderName, {'items': items});
   }
 
   /// What a line books against the pool: whole rolls for tread rubber, and the
@@ -1088,14 +1125,14 @@ class Api {
           itemCode: itemCode,
           qty: qty,
           belts: looseBelts,
-          salesOrder: salesOrder,
+          order: OrderRef(salesOrder),
           batch: batch);
 
   /// Hands back everything an order was holding. Called when an order fails to
   /// save after some of its lines were already booked, so a half-written order
   /// never strands stock that nobody can sell.
   static Future<void> releaseReservations(String salesOrder) =>
-      StockService.release(salesOrder);
+      StockService.release(OrderRef(salesOrder));
 
   /// The minimum-stock list with each item's product record alongside it,
   /// ordered by what most needs attention: items that have stopped selling
@@ -1479,21 +1516,30 @@ class Api {
     required List<Map<String, dynamic>> reservations,
     required bool returnForApproval,
     String? deliveryDate,
+    bool isLead = false,
   }) async {
-    await StockService.rebook(orderName, reservations);
+    final ref = OrderRef(orderName, isLead: isLead);
+    await StockService.rebook(ref, reservations);
 
     final body = <String, dynamic>{'items': items};
     if (deliveryDate != null) body['delivery_date'] = deliveryDate;
     if (returnForApproval) {
-      body['custom_po_status'] = 'Pending Rate Approval';
       body['custom_rate_approved'] = 0;
-      // Production has already seen this order. A change nobody tells the
-      // floor about is a batch made to the wrong spec, so the order is flagged
-      // until the production manager acknowledges it.
-      body['custom_changed_after_approval'] = 1;
+      if (isLead) {
+        // A lead order is not visible to production — it does not become a
+        // Sales Order until it is approved — so there is no floor to warn and
+        // nothing to acknowledge. It simply goes back in the queue.
+        body['status'] = 'Pending Approval';
+      } else {
+        body['custom_po_status'] = 'Pending Rate Approval';
+        // Production has already seen this order. A change nobody tells the
+        // floor about is a batch made to the wrong spec, so the order is
+        // flagged until the production manager acknowledges it.
+        body['custom_changed_after_approval'] = 1;
+      }
     }
-    final r =
-        await Session.I.dio.put('${_res('Sales Order')}/$orderName', data: body);
+    final r = await Session.I.dio
+        .put('${_res(ref.doctype)}/$orderName', data: body);
     if (r.statusCode != 200 && r.statusCode != 201) {
       throw Exception(_frappeError(r));
     }
@@ -1587,8 +1633,9 @@ class Api {
     if (lead != null) f.add('["lead","=","$lead"]');
     final filters = f.isEmpty ? null : '[${f.join(',')}]';
     return _list('Lead Order',
-        fields:
-        '["name","lead","lead_name","order_date","total_amount","status","po_number"]',
+        fields: '["name","lead","lead_name","order_date","delivery_date",'
+            '"total_amount","status","po_number","custom_rate_approved",'
+            '"custom_order_placed_at","sales_person"]',
         filters: filters,
         orderBy: 'creation desc');
   }
@@ -1856,7 +1903,53 @@ class Api {
         items: items,
         deliveryDate: deliveryDate);
 
-    if (reservations.isEmpty) return name;
+    return _bookOrUnwind(OrderRef(name), reservations);
+  }
+
+  /// Raises an order against a lead and books its minimum-stock lines.
+  ///
+  /// Identical in every respect that matters to [placeOrder]: the same pool,
+  /// the same race against other reps, the same unwind if a booking is
+  /// refused. A lead is a customer who has not been invoiced yet, not a
+  /// different kind of order.
+  static Future<String> placeLeadOrder({
+    required String lead,
+    required List<Map<String, dynamic>> items,
+    required String deliveryDate,
+    required List<Map<String, dynamic>> reservations,
+    required double total,
+  }) async {
+    final body = {
+      'lead': lead,
+      'sales_person': Session.I.salesPerson,
+      'status': 'Pending Approval',
+      'delivery_date': deliveryDate,
+      // Off the server clock, for the same reason a Sales Order's is: this is
+      // what settles who ordered first when stock is short.
+      'custom_order_placed_at': nowStamp(),
+      'custom_rate_approved': 0,
+      'items': items,
+      'total_amount': total,
+    };
+    final r = await Session.I.dio.post(_res('Lead Order'), data: body);
+    if (r.statusCode != 200 && r.statusCode != 201) {
+      throw Exception(_frappeError(r));
+    }
+    final name = r.data['data']['name'] as String;
+
+    return _bookOrUnwind(OrderRef.lead(name), reservations);
+  }
+
+  /// Books an order's minimum-stock lines, and takes the order back if any of
+  /// them is refused.
+  ///
+  /// Shared by both order types because the failure this handles is the same
+  /// one: half-booked stock against an order the rep now owns but cannot
+  /// supply. Better to refuse the whole thing and let them re-price against
+  /// what is actually left.
+  static Future<String> _bookOrUnwind(
+      OrderRef ref, List<Map<String, dynamic>> reservations) async {
+    if (reservations.isEmpty) return ref.name;
 
     try {
       for (final r in reservations) {
@@ -1864,26 +1957,23 @@ class Api {
           itemCode: '${r['item_code']}',
           qty: (r['qty'] as num?)?.toDouble() ?? 0,
           belts: (r['loose_belts'] as num?)?.toInt() ?? 0,
-          salesOrder: name,
+          order: ref,
           batch: r['batch'] as String?,
         );
       }
-      return name;
+      return ref.name;
     } catch (_) {
-      // Someone else got the last of it. Hand back whatever this order managed
-      // to book and take the order away again, so the rep can re-price against
-      // what is actually left instead of owning a half-supplied order.
-      await StockService.release(name);
-      await _discardDraftOrder(name);
+      await StockService.release(ref);
+      await _discardDraftOrder(ref);
       rethrow;
     }
   }
 
   /// Removes an order that could not get its stock. Only ever called on an
   /// order this call just created, and only while it is still a draft.
-  static Future<void> _discardDraftOrder(String name) async {
+  static Future<void> _discardDraftOrder(OrderRef ref) async {
     try {
-      await Session.I.dio.delete('${_res('Sales Order')}/$name');
+      await Session.I.dio.delete('${_res(ref.doctype)}/${ref.name}');
     } catch (_) {
       // If it will not delete, leaving a draft behind is the lesser problem —
       // the stock is already released, which is the part that mattered.

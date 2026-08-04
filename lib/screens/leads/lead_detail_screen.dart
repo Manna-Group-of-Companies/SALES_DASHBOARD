@@ -6,7 +6,8 @@ import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/leads/add_lead_screen.dart';
 import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
-import 'package:manna_field_sales/screens/leads/lead_order_screen.dart';
+import 'package:manna_field_sales/models/order_ref.dart';
+import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/widgets/route_picker.dart';
@@ -192,10 +193,15 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
             SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
+                  // The same order screen a customer gets. A lead sells the
+                  // same products in the same units against the same minimum
+                  // stock, so it takes the same order — the difference shows up
+                  // once, at approval.
                   onPressed: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                          builder: (_) => LeadOrderScreen(lead: l)))
+                          builder: (_) =>
+                              OrderScreen(party: OrderParty.lead(l))))
                       .then((_) => _reload()),
                   icon: const Icon(Icons.add_shopping_cart),
                   label: const Padding(

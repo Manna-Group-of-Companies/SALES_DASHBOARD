@@ -40,6 +40,7 @@ import 'package:dio/dio.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
+import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/offline_cache.dart';
 
 const String kPoolDoctype = 'Manna Minimum Stock Item';
@@ -103,8 +104,8 @@ class StockService {
       _cached(
           kStockBookingsKey,
           () => _list(kReservationDoctype,
-              fields:
-                  '["item_code","qty","loose_belts","sales_person","sales_order"]',
+              fields: '["item_code","qty","loose_belts","sales_person",'
+                  '"sales_order","lead_order"]',
               filters: '[["status","=","Active"]]',
               orderBy: 'creation asc')),
     ]);
@@ -159,13 +160,17 @@ class StockService {
 
   /// Books [qty] and [belts] of an item against an order.
   ///
+  /// [order] may be a Sales Order or a Lead Order — a lead draws on the same
+  /// shared pool as a customer and races the same other reps for it, so there
+  /// is one booking path and not two.
+  ///
   /// Throws [StockUnavailable] when the pool cannot cover it. Returns the name
   /// of the audit record so the caller can undo it if a later step fails.
   static Future<String> book({
     required String itemCode,
     required double qty,
     required int belts,
-    required String salesOrder,
+    required OrderRef order,
     String? batch,
   }) async {
     if (qty <= 0 && belts <= 0) {
@@ -207,7 +212,7 @@ class StockService {
             itemCode: itemCode,
             qty: qty,
             belts: belts,
-            salesOrder: salesOrder,
+            order: order,
             batch: batch);
       }
       // Lost the race. The loop re-reads, and the headroom check above is what
@@ -231,10 +236,10 @@ class StockService {
   /// Increases go first. If one is refused there is nothing to undo yet, and
   /// the order keeps exactly the stock it already held.
   static Future<void> rebook(
-      String salesOrder, List<Map<String, dynamic>> wanted) async {
+      OrderRef order, List<Map<String, dynamic>> wanted) async {
     final held = await _list(kReservationDoctype,
         fields: '["name","item_code","qty","loose_belts","batch"]',
-        filters: '[["sales_order","=","$salesOrder"],["status","=","Active"]]');
+        filters: '[${order.filter},["status","=","Active"]]');
 
     final heldQty = <String, double>{};
     final heldBelts = <String, int>{};
@@ -264,7 +269,7 @@ class StockService {
           itemCode: code,
           qty: dq > 0 ? dq : 0,
           belts: db > 0 ? db : 0,
-          salesOrder: salesOrder,
+          order: order,
           batch: wantBatch[code],
         );
       }
@@ -274,15 +279,14 @@ class StockService {
       final dq = (heldQty[code] ?? 0) - (wantQty[code] ?? 0);
       final db = (heldBelts[code] ?? 0) - (wantBelts[code] ?? 0);
       if (dq > 0.0001 || db > 0) {
-        await _giveBack(
-            code, dq > 0 ? dq : 0, db > 0 ? db : 0, salesOrder);
+        await _giveBack(code, dq > 0 ? dq : 0, db > 0 ? db : 0, order);
       }
     }
   }
 
   /// Returns part of what an order is holding without touching the rest of it.
   static Future<void> _giveBack(
-      String itemCode, double qty, int belts, String salesOrder) async {
+      String itemCode, double qty, int belts, OrderRef order) async {
     for (var attempt = 0; attempt < _maxAttempts; attempt++) {
       final pool = await _pool(itemCode);
       if (pool == null) return;
@@ -306,8 +310,7 @@ class StockService {
     var remainingBelts = belts;
     final rows = await _list(kReservationDoctype,
         fields: '["name","qty","loose_belts"]',
-        filters:
-            '[["sales_order","=","$salesOrder"],["item_code","=","$itemCode"],'
+        filters: '[${order.filter},["item_code","=","$itemCode"],'
             '["status","=","Active"]]',
         orderBy: 'creation asc');
 
@@ -339,13 +342,12 @@ class StockService {
   /// nothing in the field will notice it is stranded — the rep who booked it
   /// has moved on to the next shop. So this is deliberately forgiving: it
   /// releases what it can and never throws.
-  static Future<int> release(String salesOrder) async {
+  static Future<int> release(OrderRef order) async {
     List<Map<String, dynamic>> held;
     try {
       held = await _list(kReservationDoctype,
           fields: '["name","item_code","qty","loose_belts","batch"]',
-          filters:
-              '[["sales_order","=","$salesOrder"],["status","=","Active"]]');
+          filters: '[${order.filter},["status","=","Active"]]');
     } catch (_) {
       return 0;
     }
@@ -435,14 +437,15 @@ class StockService {
     required String itemCode,
     required double qty,
     required int belts,
-    required String salesOrder,
+    required OrderRef order,
     String? batch,
   }) async {
     final r = await Session.I.dio.post(_res(kReservationDoctype), data: {
       'item_code': itemCode,
       'qty': qty,
       'loose_belts': belts,
-      'sales_order': salesOrder,
+      // Exactly one of sales_order / lead_order, never both.
+      order.field: order.name,
       'sales_person': Session.I.salesPerson,
       'status': 'Active',
       'reserved_on': nowStamp(),
@@ -450,6 +453,37 @@ class StockService {
     });
     final d = (r.data is Map) ? r.data['data'] : null;
     return (d is Map && d['name'] is String) ? d['name'] as String : '';
+  }
+
+  /// Re-points an order's live bookings from one order to another.
+  ///
+  /// Used when an approved lead order becomes a Sales Order. Releasing and
+  /// re-booking would be wrong: the stock is already held, and handing it back
+  /// even for a moment puts it on offer for another rep to take — a customer
+  /// could lose, at the instant of approval, stock they were promised days ago.
+  ///
+  /// So the pool counters are not touched at all. Only the pointer moves, which
+  /// is why this is a plain field update rather than anything involving the
+  /// compare-and-swap.
+  ///
+  /// Returns how many bookings moved.
+  static Future<int> movePool(OrderRef from, OrderRef to) async {
+    final held = await _list(kReservationDoctype,
+        fields: '["name"]',
+        filters: '[${from.filter},["status","=","Active"]]');
+
+    var moved = 0;
+    for (final r in held) {
+      try {
+        await Session.I.dio.put('${_res(kReservationDoctype)}/${r['name']}',
+            data: {from.field: null, to.field: to.name});
+        moved++;
+      } catch (_) {
+        // A booking that will not move is still held against the lead order,
+        // which is visible and fixable. Losing the rest would not be.
+      }
+    }
+    return moved;
   }
 
   /// Oldest batch first, so the stock that has been sitting longest is the

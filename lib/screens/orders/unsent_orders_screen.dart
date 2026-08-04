@@ -45,8 +45,19 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
 
   Future<void> _sendAll() async {
     setState(() => _sending = true);
+    // Captured before sending, because sent drafts are deleted on the way.
+    final sending = List<PendingOrder>.from(_drafts);
     final result = await PendingOrders.sendAll(
       (draft) async {
+        if (draft.isLead) {
+          return Api.placeLeadOrder(
+            lead: draft.customer,
+            items: draft.items,
+            deliveryDate: draft.deliveryDate,
+            reservations: draft.reservations,
+            total: draft.total,
+          );
+        }
         final company = await Api.getCompany();
         return Api.placeOrder(
           customer: draft.customer,
@@ -73,8 +84,11 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
     if (result.allSent) {
       _snack('Sent ${result.sent.length} order'
           '${result.sent.length == 1 ? '' : 's'} ✓');
-      // A single order is worth opening — the rep wants its number.
-      if (result.sent.length == 1 && mounted) {
+      // A single order is worth opening — the rep wants its number. Only a
+      // customer order, though: a lead order has no Sales Order behind it
+      // until the manager approves and the lead converts.
+      final wasLead = sending.any((d) => d.isLead);
+      if (result.sent.length == 1 && !wasLead && mounted) {
         await Navigator.push(
             context,
             MaterialPageRoute(

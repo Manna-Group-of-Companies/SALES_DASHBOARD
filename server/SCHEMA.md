@@ -289,6 +289,42 @@ switch off is not a gate.
 Clearing `minimum_app_version` turns the gate off entirely. That is the intended
 escape hatch if a bad minimum ever locks the field team out.
 
+## 8e. Leads order exactly as customers do — created
+
+`Lead Order Item` gained the same per-family fields `Sales Order Item` has:
+`custom_product_category`, `custom_rolls`, `custom_loose_belts`, `custom_boxes`,
+`custom_cans`, `custom_total_weight`, `custom_rate_per_kg`,
+`custom_packing_note`, `custom_rate_approved`, `custom_fulfilment_mode`
+(Select: blank / `From Minimum Stock` / `New Production`) and
+`custom_aged_batch`.
+
+`Lead Order` gained `delivery_date`, `custom_order_placed_at` (read-only) and
+`custom_rate_approved`.
+
+`Manna Stock Reservation` gained `lead_order` (Link → Lead Order).
+**Exactly one of `sales_order` / `lead_order` is set on any row.** The two are
+separate doctypes so one Link field could not serve both; `OrderRef` in
+[lib/models/order_ref.dart](../lib/models/order_ref.dart) is what stops that
+choice being re-derived at each call site.
+
+### Approval moves the bookings, it does not re-take them
+
+When a lead order is approved the lead converts, a Sales Order is raised, and
+the live reservations are **re-pointed** from `lead_order` to `sales_order`.
+The pool counters are not touched at all.
+
+Releasing and re-booking would be the obvious implementation and it is wrong:
+handing the stock back even for an instant puts it on offer, and a customer
+could lose at the exact moment of approval the rolls they were promised days
+ago. There is a test pinning that the pool sees zero writes during a move.
+
+### One field-creation gotcha
+
+Creating several Custom Fields on the same child table in parallel makes Frappe
+race itself — an `IndexError: list index out of range` in its column lookup.
+Add them a few at a time and retry the loser; nothing is corrupted, the field
+simply is not created.
+
 ## 8d. `sales_order` on `Lead Order` — created
 
 Link → Sales Order, read-only. Approving a lead order now raises a real Sales

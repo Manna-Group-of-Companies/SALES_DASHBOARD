@@ -25,6 +25,7 @@ import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
+import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class ManagerOrderReviewScreen extends StatefulWidget {
@@ -35,10 +36,17 @@ class ManagerOrderReviewScreen extends StatefulWidget {
   /// finalising anything.
   final bool escalates;
 
+  /// True for an order taken against a lead. The review is the same — same
+  /// lines, same minimum stock, same per-line fulfilment decision — but
+  /// approving one also converts the lead and raises the Sales Order, and it
+  /// is refused until the lead is complete enough to invoice.
+  final bool isLead;
+
   const ManagerOrderReviewScreen({
     super.key,
     required this.orderName,
     this.escalates = false,
+    this.isLead = false,
   });
 
   @override
@@ -60,10 +68,20 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
     _init = _load();
   }
 
+  /// What a lead order is still missing before it can be approved. Empty for a
+  /// customer order, and for a lead that is already complete.
+  List<String> _missing = const [];
+
+  bool get _isLead => widget.isLead;
+
   Future<void> _load() async {
-    _order = await Api.getOrder(widget.orderName);
+    _order = _isLead
+        ? await Api.getLeadOrder(widget.orderName)
+        : await Api.getOrder(widget.orderName);
+
+    final party = _isLead ? '${_order['lead']}' : '${_order['customer']}';
     final results = await Future.wait([
-      Api.getCustomerDoc('${_order['customer']}'),
+      _isLead ? Api.getLeadDoc(party) : Api.getCustomerDoc(party),
       Api.getMinimumStock(),
       Api.getItems(),
     ]);
@@ -73,6 +91,9 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
       for (final d in results[2] as List<Map<String, dynamic>>)
         '${d['name']}': Product(d)
     };
+    // A lead becomes a customer at approval and is invoiced straight after, so
+    // it has to carry what an invoice needs before the manager can say yes.
+    _missing = _isLead ? missingLeadDetails(_customer) : const [];
   }
 
   void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(
@@ -139,9 +160,13 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
       context,
       MaterialPageRoute(
           builder: (_) => OrderScreen(
-                customer: _customer.isNotEmpty
-                    ? _customer
-                    : {'name': _order['customer']},
+                party: _isLead
+                    ? OrderParty.lead(_customer.isNotEmpty
+                        ? _customer
+                        : {'name': _order['lead']})
+                    : OrderParty.customer(_customer.isNotEmpty
+                        ? _customer
+                        : {'name': _order['customer']}),
                 existingOrder: _order,
               )),
     );
@@ -156,6 +181,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
         orderName: widget.orderName,
         itemCode: '${it['item_code']}',
         mode: mode,
+        isLead: _isLead,
       );
       _snack(mode == kFulfilMinimumStock
           ? 'Booked against minimum stock.'
@@ -169,21 +195,44 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   }
 
   Future<void> _decide(bool approve) async {
+    // A lead that cannot be invoiced cannot be approved. Refused here rather
+    // than left to fail deep inside the conversion, so the manager is told
+    // exactly what to chase the rep for.
+    if (approve && _isLead && _missing.isNotEmpty) {
+      _snack('Cannot approve — the lead still needs its '
+          '${_missing.join(', ').toLowerCase()}.');
+      return;
+    }
+
     if (approve) {
       final ok = await _confirm(
-        'Approve this order?',
-        _overLimit
-            ? 'This takes the customer past their credit limit. Approving also '
-                'fixes every rate on the order permanently — nobody, including '
-                'you, can change them afterwards.'
-            : 'Approving fixes every rate on this order permanently. Nobody, '
-                'including you, can change them afterwards.',
+        _isLead ? 'Approve and convert this lead?' : 'Approve this order?',
+        [
+          if (_isLead)
+            'This turns the lead into a customer and raises the real order for '
+                'production. The stock it is already holding moves across with '
+                'it.',
+          if (_overLimit)
+            'This takes the customer past their credit limit.',
+          'Approving fixes every rate on this order permanently. Nobody, '
+              'including you, can change them afterwards.',
+        ].join('\n\n'),
       );
       if (ok != true) return;
     }
 
     setState(() => _busy = true);
     try {
+      if (_isLead) {
+        final customer = await Api.approveLeadOrder(widget.orderName, approve);
+        _snack(approve
+            ? (customer == null
+                ? 'Approved.'
+                : 'Approved — converted to customer $customer.')
+            : 'Rejected.');
+        if (mounted) Navigator.pop(context, true);
+        return;
+      }
       if (approve && widget.escalates) {
         await Api.escalateSalesOrderPOToGM(widget.orderName);
         _snack('Sent to the GM — the rep is over their outstanding limit.');
@@ -235,18 +284,37 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                     child: Text(humanError(snap.error))));
           }
           return ListView(padding: const EdgeInsets.all(16), children: [
-            Text('${_customer['customer_name'] ?? _order['customer'] ?? ''}',
-                style:
-                    const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            Row(children: [
+              Expanded(
+                child: Text(
+                    _isLead
+                        ? '${_customer['company_name'] ?? _customer['lead_name'] ?? _order['lead'] ?? ''}'
+                        : '${_customer['customer_name'] ?? _order['customer'] ?? ''}',
+                    style: const TextStyle(
+                        fontSize: 20, fontWeight: FontWeight.bold)),
+              ),
+              if (_isLead)
+                const Chip(
+                    label: Text('Lead', style: TextStyle(fontSize: 11)),
+                    backgroundColor: Color(0xFFE0E7FF),
+                    visualDensity: VisualDensity.compact),
+            ]),
             Text(
-                'Raised by ${_order['custom_sales_person'] ?? '—'}'
+                'Raised by ${_order['custom_sales_person'] ?? _order['sales_person'] ?? '—'}'
                 '  ·  delivery ${_order['delivery_date'] ?? '—'}',
                 style: const TextStyle(fontSize: 12, color: Colors.black54)),
-            Text(approvalLabel(_order['custom_po_status']),
+            Text(
+                _isLead
+                    ? '${_order['status'] ?? ''}'
+                    : approvalLabel(_order['custom_po_status']),
                 style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     color: _approved ? Colors.green : Colors.orange.shade800)),
+            if (_missing.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _missingCard(),
+            ],
             const SizedBox(height: 12),
             _creditCard(),
             const SizedBox(height: 16),
@@ -292,6 +360,38 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   /// Outstanding against limit, projected forward. A manager approving an order
   /// is extending credit, so the number that matters is what the customer will
   /// owe once it ships, not what they owe today.
+  /// What the lead still owes the office before this can be approved.
+  ///
+  /// Named plainly and placed above everything else, because it is the one
+  /// thing that will stop the approval and the manager should see it before
+  /// they have read the lines and made up their mind.
+  Widget _missingCard() => Card(
+        color: const Color(0xFFFFF1F0),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Row(children: [
+              Icon(Icons.report_problem_outlined,
+                  size: 18, color: Color(0xFFB3261E)),
+              SizedBox(width: 8),
+              Text('Cannot approve yet',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+            ]),
+            const SizedBox(height: 8),
+            Text(
+              'This lead becomes a customer on approval and is invoiced from '
+              'there, so it needs: ${_missing.join(', ')}.',
+              style: const TextStyle(fontSize: 13, height: 1.4),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Ask the rep to add them on the lead, or edit the lead yourself.',
+              style: TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ]),
+        ),
+      );
+
   Widget _creditCard() {
     final colour = _overLimit ? Colors.red : Colors.green;
     return Container(

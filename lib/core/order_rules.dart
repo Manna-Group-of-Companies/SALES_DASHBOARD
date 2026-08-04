@@ -44,7 +44,11 @@ bool orderEditWindowOpen(dynamic deliveryDate) {
 bool canEditOrder(Map<String, dynamic> order) {
   if (!orderEditWindowOpen(order['delivery_date'])) return false;
 
-  final owner = '${order['custom_sales_person'] ?? ''}';
+  // A Sales Order names the rep in `custom_sales_person`; a Lead Order, which
+  // is our own doctype, uses the plain `sales_person`. Both are the same
+  // question — whose order is this.
+  final owner =
+      '${order['custom_sales_person'] ?? order['sales_person'] ?? ''}';
   if (owner.isEmpty) return false;
 
   if (Session.I.salesPerson != null && owner == Session.I.salesPerson) {
@@ -64,7 +68,11 @@ String orderLockReason(Map<String, dynamic> order) {
         '${d.month.toString().padLeft(2, '0')}/${d.year}, '
         'the required delivery date.';
   }
-  final owner = '${order['custom_sales_person'] ?? ''}';
+  // A Sales Order names the rep in `custom_sales_person`; a Lead Order, which
+  // is our own doctype, uses the plain `sales_person`. Both are the same
+  // question — whose order is this.
+  final owner =
+      '${order['custom_sales_person'] ?? order['sales_person'] ?? ''}';
   if (owner.isNotEmpty &&
       owner != Session.I.salesPerson &&
       !(Session.I.isManager && Session.I.teamReps.contains(owner))) {

@@ -138,7 +138,9 @@ class MinStock {
                   salesPerson: '${b['sales_person'] ?? 'Unknown'}',
                   qty: _num(b['qty']),
                   looseBelts: _int(b['loose_belts']),
-                  salesOrder: '${b['sales_order'] ?? ''}',
+                  // A booking names exactly one of the two, depending on
+                  // whether the order is still against a lead.
+                  salesOrder: '${b['sales_order'] ?? b['lead_order'] ?? ''}',
                 ))
             .toList(),
         batches: ((j['batches'] as List?) ?? const [])

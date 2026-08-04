@@ -7,6 +7,7 @@ import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/pdf/proforma_pdf.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
+import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class OrderDetailScreen extends StatefulWidget {
@@ -130,9 +131,9 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       context,
       MaterialPageRoute(
           builder: (_) => OrderScreen(
-                customer: _customer.isNotEmpty
+                party: OrderParty.customer(_customer.isNotEmpty
                     ? _customer
-                    : {'name': _order['customer']},
+                    : {'name': _order['customer']}),
                 existingOrder: _order,
               )),
     );

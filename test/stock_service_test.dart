@@ -17,6 +17,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/stock_service.dart';
 
 void main() {
@@ -39,7 +40,7 @@ void main() {
       fake.seedPool('PCTR-100', qty: 10, belts: 8);
 
       await StockService.book(
-          itemCode: 'PCTR-100', qty: 3, belts: 2, salesOrder: 'SO-1');
+          itemCode: 'PCTR-100', qty: 3, belts: 2, order: const OrderRef('SO-1'));
 
       expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 3);
       expect(fake.pools['PCTR-100']!['custom_reserved_loose_belts'], 2);
@@ -49,7 +50,7 @@ void main() {
       fake.seedPool('PCTR-100', qty: 10);
 
       final name = await StockService.book(
-          itemCode: 'PCTR-100', qty: 3, belts: 0, salesOrder: 'SO-1');
+          itemCode: 'PCTR-100', qty: 3, belts: 0, order: const OrderRef('SO-1'));
 
       expect(name, isNotEmpty);
       final row = fake.reservations[name]!;
@@ -67,13 +68,13 @@ void main() {
       fake.seedPool('PCTR-100', qty: 2, belts: 20);
 
       await StockService.book(
-          itemCode: 'PCTR-100', qty: 0, belts: 15, salesOrder: 'SO-1');
+          itemCode: 'PCTR-100', qty: 0, belts: 15, order: const OrderRef('SO-1'));
       expect(fake.pools['PCTR-100']!['custom_reserved_loose_belts'], 15);
       expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 0);
 
       await expectLater(
         StockService.book(
-            itemCode: 'PCTR-100', qty: 5, belts: 0, salesOrder: 'SO-2'),
+            itemCode: 'PCTR-100', qty: 5, belts: 0, order: const OrderRef('SO-2')),
         throwsA(isA<StockUnavailable>()),
       );
     });
@@ -81,7 +82,7 @@ void main() {
     test('an item that is not on the list cannot be booked', () async {
       await expectLater(
         StockService.book(
-            itemCode: 'NOT-STOCKED', qty: 1, belts: 0, salesOrder: 'SO-1'),
+            itemCode: 'NOT-STOCKED', qty: 1, belts: 0, order: const OrderRef('SO-1')),
         throwsA(predicate((e) =>
             e is StockUnavailable && '$e'.contains('not on the minimum'))),
       );
@@ -92,7 +93,7 @@ void main() {
 
       await expectLater(
         StockService.book(
-            itemCode: 'PCTR-100', qty: 5, belts: 0, salesOrder: 'SO-1'),
+            itemCode: 'PCTR-100', qty: 5, belts: 0, order: const OrderRef('SO-1')),
         throwsA(isA<StockUnavailable>()),
       );
       expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 1);
@@ -112,7 +113,7 @@ void main() {
 
       await expectLater(
         StockService.book(
-            itemCode: 'PCTR-100', qty: 3, belts: 0, salesOrder: 'SO-MINE'),
+            itemCode: 'PCTR-100', qty: 3, belts: 0, order: const OrderRef('SO-MINE')),
         throwsA(isA<StockUnavailable>()),
       );
 
@@ -131,7 +132,7 @@ void main() {
 
       try {
         await StockService.book(
-            itemCode: 'PCTR-100', qty: 3, belts: 0, salesOrder: 'SO-MINE');
+            itemCode: 'PCTR-100', qty: 3, belts: 0, order: const OrderRef('SO-MINE'));
         fail('expected a refusal');
       } on StockUnavailable catch (e) {
         expect('$e', contains('another rep booked the rest'));
@@ -146,7 +147,7 @@ void main() {
       });
 
       await StockService.book(
-          itemCode: 'PCTR-100', qty: 3, belts: 0, salesOrder: 'SO-1');
+          itemCode: 'PCTR-100', qty: 3, belts: 0, order: const OrderRef('SO-1'));
 
       // 2 from the other rep, 3 from us — the retry re-read rather than
       // clobbering what landed in between.
@@ -158,7 +159,7 @@ void main() {
       fake.seedPool('PCTR-100', qty: 10);
 
       await StockService.book(
-          itemCode: 'PCTR-100', qty: 1, belts: 0, salesOrder: 'SO-1');
+          itemCode: 'PCTR-100', qty: 1, belts: 0, order: const OrderRef('SO-1'));
 
       final put = fake.writes
           .firstWhere((w) => w.doctype == 'Manna Minimum Stock Item');
@@ -173,7 +174,7 @@ void main() {
 
       await expectLater(
         StockService.book(
-            itemCode: 'PCTR-100', qty: 1, belts: 0, salesOrder: 'SO-1'),
+            itemCode: 'PCTR-100', qty: 1, belts: 0, order: const OrderRef('SO-1')),
         throwsA(predicate((e) =>
             e is StockUnavailable && '$e'.contains('too many reps'))),
       );
@@ -191,7 +192,7 @@ void main() {
     });
 
     test('an unchanged line-up touches nothing at all', () async {
-      await StockService.rebook('SO-1', [
+      await StockService.rebook(const OrderRef('SO-1'), [
         {'item_code': 'ITEM-A', 'qty': 5.0, 'loose_belts': 0},
         {'item_code': 'ITEM-B', 'qty': 5.0, 'loose_belts': 0},
       ]);
@@ -202,7 +203,7 @@ void main() {
     });
 
     test('increases are booked before decreases are released', () async {
-      await StockService.rebook('SO-1', [
+      await StockService.rebook(const OrderRef('SO-1'), [
         {'item_code': 'ITEM-A', 'qty': 8.0, 'loose_belts': 0},
         {'item_code': 'ITEM-B', 'qty': 2.0, 'loose_belts': 0},
       ]);
@@ -219,7 +220,7 @@ void main() {
     test('a refused increase leaves the rest of the order holding its stock',
         () async {
       await expectLater(
-        StockService.rebook('SO-1', [
+        StockService.rebook(const OrderRef('SO-1'), [
           {'item_code': 'ITEM-A', 'qty': 999.0, 'loose_belts': 0},
           {'item_code': 'ITEM-B', 'qty': 2.0, 'loose_belts': 0},
         ]),
@@ -233,7 +234,7 @@ void main() {
     });
 
     test('dropping a line hands that stock back and keeps the other', () async {
-      await StockService.rebook('SO-1', [
+      await StockService.rebook(const OrderRef('SO-1'), [
         {'item_code': 'ITEM-A', 'qty': 5.0, 'loose_belts': 0},
       ]);
 
@@ -249,7 +250,7 @@ void main() {
       final older = fake.seedReservation('SO-2', 'ITEM-C', qty: 3);
       final newer = fake.seedReservation('SO-2', 'ITEM-C', qty: 2);
 
-      await StockService.rebook('SO-2', [
+      await StockService.rebook(const OrderRef('SO-2'), [
         {'item_code': 'ITEM-C', 'qty': 2.0, 'loose_belts': 0},
       ]);
 
@@ -259,12 +260,113 @@ void main() {
     });
   });
 
+  group('A lead books from the same pool as a customer', () {
+    test('a lead order books against lead_order, not sales_order', () async {
+      fake.seedPool('PCTR-100', qty: 10);
+
+      final name = await StockService.book(
+          itemCode: 'PCTR-100',
+          qty: 3,
+          belts: 0,
+          order: const OrderRef.lead('LO-1'));
+
+      final row = fake.reservations[name]!;
+      expect(row['lead_order'], 'LO-1');
+      expect(row['sales_order'], isNull,
+          reason: 'exactly one of the two is ever set');
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 3);
+    });
+
+    test('a lead and a customer race for the same last rolls', () async {
+      // The whole reason leads share the booking path: they compete for the
+      // same stock, and the pool must not care which kind of party wins.
+      fake.seedPool('PCTR-100', qty: 3);
+      await StockService.book(
+          itemCode: 'PCTR-100',
+          qty: 3,
+          belts: 0,
+          order: const OrderRef.lead('LO-1'));
+
+      await expectLater(
+        StockService.book(
+            itemCode: 'PCTR-100', qty: 1, belts: 0, order: const OrderRef('SO-1')),
+        throwsA(isA<StockUnavailable>()),
+      );
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 3);
+    });
+
+    test('releasing a lead order does not touch a customer order', () async {
+      fake.seedPool('ITEM-A', qty: 20, reserved: 8);
+      fake.seedReservation('LO-1', 'ITEM-A', qty: 5, isLead: true);
+      fake.seedReservation('SO-1', 'ITEM-A', qty: 3);
+
+      await StockService.release(const OrderRef.lead('LO-1'));
+
+      expect(fake.pools['ITEM-A']!['custom_reserved_qty'], 3,
+          reason: "only the lead order's 5 should have gone back");
+      expect(fake.activeFor('SO-1', 'ITEM-A'), 3);
+    });
+  });
+
+  group('Approving a lead order moves its stock, never releases it', () {
+    test('the bookings re-point without the pool changing', () async {
+      fake.seedPool('ITEM-A', qty: 20, reserved: 5);
+      final row = fake.seedReservation('LO-1', 'ITEM-A', qty: 5, isLead: true);
+
+      final moved = await StockService.movePool(
+          const OrderRef.lead('LO-1'), const OrderRef('SO-NEW'));
+
+      expect(moved, 1);
+      expect(fake.reservations[row]!['sales_order'], 'SO-NEW');
+      expect(fake.reservations[row]!['lead_order'], isNull);
+      // The critical assertion: the pool never let go. Releasing and re-taking
+      // would open a window for another rep to take the stock at the exact
+      // moment the customer was promised it.
+      expect(fake.pools['ITEM-A']!['custom_reserved_qty'], 5);
+      expect(fake.putCount('Manna Minimum Stock Item'), 0);
+    });
+
+    test('every live booking on the order comes across', () async {
+      fake.seedPool('ITEM-A', qty: 20, reserved: 5);
+      fake.seedPool('ITEM-B', qty: 20, reserved: 4);
+      fake.seedReservation('LO-1', 'ITEM-A', qty: 5, isLead: true);
+      fake.seedReservation('LO-1', 'ITEM-B', qty: 4, isLead: true);
+
+      expect(
+          await StockService.movePool(
+              const OrderRef.lead('LO-1'), const OrderRef('SO-NEW')),
+          2);
+      expect(fake.activeFor('SO-NEW', 'ITEM-A'), 5);
+      expect(fake.activeFor('SO-NEW', 'ITEM-B'), 4);
+    });
+
+    test('a released booking is left behind', () async {
+      fake.seedPool('ITEM-A', qty: 20);
+      final dead =
+          fake.seedReservation('LO-1', 'ITEM-A', qty: 5, isLead: true);
+      fake.reservations[dead]!['status'] = 'Released';
+
+      expect(
+          await StockService.movePool(
+              const OrderRef.lead('LO-1'), const OrderRef('SO-NEW')),
+          0,
+          reason: 'stock already handed back must not follow the order');
+    });
+
+    test('an order holding nothing moves nothing', () async {
+      expect(
+          await StockService.movePool(
+              const OrderRef.lead('LO-EMPTY'), const OrderRef('SO-NEW')),
+          0);
+    });
+  });
+
   group('Releasing a dead order', () {
     test('everything goes back to the pool and the trail is kept', () async {
       fake.seedPool('ITEM-A', qty: 20, reserved: 5, reservedBelts: 3);
       final row = fake.seedReservation('SO-1', 'ITEM-A', qty: 5, belts: 3);
 
-      final n = await StockService.release('SO-1');
+      final n = await StockService.release(const OrderRef('SO-1'));
 
       expect(n, 1);
       expect(fake.pools['ITEM-A']!['custom_reserved_qty'], 0);
@@ -279,19 +381,19 @@ void main() {
       fake.seedReservation('SO-1', 'ITEM-A', qty: 5);
       fake.failEverything = true;
 
-      await expectLater(StockService.release('SO-1'), completion(0));
+      await expectLater(StockService.release(const OrderRef('SO-1')), completion(0));
     });
 
     test('releasing an order that holds nothing is harmless', () async {
-      await expectLater(StockService.release('SO-NOTHING'), completion(0));
+      await expectLater(StockService.release(const OrderRef('SO-NOTHING')), completion(0));
     });
 
     test('a pool cannot be driven negative by a double release', () async {
       fake.seedPool('ITEM-A', qty: 20, reserved: 5);
       fake.seedReservation('SO-1', 'ITEM-A', qty: 5);
 
-      await StockService.release('SO-1');
-      await StockService.release('SO-1');
+      await StockService.release(const OrderRef('SO-1'));
+      await StockService.release(const OrderRef('SO-1'));
 
       expect(fake.pools['ITEM-A']!['custom_reserved_qty'], 0);
     });
@@ -343,11 +445,13 @@ class _FakeFrappe implements HttpClientAdapter {
   }
 
   String seedReservation(String order, String item,
-      {double qty = 0, int belts = 0}) {
+      {double qty = 0, int belts = 0, bool isLead = false}) {
     final name = 'RES-${_rows.toString().padLeft(3, '0')}';
     reservations[name] = {
       'name': name,
-      'sales_order': order,
+      // Exactly one is set, as in the real doctype.
+      if (!isLead) 'sales_order': order,
+      if (isLead) 'lead_order': order,
       'item_code': item,
       'qty': qty,
       'loose_belts': belts,
@@ -376,10 +480,11 @@ class _FakeFrappe implements HttpClientAdapter {
   int putCount(String doctype) =>
       writes.where((w) => w.doctype == doctype).length;
 
-  /// How much of an item an order is still actively holding.
+  /// How much of an item an order is still actively holding, whichever kind
+  /// of order it is.
   double activeFor(String order, String item) => reservations.values
       .where((r) =>
-          r['sales_order'] == order &&
+          (r['sales_order'] == order || r['lead_order'] == order) &&
           r['item_code'] == item &&
           r['status'] == 'Active')
       .fold(0.0, (sum, r) => sum + (r['qty'] as num).toDouble());

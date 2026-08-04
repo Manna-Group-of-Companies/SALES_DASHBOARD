@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/pdf/proforma_pdf.dart';
+import 'package:manna_field_sales/core/order_rules.dart';
+import 'package:manna_field_sales/models/order_ref.dart';
+import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/info_box.dart';
 
@@ -55,46 +57,23 @@ class _LeadOrderDetailScreenState extends State<LeadOrderDetailScreen> {
     if (err != null && mounted) _snack('Proforma error: $err');
   }
 
-  Future<void> _scanPO() async {
-    final shot = await ImagePicker()
-        .pickImage(source: ImageSource.camera, imageQuality: 70);
-    if (shot == null) return;
-    final poNo = await _askPo();
-    setState(() => _busy = true);
-    try {
-      await Api.uploadLeadOrderPO(
-          name: _order['name'] as String,
-          filePath: shot.path,
-          poNumber: poNo);
-      _order['status'] = 'PO Uploaded';
-      _snack('Signed PO uploaded ✓ — awaiting manager PO approval.');
-      setState(() {});
-    } catch (e) {
-      _snack(humanError(e));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+  /// Opens the same order screen the rep raised it with, so a lead order is
+  /// changed exactly the way a customer order is.
+  Future<void> _edit() async {
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+          builder: (_) => OrderScreen(
+                party: OrderParty.lead(widget.lead),
+                existingOrder: _order,
+              )),
+    );
+    if (changed == true && mounted) setState(() => _init = _load());
   }
 
-  Future<String?> _askPo() async {
-    final ctrl = TextEditingController();
-    return showDialog<String>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('PO Number (optional)'),
-          content: TextField(
-              controller: ctrl,
-              decoration: const InputDecoration(hintText: 'e.g. 192')),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(context, ''),
-                child: const Text('Skip')),
-            FilledButton(
-                onPressed: () => Navigator.pop(context, ctrl.text),
-                child: const Text('OK')),
-          ],
-        ));
-  }
+  // The signed-PO scan and its PO-number prompt are gone. Nothing comes back
+  // from the customer any more — raising the order is the request for
+  // approval, exactly as it is for a customer order.
 
   @override
   Widget build(BuildContext context) {
@@ -146,9 +125,33 @@ class _LeadOrderDetailScreenState extends State<LeadOrderDetailScreen> {
                   icon: Icons.cancel,
                   color: Colors.red,
                   text: 'This lead order was rejected by the manager.'),
+            // Editable on exactly the same terms as a customer order: until
+            // 1 pm on the delivery date, by the rep who raised it or their
+            // manager. Approved rates stay locked through the edit.
+            if (canEditOrder(_order))
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : _edit,
+                  icon: const Icon(Icons.edit),
+                  label: const Padding(
+                      padding: EdgeInsets.all(10), child: Text('Edit order')),
+                ),
+              )
+            else if (orderLockReason(_order).isNotEmpty)
+              InfoBox(
+                  icon: Icons.lock_clock,
+                  color: Colors.black54,
+                  text: orderLockReason(_order)),
             if (approved) ...[
-              const Text('1 · Proforma',
+              const SizedBox(height: 16),
+              const Text('Proforma',
                   style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              const Text(
+                  'For the customer’s own records. Nothing has to come back — '
+                  'the order is already with the factory.',
+                  style: TextStyle(fontSize: 12, color: Colors.black54)),
               const SizedBox(height: 8),
               FilledButton.icon(
                 onPressed: _busy ? null : () => _proforma(asPO: false),
@@ -157,32 +160,6 @@ class _LeadOrderDetailScreenState extends State<LeadOrderDetailScreen> {
                     padding: EdgeInsets.all(10),
                     child: Text('Generate & Send Proforma')),
               ),
-              const SizedBox(height: 20),
-              const Text('2 · Customer Purchase Order',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 4),
-              const Text(
-                  'Lead signs the proforma and returns it. Scan the signed copy to upload.',
-                  style: TextStyle(fontSize: 12, color: Colors.black54)),
-              const SizedBox(height: 8),
-              if (status == 'PO Approved - Ready for SAP')
-                const InfoBox(
-                    icon: Icons.check_circle,
-                    color: Colors.green,
-                    text:
-                    'PO approved — ready to push to SAP (creates the customer).')
-              else
-                FilledButton.icon(
-                  style:
-                  FilledButton.styleFrom(backgroundColor: Colors.indigo),
-                  onPressed: _busy ? null : _scanPO,
-                  icon: const Icon(Icons.document_scanner),
-                  label: Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: Text(status == 'PO Uploaded'
-                          ? 'Re-scan Signed PO'
-                          : 'Scan & Upload Signed PO')),
-                ),
             ],
             if (_busy)
               const Padding(

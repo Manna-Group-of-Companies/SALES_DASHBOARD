@@ -9,6 +9,7 @@ import 'package:manna_field_sales/screens/collections/collection_screen.dart';
 import 'package:manna_field_sales/screens/customers/customer_edit_screen.dart';
 import 'package:manna_field_sales/screens/complaints/complaint_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
+import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/map_service.dart';
@@ -482,7 +483,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           if (Session.I.company != 'Manna Tyre Retreads') ...[
             FilledButton.tonalIcon(
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => OrderScreen(customer: c))),
+                  builder: (_) => OrderScreen(party: OrderParty.customer(c)))),
               icon: const Icon(Icons.shopping_cart),
               label: const Padding(
                   padding: EdgeInsets.all(12), child: Text('New Order')),

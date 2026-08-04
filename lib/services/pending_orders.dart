@@ -31,6 +31,10 @@ class PendingOrder {
   final String salesPerson;
   final DateTime savedAt;
 
+  /// True when the party is a lead rather than a customer. Decides which
+  /// order the draft becomes when it is finally sent.
+  final bool isLead;
+
   /// Why the last send attempt failed, in the words the rep was shown.
   final String? lastError;
 
@@ -43,6 +47,7 @@ class PendingOrder {
     required this.reservations,
     required this.salesPerson,
     required this.savedAt,
+    this.isLead = false,
     this.lastError,
   });
 
@@ -66,6 +71,7 @@ class PendingOrder {
         'reservations': reservations,
         'sales_person': salesPerson,
         'saved_at': savedAt.toIso8601String(),
+        if (isLead) 'is_lead': true,
         if (lastError != null) 'last_error': lastError,
       };
 
@@ -82,6 +88,7 @@ class PendingOrder {
       reservations: _rows(json['reservations']),
       salesPerson: '${json['sales_person'] ?? ''}',
       savedAt: DateTime.tryParse('${json['saved_at'] ?? ''}') ?? serverNow(),
+      isLead: json['is_lead'] == true,
       lastError: json['last_error'] as String?,
     );
   }
@@ -95,6 +102,7 @@ class PendingOrder {
         reservations: reservations,
         salesPerson: salesPerson,
         savedAt: savedAt,
+        isLead: isLead,
         lastError: error,
       );
 
@@ -152,6 +160,7 @@ class PendingOrders {
     required String deliveryDate,
     required List<Map<String, dynamic>> items,
     required List<Map<String, dynamic>> reservations,
+    bool isLead = false,
   }) async {
     final now = serverNow();
     final existing = await _raw();
@@ -174,6 +183,7 @@ class PendingOrders {
       reservations: reservations,
       salesPerson: Session.I.salesPerson ?? '',
       savedAt: now,
+      isLead: isLead,
     );
     await _replaceAll([...existing, draft]);
     return draft;

@@ -7,6 +7,7 @@ import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
+import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
@@ -15,7 +16,11 @@ import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
 
 class OrderScreen extends StatefulWidget {
-  final Map<String, dynamic> customer;
+  /// Who the order is for. A lead orders on exactly the same terms as a
+  /// customer — same families, same minimum stock, same edit window — so this
+  /// screen does both rather than there being a second, thinner one that
+  /// drifts out of step.
+  final OrderParty party;
 
   /// An order being changed rather than raised. The same screen does both so
   /// there is only one copy of the rolls-and-belts maths and one set of
@@ -24,7 +29,7 @@ class OrderScreen extends StatefulWidget {
 
   const OrderScreen({
     super.key,
-    required this.customer,
+    required this.party,
     this.existingOrder,
   });
   @override
@@ -276,11 +281,12 @@ class _OrderScreenState extends State<OrderScreen> {
     if (keep != true) return;
 
     await PendingOrders.save(
-      customer: widget.customer['name'] as String,
-      customerName: '${widget.customer['customer_name'] ?? ''}',
+      customer: widget.party.name,
+      customerName: widget.party.label,
       deliveryDate: deliveryDate,
       items: [for (final l in _picked) l.toSalesOrderItem()],
       reservations: reservations,
+      isLead: widget.party.isLead,
     );
     if (!mounted) return;
     _snack('Saved on your phone — not sent yet. Send it from Unsent Orders.');
@@ -333,6 +339,7 @@ class _OrderScreenState extends State<OrderScreen> {
           // quantity, a new product, even the delivery date — goes back to the
           // manager, because what they approved is no longer what will ship.
           returnForApproval: _wasApproved,
+          isLead: widget.party.isLead,
         );
         _snack(_wasApproved
             ? 'Order updated ✓ — sent back to your manager'
@@ -343,9 +350,23 @@ class _OrderScreenState extends State<OrderScreen> {
         await Future.delayed(const Duration(milliseconds: 400));
         if (mounted) Navigator.pop(context, true);
         return;
+      } else if (widget.party.isLead) {
+        name = await Api.placeLeadOrder(
+          lead: widget.party.name,
+          items: [for (final l in _picked) l.toSalesOrderItem()],
+          deliveryDate: dd,
+          reservations: reservations,
+          total: _total,
+        );
+        _snack('Order sent for approval ✓  $name');
+        // A lead order has no proforma screen to go on to — it becomes a real
+        // Sales Order only once the manager approves and the lead converts.
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (mounted) Navigator.pop(context, true);
+        return;
       } else {
         name = await Api.placeOrder(
-          customer: widget.customer['name'] as String,
+          customer: widget.party.name,
           company: _company,
           items: [for (final l in _picked) l.toSalesOrderItem()],
           deliveryDate: dd,
@@ -386,13 +407,18 @@ class _OrderScreenState extends State<OrderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final name =
-        widget.customer['customer_name'] ?? widget.customer['name'] ?? '';
+    final name = widget.party.label;
     return Scaffold(
       appBar: AppBar(
+        // The rep is told which kind of party this is up front. A lead order
+        // follows the same path but has to be complete enough to invoice
+        // before the manager can approve it, and finding that out at the
+        // counter is better than finding out at approval.
         title: Text(_isEdit
             ? 'Edit ${widget.existingOrder!['name']}'
-            : 'Order — $name'),
+            : widget.party.isLead
+                ? 'Lead order — $name'
+                : 'Order — $name'),
         actions: [
           if (_usesMinimumStock)
             IconButton(

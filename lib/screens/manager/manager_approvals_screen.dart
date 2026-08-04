@@ -114,6 +114,7 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
           builder: (_) => ManagerOrderReviewScreen(
                 orderName: a.name,
                 escalates: a.escalate,
+                isLead: a.kind == 'lead_order',
               )),
     );
     if (decided == true) _reload();
@@ -323,7 +324,11 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
                         // fixes the price permanently and commits stock, so it
                         // goes through the review screen where the manager can
                         // actually see what they are agreeing to.
-                        if (a.kind == 'so_po')
+                        // A lead order commits the same stock and fixes the
+                        // same rates as a customer order, and approving it
+                        // converts the lead as well — even less of a yes/no on
+                        // a card than a Sales Order is.
+                        if (a.kind == 'so_po' || a.kind == 'lead_order')
                           SizedBox(
                             width: double.infinity,
                             child: FilledButton.icon(
