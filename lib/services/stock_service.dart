@@ -57,6 +57,7 @@ const String kReservationDoctype = 'Manna Stock Reservation';
 const String kStockPoolsKey = 'minstock:pools';
 const String kStockBatchesKey = 'minstock:batches';
 const String kStockBookingsKey = 'minstock:bookings';
+const String kStockItemsKey = 'minstock:packsizes';
 
 String _res(String doctype) =>
     '/api/resource/${Uri.encodeComponent(doctype)}';
@@ -120,11 +121,22 @@ class StockService {
                   '"sales_order","lead_order"]',
               filters: '[["status","=","Active"]]',
               orderBy: 'creation asc')),
+      // Pack sizes. Availability needs them: belts booked against a pool with
+      // none loose have already cost a whole roll, and without the pack size
+      // that roll appears to be still on the shelf.
+      _cached(
+          kStockItemsKey,
+          () => _list('Item',
+              fields: '["name","custom_belts_per_roll"]',
+              filters: '[["custom_belts_per_roll",">",0]]')),
     ]);
 
     final pools = results[0];
     final batches = results[1];
     final active = results[2];
+    final perRoll = {
+      for (final i in results[3]) '${i['name']}': _int(i['custom_belts_per_roll'])
+    };
 
     final me = Session.I.salesPerson;
     final myQty = <String, double>{};
@@ -163,6 +175,7 @@ class StockService {
         'last_sold_on': p['custom_last_sold_on'],
         'bookings': bookings[code] ?? const [],
         'batches': byItem[code] ?? const [],
+        'belts_per_roll': perRoll[code] ?? 0,
       });
     }
     return out;
@@ -212,18 +225,30 @@ class StockService {
       final grossQty = shelf.empty ? _num(pool['qty']) : shelf.qty;
       final grossBelts =
           shelf.empty ? _int(pool['loose_belts']) : shelf.belts;
-      final headroomQty = grossQty - _num(pool['custom_reserved_qty']);
+      final bookedQty = _num(pool['custom_reserved_qty']);
+      final bookedBelts = _int(pool['custom_reserved_loose_belts']);
+
+      // Belts already booked may have cost whole rolls. Two belts booked
+      // against a pool with none loose committed a roll — that roll is gone
+      // from the roll count, and the other eight of its belts are on offer.
+      // Without this the roll looked available *and* the belts appeared from
+      // nowhere, which is the same figure the detail sheet was getting wrong.
+      final perRoll = (belts > 0 || bookedBelts > 0)
+          ? await _beltsPerRoll(itemCode)
+          : 0;
+      final alreadyCut =
+          MinStock.rollsToOpen(bookedBelts, grossBelts, perRoll);
+
+      final headroomQty = grossQty - bookedQty - alreadyCut;
       final headroomBelts =
-          grossBelts - _int(pool['custom_reserved_loose_belts']);
+          grossBelts + (alreadyCut * perRoll) - bookedBelts;
 
       // Belts are cut from whole rolls. Ordering three belts from a twelve-belt
       // roll opens one roll: three go out and nine come back as loose stock for
       // the next rep. So a belt order can succeed with no loose belts at all,
       // provided there is a roll to open — and it costs that roll.
       var rollsOpened = 0;
-      var perRoll = 0;
       if (belts > headroomBelts) {
-        perRoll = await _beltsPerRoll(itemCode);
         if (perRoll <= 0) {
           throw StockUnavailable(
               'Only ${headroomBelts < 0 ? 0 : headroomBelts} loose belts left '

@@ -234,13 +234,18 @@ never edits the pool upward, so the two diverge the moment stock arrives.
 Reading availability off the pool pinned it near the minimum while the batch
 list showed the real, larger figure.
 
-Three numbers, three questions:
+Three numbers, two of them shown:
 
-| Shown as | Source | Answers |
-| --- | --- | --- |
-| Minimum stock | pool `qty` | what *should* be here |
-| Actual stock | sum of batches | what *is* here, undispatched |
-| Available to sell | batches − `custom_reserved_qty` | what can be promised |
+| Concept | Source | Answers | On screen |
+| --- | --- | --- | --- |
+| Minimum stock | pool `qty` | what *should* be here | yes |
+| Undispatched stock | sum of batches | what *is* here | **no** |
+| Available to sell | batches − `custom_reserved_qty` | what can be promised | yes |
+
+The undispatched total is computed but deliberately not displayed. What is
+booked is already on the detail sheet, and a rep who wants some of it goes to
+the sales manager either way — showing both figures only invited the
+subtraction.
 
 **A booking does not touch the batches.** Booked stock is still on the floor
 until it ships, so "actual stock" means *not yet dispatched* — which is the

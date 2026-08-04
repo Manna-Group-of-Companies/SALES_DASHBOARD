@@ -342,6 +342,59 @@ void main() {
     });
   });
 
+  group('Booked belts have already cost a roll', () {
+    // BLACK PEARL 120 AJAX 69, from the field: 4 rolls at 10 belts each, Jaimon
+    // holding 3 rolls and 2 belts. Those 2 belts came out of the fourth roll,
+    // so nothing whole is left and 8 belts are — not 6, which is what counting
+    // belts only against loose belts produced.
+    MinStock stock({double rolls = 4, int loose = 0, int perRoll = 10}) =>
+        MinStock(
+          itemCode: 'PCTR-100',
+          minimumQty: 2,
+          reservedQty: 3,
+          myReservedQty: 0,
+          reservedLooseBelts: 2,
+          beltsPerRoll: perRoll,
+          batches: [_batch('MSB-1', qty: rolls, belts: loose)],
+        );
+
+    test('the remainder of the cut roll is what is left to sell', () {
+      final s = stock();
+      expect(s.availableQty, 0, reason: 'the fourth roll was opened');
+      expect(s.availableLooseBelts, 8);
+    });
+
+    test('loose belts are used first, and no roll is cut', () {
+      // Same booking, but 5 belts were already loose: 2 come out of those and
+      // all four rolls survive.
+      final s = stock(loose: 5);
+      expect(s.availableQty, 1);
+      expect(s.availableLooseBelts, 3);
+    });
+
+    test('an exact pack of booked belts consumes exactly one roll', () {
+      final s = MinStock(
+        itemCode: 'PCTR-100',
+        minimumQty: 2,
+        reservedQty: 0,
+        myReservedQty: 0,
+        reservedLooseBelts: 10,
+        beltsPerRoll: 10,
+        batches: [_batch('MSB-1', qty: 4)],
+      );
+      expect(s.availableQty, 3);
+      expect(s.availableLooseBelts, 0);
+    });
+
+    test('with no pack size the roll is never treated as cuttable', () {
+      // An item whose master is incomplete must not have rolls silently
+      // consumed on a guess.
+      final s = stock(perRoll: 0);
+      expect(s.availableQty, 1);
+      expect(s.availableLooseBelts, 0);
+    });
+  });
+
   group('Belts are cut from whole rolls', () {
     test('the belt ceiling counts every belt in the pool, not just loose ones',
         () {

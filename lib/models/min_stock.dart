@@ -72,6 +72,11 @@ class MinStock {
 
   final List<StockBatch> batches;
 
+  /// How many belts one roll cuts into, from the Item master. Zero when the
+  /// item is not sold in belts, or its master is incomplete — either way no
+  /// roll is ever treated as cuttable.
+  final int beltsPerRoll;
+
   /// "10 rolls + 4 belts", or just "200 kg" where belts do not apply. Belts are
   /// only ever mentioned when there are some — on CTR, bonding gum and solution
   /// the counter is permanently zero and saying so is noise.
@@ -127,24 +132,41 @@ class MinStock {
   /// cautious.
   bool get _noBatchRecord => batches.isEmpty;
 
-  /// What a rep can still commit to: what is in the plant, less what is already
-  /// booked against it.
+  /// Gross rolls and belts, before anything booked is taken off.
+  double get _grossQty => _noBatchRecord ? minimumQty : onHandQty;
+  int get _grossBelts => _noBatchRecord ? minimumLooseBelts : onHandLooseBelts;
+
+  /// Rolls that have to be cut to cover the belts already booked.
+  ///
+  /// Booking two belts against a pool with none loose commits a whole roll —
+  /// the roll leaves the roll count even though only two of its belts are
+  /// spoken for. Without this the roll stayed on the shelf *and* the belts
+  /// appeared from nowhere.
+  int get _rollsCutForBookings =>
+      rollsToOpen(reservedLooseBelts, _grossBelts, beltsPerRoll);
+
+  /// Whole rolls a rep can still commit to.
   ///
   /// This is the number that moves when somebody books. [onHandQty] does not —
-  /// the two together answer different questions, and a rep needs both: "how
-  /// much exists" and "how much can I promise".
+  /// the two answer different questions, and a rep needs both: "how much
+  /// exists" and "how much can I promise".
   ///
   /// Never below zero, because a pool over-reserved by a race the server
   /// rejected should read as empty rather than as a negative number.
   double get availableQty {
-    final base = _noBatchRecord ? minimumQty : onHandQty;
-    final left = base - reservedQty;
+    final left = _grossQty - reservedQty - _rollsCutForBookings;
     return left < 0 ? 0 : left;
   }
 
+  /// Belts a rep can still commit to *without opening another roll*.
+  ///
+  /// Includes the remainder of any roll already cut for a booking. Four rolls
+  /// at ten belts each, with three rolls and two belts booked, leaves no whole
+  /// roll and eight belts — the rest of the fourth roll — not six.
   int get availableLooseBelts {
-    final base = _noBatchRecord ? minimumLooseBelts : onHandLooseBelts;
-    final left = base - reservedLooseBelts;
+    final left = _grossBelts +
+        (_rollsCutForBookings * beltsPerRoll) -
+        reservedLooseBelts;
     return left < 0 ? 0 : left;
   }
 
@@ -176,6 +198,7 @@ class MinStock {
     this.lastSoldOn = '',
     this.bookings = const [],
     this.batches = const [],
+    this.beltsPerRoll = 0,
   });
 
   factory MinStock.fromJson(Map<String, dynamic> j) => MinStock(
@@ -202,6 +225,7 @@ class MinStock {
             .whereType<Map>()
             .map((b) => StockBatch.fromJson(b.cast<String, dynamic>()))
             .toList(),
+        beltsPerRoll: _int(j['belts_per_roll']),
       );
 
   /// The oldest batch still holding stock — what a rep should be pushing.

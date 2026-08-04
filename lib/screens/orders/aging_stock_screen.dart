@@ -335,12 +335,11 @@ Future<void> showMinStockDetail(
           const Text('Stock details',
               style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          // Three numbers that answer three different questions, in the order a
-          // rep asks them: what should be here, what is here, what can I sell.
+          // The undispatched total is deliberately not shown. What is booked is
+          // on the line below, and a rep who wants some of it goes to the sales
+          // manager either way — the extra figure only invited the arithmetic.
           _kv('Minimum stock',
               s.describe(s.minimumQty, s.minimumLooseBelts, unit)),
-          _kv('Actual stock (not dispatched)',
-              s.describe(s.onHandQty, s.onHandLooseBelts, unit)),
           _kv('Booked by reps',
               s.bookings.isEmpty
                   ? 'Nothing booked'
@@ -365,15 +364,14 @@ Future<void> showMinStockDetail(
             ),
           _kv('Available to sell',
               s.describe(s.availableQty, s.availableLooseBelts, unit)),
-          // The gap between the two is what a rep argues over with the manager:
-          // the stock is in the plant, somebody else is holding it, and it can
-          // be reassigned. Only shown when there is a gap to argue about.
+          // What a rep does about a booking that is in their way. Only shown
+          // when something is actually booked.
           if (s.reservedQty > 0 || s.reservedLooseBelts > 0)
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text(
-                'Booked stock is still in the plant until it is dispatched. '
-                'Ask your manager if you need some of it allotted to you.',
+                'Booked stock has not shipped yet. Ask your manager if you '
+                'need some of it allotted to you.',
                 style: TextStyle(fontSize: 12, color: Colors.blueGrey.shade700),
               ),
             ),
