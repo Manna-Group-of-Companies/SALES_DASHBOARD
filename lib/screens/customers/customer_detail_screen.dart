@@ -11,10 +11,10 @@ import 'package:manna_field_sales/screens/complaints/complaint_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/sites_section.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/map_service.dart';
 import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
-import 'package:manna_field_sales/widgets/route_picker.dart';
 import 'package:manna_field_sales/widgets/visit_punch_card.dart';
 
 class CustomerDetailScreen extends StatefulWidget {
@@ -29,14 +29,11 @@ class CustomerDetailScreen extends StatefulWidget {
 class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   late Map<String, dynamic> c;
   bool _busy = false;
-  List<Map<String, dynamic>> _sites = [];
-  bool _sitesLoading = true;
 
   @override
   void initState() {
     super.initState();
     c = Map<String, dynamic>.from(widget.customer);
-    _loadSites();
   }
 
   void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(
@@ -99,158 +96,6 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         c['custom_longitude'] = pos.longitude;
       });
       _snack('Captured - sent for manager verification.');
-    } catch (e) {
-      _snack(humanError(e));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _loadSites() async {
-    try {
-      final s = await Api.getCustomerSites(c['name'] as String);
-      if (mounted) {
-        setState(() {
-          _sites = s;
-          _sitesLoading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _sitesLoading = false);
-    }
-  }
-
-  Future<void> _addSite() async {
-    final rep = Session.I.salesPerson;
-    if (rep == null) return _snack('No rep linked to this login.');
-    final ctrl = TextEditingController();
-    final siteName = await showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('New site name'),
-        content: TextField(
-          controller: ctrl,
-          textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(hintText: 'e.g. Godown, Branch 2'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, ctrl.text.trim()),
-              child: const Text('Next')),
-        ],
-      ),
-    );
-    if (siteName == null || siteName.isEmpty) return;
-    if (!mounted) return;
-    final img = await pickPhoto(context, title: 'Site banner photo');
-    if (img == null) return _snack('A site banner photo is required.');
-    setState(() => _busy = true);
-    _snack('Getting GPS...');
-    try {
-      final pos = await getCurrentLocation();
-      final created = await Api.createCustomerSite(
-        customer: c['name'],
-        siteName: siteName,
-        lat: pos.latitude,
-        lng: pos.longitude,
-      );
-      await Api.uploadPhoto(
-        doctype: 'Customer Site',
-        docname: created,
-        fieldname: 'banner_photo',
-        filePath: img.path,
-        filename: 'site_banner.jpg',
-      );
-      _snack('Site "$siteName" captured — sent for manager verification.');
-      await _loadSites();
-    } catch (e) {
-      _snack(humanError(e));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Widget _sitesSection() {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        const Text('Sites',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-        TextButton.icon(
-            onPressed: _busy ? null : _addSite,
-            icon: const Icon(Icons.add_location_alt, size: 18),
-            label: const Text('Add site')),
-      ]),
-      if (_sitesLoading)
-        const Padding(
-          padding: EdgeInsets.all(8),
-          child: Text('Loading sites…',
-              style: TextStyle(fontSize: 12, color: Colors.black45)),
-        )
-      else if (_sites.isEmpty)
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 8),
-          child: Text(
-              'No extra sites. The main location is used for check-in; add a site for a second shop or godown.',
-              style: TextStyle(fontSize: 12, color: Colors.black45)),
-        )
-      else
-        ..._sites.map((s) {
-          final st = '${s['location_status']}';
-          Color col;
-          IconData ic;
-          if (st == 'Verified') {
-            col = Colors.green;
-            ic = Icons.verified;
-          } else if (st == 'Pending Verification') {
-            col = Colors.orange;
-            ic = Icons.hourglass_top;
-          } else if (st == 'Rejected') {
-            col = Colors.red;
-            ic = Icons.cancel;
-          } else {
-            col = Colors.grey;
-            ic = Icons.location_off;
-          }
-          return Card(
-            margin: const EdgeInsets.symmetric(vertical: 4),
-            child: ListTile(
-              dense: true,
-              leading: Icon(ic, color: col),
-              title: Text('${s['site_name']}'),
-              // Each site is its own drop. A customer's second yard can sit on
-              // a completely different run from their office, so the route is
-              // set per site rather than inherited from the customer.
-              subtitle: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(st),
-                    RouteChip(
-                      route: '${s['route'] ?? ''}',
-                      onTap: _busy ? null : () => _setSiteRoute(s),
-                    ),
-                  ]),
-            ),
-          );
-        }),
-    ]);
-  }
-
-  /// Puts one site on a route. Sites are separate places with separate runs,
-  /// so this never touches the customer's own route.
-  Future<void> _setSiteRoute(Map<String, dynamic> site) async {
-    final current = '${site['route'] ?? ''}';
-    final picked = await pickSalesRoute(context,
-        current: current.isEmpty || current == 'null' ? null : current,
-        title: 'Route for ${site['site_name']}');
-    if (picked == null) return;
-    setState(() => _busy = true);
-    try {
-      await Api.setSiteRoute('${site['name']}', picked);
-      setState(() => site['route'] = picked);
-      _snack('Site route set.');
     } catch (e) {
       _snack(humanError(e));
     } finally {
@@ -489,7 +334,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               customer: c['name'] as String,
               locationCaptured: _locationCaptured),
           const SizedBox(height: 16),
-          _sitesSection(),
+          SitesSection(customer: c['name'] as String),
           const SizedBox(height: 16),
           if (Session.I.company != 'Manna Tyre Retreads') ...[
             FilledButton.tonalIcon(

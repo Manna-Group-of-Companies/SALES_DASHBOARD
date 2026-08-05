@@ -9,6 +9,7 @@ import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/sites_section.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/widgets/route_picker.dart';
 import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
@@ -208,6 +209,12 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                       padding: EdgeInsets.all(12),
                       child: Text('Take Order from Lead')),
                 )),
+            const SizedBox(height: 12),
+            // A lead can have several premises before it is ever converted —
+            // a shop and a godown are two drops on two runs. Captured here so
+            // the routes are already right on the day it becomes a customer,
+            // rather than being redone from scratch afterwards.
+            SitesSection(lead: l['name'] as String),
             const SizedBox(height: 12),
             const Text('Lead Orders',
                 style: TextStyle(fontWeight: FontWeight.bold)),

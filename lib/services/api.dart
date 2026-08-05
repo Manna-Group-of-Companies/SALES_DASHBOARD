@@ -2980,12 +2980,28 @@ class Api {
     throw Exception(_frappeError(r));
   }
 
+  /// Removes a site captured by mistake — the wrong premises, or a duplicate
+  /// of one already on the list.
+  ///
+  /// Deleted rather than disabled: a site that was never a real drop should not
+  /// keep appearing in a route list for somebody to plan a van around.
+  static Future<void> deleteSite(String name) async {
+    final r = await Session.I.dio
+        .delete('${_res('Customer Site')}/${Uri.encodeComponent(name)}');
+    if (r.statusCode != 200 && r.statusCode != 202) {
+      throw Exception(_frappeError(r));
+    }
+  }
+
   static Future<List<Map<String, dynamic>>> getPendingSiteVerifications() {
     final team = Session.I.teamReps;
     if (team.isEmpty) return Future.value([]);
     return _list('Customer Site',
+        // `lead` as well as `customer`: a site can belong to either, and a
+        // verification card headed by a blank customer tells the manager
+        // nothing about what they are approving.
         fields:
-        '["name","site_name","customer","captured_by","latitude","longitude","banner_photo"]',
+        '["name","site_name","customer","lead","captured_by","latitude","longitude","banner_photo"]',
         filters:
         '[["location_status","=","Pending Verification"],["captured_by","in",${_inList(team)}]]',
         orderBy: 'modified desc');

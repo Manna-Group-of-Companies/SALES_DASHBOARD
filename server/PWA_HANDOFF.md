@@ -458,6 +458,25 @@ screens still had one months after the migration.
 Deleting a route is refused by Frappe while anything points at it. That is
 correct behaviour; surface the refusal rather than pre-empting it.
 
+### Sites
+
+`Customer Site` holds the extra premises a party has beyond the one location
+used for check-in — a second shop, a godown, a yard across town.
+
+It hangs off **either** a customer or a lead: both `customer` and `lead` are
+Link fields and **neither is mandatory**, so exactly one is set. A lead can have
+several premises before it is ever converted, and capturing them early means the
+routes are already right on the day it becomes a customer.
+
+Each site carries its own `route`. A customer's warehouse may sit on an entirely
+different run from their office, so the route is **per site** and never
+inherited from the party. Fields: `site_name`, `customer`, `lead`, `route`,
+`latitude`, `longitude`, `verified_latitude`, `verified_longitude`,
+`location_status`, `captured_by`, `captured_on`, `banner_photo`.
+
+Site verification cards must read the **lead** when there is no customer, or the
+manager is asked to approve something headed by a blank name.
+
 ---
 
 ## 10. Gotchas that cost time

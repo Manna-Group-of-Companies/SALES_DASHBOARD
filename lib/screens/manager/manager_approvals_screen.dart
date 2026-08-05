@@ -53,8 +53,15 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
           image: r['custom_banner_photo']?.toString()));
     }
     for (final r in res[2]) {
-      out.add(Approval('Site: ${r['site_name']} (${r['customer']})', r['name'],
-          r['captured_by'], r['customer'], null, 'site',
+      // A site hangs off a customer or a lead, never both. Heading the card
+      // with a blank customer told the manager nothing about what they were
+      // being asked to approve.
+      final owner = '${r['customer'] ?? ''}'.isNotEmpty &&
+              '${r['customer']}' != 'null'
+          ? '${r['customer']}'
+          : '${r['lead'] ?? 'Lead'}';
+      out.add(Approval('Site: ${r['site_name']} ($owner)', r['name'],
+          r['captured_by'], owner, null, 'site',
           lat: r['latitude'], lng: r['longitude'],
           image: r['banner_photo']?.toString()));
     }
