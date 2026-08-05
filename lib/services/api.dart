@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'package:manna_field_sales/core/app_version.dart';
 import 'package:manna_field_sales/core/attendance_rules.dart';
 import 'package:manna_field_sales/core/auth_store.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
+import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
@@ -3095,7 +3097,55 @@ class Api {
     for (final it in items) {
       if ('${it['name']}' == itemRowName) it['custom_production_stage'] = stage;
     }
-    await _put('Sales Order', orderName, {'items': items});
+    await _put('Sales Order', orderName, {
+      'items': items,
+      // Rolled up to the order so the sales side can see it. Production moves
+      // stages per item; the manager's order list and review read the
+      // order-level field, and nothing was writing it — so an order in Curing
+      // still read "Not Started" to everyone outside the factory.
+      'custom_production_status': _rollUpStage(items),
+    });
+  }
+
+  /// One coarse status for a whole order, from its items' stages.
+  ///
+  /// `custom_production_status` is a Select and accepts only these four values,
+  /// so the per-item stage cannot be copied into it — writing "Curing" there is
+  /// rejected outright. That split is right anyway: the floor works in fine
+  /// stages, the sales side only needs to know whether an order has started,
+  /// is running, is ready, or has gone.
+  ///
+  /// Ready and Dispatched are decided by the **slowest** line — an order is not
+  /// ready to ship because one of its lines is packed. Started is decided by
+  /// the fastest: once the floor has touched anything, work is under way.
+  @visibleForTesting
+  static String rollUpStage(List<Map<String, dynamic>> items) =>
+      _rollUpStage(items);
+
+  static String _rollUpStage(List<Map<String, dynamic>> items) {
+    if (items.isEmpty) return 'Not Started';
+
+    var allDispatched = true;
+    var allPackedOrBetter = true;
+    var anyStarted = false;
+
+    for (final it in items) {
+      final stages = stagesForLabel(it['custom_product_category']);
+      final current = '${it['custom_production_stage'] ?? ''}';
+      // A stage no longer in the sequence counts as unknown rather than as
+      // finished, so revising the stage list cannot make an order look done.
+      final rank = current.isEmpty ? 0 : stageIndex(stages, current);
+      final effective = rank < 0 ? 0 : rank;
+
+      if (effective > 0) anyStarted = true;
+      if (current != kStageDispatched) allDispatched = false;
+      // "Packed" is the last stage before Dispatched in every family.
+      if (effective < stages.length - 2) allPackedOrBetter = false;
+    }
+
+    if (allDispatched) return 'Dispatched';
+    if (allPackedOrBetter) return 'Ready';
+    return anyStarted ? 'In Production' : 'Not Started';
   }
 
   /// The production manager moving a delivery date, forwards or back.

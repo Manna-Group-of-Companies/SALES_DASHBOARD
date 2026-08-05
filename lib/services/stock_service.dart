@@ -573,7 +573,6 @@ class StockService {
       final rows = await _list(kBatchDoctype,
           fields: '["qty","loose_belts"]',
           filters: '[["item_code","=","$itemCode"]]');
-      if (rows.isEmpty) return const _Shelf(0, 0, empty: true);
       var qty = 0.0;
       var belts = 0;
       for (final b in rows) {
@@ -582,7 +581,18 @@ class StockService {
         if (q > 0) qty += q;
         if (l > 0) belts += l;
       }
-      return _Shelf(qty, belts);
+      // "No usable batch record" means the rows hold nothing, not merely that
+      // there are none. Many items carry a batch row sitting at zero from the
+      // original import while their pool figure is what the office actually
+      // maintains — and the display already ignores empty batches. Reading a
+      // row that holds nothing as a shelf of nothing made the guard refuse
+      // orders the very same screen was offering.
+      //
+      // The cost of this: an item that genuinely sells out falls back to the
+      // threshold instead of reading zero. That is the pre-batch behaviour and
+      // is safe while nothing empties a batch — dispatch, which is what should,
+      // is not built. Revisit when it is.
+      return _Shelf(qty, belts, empty: qty <= 0 && belts <= 0);
     } catch (_) {
       // Treated as "no record", which falls back to the pool arithmetic rather
       // than refusing every order because one read failed.

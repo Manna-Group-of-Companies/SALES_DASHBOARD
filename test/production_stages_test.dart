@@ -5,8 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/models/product_category.dart';
+import 'package:manna_field_sales/services/api.dart';
 
 void main() {
+  _orderRollUp();
   group('Stage sequences', () {
     test('each family has its own cycle', () {
       final pctr = stagesFor(ProductCategory.pctr);
@@ -70,6 +72,92 @@ void main() {
       // already running must not quietly reset to "Not Started".
       expect(stageIndex(stages, 'Some Retired Stage'), -1);
       expect(stageProgress(stages, 'Some Retired Stage'), 0);
+    });
+  });
+}
+
+// The order-level status the sales side reads.
+//
+// Production moves stages per item; the manager's order list and review read a
+// single order-level field. Nothing was writing it, so an order the factory had
+// put into Curing still read "Not Started" to everyone outside the factory.
+void _orderRollUp() {
+  Map<String, dynamic> line(String category, String? stage) => {
+        'custom_product_category': category,
+        if (stage != null) 'custom_production_stage': stage,
+      };
+
+  group('Rolling item stages up to the order', () {
+    test('an untouched order reads Not Started', () {
+      expect(Api.rollUpStage([line('PCTR', null)]), 'Not Started');
+    });
+
+    test('a started line puts the order In Production', () {
+      expect(Api.rollUpStage([line('PCTR', 'Curing')]), 'In Production');
+    });
+
+    test('one packed line and one untouched is not Ready', () {
+      // Work has begun, so it is not Not Started — but calling it Ready while
+      // half the order has not been touched would be a lie to the sales side.
+      expect(
+          Api.rollUpStage([
+            line('PCTR', 'Packed'),
+            line('PCTR', null),
+          ]),
+          'In Production');
+    });
+
+    test('every line packed reads Ready', () {
+      expect(
+          Api.rollUpStage([
+            line('PCTR', 'Packed'),
+            line('CTR', 'Packed'),
+          ]),
+          'Ready');
+    });
+
+    test('every line dispatched reads Dispatched', () {
+      expect(
+          Api.rollUpStage([
+            line('PCTR', kStageDispatched),
+            line('CTR', kStageDispatched),
+          ]),
+          'Dispatched');
+    });
+
+    test('one line still packed keeps the order off Dispatched', () {
+      expect(
+          Api.rollUpStage([
+            line('PCTR', kStageDispatched),
+            line('CTR', 'Packed'),
+          ]),
+          'Ready');
+    });
+
+    test('a retired stage does not make an order look Ready', () {
+      // A stage revised out of the sequence counts as unknown, not finished,
+      // so it holds the order back rather than letting it read Ready.
+      expect(
+          Api.rollUpStage([
+            line('PCTR', 'Some Retired Stage'),
+            line('PCTR', 'Packed'),
+          ]),
+          'In Production');
+    });
+
+    test('an order with no lines is Not Started, not blank', () {
+      expect(Api.rollUpStage(const []), 'Not Started');
+    });
+
+    test('only the four Select values are ever produced', () {
+      // custom_production_status is a Select; anything else is rejected by
+      // Frappe and the stage update fails outright.
+      const allowed = {'Not Started', 'In Production', 'Ready', 'Dispatched'};
+      for (final s in ['Compound Mixing', 'Extrusion', 'Curing', 'Trimming',
+        'Quality Check', 'Packed', kStageDispatched, '', 'Nonsense']) {
+        expect(allowed, contains(Api.rollUpStage([line('PCTR', s)])),
+            reason: 'stage "" produced a value the field will not accept');
+      }
     });
   });
 }

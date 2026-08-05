@@ -342,6 +342,75 @@ void main() {
     });
   });
 
+  group('A batch row holding nothing is not a shelf of nothing', () {
+    // The bug: many items carry a batch row sitting at zero from the original
+    // import, while the pool figure is what the office maintains. The screen
+    // ignores empty batches and fell back to the pool — showing 10 available —
+    // while the guard saw a row and read zero, refusing an order the very same
+    // screen was offering.
+    test('an empty batch row falls back to the pool, as the screen does',
+        () async {
+      fake.seedPool('PCTR-100', qty: 10);
+      fake.seedBatch('PCTR-100', qty: 0);
+
+      await StockService.book(
+          itemCode: 'PCTR-100',
+          qty: 4,
+          belts: 0,
+          order: const OrderRef('SO-1'));
+
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 4);
+    });
+
+    test('and the pool limit still binds', () async {
+      fake.seedPool('PCTR-100', qty: 10);
+      fake.seedBatch('PCTR-100', qty: 0);
+
+      await expectLater(
+        StockService.book(
+            itemCode: 'PCTR-100', qty: 11, belts: 0, order: const OrderRef('SO-1')),
+        throwsA(isA<StockUnavailable>()),
+      );
+    });
+
+    test('a batch that holds something is still the truth', () async {
+      // The fallback must not swallow a real shelf figure that is larger than
+      // the threshold — that was the whole point of reading batches.
+      fake.seedPool('PCTR-100', qty: 10);
+      fake.seedBatch('PCTR-100', qty: 27);
+
+      await StockService.book(
+          itemCode: 'PCTR-100',
+          qty: 20,
+          belts: 0,
+          order: const OrderRef('SO-1'));
+
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 20);
+    });
+
+    test('releasing then re-booking the same line succeeds', () async {
+      // What the sales manager actually hit: switch a line to New Production,
+      // then back to minimum stock.
+      fake.seedPool('PCTR-100', qty: 10);
+      fake.seedBatch('PCTR-100', qty: 0);
+
+      await StockService.book(
+          itemCode: 'PCTR-100',
+          qty: 1,
+          belts: 0,
+          order: const OrderRef('SO-1'));
+      await StockService.release(const OrderRef('SO-1'));
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 0);
+
+      await StockService.book(
+          itemCode: 'PCTR-100',
+          qty: 1,
+          belts: 0,
+          order: const OrderRef('SO-1'));
+      expect(fake.pools['PCTR-100']!['custom_reserved_qty'], 1);
+    });
+  });
+
   group('Booked belts have already cost a roll', () {
     // BLACK PEARL 120 AJAX 69, from the field: 4 rolls at 10 belts each, Jaimon
     // holding 3 rolls and 2 belts. Those 2 belts came out of the fourth roll,
