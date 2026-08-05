@@ -8,7 +8,12 @@ import 'package:manna_field_sales/widgets/offline_banner.dart';
 class HistoryList extends StatefulWidget {
   final String title;
   final Future<List<Map<String, dynamic>>> Function() loader;
-  final Widget Function(BuildContext, Map<String, dynamic>) tileBuilder;
+
+  /// Builds one row. The third argument reloads the list — a tile that deletes
+  /// or edits its own row needs it, and the list owns the future so it cannot
+  /// be reached any other way.
+  final Widget Function(
+      BuildContext, Map<String, dynamic>, VoidCallback reload) tileBuilder;
 
   /// The cache key [loader] reads through, so the list can say when it is
   /// showing data from the last sync rather than from now. Omit for a loader
@@ -32,6 +37,8 @@ class _HistoryListState extends State<HistoryList> {
     super.initState();
     _future = widget.loader();
   }
+
+  void _reload() => setState(() { _future = widget.loader(); });
 
   bool _match(Map<String, dynamic> r) {
     if (_q.isEmpty) return true;
@@ -98,7 +105,7 @@ class _HistoryListState extends State<HistoryList> {
                   child: ListView.separated(
                     itemCount: rows.length,
                     separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (ctx, i) => widget.tileBuilder(ctx, rows[i]),
+                    itemBuilder: (ctx, i) => widget.tileBuilder(ctx, rows[i], _reload),
                   ),
                 ),
               ]);

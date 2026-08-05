@@ -13,7 +13,7 @@ class MyCollectionsScreen extends StatelessWidget {
       title: 'My Collections',
       loader: Api.getMyCollections,
       cacheKey: CacheKeys.collections,
-      tileBuilder: (ctx, r) => ListTile(
+      tileBuilder: (ctx, r, _) => ListTile(
         leading: const Icon(Icons.payments),
         title: Text(r['customer'] ?? r['name']),
         subtitle: Text(

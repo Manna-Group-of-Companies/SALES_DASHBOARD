@@ -1635,8 +1635,13 @@ class Api {
     return _cachedRows(
         CacheKeys.leads,
         () => _list('Lead',
+            // The location fields belong here even though the list does not
+            // draw them. The detail screen is built from this row, so leaving
+            // them out made a captured location vanish the moment a rep left
+            // the screen and came back — it read the absent status as "Not
+            // Captured" and asked them to do it again.
             fields:
-                '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status"]',
+                '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status","custom_location_status","custom_latitude","custom_longitude","custom_verified_latitude","custom_verified_longitude"]',
             filters: filters,
             orderBy: 'creation desc'));
   }
@@ -3150,6 +3155,75 @@ class Api {
       decode: (j) => (j as List? ?? []).map((e) => '$e').toList(),
     );
     return cached.value;
+  }
+
+  /// Removes a visit the rep logged by mistake.
+  ///
+  /// Deleted rather than cancelled: a visit recorded against the wrong shop is
+  /// not a thing that happened, and leaving it as a cancelled row would still
+  /// count it on the day map and in the visit totals.
+  static Future<void> deleteVisit(String name) async {
+    final r = await Session.I.dio
+        .delete('${_res('Sales Visit')}/${Uri.encodeComponent(name)}');
+    if (r.statusCode != 200 && r.statusCode != 202) {
+      throw Exception(_frappeError(r));
+    }
+    await OfflineCache.clear();
+  }
+
+  /// The rep's own routes, with enough detail to manage them.
+  static Future<List<Map<String, dynamic>>> getMySalesRoutes() {
+    final rep = Session.I.salesPerson;
+    if (rep == null || rep.isEmpty) return Future.value([]);
+    return _list('Sales Route',
+        fields: '["name","route_name","sales_person","is_active","visit_day"]',
+        filters: '[["sales_person","=","$rep"]]',
+        orderBy: 'route_name asc');
+  }
+
+  /// Adds a route for this rep.
+  ///
+  /// Named `Rep - Area`, which is the convention every existing route already
+  /// follows and what makes a route list readable when a manager sees several
+  /// reps' routes at once. The rep supplies the area only; prefixing their own
+  /// name is not their job to remember.
+  static Future<String> createSalesRoute(String area) async {
+    final rep = Session.I.salesPerson;
+    if (rep == null || rep.isEmpty) {
+      throw Exception('No sales person linked to this login.');
+    }
+    final trimmed = area.trim();
+    if (trimmed.isEmpty) throw Exception('Enter an area name.');
+
+    final name = trimmed.startsWith('$rep -') ? trimmed : '$rep - $trimmed';
+    final r = await Session.I.dio.post(_res('Sales Route'), data: {
+      'route_name': name,
+      'sales_person': rep,
+      'is_active': 1,
+    });
+    if (r.statusCode != 200 && r.statusCode != 201) {
+      throw Exception(_frappeError(r));
+    }
+    // The route list is cached for offline use, so it has to be dropped or the
+    // rep adds a route and cannot see it.
+    await OfflineCache.clear();
+    return '${r.data['data']['name']}';
+  }
+
+  /// Removes a route.
+  ///
+  /// Frappe refuses this while any customer, lead or site still points at it,
+  /// which is the behaviour we want — deleting a route out from under a
+  /// customer would leave production with nothing to plan a delivery by. The
+  /// refusal surfaces as a readable message rather than being pre-empted here,
+  /// because the app cannot see every doctype that might link to it.
+  static Future<void> deleteSalesRoute(String name) async {
+    final r = await Session.I.dio
+        .delete('${_res('Sales Route')}/${Uri.encodeComponent(name)}');
+    if (r.statusCode != 200 && r.statusCode != 202) {
+      throw Exception(_frappeError(r));
+    }
+    await OfflineCache.clear();
   }
 
   /// Updates the details a rep can correct in the field.

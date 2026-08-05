@@ -136,28 +136,28 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
                 controller: _company,
                 textCapitalization: TextCapitalization.words,
                 decoration: const InputDecoration(
-                    labelText: 'Company (optional)',
+                    labelText: 'Company',
                     border: OutlineInputBorder())),
             const SizedBox(height: 14),
             TextField(
                 controller: _mobile,
                 keyboardType: TextInputType.phone,
                 decoration: const InputDecoration(
-                    labelText: 'Mobile (optional)',
+                    labelText: 'Mobile',
                     border: OutlineInputBorder())),
             const SizedBox(height: 14),
             TextField(
                 controller: _email,
                 keyboardType: TextInputType.emailAddress,
                 decoration: const InputDecoration(
-                    labelText: 'Email (optional)',
+                    labelText: 'Email',
                     border: OutlineInputBorder())),
             const SizedBox(height: 14),
             TextField(
                 controller: _gstin,
                 textCapitalization: TextCapitalization.characters,
                 decoration: const InputDecoration(
-                    labelText: 'GST number (optional)',
+                    labelText: 'GST number',
                     border: OutlineInputBorder())),
             const SizedBox(height: 14),
             TextField(
@@ -166,14 +166,14 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
                 maxLines: 3,
                 textCapitalization: TextCapitalization.words,
                 decoration: const InputDecoration(
-                    labelText: 'Address (optional)',
+                    labelText: 'Address',
                     border: OutlineInputBorder())),
             const SizedBox(height: 14),
             DropdownButtonFormField<String>(
               value: _terms,
               isExpanded: true,
               decoration: const InputDecoration(
-                  labelText: 'Terms of payment (optional)',
+                  labelText: 'Terms of payment',
                   border: OutlineInputBorder()),
               items: terms
                   .map((t) => DropdownMenuItem(value: t, child: Text(t)))

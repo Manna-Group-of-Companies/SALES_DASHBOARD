@@ -13,6 +13,7 @@ import 'package:manna_field_sales/screens/attendance/attendance_calendar_screen.
 import 'package:manna_field_sales/screens/attendance/regularization_approvals_screen.dart';
 import 'package:manna_field_sales/screens/auth/login_screen.dart';
 import 'package:manna_field_sales/screens/customers/customer_list_screen.dart';
+import 'package:manna_field_sales/screens/customers/routes_screen.dart';
 import 'package:manna_field_sales/screens/history/my_collections_screen.dart';
 import 'package:manna_field_sales/screens/history/my_orders_screen.dart';
 import 'package:manna_field_sales/screens/history/my_visits_screen.dart';
@@ -473,6 +474,9 @@ class _HomeDashboardState extends State<HomeDashboard>
             () => _go(const UnsentOrdersScreen())),
       if (isRep) ...[
         _Tile('Customers', Icons.store, () => _go(const CustomerListScreen())),
+        // Reachable from the route filters too, but a rep setting up their
+        // patch for the first time is not filtering anything yet.
+        _Tile('My Routes', Icons.alt_route, () => _go(const RoutesScreen())),
         _Tile('Leads', Icons.emoji_objects, () => _go(const LeadsScreen())),
         _Tile('My Visits', Icons.location_on, () => _go(const MyVisitsScreen())),
         _Tile('My Orders', Icons.shopping_cart,

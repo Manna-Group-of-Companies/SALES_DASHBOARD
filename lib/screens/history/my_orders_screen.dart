@@ -15,7 +15,7 @@ class MyOrdersScreen extends StatelessWidget {
       title: 'My Orders',
       loader: Api.getMyOrders,
       cacheKey: CacheKeys.orders,
-      tileBuilder: (ctx, r) {
+      tileBuilder: (ctx, r, _) {
         final isLead = r['is_lead'] == true;
         final dd = '${r['delivery_date'] ?? ''}';
         final ddText =
