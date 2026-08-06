@@ -10,6 +10,7 @@ import 'package:manna_field_sales/core/auth_store.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
+import 'package:manna_field_sales/core/proximity.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
@@ -1330,6 +1331,88 @@ class Api {
             '["name","lead_name","company_name","territory","status","custom_latitude","custom_longitude","custom_location_status"]',
         filters: '[${f.join(',')}]',
         orderBy: 'lead_name asc');
+  }
+
+  /// Leads and customers already on record within [radiusMetres] of a point.
+  ///
+  /// Deliberately unfiltered by rep: the whole point is to catch the shop a
+  /// *different* rep already raised, so narrowing this to the caller's own
+  /// records would find nothing and report all-clear. Reps can read every lead
+  /// and customer, so this sees the same ground the office does.
+  ///
+  /// Two stages, because neither alone is right. The backend narrows by a
+  /// latitude/longitude box, which SQL can do against an index; the box is a
+  /// square around a circle, so it over-selects the corners. The exact
+  /// haversine distance then trims it back to a true radius here.
+  ///
+  /// Throws rather than returning empty if the query fails. An empty list means
+  /// "nothing is nearby", and a lookup that could not run must never be able to
+  /// say that — see the callers, which refuse to proceed on an error.
+  static Future<List<NearbyPlace>> nearbyPlaces({
+    required double lat,
+    required double lng,
+    double radiusMetres = kDuplicateRadiusMetres,
+    Set<String> exclude = const {},
+  }) async {
+    if (!isRealCoordinate(lat, lng)) {
+      throw Exception('No usable GPS fix — cannot check what is nearby.');
+    }
+    final dLat = latSpanForMetres(radiusMetres);
+    final dLng = lngSpanForMetres(radiusMetres, lat);
+    String box(String latField, String lngField) => '["$latField",">=",'
+        '${lat - dLat}],["$latField","<=",${lat + dLat}],'
+        '["$lngField",">=",${lng - dLng}],["$lngField","<=",${lng + dLng}]';
+
+    final results = await Future.wait([
+      _list('Lead',
+          fields: '["name","lead_name","company_name","custom_sales_person",'
+              '"custom_latitude","custom_longitude"]',
+          filters: '[${box('custom_latitude', 'custom_longitude')}]',
+          orderBy: 'modified desc'),
+      _list('Customer',
+          fields: '["name","customer_name","custom_assigned_reps",'
+              '"custom_latitude","custom_longitude"]',
+          filters: '[${box('custom_latitude', 'custom_longitude')}]',
+          orderBy: 'modified desc'),
+    ]);
+
+    double n(dynamic v) =>
+        v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
+
+    NearbyPlace? place(Map<String, dynamic> d, String kind) {
+      final la = n(d['custom_latitude']), lo = n(d['custom_longitude']);
+      // A record whose coordinates were never captured reads as (0, 0), which
+      // is a real point in the Atlantic. Skipped rather than measured.
+      if (!isRealCoordinate(la, lo)) return null;
+      final label = '${d[kind == 'Lead' ? 'lead_name' : 'customer_name'] ?? ''}'
+          .trim();
+      return NearbyPlace(
+        name: '${d['name']}',
+        label: label.isEmpty ? '${d['name']}' : label,
+        kind: kind,
+        owner: '${d[kind == 'Lead' ? 'custom_sales_person' : 'custom_assigned_reps'] ?? ''}'
+            .trim(),
+        metres: metresBetween(lat, lng, la, lo),
+      );
+    }
+
+    final makers = <NearbyPlace Function()>[];
+    for (final d in results[0]) {
+      final p = place(d, 'Lead');
+      if (p != null) makers.add(() => p);
+    }
+    for (final d in results[1]) {
+      final p = place(d, 'Customer');
+      if (p != null) makers.add(() => p);
+    }
+
+    return placesWithin(
+      lat: lat,
+      lng: lng,
+      radiusMetres: radiusMetres,
+      candidates: makers,
+      excludeNames: exclude,
+    );
   }
 
   static Future<String> createCustomer({

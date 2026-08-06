@@ -6,6 +6,7 @@ import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
+import 'package:manna_field_sales/widgets/proximity_gate.dart';
 
 class VisitPunchCard extends StatefulWidget {
   final String? customer;
@@ -62,6 +63,21 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
     _snack('Getting GPS...');
     try {
       final pos = await getCurrentLocation();
+      // Leads only. Established customers genuinely sit close together in a
+      // town, and blocking a rep from starting a visit at a shop they already
+      // sell to would stop real work to prevent a duplicate that cannot happen
+      // — the customer is already on record.
+      if (widget.lead != null) {
+        if (!mounted) return;
+        final clear = await ensureNothingNearby(
+          context,
+          lat: pos.latitude,
+          lng: pos.longitude,
+          subject: 'start a visit',
+          exclude: {widget.lead!},
+        );
+        if (!clear || !mounted) return;
+      }
       await Api.punchInVisit(
           customer: widget.customer,
           lead: widget.lead,

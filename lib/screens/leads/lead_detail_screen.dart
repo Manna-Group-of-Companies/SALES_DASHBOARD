@@ -14,6 +14,7 @@ import 'package:manna_field_sales/widgets/sites_section.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/widgets/route_picker.dart';
 import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
+import 'package:manna_field_sales/widgets/proximity_gate.dart';
 import 'package:manna_field_sales/widgets/visit_punch_card.dart';
 
 class LeadDetailScreen extends StatefulWidget {
@@ -53,15 +54,30 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
 
   /// One-time location capture for the lead. This never logs a visit —
   /// punching in on the visit card is the only thing that creates a visit.
+  ///
+  /// GPS and the duplicate check come before the photo on purpose. Asking a rep
+  /// to photograph a shopfront and only then telling them the shop is already
+  /// on record wastes the one part of this that costs them time.
   Future<void> _capture() async {
     final rep = Session.I.salesPerson;
     if (rep == null) return _snack('No rep linked to this login.');
-    final img = await pickPhoto(context, title: 'Location / banner photo');
-    if (img == null) return _snack('A location/banner photo is required.');
     setState(() => _busy = true);
     _snack('Getting GPS...');
     try {
       final pos = await getCurrentLocation();
+      if (!mounted) return;
+      // The lead being captured sits at zero metres from itself, so it is
+      // excluded — otherwise the first capture would always block.
+      final clear = await ensureNothingNearby(
+        context,
+        lat: pos.latitude,
+        lng: pos.longitude,
+        subject: 'put this lead on the map',
+        exclude: {_l['name'] as String},
+      );
+      if (!clear || !mounted) return;
+      final img = await pickPhoto(context, title: 'Location / banner photo');
+      if (img == null) return _snack('A location/banner photo is required.');
       await Api.captureLeadLocation(
         lead: _l['name'] as String,
         salesPerson: rep,
