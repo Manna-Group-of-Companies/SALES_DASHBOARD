@@ -3231,6 +3231,87 @@ class Api {
     return cached.value;
   }
 
+  /// Fills in the packing details an Item was imported without.
+  ///
+  /// A rep standing in front of the product knows what a roll weighs and how
+  /// many belts come off it; waiting for the office to fill that in is a sale
+  /// lost. So they can supply it once, here.
+  ///
+  /// **Only ever sends fields that are currently empty.** A packing figure that
+  /// has been set is not editable from the app at all — it decides what the
+  /// customer is charged, and a number that can be changed after orders have
+  /// been priced against it is a number nobody can reconcile. Corrections go
+  /// through Desk.
+  ///
+  /// Returns the fields that were actually written, so the caller can update
+  /// its copy without a re-fetch.
+  static Future<Map<String, dynamic>> saveItemPacking({
+    required String itemCode,
+    double? weightPerRoll,
+    int? beltsPerRoll,
+    double? packLitres,
+  }) async {
+    // Re-read rather than trusting the caller's copy: another rep may have
+    // filled the same item in since this screen loaded, and their figure wins.
+    final r = await Session.I.dio
+        .get('${_res('Item')}/${Uri.encodeComponent(itemCode)}');
+    final doc = (r.data is Map) ? r.data['data'] : null;
+    if (doc is! Map) throw Exception('Could not read $itemCode.');
+
+    double num0(dynamic v) =>
+        v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
+
+    final body = <String, dynamic>{};
+    if (weightPerRoll != null &&
+        weightPerRoll > 0 &&
+        num0(doc['custom_weight_per_roll']) <= 0) {
+      body['custom_weight_per_roll'] = weightPerRoll;
+    }
+    if (beltsPerRoll != null &&
+        beltsPerRoll > 0 &&
+        num0(doc['custom_belts_per_roll']) <= 0) {
+      body['custom_belts_per_roll'] = beltsPerRoll;
+    }
+    if (packLitres != null &&
+        packLitres > 0 &&
+        num0(doc['custom_pack_litres']) <= 0) {
+      body['custom_pack_litres'] = packLitres;
+    }
+    // What the item ends up with either way: whatever was already on it, plus
+    // whatever this rep is adding. Returned even when there is nothing to
+    // write, so a row that lost the race still prices off the winner's figures
+    // instead of sitting there claiming the item is incomplete.
+    final effective = <String, dynamic>{
+      for (final f in const [
+        'custom_weight_per_roll',
+        'custom_belts_per_roll',
+        'custom_pack_litres',
+      ])
+        if (num0(doc[f]) > 0) f: doc[f],
+      ...body,
+    };
+
+    if (body.isEmpty) return effective;
+
+    try {
+      await _put('Item', itemCode, body);
+    } on DioException catch (e) {
+      // Reps are read-only on Item under stock ERPNext permissions. Said in
+      // terms of what to do about it, because the rep cannot grant it and
+      // needs to know who can.
+      if (e.response?.statusCode == 403) {
+        throw Exception('Your login cannot edit the product master. Ask the '
+            'office to add the packing details, or to give your role write '
+            'access to Item.');
+      }
+      rethrow;
+    }
+    // The catalogue is cached for offline use; a stale copy would keep telling
+    // the rep the item is incomplete.
+    await OfflineCache.clear();
+    return effective;
+  }
+
   /// Removes a visit the rep logged by mistake.
   ///
   /// Deleted rather than cancelled: a visit recorded against the wrong shop is

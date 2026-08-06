@@ -186,8 +186,11 @@ void main() {
     expect(find.text('Rs 4400.00'), findsOneWidget);
   });
 
-  testWidgets('a misconfigured item is called out instead of priced at zero',
+  testWidgets('an incomplete item offers to be completed, not just refused',
       (tester) async {
+    // It must still not be orderable — the arithmetic has no answer without
+    // the belt count — but the block is something the rep can clear rather
+    // than a message telling them to go and ask the office.
     await tester.pumpWidget(_host(ProductRow(
       line: OrderLine(
           product: Product({
@@ -200,7 +203,39 @@ void main() {
       onChanged: () {},
     )));
 
-    expect(find.textContaining('missing its packing details'), findsOneWidget);
+    expect(find.textContaining('Packing details needed'), findsOneWidget);
     expect(find.text('Rolls'), findsNothing);
+    // Names only what is actually missing — the roll weight is already set.
+    expect(find.textContaining('belts per roll'), findsOneWidget);
+    expect(find.textContaining('weight of one roll'), findsNothing);
+  });
+
+  testWidgets('an item missing everything asks for everything', (tester) async {
+    await tester.pumpWidget(_host(ProductRow(
+      line: OrderLine(
+          product: Product({
+        'name': 'PCTR-EMPTY',
+        'item_name': 'Precured, not imported',
+        'item_group': 'Precured',
+      })),
+      stock: null,
+      onChanged: () {},
+    )));
+
+    expect(find.textContaining('weight of one roll'), findsOneWidget);
+    expect(find.textContaining('belts per roll'), findsOneWidget);
+  });
+
+  testWidgets('a complete item offers no packing prompt at all', (tester) async {
+    // Once set, a packing figure is not editable from the app — it decides
+    // what customers are charged.
+    await tester.pumpWidget(_host(ProductRow(
+      line: OrderLine(product: _pctr()),
+      stock: null,
+      onChanged: () {},
+    )));
+
+    expect(find.textContaining('Packing details needed'), findsNothing);
+    expect(find.text('Rolls'), findsOneWidget);
   });
 }

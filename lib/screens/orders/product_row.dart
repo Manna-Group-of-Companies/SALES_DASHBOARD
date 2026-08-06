@@ -10,8 +10,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
+import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart'
     show lastSoldLabel;
 
@@ -50,6 +52,7 @@ class ProductRow extends StatefulWidget {
 
 class _ProductRowState extends State<ProductRow> {
   late final TextEditingController _rate;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -57,6 +60,139 @@ class _ProductRowState extends State<ProductRow> {
     _rate = TextEditingController(
         text: widget.line.rate > 0 ? trimQty(widget.line.rate) : '');
   }
+
+  /// Collects the packing figures this item was imported without, and writes
+  /// them once.
+  ///
+  /// Only the missing ones are asked for. A figure already on the item is not
+  /// offered for editing here at all — it decides what customers are charged,
+  /// and a number that can be revised after orders have been priced against it
+  /// is one nobody can reconcile later. Corrections go through Desk.
+  Future<void> _collectPacking() async {
+    final rollCtrl = TextEditingController();
+    final beltsCtrl = TextEditingController();
+    final litresCtrl = TextEditingController();
+
+    final needsRoll = (p.category == ProductCategory.pctr ||
+            p.category == ProductCategory.ctr) &&
+        p.weightPerRoll <= 0;
+    final needsBelts =
+        p.category == ProductCategory.pctr && p.beltsPerRoll <= 0;
+    final needsLitres =
+        p.category == ProductCategory.vulcanizingSolution && p.packLitres <= 0;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Packing details'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(p.name,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+                textAlign: TextAlign.center),
+            const SizedBox(height: 12),
+            if (needsRoll) ...[
+              TextField(
+                controller: rollCtrl,
+                autofocus: true,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Weight of one roll',
+                  suffixText: 'kg',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (needsBelts) ...[
+              TextField(
+                controller: beltsCtrl,
+                autofocus: !needsRoll,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(
+                  labelText: 'Belts per roll',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (needsLitres) ...[
+              TextField(
+                controller: litresCtrl,
+                autofocus: true,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Litres per tin',
+                  suffixText: 'L',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            const Text(
+              'This is what the product is priced by, and it cannot be changed '
+              'from the app once saved. Check it before you save.',
+              style: TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save')),
+        ],
+      ),
+    );
+
+    if (ok != true || !mounted) return;
+
+    final roll = double.tryParse(rollCtrl.text.trim());
+    final belts = int.tryParse(beltsCtrl.text.trim());
+    final litres = double.tryParse(litresCtrl.text.trim());
+
+    if ((needsRoll && (roll == null || roll <= 0)) ||
+        (needsBelts && (belts == null || belts <= 0)) ||
+        (needsLitres && (litres == null || litres <= 0))) {
+      _snack('Enter every figure before saving.');
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final written = await Api.saveItemPacking(
+        itemCode: p.code,
+        weightPerRoll: needsRoll ? roll : null,
+        beltsPerRoll: needsBelts ? belts : null,
+        packLitres: needsLitres ? litres : null,
+      );
+      // Applied to the in-memory item so the row prices immediately, rather
+      // than making the rep leave and come back.
+      p.doc.addAll(written);
+      widget.onChanged();
+      // Another rep can have filled the same item in between this screen
+      // loading and this save. Theirs stands, and the rep is told so rather
+      // than being left to wonder why the row prices off a different number.
+      final kept = (needsRoll && written['custom_weight_per_roll'] != roll) ||
+          (needsBelts && written['custom_belts_per_roll'] != belts) ||
+          (needsLitres && written['custom_pack_litres'] != litres);
+      _snack(kept
+          ? 'Someone else filled this in first — their figures are being used.'
+          : 'Saved. This cannot be changed from the app.');
+    } catch (e) {
+      _snack(humanError(e));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  void _snack(String m) => ScaffoldMessenger.of(context)
+      .showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 5)));
 
   @override
   void dispose() {
@@ -137,9 +273,7 @@ class _ProductRowState extends State<ProductRow> {
         ],
         if (p.isMisconfigured) ...[
           const SizedBox(height: 6),
-          _warning(
-              'This product is missing its packing details. Ask the office to '
-              'complete the item master before ordering it.'),
+          _packingPrompt(),
         ] else ...[
           const SizedBox(height: 8),
           _inputs(),
@@ -369,6 +503,63 @@ class _ProductRowState extends State<ProductRow> {
         widget.onChanged();
       },
     );
+  }
+
+  /// What an incomplete item offers instead of a dead end.
+  ///
+  /// The rep is standing in front of the product; the office is not. Asking
+  /// them to wait for a master to be filled in loses the sale, so they fill it
+  /// in. It still cannot be ordered until they do — the arithmetic has no
+  /// answer without it — but the block is now something they can clear.
+  Widget _packingPrompt() => Material(
+        color: const Color(0xFFFFF3E0),
+        borderRadius: BorderRadius.circular(6),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: _saving ? null : _collectPacking,
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(Icons.edit_note, size: 18, color: Colors.orange.shade800),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Packing details needed — tap to add',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.orange.shade900)),
+                      const SizedBox(height: 2),
+                      Text(_missingLabel,
+                          style: TextStyle(
+                              fontSize: 11.5, color: Colors.orange.shade900)),
+                    ]),
+              ),
+              if (_saving)
+                const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+            ]),
+          ),
+        ),
+      );
+
+  /// Which figures this family still owes, in the rep's words.
+  String get _missingLabel {
+    final p = widget.line.product;
+    final missing = <String>[
+      if (p.category == ProductCategory.pctr ||
+          p.category == ProductCategory.ctr)
+        if (p.weightPerRoll <= 0) 'weight of one roll',
+      if (p.category == ProductCategory.pctr)
+        if (p.beltsPerRoll <= 0) 'belts per roll',
+      if (p.category == ProductCategory.vulcanizingSolution)
+        if (p.packLitres <= 0) 'litres per tin',
+    ];
+    return 'Needs the ${missing.join(' and the ')}.';
   }
 
   Widget _warning(String text) => Container(
