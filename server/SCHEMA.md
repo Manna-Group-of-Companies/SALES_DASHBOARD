@@ -328,10 +328,13 @@ app calls them.
 | --- | --- | --- |
 | `custom_units` | Small Text | Pipe-wrapped list of units that sell this item, e.g. `\|Manna Treads\|Manna Tyres UAE\|` |
 
-Matches the convention `Customer.custom_assigned_reps` already uses. **Empty
-means every unit sees the item**, which is the state all 218 existing items are
-in — so an incomplete import degrades to the old behaviour rather than to an
-empty product list.
+Pipe-wrapped rather than a Link because one item can be sold by several units.
+(`Customer.custom_assigned_reps` used to follow the same convention; it is a
+Link to Sales Person now, so it is no longer the example to copy.)
+
+**Empty means every unit sees the item**, which is the state all 218 existing
+items are in — so an incomplete import degrades to the old behaviour rather
+than to an empty product list.
 
 The unit a rep belongs to is `Sales Person.custom_company`, which the app
 already reads into `Session.I.company`. The valid values are the three options

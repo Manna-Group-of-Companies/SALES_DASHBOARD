@@ -321,9 +321,13 @@ class Api {
   /// the sort of figure nobody should read off a stale screen unknowingly.
   static Future<Cached<List<Map<String, dynamic>>>> getCustomersCached() {
     final rep = Session.I.salesPerson;
+    // `custom_assigned_reps` is a Link to Sales Person now, holding a bare
+    // name. It used to be free text wrapped in pipes — "|Subhash|" — matched
+    // with a LIKE. That match cannot succeed against a Link value, so the
+    // customer list came back empty for every rep.
     final filters = (rep == null || rep.isEmpty)
         ? null
-        : '[["custom_assigned_reps","like","%|$rep|%"]]';
+        : '[["custom_assigned_reps","=","$rep"]]';
     return OfflineCache.read<List<Map<String, dynamic>>>(
       'customers:${rep ?? 'all'}',
       () => _list('Customer',
@@ -605,7 +609,9 @@ class Api {
       'custom_address': '${lead['custom_address'] ?? ''}',
       'custom_sales_route': '${lead['custom_sales_route'] ?? ''}',
       'custom_phone': '${lead['mobile_no'] ?? ''}',
-      'custom_assigned_reps': rep.isEmpty ? '' : '|$rep|',
+      // A Link field: the bare Sales Person name, or nothing. Writing the old
+      // "|Rep|" form would fail the link check outright.
+      if (rep.isNotEmpty) 'custom_assigned_reps': rep,
       // The shop location the rep captured against the lead should not have to
       // be captured again just because the record changed type.
       'custom_latitude': lead['custom_latitude'],
@@ -1045,11 +1051,11 @@ class Api {
   }
 
   // Rep's total outstanding = sum of outstanding across customers assigned to
-  // that rep (custom_assigned_reps is pipe-delimited, e.g. "|Subhash|").
+  // that rep. `custom_assigned_reps` is a Link to Sales Person.
   static Future<double> getRepOutstanding(String rep) async {
     final list = await _list('Customer',
         fields: '["custom_outstanding_balance"]',
-        filters: '[["custom_assigned_reps","like","%|$rep|%"]]',
+        filters: '[["custom_assigned_reps","=","$rep"]]',
         limit: 0);
     double t = 0;
     for (final e in list) {
@@ -1110,8 +1116,10 @@ class Api {
   ///
   /// Manna Treads, Manna Tyre Retreads and Manna Tyres UAE do not share a
   /// catalogue, and a rep shown another unit's products will eventually sell
-  /// one. The unit list lives on the Item as a pipe-wrapped string, matching
-  /// how `custom_assigned_reps` already works on Customer.
+  /// one. The unit list lives on the Item as a pipe-wrapped string — one item
+  /// can be sold by several units, so it cannot be a Link. (`custom_assigned_reps`
+  /// on Customer used to follow the same convention and is now a Link, so do
+  /// not take it as the example any more.)
   ///
   /// Filtering happens here rather than in the query because an item with no
   /// units set has to stay visible to everyone — that is the state every
@@ -1288,7 +1296,7 @@ class Api {
     }
 
     final res = await Future.wait([
-      pull('Customer', '[["custom_assigned_reps","like","%|$rep|%"]]'),
+      pull('Customer', '[["custom_assigned_reps","=","$rep"]]'),
       pull('Lead', '[["custom_sales_person","=","$rep"]]'),
     ]);
     return res
@@ -1336,7 +1344,7 @@ class Api {
       'customer_type': 'Company',
       'customer_group': group,
       'territory': territory,
-      'custom_assigned_reps': (rep != null && rep.isNotEmpty) ? '|$rep|' : '',
+      if (rep != null && rep.isNotEmpty) 'custom_assigned_reps': rep,
       'custom_location_status': 'Not Captured',
     };
     if (phone != null && phone.trim().isNotEmpty) {

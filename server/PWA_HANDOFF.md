@@ -423,6 +423,16 @@ A manager's team = every Sales Person whose `custom_team_manager` matches their
 `Sales User` has create/write/delete on `Sales Route` and create/write on
 `Manna Stock Reservation`.
 
+**A customer belongs to a rep through `Customer.custom_assigned_reps`** — a
+**Link to Sales Person**, holding a bare name. It was free text wrapped in
+pipes (`|Subhash|`) and matched with a LIKE; that changed under the app and
+every rep's customer list came back empty until the filters were switched to
+equality. If you find a `like "%|...|%"` against it anywhere, it is broken.
+
+`Item.custom_units` **is** still pipe-wrapped, because one item can be sold by
+several units. The two conventions no longer match — check which field you are
+looking at.
+
 **Minimum stock is a Manna Treads process.** Hide it entirely for Retreads and
 UAE rather than showing an empty list that invites questions about data that
 will never arrive.
