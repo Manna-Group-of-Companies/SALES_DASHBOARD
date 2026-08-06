@@ -16,7 +16,6 @@ class AddLeadScreen extends StatefulWidget {
 }
 
 class _AddLeadScreenState extends State<AddLeadScreen> {
-  late Future<List<String>> _terrFut;
   final _name = TextEditingController();
   final _company = TextEditingController();
   final _mobile = TextEditingController();
@@ -34,7 +33,6 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
   @override
   void initState() {
     super.initState();
-    _terrFut = Api.getRoutes();
     final l = widget.lead;
     _route = ((l?['custom_sales_route'] ?? '').toString().isEmpty ||
             '${l?['custom_sales_route']}' == 'null')
@@ -111,15 +109,13 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(_editing ? 'Edit Lead' : 'Add Lead')),
-      body: FutureBuilder<List<String>>(
-        future: _terrFut,
-        builder: (context, snap) {
-          final terrs = [...?snap.data];
-          // The saved value may not be in the list (still loading, or the
-          // territory was removed) — keep it selectable so it isn't lost.
-          if (_territory != null && !terrs.contains(_territory)) {
-            terrs.insert(0, _territory!);
-          }
+      // No Territory fetch. The territory dropdown went when routes moved to
+      // their own doctype; the query behind it stayed, pulling the whole
+      // Territory tree every time this screen opened for a list nothing drew.
+      // `_territory` is still carried through on save so editing a lead does
+      // not wipe whatever it already had.
+      body: Builder(
+        builder: (context) {
           final terms = ['Cash', 'Net 15', 'Net 30'];
           if (_terms != null && !terms.contains(_terms)) {
             terms.insert(0, _terms!);

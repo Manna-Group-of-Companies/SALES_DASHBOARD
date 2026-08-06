@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/trips/trip_detail_screen.dart';
+import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/trip_tracker.dart';
@@ -20,7 +21,10 @@ class _NewTripScreenState extends State<NewTripScreen> {
   bool _busy = false;
   String? _error;
 
-  // Route (Territory) the trip covers — same list the day map filters by.
+  // The Sales Route the trip covers — this rep's own runs, not the Territory
+  // tree. Territory is a sales hierarchy; a trip covers a delivery route, and
+  // the two drifted far enough apart that offering territories here had reps
+  // naming trips after something nobody plans by.
   List<String> _routes = [];
   String? _route;
   bool _loadingRoutes = true;
@@ -33,7 +37,9 @@ class _NewTripScreenState extends State<NewTripScreen> {
 
   Future<void> _loadRoutes() async {
     try {
-      final r = await Api.getRoutes();
+      // Scoped to this rep. A trip is one person's day, and a list of every
+      // route in the company is a list to scroll past rather than choose from.
+      final r = await Api.getSalesRoutes(forRep: Session.I.salesPerson);
       if (mounted) setState(() => _routes = r);
     } catch (_) {
       // A missing route list shouldn't stop the rep starting a trip.

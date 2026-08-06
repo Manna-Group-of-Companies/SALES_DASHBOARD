@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/leads/add_lead_screen.dart';
 import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
@@ -93,6 +94,44 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
     if (updated != null && mounted) setState(() => _l.addAll(updated));
   }
 
+  /// What this lead still owes before an order against it can be approved.
+  ///
+  /// Tapping it opens the edit form, because the point is to fix it now rather
+  /// than to be told about it.
+  Widget _missingCard(List<String> missing) => Card(
+        color: const Color(0xFFFFF1F0),
+        margin: EdgeInsets.zero,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: _busy ? null : _edit,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Row(children: [
+                Icon(Icons.report_problem_outlined,
+                    size: 18, color: Color(0xFFB3261E)),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text('Details missing',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+                Icon(Icons.edit, size: 16, color: Color(0xFFB3261E)),
+              ]),
+              const SizedBox(height: 6),
+              Text(
+                'You can take an order, but your manager cannot approve it '
+                'until this lead has: ${missing.join(', ')}.',
+                style: const TextStyle(fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 4),
+              const Text('Tap to fill them in.',
+                  style: TextStyle(fontSize: 12, color: Colors.black54)),
+            ]),
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final l = _l;
@@ -142,6 +181,13 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                 ].join('  ·  '),
                     style: const TextStyle(fontSize: 13, color: Colors.black54)),
               ),
+            // What the manager will refuse to approve on, said here instead of
+            // at the far end of the process. A rep standing in the shop can ask
+            // for the GST number; a rep back in the van two days later cannot.
+            if (missingLeadDetails(l).isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _missingCard(missingLeadDetails(l)),
+            ],
             const SizedBox(height: 16),
             Card(
               color: const Color(0xFFFFF3E0),

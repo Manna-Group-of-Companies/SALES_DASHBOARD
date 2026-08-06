@@ -84,6 +84,11 @@ class _OrderScreenState extends State<OrderScreen> {
 
   bool get _isEdit => widget.existingOrder != null;
 
+  /// What a lead is still missing before the manager can approve an order
+  /// against it. Empty for a customer, and for a complete lead.
+  List<String> get _leadMissing =>
+      widget.party.isLead ? missingLeadDetails(widget.party.doc) : const [];
+
   /// Whether the order as a whole has been approved. Before that a rep changes
   /// whatever they like — the manager has not looked at it yet, so there is
   /// nothing to protect. Afterwards, every change goes back to them.
@@ -543,6 +548,29 @@ class _OrderScreenState extends State<OrderScreen> {
         ],
       ),
       body: Column(children: [
+        // Said before the rep starts typing, not after they have built the
+        // order. It does not block: the order is still worth taking, and the
+        // rep may well be standing in front of the person who can supply the
+        // GST number.
+        if (_leadMissing.isNotEmpty)
+          Container(
+            width: double.infinity,
+            color: const Color(0xFFFFF1F0),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.report_problem_outlined,
+                  size: 16, color: Color(0xFFB3261E)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'This lead is missing its ${_leadMissing.join(', ').toLowerCase()}. '
+                  'You can take the order, but your manager cannot approve it '
+                  'until that is filled in.',
+                  style: const TextStyle(fontSize: 12.5, height: 1.35),
+                ),
+              ),
+            ]),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
           child: Column(children: [

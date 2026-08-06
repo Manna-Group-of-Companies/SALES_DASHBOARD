@@ -39,6 +39,12 @@ class _RoutesScreenState extends State<RoutesScreen> {
       SnackBar(content: Text(m), duration: const Duration(seconds: 5)));
 
   Future<void> _add() async {
+    final rep = Session.I.salesPerson;
+    if (rep == null || rep.isEmpty) {
+      _snack('No sales person linked to this login.');
+      return;
+    }
+
     final ctrl = TextEditingController();
     final area = await showDialog<String>(
       context: context,
@@ -49,18 +55,25 @@ class _RoutesScreenState extends State<RoutesScreen> {
             controller: ctrl,
             autofocus: true,
             textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(
-              labelText: 'Area',
-              hintText: 'e.g. Thrissur',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: 'Route',
+              // The rep's name is shown as a fixed prefix rather than typed.
+              // Every route in the system is named "Rep - Area", and a rep who
+              // has to remember that will eventually not — leaving one route
+              // sorted away from all their others.
+              prefixText: '$rep - ',
+              prefixStyle: const TextStyle(
+                  fontWeight: FontWeight.bold, color: Colors.black87),
+              hintText: 'Thrissur',
+              border: const OutlineInputBorder(),
             ),
             onSubmitted: (v) => Navigator.pop(ctx, v),
           ),
           const SizedBox(height: 8),
-          Text(
-              'Saved as "${Session.I.salesPerson ?? 'You'} - <area>", so your '
+          const Text(
+              'Type the area only — your name is added automatically so your '
               'routes stay together in every list.',
-              style: const TextStyle(fontSize: 12, color: Colors.black54)),
+              style: TextStyle(fontSize: 12, color: Colors.black54)),
         ]),
         actions: [
           TextButton(
