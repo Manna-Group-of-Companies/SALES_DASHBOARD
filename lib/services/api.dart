@@ -2070,6 +2070,28 @@ class Api {
   /// The order of the two matters. A reservation has to name the order it is
   /// held against, so the order has to exist first; the alternative is stock
   /// held against nothing, which nobody would ever notice was stranded.
+  /// Refuses to raise an order for a party with no delivery route.
+  ///
+  /// The screens check this before letting a rep start, which is where a rep
+  /// should meet it. This is the backstop: the route is what production is
+  /// given in place of the customer's name, so an order without one is one the
+  /// floor cannot deliver, and it must not be creatable through any path — an
+  /// unsent draft synced later, or a screen added in future that forgets.
+  static Future<void> _requireRoute(String doctype, String name) async {
+    final rows = await _list(doctype,
+        fields: '["name","custom_sales_route"]',
+        filters: '[["name","=","$name"]]',
+        limit: 1);
+    final route =
+        rows.isEmpty ? '' : '${rows.first['custom_sales_route'] ?? ''}'.trim();
+    if (route.isEmpty || route == 'null') {
+      throw Exception('No delivery route is set for this '
+          '${doctype == 'Lead' ? 'lead' : 'customer'}. '
+          'Set the route first — the factory has nothing else telling it where '
+          'the order goes.');
+    }
+  }
+
   static Future<String> placeOrder({
     required String customer,
     required String company,
@@ -2077,6 +2099,7 @@ class Api {
     required String deliveryDate,
     required List<Map<String, dynamic>> reservations,
   }) async {
+    await _requireRoute('Customer', customer);
     final name = await createSalesOrder(
         customer: customer,
         company: company,
@@ -2099,6 +2122,7 @@ class Api {
     required List<Map<String, dynamic>> reservations,
     required double total,
   }) async {
+    await _requireRoute('Lead', lead);
     final body = {
       'lead': lead,
       'sales_person': Session.I.salesPerson,
@@ -3157,16 +3181,18 @@ class Api {
 
   /// Where an order is going, as production should see it.
   ///
-  /// The Sales Route is the answer. Territory is only a fallback, and only
-  /// because the routes are still being created — a customer who has not been
-  /// put on one yet would otherwise reach the floor as "No route set" and
-  /// nobody could plan a van. Once every customer carries a route the fallback
-  /// stops being reached on its own.
+  /// The Sales Route, or nothing. Territory used to stand in when no route was
+  /// set, from a time when the routes were still being drawn up — but every
+  /// customer sits in the single territory "India", so what reached the floor
+  /// was "India (no route set)", which reads like a destination, sorts like a
+  /// destination, and tells nobody anything. A blank is more use than a
+  /// plausible wrong answer: it cannot be mistaken for somewhere to drive.
+  ///
+  /// New orders cannot be raised without a route at all — see [_requireRoute] —
+  /// so this only speaks for orders taken before that rule existed.
   static String destinationOf(Map<String, dynamic> customer) {
-    final route = '${customer['custom_sales_route'] ?? ''}';
+    final route = '${customer['custom_sales_route'] ?? ''}'.trim();
     if (route.isNotEmpty && route != 'null') return route;
-    final t = '${customer['territory'] ?? ''}';
-    if (t.isNotEmpty && t != 'null') return '$t (no route set)';
     return 'No route set';
   }
 

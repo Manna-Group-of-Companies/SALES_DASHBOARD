@@ -49,6 +49,22 @@ class OrderParty {
   /// for — the approval path differs, and they should know that before they
   /// start rather than when it is refused.
   String get kindLabel => isLead ? 'Lead' : 'Customer';
+
+  /// The delivery route this party sits on, blank when none is set.
+  String get salesRoute {
+    final r = '${doc['custom_sales_route'] ?? ''}'.trim();
+    return (r.isEmpty || r == 'null') ? '' : r;
+  }
+
+  /// An order cannot be taken without one.
+  ///
+  /// The route is the only thing production is given about where an order is
+  /// going — they never receive the customer's name. Without it the order
+  /// reaches the floor with nowhere to send it, and nobody downstream can put
+  /// it on a van. Everything else about a lead can be filled in later and is
+  /// caught at the manager's approval; this cannot, because by then the order
+  /// has already been made.
+  bool get hasRoute => salesRoute.isNotEmpty;
 }
 
 class OrderRef {

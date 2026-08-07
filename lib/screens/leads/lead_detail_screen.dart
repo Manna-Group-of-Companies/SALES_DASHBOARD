@@ -13,6 +13,7 @@ import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/sites_section.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/widgets/route_picker.dart';
+import 'package:manna_field_sales/widgets/route_required_gate.dart';
 import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
 import 'package:manna_field_sales/widgets/proximity_gate.dart';
 import 'package:manna_field_sales/widgets/visit_punch_card.dart';
@@ -260,12 +261,19 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                   // same products in the same units against the same minimum
                   // stock, so it takes the same order — the difference shows up
                   // once, at approval.
-                  onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) =>
-                              OrderScreen(party: OrderParty.lead(l))))
-                      .then((_) => _reload()),
+                  onPressed: () async {
+                    // A lead may be missing everything else and still be
+                    // ordered from — the manager catches the rest at approval.
+                    // The route is the exception: it cannot be added after the
+                    // order exists and has already reached the floor.
+                    final party = OrderParty.lead(l);
+                    if (!await ensureRouteSet(context, party)) return;
+                    if (!context.mounted) return;
+                    await Navigator.push(context,
+                        MaterialPageRoute(
+                            builder: (_) => OrderScreen(party: party)));
+                    _reload();
+                  },
                   icon: const Icon(Icons.add_shopping_cart),
                   label: const Padding(
                       padding: EdgeInsets.all(12),

@@ -11,6 +11,7 @@ import 'package:manna_field_sales/screens/complaints/complaint_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/route_required_gate.dart';
 import 'package:manna_field_sales/widgets/sites_section.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/map_service.dart';
@@ -338,8 +339,16 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           const SizedBox(height: 16),
           if (Session.I.company != 'Manna Tyre Retreads') ...[
             FilledButton.tonalIcon(
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => OrderScreen(party: OrderParty.customer(c)))),
+              // Checked before the order screen opens, not when it is saved.
+              // Refusing a full basket at the counter wastes the rep's time
+              // and the customer's.
+              onPressed: () async {
+                final party = OrderParty.customer(c);
+                if (!await ensureRouteSet(context, party)) return;
+                if (!context.mounted) return;
+                await Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => OrderScreen(party: party)));
+              },
               icon: const Icon(Icons.shopping_cart),
               label: const Padding(
                   padding: EdgeInsets.all(12), child: Text('New Order')),
