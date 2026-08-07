@@ -3,12 +3,54 @@
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 void main() {
   _orderRollUp();
+  group('Serving a line off the shelf', () {
+    test('a stock line is picked and sent, never made', () {
+      final stages = stagesForItem({
+        'custom_product_category': 'PCTR',
+        'custom_fulfilment_mode': kFulfilMinimumStock,
+      });
+      expect(stages, [kStageNotStarted, 'Packed', kStageDispatched]);
+      // The making stages describe work nobody will do on these goods.
+      expect(stages, isNot(contains('Curing')));
+      expect(stages, isNot(contains('Compound Mixing')));
+    });
+
+    test('every family collapses to the same short cycle off the shelf', () {
+      final seen = <List<String>>{};
+      for (final c in ['PCTR', 'CTR', 'BONDING GUM', 'VULCANIZING SOLUTION']) {
+        seen.add(stagesForItem({
+          'custom_product_category': c,
+          'custom_fulfilment_mode': kFulfilMinimumStock,
+        }));
+      }
+      expect(seen.map((s) => s.join('>')).toSet(), hasLength(1));
+    });
+
+    test('a new-production line keeps its full family cycle', () {
+      final stages = stagesForItem({
+        'custom_product_category': 'PCTR',
+        'custom_fulfilment_mode': kFulfilNewProduction,
+      });
+      expect(stages, contains('Curing'));
+      expect(stages.length, greaterThan(3));
+    });
+
+    test('a line with no mode set is treated as production, not stock', () {
+      // Erring the other way would hide real making stages from the floor the
+      // moment a field was left blank.
+      expect(stagesForItem({'custom_product_category': 'PCTR'}),
+          stagesFor(ProductCategory.pctr));
+      expect(isFromMinimumStock({'custom_product_category': 'PCTR'}), isFalse);
+    });
+  });
+
   group('Stage sequences', () {
     test('each family has its own cycle', () {
       final pctr = stagesFor(ProductCategory.pctr);
@@ -147,6 +189,30 @@ void _orderRollUp() {
 
     test('an order with no lines is Not Started, not blank', () {
       expect(Api.rollUpStage(const []), 'Not Started');
+    });
+
+    test('a stock line reaches Ready once packed, without the making stages',
+        () {
+      // Packed is the last stage before dispatch for a stock line, so an order
+      // made entirely of stock lines is ready to go the moment they are packed.
+      final packed = line('PCTR', 'Packed')
+        ..['custom_fulfilment_mode'] = kFulfilMinimumStock;
+      expect(Api.rollUpStage([packed]), 'Ready');
+    });
+
+    test('switching a running line to stock resets it, and does not read done',
+        () {
+      // A line moved to minimum stock after the floor had started it keeps its
+      // old making stage, which is no longer in its sequence. It reads Not
+      // Started, which is the honest answer: the goods now come off a shelf and
+      // nobody has picked them yet, whatever was done to the batch before.
+      //
+      // What matters is the direction of the error. An unrecognised stage must
+      // never round up to Ready or Dispatched, or an order would look shippable
+      // because a field changed.
+      final stale = line('PCTR', 'Curing')
+        ..['custom_fulfilment_mode'] = kFulfilMinimumStock;
+      expect(Api.rollUpStage([stale]), 'Not Started');
     });
 
     test('only the four Select values are ever produced', () {

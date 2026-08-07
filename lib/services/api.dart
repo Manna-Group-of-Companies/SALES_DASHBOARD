@@ -3237,7 +3237,7 @@ class Api {
     var anyStarted = false;
 
     for (final it in items) {
-      final stages = stagesForLabel(it['custom_product_category']);
+      final stages = stagesForItem(it);
       final current = '${it['custom_production_stage'] ?? ''}';
       // A stage no longer in the sequence counts as unknown rather than as
       // finished, so revising the stage list cannot make an order look done.

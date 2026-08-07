@@ -263,7 +263,7 @@ class _ProductionOrderDetailScreenState
   }
 
   Widget _itemCard(Map<String, dynamic> it) {
-    final stages = stagesForLabel(it['custom_product_category']);
+    final stages = stagesForItem(it);
     final current = '${it['custom_production_stage'] ?? ''}';
     final index = stageIndex(stages, current);
     final progress = stageProgress(stages, current);
