@@ -186,6 +186,74 @@ void main() {
     expect(find.text('Rs 4400.00'), findsOneWidget);
   });
 
+  group('what is being made', () {
+    MinStock pool({double inProduction = 0, double available = 6}) => MinStock(
+          itemCode: 'PCTR-100',
+          minimumQty: 10,
+          reservedQty: 10 - available,
+          myReservedQty: 0,
+          inProductionQty: inProduction,
+        );
+
+    testWidgets('a run in progress is shown on the order row', (tester) async {
+      // The screen a rep is actually on when a customer asks. "None left" and
+      // "none left, twenty being made" are different answers to give somebody
+      // standing at the counter.
+      await tester.pumpWidget(_host(ProductRow(
+        line: OrderLine(product: _pctr()),
+        stock: pool(inProduction: 20),
+        onChanged: () {},
+      )));
+
+      expect(find.textContaining('20 rolls being made'), findsOneWidget);
+    });
+
+    testWidgets('it says plainly that it cannot be sold yet', (tester) async {
+      // Without this a rep reads "20 being made" as "20 I can promise".
+      await tester.pumpWidget(_host(ProductRow(
+        line: OrderLine(product: _pctr()),
+        stock: pool(inProduction: 20),
+        onChanged: () {},
+      )));
+
+      expect(find.textContaining('not on the shelf yet'), findsOneWidget);
+    });
+
+    testWidgets('it never inflates what is available to sell', (tester) async {
+      // 6 available with 20 on a run must still read 6. The run is intent,
+      // not stock.
+      await tester.pumpWidget(_host(ProductRow(
+        line: OrderLine(product: _pctr()),
+        stock: pool(inProduction: 20, available: 6),
+        onChanged: () {},
+      )));
+
+      expect(find.textContaining('6 rolls available'), findsOneWidget);
+      expect(find.textContaining('26'), findsNothing);
+    });
+
+    testWidgets('nothing is said when no run is on', (tester) async {
+      await tester.pumpWidget(_host(ProductRow(
+        line: OrderLine(product: _pctr()),
+        stock: pool(),
+        onChanged: () {},
+      )));
+
+      expect(find.textContaining('being made'), findsNothing);
+    });
+
+    testWidgets('an item off the minimum-stock list says nothing about runs',
+        (tester) async {
+      await tester.pumpWidget(_host(ProductRow(
+        line: OrderLine(product: _pctr()),
+        stock: null,
+        onChanged: () {},
+      )));
+
+      expect(find.textContaining('being made'), findsNothing);
+    });
+  });
+
   testWidgets('an incomplete item offers to be completed, not just refused',
       (tester) async {
     // It must still not be orderable — the arithmetic has no answer without

@@ -253,6 +253,18 @@ class _ProductRowState extends State<ProductRow> {
           const SizedBox(height: 6),
           _stockLine(),
         ],
+        // What the factory has on a run for this item.
+        //
+        // It also appears on the minimum-stock list, but this is the screen a
+        // rep is actually on when a customer asks — and "there are none left"
+        // and "there are none left, twenty are being made" are different
+        // answers to give somebody standing at the counter. Putting it only
+        // one screen away meant the rep had to already suspect it was there.
+        if (widget.showMinimumStock &&
+            widget.stock?.hasProductionRun == true) ...[
+          const SizedBox(height: 4),
+          _inProductionLine(widget.stock!),
+        ],
         // A minimum-stock item is meant to be fast-moving. One that has stopped
         // selling is drifting towards a write-off, and the rep standing in
         // front of a customer is the only person who can turn that around.
@@ -344,6 +356,30 @@ class _ProductRowState extends State<ProductRow> {
   }
 
   // ------------------------------------------------------ minimum stock ---
+
+  /// "5 rolls being made" — what production has told everyone is on a run.
+  ///
+  /// Deliberately not folded into the availability line beside "3 available".
+  /// Two numbers in one sentence, one of which can be sold and one of which
+  /// cannot, is how a rep ends up promising stock that does not exist. It sits
+  /// on its own line, in its own colour, saying it is not on the shelf.
+  Widget _inProductionLine(MinStock s) {
+    final unit = p.category.stockUnit;
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Icon(Icons.precision_manufacturing_outlined,
+          size: 13, color: Color(0xFF1A56A8)),
+      const SizedBox(width: 4),
+      Expanded(
+        child: Text(
+            '${s.describe(s.inProductionQty, s.inProductionBelts, unit)} '
+            'being made — not on the shelf yet',
+            style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF1A56A8))),
+      ),
+    ]);
+  }
 
   Widget _stockLine() {
     final s = widget.stock;
