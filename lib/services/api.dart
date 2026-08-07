@@ -3417,6 +3417,35 @@ class Api {
   /// same way. Returns the raw document plus a `destination`.
   static Future<Map<String, dynamic>> getOrderForProduction(String name) async {
     final o = await getOrder(name);
+
+    // How much of each line the shelf covered, so production knows what is
+    // actually left to make. An order for eight rolls with four reserved needs
+    // four made, and nothing on the line itself says so — the reservation is a
+    // separate record.
+    try {
+      final held = await _list('Manna Stock Reservation',
+          fields: '["item_code","qty","loose_belts"]',
+          filters: '[["sales_order","=","$name"],["status","=","Active"]]');
+      final byItem = <String, ({double qty, int belts})>{};
+      for (final h in held) {
+        final code = '${h['item_code']}';
+        final cur = byItem[code] ?? (qty: 0.0, belts: 0);
+        byItem[code] = (
+          qty: cur.qty + ((h['qty'] as num?)?.toDouble() ?? 0),
+          belts: cur.belts + ((h['loose_belts'] as num?)?.toInt() ?? 0),
+        );
+      }
+      for (final it in ((o['items'] as List?) ?? [])) {
+        if (it is! Map) continue;
+        final r = byItem['${it['item_code']}'] ?? (qty: 0.0, belts: 0);
+        it['reserved_rolls'] = r.qty;
+        it['reserved_belts'] = r.belts;
+      }
+    } catch (_) {
+      // Without this the line simply shows no split, which is what it did
+      // before. Losing the whole order over it would be worse.
+    }
+
     final code = '${o['customer'] ?? ''}';
     var destination = 'No route set';
     if (code.isNotEmpty) {

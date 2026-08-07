@@ -262,6 +262,18 @@ class _ProductionOrderDetailScreenState
     );
   }
 
+  /// What is left to make on a line: ordered, less whatever the shelf covered.
+  ///
+  /// Never negative. A reservation larger than the order would mean the two
+  /// records disagree, and telling the floor to make a negative quantity is
+  /// not a useful way to surface that.
+  ({double rolls, int belts}) _toMake(Map<String, dynamic> it) {
+    final rolls = _num(it['custom_rolls']) - _num(it['reserved_rolls']);
+    final belts = ((it['custom_loose_belts'] as num?)?.toInt() ?? 0) -
+        ((it['reserved_belts'] as num?)?.toInt() ?? 0);
+    return (rolls: rolls < 0 ? 0 : rolls, belts: belts < 0 ? 0 : belts);
+  }
+
   Widget _itemCard(Map<String, dynamic> it) {
     final stages = stagesForItem(it);
     final current = '${it['custom_production_stage'] ?? ''}';
@@ -280,6 +292,36 @@ class _ProductionOrderDetailScreenState
               style: const TextStyle(
                   fontSize: 13, fontWeight: FontWeight.w600)),
           const SizedBox(height: 2),
+          // What has to be made, as against what the shelf already covers.
+          // Without it a line reading "8 rolls" looks like eight to make when
+          // four are already sitting in the plant.
+          if (_toMake(it) case (rolls: final r, belts: final b)
+              when r > 0.0001 || b > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 2),
+              child: Container(
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                    color: const Color(0xFFF3E8FF),
+                    borderRadius: BorderRadius.circular(5)),
+                child: Row(children: [
+                  const Icon(Icons.call_split,
+                      size: 14, color: Colors.deepPurple),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                        'To make: ${trimQtyLocal(r)}'
+                        '${b > 0 ? ' + $b belts' : ''}'
+                        '   ·   ${trimQtyLocal(_num(it['custom_rolls']))} ordered, '
+                        '${trimQtyLocal(_num(it['reserved_rolls']))} already in stock',
+                        style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.deepPurple)),
+                  ),
+                ]),
+              ),
+            ),
           Text('${it['custom_packing_note'] ?? ''}',
               style: const TextStyle(fontSize: 11, color: Colors.black54)),
           const SizedBox(height: 6),

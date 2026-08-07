@@ -492,7 +492,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
             )
           else ...[
             const Divider(height: 14),
-            _stockBreakdown(s, unit),
+            _stockBreakdown(s, unit, it),
             // Not a warning, and nothing to decide. The oldest batch goes out
             // first automatically, and the shelf life is long enough that age
             // is not a quality question. This is here so the product gets
@@ -529,16 +529,41 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   /// Who is holding what. The line that matters is the middle one — a manager
   /// looking at "1 booked" needs to know that the one is this very order, or
   /// they will think somebody else is competing for stock they already have.
-  Widget _stockBreakdown(MinStock s, String unit) {
+  Widget _stockBreakdown(MinStock s, String unit,
+      [Map<String, dynamic>? item]) {
     final here = _heldHere(s);
     final hereBelts = _beltsHeldHere(s);
     final elsewhere = _heldElsewhere(s);
+
+    // What the customer actually asked for, against what the pool could cover.
+    //
+    // The booking alone was misleading: an order for eight rolls that could
+    // only be covered for four showed "booked by this order: 4", and a manager
+    // reading that had no way to know four more still had to be made. The
+    // order was for eight either way.
+    final orderedRolls = item == null ? 0.0 : _num(item['custom_rolls']);
+    final orderedBelts = item == null ? 0 : _int(item['custom_loose_belts']);
+    final toMake = orderedRolls - here;
+    final beltsToMake = orderedBelts - hereBelts;
+    final splits = item != null && (toMake > 0.0001 || beltsToMake > 0);
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _dot('Minimum stock held',
           s.describe(s.minimumQty, s.minimumLooseBelts, unit), Colors.black87),
+      if (splits)
+        _dot('Ordered', s.describe(orderedRolls, orderedBelts, unit),
+            Colors.black87,
+            bold: true),
       if (here > 0 || hereBelts > 0)
-        _dot('Booked by THIS order', s.describe(here, hereBelts, unit),
-            Colors.blue.shade700,
+        _dot(splits ? 'Of that, from stock' : 'Booked by THIS order',
+            s.describe(here, hereBelts, unit), Colors.blue.shade700,
+            bold: true),
+      if (splits)
+        _dot(
+            'To be made',
+            s.describe(toMake < 0 ? 0 : toMake,
+                beltsToMake < 0 ? 0 : beltsToMake, unit),
+            Colors.deepPurple,
             bold: true),
       if (elsewhere > 0)
         _dot('Booked by other orders', s.describe(elsewhere, 0, unit),
