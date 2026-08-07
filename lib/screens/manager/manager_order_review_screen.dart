@@ -584,6 +584,26 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
       );
 
   Widget _modeToggle(Map<String, dynamic> it, String mode) {
+    // Where an order is served from is a change to the order like any other,
+    // and it stops being one at 1 pm on the delivery date. After that the
+    // goods are being picked or made against whatever was decided, and moving
+    // a line between stock and production would be describing a decision the
+    // floor has already acted on.
+    if (!orderEditWindowOpen(_order['delivery_date'])) {
+      final stock = mode == kFulfilMinimumStock;
+      return Row(children: [
+        Icon(Icons.lock_outline,
+            size: 14, color: Colors.grey.shade600),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            'Served from ${stock ? 'minimum stock' : 'new production'} '
+            '— fixed at 1 pm on the delivery date.',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+          ),
+        ),
+      ]);
+    }
     return Row(children: [
       Expanded(
         child: _modeChip(

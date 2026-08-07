@@ -201,6 +201,9 @@ class _ManagerOrdersScreenState extends State<ManagerOrdersScreen> {
     final rejected = status == 'Rejected';
     final production = '${r['custom_production_status'] ?? ''}';
     final finish = '${r['custom_production_finish_date'] ?? ''}';
+    final combinedRaw = '${r['custom_combined_order'] ?? ''}'.trim();
+    final combined =
+        (combinedRaw.isEmpty || combinedRaw == 'null') ? '' : combinedRaw;
 
     final colour = rejected
         ? Colors.red
@@ -267,18 +270,50 @@ class _ManagerOrdersScreenState extends State<ManagerOrdersScreen> {
             // approved — before that, production has never seen the order.
             if (approved) ...[
               const SizedBox(height: 6),
+              // A finished order is said plainly rather than left as one more
+              // stage name the manager has to know the order of. Everything
+              // short of finished still reads as its stage, because "not
+              // complete" is not enough to chase anything with.
+              if (Api.isOrderComplete(r))
+                Row(children: const [
+                  Icon(Icons.check_box, size: 15, color: Color(0xFF1B7F3B)),
+                  SizedBox(width: 4),
+                  Text('Order complete — dispatched',
+                      style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1B7F3B))),
+                ])
+              else
+                Row(children: [
+                  const Icon(Icons.precision_manufacturing_outlined,
+                      size: 14, color: Colors.black54),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                        'Production: '
+                        '${production.isEmpty || production == 'null' ? 'Not started' : production}'
+                        '${(finish.isNotEmpty && finish != 'null') ? '  ·  est. finish $finish' : ''}',
+                        style: const TextStyle(
+                            fontSize: 11, color: Colors.black54)),
+                  ),
+                ]),
+            ],
+            // The weekly combined order this one was rolled into, once the
+            // production manager has closed that week. Shown to the manager
+            // for the same reason the rep sees it: a customer ringing about
+            // "last week's order" and the office looking at one combined
+            // document need to be talking about the same thing.
+            if (combined.isNotEmpty) ...[
+              const SizedBox(height: 4),
               Row(children: [
-                const Icon(Icons.precision_manufacturing_outlined,
-                    size: 14, color: Colors.black54),
+                const Icon(Icons.merge_type, size: 14, color: Color(0xFF6D4C41)),
                 const SizedBox(width: 4),
-                Expanded(
-                  child: Text(
-                      'Production: '
-                      '${production.isEmpty || production == 'null' ? 'Not started' : production}'
-                      '${(finish.isNotEmpty && finish != 'null') ? '  ·  est. finish $finish' : ''}',
-                      style: const TextStyle(
-                          fontSize: 11, color: Colors.black54)),
-                ),
+                Text('Week order: $combined',
+                    style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF6D4C41))),
               ]),
             ],
             if ('${r['delivery_date'] ?? ''}'.isNotEmpty &&

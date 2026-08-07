@@ -817,6 +817,13 @@ class Api {
   }) async {
     final ref = OrderRef(orderName, isLead: isLead);
     final order = isLead ? await getLeadOrder(orderName) : await getOrder(orderName);
+    // The same 1 pm deadline that closes the rest of the order. Moving a line
+    // between stock and production after it would release or claim goods the
+    // floor has already committed, so the window is checked against the order
+    // as stored rather than as the screen last saw it.
+    if (!orderEditWindowOpen(order['delivery_date'])) {
+      throw Exception(orderLockReason(order));
+    }
     final items = ((order['items'] as List?) ?? [])
         .map((e) => (e as Map).cast<String, dynamic>())
         .toList();
