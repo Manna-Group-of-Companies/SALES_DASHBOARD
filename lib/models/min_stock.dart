@@ -170,6 +170,52 @@ class MinStock {
     return left < 0 ? 0 : left;
   }
 
+  // --------------------------------------------------- the making question ---
+  //
+  // A rep asks "how much can I promise". The production manager asks a
+  // different question — "how much do I have to make" — and it is answered off
+  // the shelf, not off what is left to sell. Stock that is booked but not yet
+  // dispatched is still in the building and does not need replacing.
+
+  /// What the app believes is physically on the shelf, in the pool's unit.
+  ///
+  /// The same basis availability is computed from, so the two can never tell
+  /// different stories about one item.
+  double get shelfQty => _grossQty;
+  int get shelfLooseBelts => _grossBelts;
+
+  /// How far the shelf sits below the level management set, 0 when at or above.
+  ///
+  /// This is the quantity to put on a production run to restore the pool.
+  /// Measured against the shelf rather than against what is available to sell:
+  /// booked stock has not left yet, and making a second lot to cover it would
+  /// build the same goods twice.
+  double get shortfallQty {
+    final short = minimumQty - shelfQty;
+    return short < 0 ? 0 : short;
+  }
+
+  /// True when the shelf has fallen under the threshold and needs a run.
+  bool get belowMinimum => shortfallQty > 0;
+
+  /// True when nothing is left to promise, whatever is on the shelf.
+  ///
+  /// A separate alarm from [belowMinimum], and often the earlier one: a pool
+  /// can sit exactly at its minimum and still be entirely spoken for, at which
+  /// point the next rep to ask is turned away even though the shelf looks full.
+  bool get fullyBooked => availableQty <= 0 && availableLooseBelts <= 0;
+
+  /// How urgently this item needs a production run. Higher is worse.
+  ///
+  /// Ordering by shortfall alone would bury a fully-booked item that happens to
+  /// be sitting at its minimum, which is the one a rep is about to be refused.
+  int get productionUrgency {
+    if (fullyBooked && belowMinimum) return 3;
+    if (fullyBooked) return 2;
+    if (belowMinimum) return 1;
+    return 0;
+  }
+
   /// Total belts a rep could take, counting whole rolls that would be cut.
   ///
   /// Ordering belts opens a roll: the belts asked for go out and the rest of
