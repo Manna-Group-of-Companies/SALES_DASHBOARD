@@ -23,6 +23,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/item_naming.dart';
+import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -384,6 +385,118 @@ class _ProductionStockScreenState extends State<ProductionStockScreen> {
     }
   }
 
+  /// Moves the run along its cycle. Every order line claimed out of it moves
+  /// too — it is one batch, not one job per order.
+  Future<void> _setRunStage(MinStockDetail d) async {
+    final stages = stagesForLabel(d.product.category.shortLabel);
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Stage of this run'),
+        children: [
+          for (final st in stages)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, st),
+              child: Row(children: [
+                Icon(
+                    st == d.stock.productionRunStage
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 18,
+                    color: const Color(0xFF1A56A8)),
+                const SizedBox(width: 10),
+                Text(st),
+              ]),
+            ),
+        ],
+      ),
+    );
+    if (chosen == null || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final n = await Api.setProductionRunStage(
+          itemCode: d.stock.itemCode, stage: chosen);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(n == 0
+              ? 'Run moved to $chosen.'
+              : 'Run moved to $chosen — $n order${n == 1 ? '' : 's'} updated.')));
+      setState(_reload);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// The run has landed. Claims against it become ordinary bookings.
+  Future<void> _receiveRun(MinStockDetail d) async {
+    final s = d.stock;
+    final unit = d.category.stockUnit;
+    final claimed = s.reservedInProductionQty > 0 || s.reservedInProductionBelts > 0;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Run received?'),
+        content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(d.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 10),
+              Text(
+                claimed
+                    ? 'The ${s.describe(s.reservedInProductionQty, s.reservedInProductionBelts, unit)} '
+                        'reps claimed off this run become ordinary bookings, '
+                        'and the run is cleared.'
+                    : 'Nothing was claimed off this run. It will simply be '
+                        'cleared.',
+                style: const TextStyle(fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 10),
+              // Said plainly: this app does not receive stock, and pretending
+              // otherwise would put rubber on the shelf nobody counted.
+              const Text(
+                'This does not add the stock. Create the batch in ERPNext as '
+                'usual — this only moves the claims across.',
+                style: TextStyle(fontSize: 11.5, color: Colors.black54),
+              ),
+            ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Received')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final n = await Api.receiveProductionRun(d.stock.itemCode);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              'Run closed — $n claim${n == 1 ? '' : 's'} moved to the shelf.')));
+      setState(_reload);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Widget _card(MinStockDetail d) {
     final s = d.stock;
     final unit = d.category.stockUnit;
@@ -488,6 +601,47 @@ class _ProductionStockScreenState extends State<ProductionStockScreen> {
                     ],
                   ]),
             ),
+          ],
+
+          // Moving the run, and closing it off when it lands. Only offered
+          // once there is a run — there is nothing to stage or receive
+          // otherwise.
+          if (s.hasProductionRun) ...[
+            const SizedBox(height: 6),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : () => _setRunStage(d),
+                  icon: const Icon(Icons.timeline, size: 15),
+                  label: Text(
+                      s.productionRunStage.isEmpty
+                          ? 'Set stage'
+                          : s.productionRunStage,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11.5)),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _busy ? null : () => _receiveRun(d),
+                  icon: const Icon(Icons.inventory, size: 15),
+                  label: const Text('Run received',
+                      style: TextStyle(fontSize: 11.5)),
+                ),
+              ),
+            ]),
+            if (s.reservedInProductionQty > 0 ||
+                s.reservedInProductionBelts > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                    'Reps have claimed '
+                    '${s.describe(s.reservedInProductionQty, s.reservedInProductionBelts, unit)} '
+                    'of this run.',
+                    style: const TextStyle(
+                        fontSize: 10.5, color: Color(0xFF1A56A8))),
+              ),
           ],
 
           const SizedBox(height: 8),

@@ -196,6 +196,14 @@ class OrderLine {
   /// model genuinely supports pinning a batch, should a reason ever appear.
   String? agedBatch;
 
+  /// True when this line is claimed out of the production run being made for
+  /// the item, rather than off the shelf.
+  ///
+  /// The two draw on separate counters and are never mixed on one line. A rep
+  /// wanting some of each takes the shelf stock on one order and the run on
+  /// another — which is honest, because the two will arrive on different days.
+  bool fromRun;
+
   OrderLine({
     required this.product,
     this.rolls = 0,
@@ -203,6 +211,7 @@ class OrderLine {
     this.boxes = 0,
     this.cans = 0,
     this.rate = 0,
+    this.fromRun = false,
     this.agedBatch,
   });
 
@@ -334,5 +343,13 @@ class OrderLine {
         'custom_total_weight': double.parse(totalWeightKg.toStringAsFixed(3)),
         'custom_packing_note': packingNote,
         if (agedBatch != null) 'custom_aged_batch': agedBatch,
+        // Stamped by the rep, not left for the sales manager to set.
+        //
+        // The other two modes are the manager's call at approval, but this one
+        // is a fact about where the stock was taken from — the rep claimed out
+        // of a run, and the booking already sits against that run's counter.
+        // Leaving the line blank would show the manager a new-production line
+        // holding a reservation, which is a contradiction.
+        if (fromRun) 'custom_fulfilment_mode': kFulfilProductionRun,
       };
 }

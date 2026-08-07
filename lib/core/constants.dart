@@ -73,6 +73,21 @@ const double kBgKgPerRoll = 5;
 const String kFulfilMinimumStock = 'From Minimum Stock';
 const String kFulfilNewProduction = 'New Production';
 
+// A third answer, between the other two.
+//
+// The goods are not on the shelf, so they cannot come from minimum stock; but
+// they are already being made against a run the production manager has raised
+// in SAP, so the customer is not waiting for a decision either. A rep can claim
+// out of that run, and everyone downstream can see the claim is against goods
+// that do not exist yet.
+const String kFulfilProductionRun = 'From Production Run';
+
+// Which pool a reservation drew on, stored on `Manna Stock Reservation` as
+// `custom_source`. Kept apart from the fulfilment mode above: the mode is what
+// the sales side decided, this is what the stock system actually did.
+const String kSourceShelf = 'Shelf';
+const String kSourceProductionRun = 'Production Run';
+
 // Dead-stock thresholds.
 //
 // Everything on the minimum-stock list is there because management expects it

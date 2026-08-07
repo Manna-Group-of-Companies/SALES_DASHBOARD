@@ -111,6 +111,22 @@ class MinStock {
   final String inProductionUpdatedOn;
   final String inProductionUpdatedBy;
 
+  /// Of the run, how much reps have already claimed.
+  ///
+  /// Counted apart from [reservedQty] on purpose. The two draw on different
+  /// things — one on goods that exist, one on goods that do not — and adding
+  /// them together is how a pool would appear to have stock it has not made
+  /// yet.
+  final double reservedInProductionQty;
+  final int reservedInProductionBelts;
+
+  /// The stage the run itself is on, set by the production manager.
+  ///
+  /// One batch is being made, not one job per order, so the stage lives on the
+  /// run and every line booked against it follows. Blank until the floor
+  /// touches it.
+  final String productionRunStage;
+
   /// "10 rolls + 4 belts", or just "200 kg" where belts do not apply. Belts are
   /// only ever mentioned when there are some — on CTR, bonding gum and solution
   /// the counter is permanently zero and saying so is noise.
@@ -235,6 +251,33 @@ class MinStock {
   /// True when a production run has been recorded against this pool.
   bool get hasProductionRun => inProductionQty > 0 || inProductionBelts > 0;
 
+  // ------------------------------------------------- claiming out of a run ---
+  //
+  // Deliberately its own arithmetic, never merged with the shelf. A run is a
+  // promise about goods that do not exist; the shelf is goods that do. The one
+  // mistake that must be impossible here is a rep seeing the two added
+  // together and promising a customer stock nobody has made.
+
+  /// What is left of the run for a rep to claim.
+  double get availableInProductionQty {
+    final left = inProductionQty - reservedInProductionQty;
+    return left < 0 ? 0 : left;
+  }
+
+  int get availableInProductionBelts {
+    final left = inProductionBelts - reservedInProductionBelts;
+    return left < 0 ? 0 : left;
+  }
+
+  /// True when there is a run with something still unclaimed on it.
+  bool get canClaimFromRun =>
+      hasProductionRun &&
+      (availableInProductionQty > 0 || availableInProductionBelts > 0);
+
+  /// True when the whole run is spoken for. The goods are still coming, but
+  /// not to anybody new.
+  bool get runFullyClaimed => hasProductionRun && !canClaimFromRun;
+
   /// What still needs ordering after the run already under way.
   ///
   /// The gap on its own says nothing about whether anybody has acted on it. A
@@ -300,6 +343,9 @@ class MinStock {
     this.inProductionBelts = 0,
     this.inProductionUpdatedOn = '',
     this.inProductionUpdatedBy = '',
+    this.reservedInProductionQty = 0,
+    this.reservedInProductionBelts = 0,
+    this.productionRunStage = '',
   });
 
   factory MinStock.fromJson(Map<String, dynamic> j) => MinStock(
@@ -331,6 +377,9 @@ class MinStock {
         inProductionBelts: _int(j['in_production_belts']),
         inProductionUpdatedOn: _stamp(j['in_production_updated_on']),
         inProductionUpdatedBy: _clean(j['in_production_updated_by']),
+        reservedInProductionQty: _num(j['reserved_in_production_qty']),
+        reservedInProductionBelts: _int(j['reserved_in_production_belts']),
+        productionRunStage: _clean(j['production_run_stage']),
       );
 
   /// The oldest batch still holding stock — what a rep should be pushing.

@@ -213,12 +213,22 @@ class _ProductRowState extends State<ProductRow> {
   /// The rep's own existing booking is already inside the reserved figures, so
   /// it has to be added back before comparing, or editing a line would look
   /// like an overdraw of itself.
-  double get _headroom =>
-      (widget.stock?.availableQty ?? 0) + (widget.stock?.myReservedQty ?? 0);
+  /// A line claimed from the run is measured against the run, not the shelf.
+  /// Measuring it against the shelf would refuse a claim on an empty shelf,
+  /// which is the exact case the run exists to serve.
+  double get _headroom {
+    final s = widget.stock;
+    if (s == null) return 0;
+    if (line.fromRun) return s.availableInProductionQty;
+    return s.availableQty + s.myReservedQty;
+  }
 
-  int get _beltHeadroom =>
-      (widget.stock?.availableLooseBelts ?? 0) +
-      (widget.stock?.myReservedLooseBelts ?? 0);
+  int get _beltHeadroom {
+    final s = widget.stock;
+    if (s == null) return 0;
+    if (line.fromRun) return s.availableInProductionBelts;
+    return s.availableLooseBelts + s.myReservedLooseBelts;
+  }
 
   bool get _overBooking {
     if (widget.stock == null) return false;
@@ -264,6 +274,10 @@ class _ProductRowState extends State<ProductRow> {
             widget.stock?.hasProductionRun == true) ...[
           const SizedBox(height: 4),
           _inProductionLine(widget.stock!),
+          // Claiming out of the run is offered only while there is something
+          // unclaimed on it. A switch that can be turned on and then refuses
+          // the order at the end is worse than no switch.
+          if (widget.stock!.canClaimFromRun) _claimSwitch(widget.stock!),
         ],
         // A minimum-stock item is meant to be fast-moving. One that has stopped
         // selling is drifting towards a write-off, and the rep standing in
@@ -379,6 +393,40 @@ class _ProductRowState extends State<ProductRow> {
                 color: Color(0xFF1A56A8))),
       ),
     ]);
+  }
+
+  /// Lets the rep take this line out of the run instead of the shelf.
+  Widget _claimSwitch(MinStock s) {
+    final unit = p.category.stockUnit;
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(children: [
+        SizedBox(
+          height: 30,
+          child: Switch(
+            value: line.fromRun,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            onChanged: (v) {
+              setState(() => line.fromRun = v);
+              widget.onChanged();
+            },
+          ),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+              line.fromRun
+                  ? 'Taking from the run — delivered when it is made'
+                  : 'Take from the run instead '
+                      '(${trimQty(s.availableInProductionQty)} $unit unclaimed)',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight:
+                      line.fromRun ? FontWeight.w700 : FontWeight.w500,
+                  color: const Color(0xFF1A56A8))),
+        ),
+      ]),
+    );
   }
 
   Widget _stockLine() {

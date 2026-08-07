@@ -37,6 +37,7 @@
 
 import 'package:dio/dio.dart';
 
+import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
@@ -105,7 +106,9 @@ class StockService {
               fields: '["item_code","qty","loose_belts","custom_reserved_qty",'
                   '"custom_reserved_loose_belts","custom_last_sold_on",'
                   '"custom_in_production_qty","custom_in_production_belts",'
-                  '"custom_in_production_updated_on","custom_in_production_updated_by"]',
+                  '"custom_in_production_updated_on","custom_in_production_updated_by",'
+                  '"custom_reserved_in_production_qty",'
+                  '"custom_reserved_in_production_belts","custom_production_run_stage"]',
               filters: '[["disabled","=",0]]')),
       _cached(
           kStockBatchesKey,
@@ -182,6 +185,9 @@ class StockService {
         'in_production_belts': p['custom_in_production_belts'],
         'in_production_updated_on': p['custom_in_production_updated_on'],
         'in_production_updated_by': p['custom_in_production_updated_by'],
+        'reserved_in_production_qty': p['custom_reserved_in_production_qty'],
+        'reserved_in_production_belts': p['custom_reserved_in_production_belts'],
+        'production_run_stage': p['custom_production_run_stage'],
       });
     }
     return out;
@@ -303,6 +309,136 @@ class StockService {
     throw StockUnavailable(
         'Could not book $itemCode — too many reps are ordering it at once. '
         'Try again in a moment.');
+  }
+
+  /// Claims [qty] and [belts] out of the production run being made for an item.
+  ///
+  /// A separate path from [book] rather than a flag on it, because it draws on
+  /// a separate pool. The run is a promise about goods that do not exist yet;
+  /// the shelf is goods that do. Sharing one counter between them is exactly
+  /// how a rep would end up promising stock nobody has made.
+  ///
+  /// The same compare-and-swap as [book]: read the pool, check the headroom,
+  /// write conditionally on `modified`, retry on a lost race. Two reps claiming
+  /// the last rolls of one run race each other the same way they race for the
+  /// shelf, and the loser is refused rather than overselling.
+  static Future<String> claimFromRun({
+    required String itemCode,
+    required double qty,
+    required int belts,
+    required OrderRef order,
+  }) async {
+    if (qty <= 0 && belts <= 0) {
+      throw StockUnavailable('A claim needs a quantity.');
+    }
+
+    for (var attempt = 0; attempt < _maxAttempts; attempt++) {
+      final pool = await _pool(itemCode);
+      if (pool == null) {
+        throw StockUnavailable('$itemCode is not on the minimum stock list.');
+      }
+
+      final onRun = _num(pool['custom_in_production_qty']);
+      final onRunBelts = _int(pool['custom_in_production_belts']);
+      if (onRun <= 0 && onRunBelts <= 0) {
+        throw StockUnavailable(
+            'Nothing is being made for $itemCode any more.');
+      }
+
+      final claimedQty = _num(pool['custom_reserved_in_production_qty']);
+      final claimedBelts = _int(pool['custom_reserved_in_production_belts']);
+      final headroomQty = onRun - claimedQty;
+      final headroomBelts = onRunBelts - claimedBelts;
+
+      // No roll-cutting here. A run has not been made yet, so there is no roll
+      // on a shelf to open — the belts on it are whatever the production
+      // manager said would be on it.
+      if (qty > headroomQty + 0.0001) {
+        throw StockUnavailable(
+            'Only ${trimQty(headroomQty < 0 ? 0 : headroomQty)} left on the '
+            'production run for $itemCode — another rep claimed the rest.');
+      }
+      if (belts > headroomBelts) {
+        throw StockUnavailable(
+            'Only ${headroomBelts < 0 ? 0 : headroomBelts} belts left on the '
+            'production run for $itemCode.');
+      }
+
+      final won = await _commit(pool, {
+        'custom_reserved_in_production_qty': claimedQty + qty,
+        'custom_reserved_in_production_belts': claimedBelts + belts,
+        'custom_last_sold_on': today(),
+      });
+
+      if (won) {
+        return _audit(
+            itemCode: itemCode,
+            qty: qty,
+            belts: belts,
+            order: order,
+            source: kSourceProductionRun);
+      }
+    }
+
+    throw StockUnavailable(
+        'Could not claim $itemCode from the production run — too many reps at '
+        'once. Try again in a moment.');
+  }
+
+  /// Turns every claim against an item's run into an ordinary shelf booking,
+  /// and clears the run.
+  ///
+  /// Called when the goods land. The orders that claimed out of the run keep
+  /// their bookings — the same rolls, the same orders — but they now draw on
+  /// stock that exists, so they behave like every other booking from here on.
+  ///
+  /// The batch itself is not created here. Receiving stock is a Desk job today,
+  /// and inventing a batch from this figure would put rubber on the shelf that
+  /// nobody had counted.
+  static Future<int> receiveRun(String itemCode) async {
+    final claims = await _list(kReservationDoctype,
+        fields: '["name","qty","loose_belts"]',
+        filters: '[["item_code","=","$itemCode"],["status","=","Active"],'
+            '["custom_source","=","$kSourceProductionRun"]]');
+
+    for (var attempt = 0; attempt < _maxAttempts; attempt++) {
+      final pool = await _pool(itemCode);
+      if (pool == null) throw StockUnavailable('$itemCode has no pool.');
+
+      final claimedQty = _num(pool['custom_reserved_in_production_qty']);
+      final claimedBelts = _int(pool['custom_reserved_in_production_belts']);
+
+      // The claims move across to the shelf counter, and the run is cleared.
+      // Both in one conditional write, so a lost race cannot leave the claims
+      // counted twice.
+      final won = await _commit(pool, {
+        'custom_reserved_qty': _num(pool['custom_reserved_qty']) + claimedQty,
+        'custom_reserved_loose_belts':
+            _int(pool['custom_reserved_loose_belts']) + claimedBelts,
+        'custom_reserved_in_production_qty': 0,
+        'custom_reserved_in_production_belts': 0,
+        'custom_in_production_qty': 0,
+        'custom_in_production_belts': 0,
+        'custom_production_run_stage': '',
+      });
+      if (!won) continue;
+
+      // Re-labelled after the counters moved, not before: if this half fails,
+      // a claim still marked as against the run is easier to spot and fix than
+      // a shelf booking counted in neither place.
+      for (final c in claims) {
+        try {
+          await Session.I.dio.put(
+              '${_res(kReservationDoctype)}/${Uri.encodeComponent('${c['name']}')}',
+              data: {'custom_source': kSourceShelf});
+        } catch (_) {}
+      }
+      await OfflineCache.clear();
+      return claims.length;
+    }
+
+    throw StockUnavailable(
+        'Could not receive the run for $itemCode. Try again in a moment.');
   }
 
   /// Moves an order's bookings to match a new line-up.
@@ -521,8 +657,10 @@ class StockService {
     required int belts,
     required OrderRef order,
     String? batch,
+    String source = kSourceShelf,
   }) async {
     final r = await Session.I.dio.post(_res(kReservationDoctype), data: {
+      'custom_source': source,
       'item_code': itemCode,
       'qty': qty,
       'loose_belts': belts,

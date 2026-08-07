@@ -1250,6 +1250,68 @@ class Api {
     await StockService.invalidate();
   }
 
+  /// Moves the whole run to a stage, and every order line claimed out of it
+  /// with it.
+  ///
+  /// One batch is being made, not one job per order, so the stage belongs to
+  /// the run. Writing it down onto each line as well is what lets the rest of
+  /// the app carry on unchanged: the order roll-up, the rep's status and the
+  /// production screens all read the line, and none of them need to know that
+  /// this particular line's stage came from a run rather than from someone
+  /// advancing it directly.
+  static Future<int> setProductionRunStage({
+    required String itemCode,
+    required String stage,
+  }) async {
+    await _put('Manna Minimum Stock Item', itemCode,
+        {'custom_production_run_stage': stage});
+
+    final claims = await _list('Manna Stock Reservation',
+        fields: '["sales_order","lead_order"]',
+        filters: '[["item_code","=","$itemCode"],["status","=","Active"],'
+            '["custom_source","=","$kSourceProductionRun"]]');
+
+    final orders = <String>{
+      for (final c in claims)
+        if ('${c['sales_order'] ?? ''}'.trim().isNotEmpty &&
+            '${c['sales_order']}' != 'null')
+          '${c['sales_order']}'
+    };
+
+    var touched = 0;
+    for (final name in orders) {
+      try {
+        final order = await getOrder(name);
+        final items = ((order['items'] as List?) ?? [])
+            .map((e) => (e as Map).cast<String, dynamic>())
+            .toList();
+        var changed = false;
+        for (final it in items) {
+          if ('${it['item_code']}' == itemCode) {
+            it['custom_production_stage'] = stage;
+            changed = true;
+          }
+        }
+        if (!changed) continue;
+        await _put('Sales Order', name, {
+          'items': items,
+          'custom_production_status': _rollUpStage(items),
+        });
+        touched++;
+      } catch (_) {
+        // One order failing must not stop the rest of the run moving. The
+        // stage is on the pool either way, so nothing is lost that a repeat
+        // will not fix.
+      }
+    }
+    await OfflineCache.clear();
+    return touched;
+  }
+
+  /// The run has landed. Claims against it become ordinary bookings.
+  static Future<int> receiveProductionRun(String itemCode) =>
+      StockService.receiveRun(itemCode);
+
   static Future<List<MinStockDetail>> getMinimumStockDetailed() async {
     final results = await Future.wait([StockService.load(), getItems()]);
     final stock = results[0] as Map<String, MinStock>;
@@ -2281,6 +2343,18 @@ class Api {
 
     try {
       for (final r in reservations) {
+        // A line marked as claimed from the run draws on the run's counter
+        // instead of the shelf. Two separate pools, two separate paths — see
+        // StockService.claimFromRun.
+        if (r['from_run'] == true) {
+          await StockService.claimFromRun(
+            itemCode: '${r['item_code']}',
+            qty: (r['qty'] as num?)?.toDouble() ?? 0,
+            belts: (r['loose_belts'] as num?)?.toInt() ?? 0,
+            order: ref,
+          );
+          continue;
+        }
         await StockService.book(
           itemCode: '${r['item_code']}',
           qty: (r['qty'] as num?)?.toDouble() ?? 0,

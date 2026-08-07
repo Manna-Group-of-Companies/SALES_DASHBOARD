@@ -375,6 +375,9 @@ class _OrderScreenState extends State<OrderScreen> {
             'qty': double.parse(l.reserveQty.toStringAsFixed(3)),
             'loose_belts': l.reserveBelts,
             if (l.agedBatch != null) 'batch': l.agedBatch,
+            // Which pool this line draws on. Read by Api._bookOrUnwind, which
+            // sends it down a different booking path entirely.
+            if (l.fromRun) 'from_run': true,
           }
     ];
 
