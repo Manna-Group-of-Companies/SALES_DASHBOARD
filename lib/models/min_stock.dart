@@ -37,6 +37,19 @@ String _date(dynamic v) {
   return (s.isEmpty || s == 'null') ? '' : s.substring(0, 10);
 }
 
+/// Frappe sends an unset Data or Datetime as null, and string interpolation
+/// turns that into the literal 'null'. Both have to read as empty.
+String _clean(dynamic v) {
+  final s = '${v ?? ''}'.trim();
+  return (s.isEmpty || s == 'null') ? '' : s;
+}
+
+/// A `yyyy-MM-dd HH:mm:ss` stamp, trimmed to the date and minute.
+String _stamp(dynamic v) {
+  final s = _clean(v);
+  return s.length >= 16 ? s.substring(0, 16) : s;
+}
+
 /// Quantities read better without trailing zeroes — "8 rolls", not "8.00
 /// rolls" — but half a kilogram still has to survive. Shared so the order row,
 /// the aging list, and the review line all round the same way.
@@ -76,6 +89,27 @@ class MinStock {
   /// item is not sold in belts, or its master is incomplete — either way no
   /// roll is ever treated as cuttable.
   final int beltsPerRoll;
+
+  /// What the production manager has told everyone is being made to refill
+  /// this pool.
+  ///
+  /// The production order itself is raised in SAP, which this app cannot see.
+  /// Without this figure a short pool looks equally short whether a run was
+  /// ordered this morning or nobody has looked at it for a fortnight — so the
+  /// manager records it here once, and every rep asking about the item gets
+  /// the answer instead of ringing the factory.
+  ///
+  /// It is a statement of intent, not stock. Nothing can be booked against it
+  /// and it never counts towards what is available; it becomes real when the
+  /// goods arrive and a batch is created.
+  final double inProductionQty;
+  final int inProductionBelts;
+
+  /// When that figure was last set, and by whom. A quantity with no date on it
+  /// is worth little — "20 rolls coming" means one thing said yesterday and
+  /// another said two months ago.
+  final String inProductionUpdatedOn;
+  final String inProductionUpdatedBy;
 
   /// "10 rolls + 4 belts", or just "200 kg" where belts do not apply. Belts are
   /// only ever mentioned when there are some — on CTR, bonding gum and solution
@@ -198,6 +232,23 @@ class MinStock {
   /// True when the shelf has fallen under the threshold and needs a run.
   bool get belowMinimum => shortfallQty > 0;
 
+  /// True when a production run has been recorded against this pool.
+  bool get hasProductionRun => inProductionQty > 0 || inProductionBelts > 0;
+
+  /// What still needs ordering after the run already under way.
+  ///
+  /// The gap on its own says nothing about whether anybody has acted on it. A
+  /// pool 20 rolls short with 20 rolls being made needs no second order, and a
+  /// manager who cannot see that either orders it twice or has to remember
+  /// what they did last week.
+  double get uncoveredShortfallQty {
+    final left = shortfallQty - inProductionQty;
+    return left < 0 ? 0 : left;
+  }
+
+  /// True when the shortfall is fully covered by a run already ordered.
+  bool get shortfallCovered => belowMinimum && uncoveredShortfallQty <= 0;
+
   /// True when nothing is left to promise, whatever is on the shelf.
   ///
   /// A separate alarm from [belowMinimum], and often the earlier one: a pool
@@ -245,6 +296,10 @@ class MinStock {
     this.bookings = const [],
     this.batches = const [],
     this.beltsPerRoll = 0,
+    this.inProductionQty = 0,
+    this.inProductionBelts = 0,
+    this.inProductionUpdatedOn = '',
+    this.inProductionUpdatedBy = '',
   });
 
   factory MinStock.fromJson(Map<String, dynamic> j) => MinStock(
@@ -272,6 +327,10 @@ class MinStock {
             .map((b) => StockBatch.fromJson(b.cast<String, dynamic>()))
             .toList(),
         beltsPerRoll: _int(j['belts_per_roll']),
+        inProductionQty: _num(j['in_production_qty']),
+        inProductionBelts: _int(j['in_production_belts']),
+        inProductionUpdatedOn: _stamp(j['in_production_updated_on']),
+        inProductionUpdatedBy: _clean(j['in_production_updated_by']),
       );
 
   /// The oldest batch still holding stock — what a rep should be pushing.

@@ -103,7 +103,9 @@ class StockService {
           kStockPoolsKey,
           () => _list(kPoolDoctype,
               fields: '["item_code","qty","loose_belts","custom_reserved_qty",'
-                  '"custom_reserved_loose_belts","custom_last_sold_on"]',
+                  '"custom_reserved_loose_belts","custom_last_sold_on",'
+                  '"custom_in_production_qty","custom_in_production_belts",'
+                  '"custom_in_production_updated_on","custom_in_production_updated_by"]',
               filters: '[["disabled","=",0]]')),
       _cached(
           kStockBatchesKey,
@@ -176,6 +178,10 @@ class StockService {
         'bookings': bookings[code] ?? const [],
         'batches': byItem[code] ?? const [],
         'belts_per_roll': perRoll[code] ?? 0,
+        'in_production_qty': p['custom_in_production_qty'],
+        'in_production_belts': p['custom_in_production_belts'],
+        'in_production_updated_on': p['custom_in_production_updated_on'],
+        'in_production_updated_by': p['custom_in_production_updated_by'],
       });
     }
     return out;
@@ -623,6 +629,13 @@ class StockService {
   // numbers a rep needs to see side by side. Batches now move only when stock
   // physically leaves, which the app does not yet do: dispatch is not built,
   // so today they change only when the office edits them in Desk.
+
+  /// Drops the cached pool list so the next [load] reads the server.
+  ///
+  /// Called after anything that changes a pool outside the booking path —
+  /// recording a production run, above all — because that cache is what a rep
+  /// on a weak signal is looking at.
+  static Future<void> invalidate() => OfflineCache.clear();
 
   /// A read that falls back to the last sync when the network is down.
   ///

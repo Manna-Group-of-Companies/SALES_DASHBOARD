@@ -22,11 +22,19 @@
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/item_naming.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/services/api.dart';
 
-enum _Filter { needsRun, fullyBooked, all }
+/// Which slice of the pool list to show.
+///
+/// [belowMinimum] and [fullyBooked] are separate on purpose — they are the two
+/// alarms, and they do not fire together. A pool sitting exactly at its minimum
+/// can be entirely spoken for, and a pool well short of its minimum can still
+/// have plenty left to sell. [needsRun] is the union, for a manager who wants
+/// one list of everything that wants attention.
+enum _Filter { belowMinimum, fullyBooked, needsRun, all }
 
 class ProductionStockScreen extends StatefulWidget {
   const ProductionStockScreen({super.key});
@@ -36,8 +44,16 @@ class ProductionStockScreen extends StatefulWidget {
 
 class _ProductionStockScreenState extends State<ProductionStockScreen> {
   late Future<List<MinStockDetail>> _fut;
-  _Filter _filter = _Filter.needsRun;
+
+  /// Opens on what is short, because that is the list a production run is
+  /// planned from.
+  _Filter _filter = _Filter.belowMinimum;
   String _q = '';
+
+  /// Null means "any". Both are read off the item name.
+  String? _quality;
+  String? _pattern;
+  bool _busy = false;
 
   @override
   void initState() {
@@ -65,9 +81,16 @@ class _ProductionStockScreenState extends State<ProductionStockScreen> {
     if (_q.isNotEmpty && !d.name.toLowerCase().contains(_q.toLowerCase())) {
       return false;
     }
+    // Quality and pattern are read out of the item name — see core/item_naming.
+    // An item whose name does not parse keeps its place under "any", and is
+    // only hidden when a specific grade or pattern is asked for.
+    final parts = parseItemName(d.name);
+    if (_quality != null && parts.quality != _quality) return false;
+    if (_pattern != null && parts.pattern != _pattern) return false;
     return switch (_filter) {
-      _Filter.needsRun => d.stock.belowMinimum || d.stock.fullyBooked,
+      _Filter.belowMinimum => d.stock.belowMinimum,
       _Filter.fullyBooked => d.stock.fullyBooked,
+      _Filter.needsRun => d.stock.belowMinimum || d.stock.fullyBooked,
       _Filter.all => true,
     };
   }
@@ -97,9 +120,14 @@ class _ProductionStockScreenState extends State<ProductionStockScreen> {
           final booked = all.where((d) => d.stock.fullyBooked).length;
           final rows = all.where(_matches).toList();
 
+          final needsRun = all
+              .where((d) => d.stock.belowMinimum || d.stock.fullyBooked)
+              .length;
+
           return Column(children: [
             _summary(all.length, short, booked),
-            _filters(short, booked, all.length),
+            _filters(short, booked, needsRun, all.length),
+            _gradeFilters(all),
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
               child: TextField(
@@ -118,10 +146,21 @@ class _ProductionStockScreenState extends State<ProductionStockScreen> {
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Text(
-                          _filter == _Filter.needsRun
-                              ? 'Every pool is at or above its minimum, and '
-                                  'nothing is fully booked.'
-                              : 'Nothing matches.',
+                          // Says which question came back empty, so an empty
+                          // screen reads as an answer rather than as a fault.
+                          _q.isNotEmpty
+                              ? 'Nothing matches "$_q" in this filter.'
+                              : switch (_filter) {
+                                  _Filter.belowMinimum =>
+                                    'Every pool is at or above its minimum.',
+                                  _Filter.fullyBooked =>
+                                    'Every pool still has something left to '
+                                        'promise.',
+                                  _Filter.needsRun =>
+                                    'Every pool is at or above its minimum, '
+                                        'and nothing is fully booked.',
+                                  _Filter.all => 'No minimum stock is set up.',
+                                },
                           textAlign: TextAlign.center,
                           style: const TextStyle(
                               color: Colors.black54, height: 1.5),
@@ -180,7 +219,8 @@ class _ProductionStockScreenState extends State<ProductionStockScreen> {
         ]),
       );
 
-  Widget _filters(int short, int booked, int total) => SingleChildScrollView(
+  Widget _filters(int short, int booked, int needsRun, int total) =>
+      SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(children: [
@@ -190,15 +230,159 @@ class _ProductionStockScreenState extends State<ProductionStockScreen> {
               child: ChoiceChip(
                 selected: _filter == f,
                 onSelected: (_) => setState(() => _filter = f),
+                // Counted on every chip, so the manager can see how much each
+                // filter is hiding before choosing it.
                 label: Text(switch (f) {
-                  _Filter.needsRun => 'Needs a run',
+                  _Filter.belowMinimum => 'Below minimum ($short)',
                   _Filter.fullyBooked => 'Fully booked ($booked)',
+                  _Filter.needsRun => 'Needs a run ($needsRun)',
                   _Filter.all => 'All ($total)',
                 }),
               ),
             ),
         ]),
       );
+
+  /// Quality and pattern, built from whatever is actually on the list rather
+  /// than from a hard-coded set — new grades and patterns are added to the
+  /// catalogue without anybody being told.
+  Widget _gradeFilters(List<MinStockDetail> all) {
+    final names = all.map((d) => d.name);
+    final qualities = qualitiesIn(names);
+    final patterns = patternsIn(names);
+    // A dropdown offering one choice is not a choice. Hidden until the list
+    // actually holds more than one — today every pool is BLACK PEARL.
+    final showQuality = qualities.length > 1;
+    if (!showQuality && patterns.length <= 1) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+      child: Row(children: [
+        if (showQuality) ...[
+          Expanded(child: _dropdown('Quality', qualities, _quality,
+              (v) => setState(() => _quality = v))),
+          const SizedBox(width: 8),
+        ],
+        Expanded(
+            child: _dropdown('Pattern', patterns, _pattern,
+                (v) => setState(() => _pattern = v))),
+      ]),
+    );
+  }
+
+  Widget _dropdown(String label, List<String> values, String? selected,
+          ValueChanged<String?> onChanged) =>
+      DropdownButtonFormField<String?>(
+        initialValue: selected,
+        isDense: true,
+        isExpanded: true,
+        decoration: InputDecoration(
+          labelText: label,
+          isDense: true,
+          border: const OutlineInputBorder(),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        ),
+        items: [
+          DropdownMenuItem(value: null, child: Text('Any $label'.toLowerCase())),
+          for (final v in values)
+            DropdownMenuItem(value: v, child: Text(v)),
+        ],
+        onChanged: onChanged,
+      );
+
+  /// Records what the manager has put on a run in SAP.
+  Future<void> _editInProduction(MinStockDetail d) async {
+    final s = d.stock;
+    final unit = d.category.stockUnit;
+    final qtyCtrl =
+        TextEditingController(text: s.inProductionQty > 0 ? trimQty(s.inProductionQty) : '');
+    final beltsCtrl = TextEditingController(
+        text: s.inProductionBelts > 0 ? '${s.inProductionBelts}' : '');
+    final takesBelts = s.beltsPerRoll > 0;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('On production'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(d.name,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+                textAlign: TextAlign.center),
+            const SizedBox(height: 4),
+            Text('Short by ${trimQty(s.shortfallQty)} $unit',
+                style: const TextStyle(fontSize: 12, color: Colors.black54)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: qtyCtrl,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: 'Quantity on the run',
+                suffixText: unit,
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            if (takesBelts) ...[
+              const SizedBox(height: 10),
+              TextField(
+                controller: beltsCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Loose belts (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+            const SizedBox(height: 10),
+            const Text(
+              'Raise the order in SAP first. This only tells the reps that '
+              'stock is coming — nothing can be sold against it until it '
+              'arrives.\n\nSet it to 0 once the run is in.',
+              style: TextStyle(fontSize: 11.5, color: Colors.black54, height: 1.4),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    final qty = double.tryParse(qtyCtrl.text.trim()) ?? 0;
+    final belts = int.tryParse(beltsCtrl.text.trim()) ?? 0;
+    if (qty < 0 || belts < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('That is not a quantity.')));
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      await Api.setInProduction(
+          itemCode: d.stock.itemCode, qty: qty, belts: belts);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(qty <= 0 && belts <= 0
+              ? 'Cleared — nothing recorded as on production.'
+              : 'Recorded. Reps will see this is being made.')));
+      setState(_reload);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Widget _card(MinStockDetail d) {
     final s = d.stock;
@@ -257,6 +441,70 @@ class _ProductionStockScreenState extends State<ProductionStockScreen> {
               ]),
             ),
           ],
+
+          // What has been put on a run, and what that still leaves. Shown
+          // above the movement line because it is the thing the manager is
+          // about to act on.
+          if (s.hasProductionRun) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFE8F0FE),
+                  borderRadius: BorderRadius.circular(6)),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      const Icon(Icons.precision_manufacturing_outlined,
+                          size: 15, color: Color(0xFF1A56A8)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                            'On production: '
+                            '${s.describe(s.inProductionQty, s.inProductionBelts, unit)}',
+                            style: const TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1A56A8))),
+                      ),
+                    ]),
+                    if (s.belowMinimum) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                          s.shortfallCovered
+                              ? 'Covers the shortfall.'
+                              : 'Still ${trimQty(s.uncoveredShortfallQty)} $unit short after this run.',
+                          style: const TextStyle(
+                              fontSize: 11, color: Color(0xFF1A56A8))),
+                    ],
+                    if (s.inProductionUpdatedOn.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                          'Set ${s.inProductionUpdatedOn}'
+                          '${s.inProductionUpdatedBy.isEmpty ? '' : ' by ${s.inProductionUpdatedBy}'}',
+                          style: const TextStyle(
+                              fontSize: 10, color: Colors.black45)),
+                    ],
+                  ]),
+            ),
+          ],
+
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _busy ? null : () => _editInProduction(d),
+              icon: Icon(
+                  s.hasProductionRun ? Icons.edit : Icons.add_circle_outline,
+                  size: 16),
+              label: Text(
+                  s.hasProductionRun
+                      ? 'Change what is on production'
+                      : 'Record what is on production',
+                  style: const TextStyle(fontSize: 12)),
+            ),
+          ),
 
           // Movement. Oldest stock first tells the manager whether a pool is
           // turning over or quietly sitting.

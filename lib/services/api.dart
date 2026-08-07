@@ -1220,6 +1220,36 @@ class Api {
   /// — a rep is not shown another unit's stock position any more than they are
   /// shown its catalogue. A pooled item with no matching product record is
   /// dropped rather than rendered as a bare code.
+  /// Records how much of an item is on a production run to refill its pool.
+  ///
+  /// The run itself is raised in SAP, which this app cannot see. This is the
+  /// production manager telling everybody else what they have done, so a rep
+  /// looking at a short pool knows whether stock is coming or nobody has
+  /// noticed yet.
+  ///
+  /// Passing zero clears it — which is how a completed run is closed off once
+  /// the goods arrive and become a batch.
+  static Future<void> setInProduction({
+    required String itemCode,
+    required double qty,
+    int belts = 0,
+    String? by,
+  }) async {
+    final who =
+        (by ?? Session.I.salesPersonLabel ?? Session.I.email).toString().trim();
+    await _put('Manna Minimum Stock Item', itemCode, {
+      'custom_in_production_qty': qty < 0 ? 0 : qty,
+      'custom_in_production_belts': belts < 0 ? 0 : belts,
+      // Stamped from the server's clock for the same reason every other
+      // deadline is: a figure dated by the handset can be dated wrongly.
+      'custom_in_production_updated_on': nowStamp(),
+      'custom_in_production_updated_by': who,
+    });
+    // The pool list is cached for offline use, and a stale copy would keep
+    // telling reps nothing is on order.
+    await StockService.invalidate();
+  }
+
   static Future<List<MinStockDetail>> getMinimumStockDetailed() async {
     final results = await Future.wait([StockService.load(), getItems()]);
     final stock = results[0] as Map<String, MinStock>;
