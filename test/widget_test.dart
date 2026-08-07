@@ -186,6 +186,83 @@ void main() {
     expect(find.text('Rs 4400.00'), findsOneWidget);
   });
 
+  group('ordering more than the pool holds', () {
+    // The bug: fifteen rolls against a pool of ten was refused outright, and
+    // the rep was told to reduce the order. A customer wanting more than the
+    // minimum stock is a customer worth having — the pool covers what it can
+    // and the rest is made.
+    MinStock shelf({double available = 10}) => MinStock(
+          itemCode: 'PCTR-100',
+          minimumQty: 10,
+          reservedQty: 10 - available,
+          myReservedQty: 0,
+        );
+
+    testWidgets('a line inside the pool says nothing about splitting',
+        (tester) async {
+      final line = OrderLine(product: _pctr(), rate: 100)..rolls = 6;
+      await tester.pumpWidget(_host(ProductRow(
+          line: line, stock: shelf(available: 10), onChanged: () {})));
+
+      expect(find.textContaining('Split:'), findsNothing);
+    });
+
+    testWidgets('a line over the pool is allowed, and the split is shown',
+        (tester) async {
+      final line = OrderLine(product: _pctr(), rate: 100)..rolls = 15;
+      await tester.pumpWidget(_host(ProductRow(
+          line: line, stock: shelf(available: 10), onChanged: () {})));
+
+      expect(find.textContaining('Split:'), findsOneWidget);
+      expect(find.textContaining('10 rolls from minimum stock'), findsOneWidget);
+      expect(find.textContaining('5 rolls made to order'), findsOneWidget);
+    });
+
+    testWidgets('an empty pool makes the whole line to order', (tester) async {
+      final line = OrderLine(product: _pctr(), rate: 100)..rolls = 4;
+      await tester.pumpWidget(_host(ProductRow(
+          line: line, stock: shelf(available: 0), onChanged: () {})));
+
+      expect(find.textContaining('whole line will be made to order'),
+          findsOneWidget);
+    });
+
+    testWidgets('the rep is never told to reduce the quantity', (tester) async {
+      // The old wording, and the thing that made this a bug rather than a
+      // rough edge.
+      final line = OrderLine(product: _pctr(), rate: 100)..rolls = 15;
+      await tester.pumpWidget(_host(ProductRow(
+          line: line, stock: shelf(available: 10), onChanged: () {})));
+
+      expect(find.textContaining('Reduce the quantity'), findsNothing);
+      expect(find.textContaining('left in minimum stock.'), findsNothing);
+    });
+
+    testWidgets('a claim over the run splits against the run, not the shelf',
+        (tester) async {
+      // The second bug: toggling the run switch still measured the line
+      // against the shelf, so a claim on an empty shelf was refused.
+      final line = OrderLine(product: _pctr(), rate: 100)
+        ..rolls = 8
+        ..fromRun = true;
+      await tester.pumpWidget(_host(ProductRow(
+        line: line,
+        stock: MinStock(
+          itemCode: 'PCTR-100',
+          minimumQty: 10,
+          reservedQty: 10, // shelf empty
+          myReservedQty: 0,
+          inProductionQty: 5,
+        ),
+        onChanged: () {},
+      )));
+
+      expect(find.textContaining('5 rolls from the production run'),
+          findsOneWidget);
+      expect(find.textContaining('3 rolls made to order'), findsOneWidget);
+    });
+  });
+
   group('what is being made', () {
     MinStock pool({double inProduction = 0, double available = 6}) => MinStock(
           itemCode: 'PCTR-100',

@@ -269,37 +269,48 @@ class _OrderScreenState extends State<OrderScreen> {
     if (broken.isNotEmpty) {
       return '${broken.first.product.name} is missing its packing details.';
     }
-    for (final l in _picked) {
-      final s = _stock[l.product.code];
-      if (s == null) continue;
-
-      // This rep's own booking is already inside the reserved figures, so it
-      // has to be added back or editing an order would refuse the quantity it
-      // already holds.
-      final rollsFree = s.availableQty + s.myReservedQty;
-      final looseFree = s.availableLooseBelts + s.myReservedLooseBelts;
-      final perRoll = l.product.beltsPerRoll;
-
-      // Belts come out of whole rolls, so the ceiling is every belt in the
-      // pool — and any roll opened to reach them costs a roll. Both have to
-      // agree with the server or a rep is refused here for an order it would
-      // have accepted, or accepted here and refused there.
-      if (l.reserveBelts > 0) {
-        final ceiling = s.beltCeiling(perRoll) + s.myReservedLooseBelts;
-        if (l.reserveBelts > ceiling) {
-          return 'Only $ceiling belts of ${l.product.name} left in minimum '
-              'stock, counting rolls that would be opened.';
-        }
-      }
-      final opened =
-          MinStock.rollsToOpen(l.reserveBelts, looseFree.toInt(), perRoll);
-      if (l.reserveQty + opened > rollsFree + 0.0001) {
-        return 'Only ${trimQty(s.availableQty)} ${l.product.category.stockUnit} '
-            'of ${l.product.name} left in minimum stock'
-            '${opened > 0 ? ', and this order needs $opened more to cut belts from' : ''}.';
-      }
-    }
+    // Wanting more than the pool holds is not an error, and refusing it here
+    // was wrong. Fifteen rolls against a pool of ten is an order for fifteen:
+    // ten come off the shelf and five are made. The order is placed in full
+    // and only the *reservation* is capped — see [_poolShare].
     return null;
+  }
+
+  /// How much of a line the pool can actually cover, in the pool's own units.
+  ///
+  /// Everything above this is made to order. Returning less than the line asks
+  /// for is the normal case, not a failure — it is what splits an order across
+  /// the shelf and a production run.
+  ({double qty, int belts}) _poolShare(OrderLine l) {
+    final s = _stock[l.product.code];
+    if (s == null) return (qty: 0, belts: 0);
+
+    // A claim draws on the run, which is a different pool with different
+    // headroom. Mixing the two would either refuse a claim on an empty shelf —
+    // the exact case the run exists for — or book shelf stock against a run.
+    if (l.fromRun) {
+      return (
+        qty: l.reserveQty.clamp(0, s.availableInProductionQty).toDouble(),
+        belts: l.reserveBelts.clamp(0, s.availableInProductionBelts).toInt(),
+      );
+    }
+
+    // This rep's own booking is already inside the reserved figures, so it is
+    // added back — otherwise editing an order would fail to re-book the
+    // quantity it already holds.
+    final rollsFree = s.availableQty + s.myReservedQty;
+    final perRoll = l.product.beltsPerRoll;
+    final beltCeiling = s.beltCeiling(perRoll) + s.myReservedLooseBelts;
+
+    final belts = l.reserveBelts.clamp(0, beltCeiling).toInt();
+    // Belts are cut from whole rolls, so the belts taken may already have cost
+    // rolls. Those rolls are gone from what is left for this line's own rolls.
+    final looseFree = s.availableLooseBelts + s.myReservedLooseBelts;
+    final opened = MinStock.rollsToOpen(belts, looseFree.toInt(), perRoll);
+    final rollsLeft = rollsFree - opened;
+    final qty = l.reserveQty.clamp(0, rollsLeft < 0 ? 0 : rollsLeft).toDouble();
+
+    return (qty: qty, belts: belts);
   }
 
   /// Offers to hold an order that could not be sent for want of signal.
@@ -367,18 +378,24 @@ class _OrderScreenState extends State<OrderScreen> {
     // Booked in the pool's own units — whole rolls and whole belts, not the
     // fractional roll the order line carries.
     // Built outside the try so the offline path can still hand them to a draft.
+    // Only what the pool can cover is reserved. A line for fifteen rolls
+    // against a pool of ten books ten and leaves five to be made — so a line
+    // with nothing left to draw on reserves nothing at all and is simply made
+    // to order, rather than failing the whole order.
     final reservations = <Map<String, dynamic>>[
       for (final l in _picked)
         if (_stock.containsKey(l.product.code))
-          {
-            'item_code': l.product.code,
-            'qty': double.parse(l.reserveQty.toStringAsFixed(3)),
-            'loose_belts': l.reserveBelts,
-            if (l.agedBatch != null) 'batch': l.agedBatch,
-            // Which pool this line draws on. Read by Api._bookOrUnwind, which
-            // sends it down a different booking path entirely.
-            if (l.fromRun) 'from_run': true,
-          }
+          if (_poolShare(l) case (qty: final q, belts: final b)
+              when q > 0 || b > 0)
+            {
+              'item_code': l.product.code,
+              'qty': double.parse(q.toStringAsFixed(3)),
+              'loose_belts': b,
+              if (l.agedBatch != null) 'batch': l.agedBatch,
+              // Which pool this line draws on. Read by Api._bookOrUnwind,
+              // which sends it down a different booking path entirely.
+              if (l.fromRun) 'from_run': true,
+            }
     ];
 
     try {

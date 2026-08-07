@@ -230,9 +230,60 @@ class _ProductRowState extends State<ProductRow> {
     return s.availableLooseBelts + s.myReservedLooseBelts;
   }
 
-  bool get _overBooking {
+  /// True when this line asks for more than the pool it draws on can cover.
+  ///
+  /// Not an error. Fifteen rolls against a pool of ten is an order for
+  /// fifteen — ten come off the shelf and five are made. Refusing it was the
+  /// bug: a customer wanting more than the minimum stock is a customer worth
+  /// having, and the rep was being told to reduce the order.
+  bool get _splitsWithProduction {
     if (widget.stock == null) return false;
     return _wouldBook > _headroom + 0.0001 || _wouldBookBelts > _beltHeadroom;
+  }
+
+  /// What the pool covers and what has to be made, said before the rep sends
+  /// it — so the split is something they told the customer, not something the
+  /// customer discovers when half the order arrives later.
+  Widget _splitLine() {
+    final unit = p.category.stockUnit;
+    final fromPool = _wouldBook.clamp(0, _headroom).toDouble();
+    final made = _wouldBook - fromPool;
+    final beltsFromPool = _wouldBookBelts.clamp(0, _beltHeadroom).toInt();
+    final beltsMade = _wouldBookBelts - beltsFromPool;
+
+    final source = line.fromRun ? 'the production run' : 'minimum stock';
+    // Nothing from the pool is not a split, and calling it one would have the
+    // rep telling a customer half of it is in stock.
+    final nothingFromPool = fromPool <= 0 && beltsFromPool <= 0;
+    final parts = nothingFromPool
+        ? const <String>[]
+        : <String>[
+            if (fromPool > 0) '${trimQty(fromPool)} $unit from $source',
+            if (beltsFromPool > 0) '$beltsFromPool belts from $source',
+            if (made > 0) '${trimQty(made)} $unit made to order',
+            if (beltsMade > 0) '$beltsMade belts made to order',
+          ];
+
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+          color: const Color(0xFFF3E8FF),
+          borderRadius: BorderRadius.circular(6)),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.call_split, size: 15, color: Colors.deepPurple),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+              parts.isEmpty
+                  ? 'This whole line will be made to order.'
+                  : 'Split: ${parts.join(', ')}.',
+              style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.deepPurple)),
+        ),
+      ]),
+    );
   }
 
   @override
@@ -316,14 +367,9 @@ class _ProductRowState extends State<ProductRow> {
                     : line.packingNote,
                 style: const TextStyle(fontSize: 12, color: Colors.black54)),
           ],
-          if (_overBooking) ...[
+          if (_splitsWithProduction) ...[
             const SizedBox(height: 6),
-            _warning(_wouldBookBelts > _beltHeadroom
-                ? 'Only $_beltHeadroom loose belt'
-                    '${_beltHeadroom == 1 ? '' : 's'} left in minimum stock.'
-                : 'Only ${trimQty(_headroom)} ${p.category.stockUnit} left in '
-                    'minimum stock. Reduce the quantity or offer aged stock '
-                    'instead.'),
+            _splitLine(),
           ],
         ],
       ]),
@@ -646,19 +692,4 @@ class _ProductRowState extends State<ProductRow> {
     return 'Needs the ${missing.join(' and the ')}.';
   }
 
-  Widget _warning(String text) => Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-            color: const Color(0xFFFFF3E0),
-            borderRadius: BorderRadius.circular(6)),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Icon(Icons.warning_amber_rounded,
-              size: 16, color: Colors.orange.shade800),
-          const SizedBox(width: 6),
-          Expanded(
-              child: Text(text,
-                  style: TextStyle(
-                      fontSize: 12, color: Colors.orange.shade900))),
-        ]),
-      );
 }
