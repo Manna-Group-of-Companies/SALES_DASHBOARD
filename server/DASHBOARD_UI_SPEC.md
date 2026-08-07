@@ -342,21 +342,40 @@ raises always reads as **new production**.
 
 ## A3. Approvals inbox
 
-**Everything the manager owes a decision on except orders.** Four queues in one
+**Everything the manager owes a decision on except orders.** Two queues in one
 list. Two places to look was two places to miss one — so orders are *not* here,
-and these four are *only* here.
+and these two are *only* here.
 
 | Card title | Source | Filter |
 |---|---|---|
 | Proforma credit release | `Sales Order` | `custom_proforma_status = "Pending Release Approval"`, team |
-| Location verification | `Customer` | `custom_location_status = "Pending Verification"`, team |
 | Site: {site name} ({owner}) | `Customer Site` | pending, team |
-| Lead location verification | `Lead` | `custom_location_status = "Pending Verification"`, `custom_location_captured_by in <team>` |
 
 Each card carries: title, document id, the rep, the party, an amount (proforma
-only), and for the three location types **the captured photo and a map link** to
-the coordinates. The manager is verifying that a photograph matches a place —
-they need both.
+only), and for a site **the captured photo and a map link** to the coordinates.
+The manager is verifying that a photograph matches a place — they need both.
+
+### Customer and lead locations are NOT approved
+
+They used to be, and were removed. Capturing a location no longer takes a photo,
+so there is nothing for a manager to judge — and a queue nobody can act on is
+worse than no queue: the record sits `Pending Verification` for ever and the
+verified coordinates are never written.
+
+**A capture now verifies itself.** One write, both pairs of coordinates:
+
+```json
+{ "custom_latitude": <lat>, "custom_longitude": <lng>,
+  "custom_verified_latitude": <lat>, "custom_verified_longitude": <lng>,
+  "custom_location_status": "Verified",
+  "custom_location_captured_by": "<Sales Person>" }
+```
+
+Do not build a location-verification queue in the dashboard. Do not require a
+photo to capture a location.
+
+Records still sitting at `Pending Verification` are legacy — from when a manager
+did check them. Treat them as captured; nothing will move them on.
 
 For a site card, the owner is the customer if set, otherwise the lead. Heading
 the card with a blank customer tells the manager nothing about what they are
@@ -367,13 +386,10 @@ approving.
 | Type | Approve writes | Reject writes |
 |---|---|---|
 | `proforma` | `custom_proforma_status: "Released"` | `custom_proforma_status: "Blocked - Credit"` |
-| `location` | `custom_location_status: "Verified"` + copy lat/lng into `custom_verified_latitude` / `custom_verified_longitude` | `custom_location_status: "Not Captured"` |
-| `lead_location` | same, on `Lead` | same |
 | `site` | verified + verified coordinates | back to not captured |
 
-**Why the verified fields matter:** the 100 m punch-in check runs against the
-*verified* coordinates, not the captured ones. Rejecting must set the status
-back to `Not Captured` so the rep captures again.
+Rejecting a site must set its status back to not-captured so the rep captures
+again.
 
 ---
 

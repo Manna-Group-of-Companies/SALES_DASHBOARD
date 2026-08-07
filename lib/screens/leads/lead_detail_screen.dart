@@ -14,7 +14,6 @@ import 'package:manna_field_sales/widgets/sites_section.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/widgets/route_picker.dart';
 import 'package:manna_field_sales/widgets/route_required_gate.dart';
-import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
 import 'package:manna_field_sales/widgets/proximity_gate.dart';
 import 'package:manna_field_sales/widgets/visit_punch_card.dart';
 
@@ -48,17 +47,18 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
   bool get _submitted => _locStatus == 'Pending Verification';
   bool get _verified => _locStatus == 'Verified';
 
-  /// A visit can only start once the location is on record. Awaiting the
-  /// manager's verification is enough — the rep isn't blocked by that queue.
+  /// A visit can only start once the location is on record. Records left
+  /// 'Pending Verification' from when a manager still checked them count too —
+  /// there is nobody to move them on now.
   /// 'Rejected' does not count: that location has to be captured again.
   bool get _locationCaptured => _submitted || _verified;
 
   /// One-time location capture for the lead. This never logs a visit —
   /// punching in on the visit card is the only thing that creates a visit.
   ///
-  /// GPS and the duplicate check come before the photo on purpose. Asking a rep
-  /// to photograph a shopfront and only then telling them the shop is already
-  /// on record wastes the one part of this that costs them time.
+  /// GPS only, and verified on the spot. The banner photo used to be taken
+  /// here so a manager could confirm the coordinates belonged to the shop;
+  /// with that queue gone there is nobody to look at it.
   Future<void> _capture() async {
     final rep = Session.I.salesPerson;
     if (rep == null) return _snack('No rep linked to this login.');
@@ -77,27 +77,20 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
         exclude: {_l['name'] as String},
       );
       if (!clear || !mounted) return;
-      final img = await pickPhoto(context, title: 'Location / banner photo');
-      if (img == null) return _snack('A location/banner photo is required.');
       await Api.captureLeadLocation(
         lead: _l['name'] as String,
         salesPerson: rep,
         lat: pos.latitude,
         lng: pos.longitude,
       );
-      await Api.uploadPhoto(
-        doctype: 'Lead',
-        docname: _l['name'] as String,
-        fieldname: 'custom_banner_photo',
-        filePath: img.path,
-        filename: 'lead_banner.jpg',
-      );
       setState(() {
-        _l['custom_location_status'] = 'Pending Verification';
+        _l['custom_location_status'] = 'Verified';
         _l['custom_latitude'] = pos.latitude;
         _l['custom_longitude'] = pos.longitude;
+        _l['custom_verified_latitude'] = pos.latitude;
+        _l['custom_verified_longitude'] = pos.longitude;
       });
-      _snack('Captured - sent for manager verification.');
+      _snack('Location captured ✓');
     } catch (e) {
       _snack(humanError(e));
     } finally {
@@ -237,9 +230,9 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                           label: Padding(
                             padding: const EdgeInsets.all(10),
                             child: Text(_verified
-                                ? 'Verified'
+                                ? 'Location captured'
                                 : _submitted
-                                    ? 'Submitted for verification'
+                                    ? 'Captured'
                                     : (_locStatus == 'Rejected'
                                         ? 'Re-capture Location'
                                         : 'Capture Location')),

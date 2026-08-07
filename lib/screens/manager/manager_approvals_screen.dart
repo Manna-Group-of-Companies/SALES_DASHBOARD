@@ -29,14 +29,16 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
   /// Orders live in Team Orders and only there. Approving one fixes a price
   /// permanently, commits stock, and — for a lead — converts the party, so it
   /// belongs on a screen built to show what that decision rests on, not mixed
-  /// in with location photos to verify. Two places to look was two places to
-  /// miss one.
+  /// in with sites to verify. Two places to look was two places to miss one.
+  ///
+  /// Customer and lead locations are no longer here either. They were only
+  /// ever a queue because a photograph needed a human to say it matched the
+  /// place; the photo has gone, so there is nothing left to judge. A capture
+  /// is now trusted as taken and verifies itself.
   Future<List<Approval>> _load() async {
     final res = await Future.wait([
       Api.getPendingProformaReleases(),
-      Api.getPendingLocationVerifications(),
       Api.getPendingSiteVerifications(),
-      Api.getPendingLeadLocationVerifications(),
     ]);
     final out = <Approval>[];
     for (final r in res[0]) {
@@ -45,14 +47,6 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
           'proforma'));
     }
     for (final r in res[1]) {
-      out.add(Approval(
-          'Location verification', r['name'],
-          r['custom_location_captured_by'],
-          r['customer_name'] ?? r['name'], null, 'location',
-          lat: r['custom_latitude'], lng: r['custom_longitude'],
-          image: r['custom_banner_photo']?.toString()));
-    }
-    for (final r in res[2]) {
       // A site hangs off a customer or a lead, never both. Heading the card
       // with a blank customer told the manager nothing about what they were
       // being asked to approve.
@@ -65,15 +59,6 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
           lat: r['latitude'], lng: r['longitude'],
           image: r['banner_photo']?.toString()));
     }
-    for (final r in res[3]) {
-      out.add(Approval(
-          'Lead location verification', r['name'],
-          r['custom_location_captured_by'],
-          r['lead_name'] ?? r['name'], null, 'lead_location',
-          lat: r['custom_latitude'], lng: r['custom_longitude'],
-          image: r['custom_banner_photo']?.toString()));
-    }
-
     // The outstanding-limit enrichment and escalation flag that used to run
     // here went with the orders. Nothing left on this screen turns on a rep's
     // credit position.

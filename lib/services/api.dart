@@ -929,10 +929,13 @@ class Api {
     required double lat,
     required double lng,
   }) async {
+    // Captured and verified in one step — see captureCustomerLocation for why.
     await _put('Lead', lead, {
       'custom_latitude': lat,
       'custom_longitude': lng,
-      'custom_location_status': 'Pending Verification',
+      'custom_verified_latitude': lat,
+      'custom_verified_longitude': lng,
+      'custom_location_status': 'Verified',
       'custom_location_captured_by': salesPerson,
     });
   }
@@ -2633,10 +2636,20 @@ class Api {
   }) async {
     final stamp =
     DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
+    // Captured and verified in one step.
+    //
+    // The verification queue existed because a photograph needed a human to
+    // say it matched the place. With no photo there is nothing for a manager
+    // to look at, and a queue nobody can act on is worse than no queue: the
+    // record sits "Pending Verification" for ever, and the verified
+    // coordinates — the ones the 100 m punch-in check runs against — are never
+    // written, so the rep is quietly blocked from starting a visit.
     final body = {
       'custom_latitude': lat,
       'custom_longitude': lng,
-      'custom_location_status': 'Pending Verification',
+      'custom_verified_latitude': lat,
+      'custom_verified_longitude': lng,
+      'custom_location_status': 'Verified',
       'custom_location_captured_by': salesPerson,
       'custom_location_captured_on': stamp,
     };

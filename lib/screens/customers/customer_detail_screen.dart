@@ -15,7 +15,6 @@ import 'package:manna_field_sales/widgets/route_required_gate.dart';
 import 'package:manna_field_sales/widgets/sites_section.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/map_service.dart';
-import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
 import 'package:manna_field_sales/widgets/visit_punch_card.dart';
 
 class CustomerDetailScreen extends StatefulWidget {
@@ -61,19 +60,24 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   String get _status =>
       (c['custom_location_status'] ?? 'Not Captured').toString();
 
-  /// A visit can only start once the shop location is on record. Awaiting the
-  /// manager's verification is enough — the rep isn't blocked by that queue.
+  /// A visit can only start once the shop location is on record. Records left
+  /// 'Pending Verification' from when a manager still checked them count too —
+  /// there is nobody to move them on now, and stranding those reps would be a
+  /// consequence of removing the queue, not a decision anyone took.
   /// 'Rejected' does not count: that location has to be captured again.
   bool get _locationCaptured =>
       _status == 'Pending Verification' || _status == 'Verified';
 
   /// Captures the shop location once. This never logs a visit — punching in
   /// on the visit card is the only thing that creates a Sales Visit.
+  ///
+  /// GPS only. The shop photo used to be taken here so a manager could confirm
+  /// the coordinates belonged to the shop; with that queue gone there is
+  /// nobody to look at it, and a photograph nobody examines is a minute of the
+  /// rep's time at every counter for nothing.
   Future<void> _capture() async {
     final rep = Session.I.salesPerson;
     if (rep == null) return _snack('No rep linked to this login.');
-    final img = await pickPhoto(context, title: 'Shop banner photo');
-    if (img == null) return _snack('A shop banner photo is required.');
     setState(() => _busy = true);
     _snack('Getting GPS...');
     try {
@@ -84,19 +88,14 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         lat: pos.latitude,
         lng: pos.longitude,
       );
-      await Api.uploadPhoto(
-        doctype: 'Customer',
-        docname: c['name'],
-        fieldname: 'custom_banner_photo',
-        filePath: img.path,
-        filename: 'banner.jpg',
-      );
       setState(() {
-        c['custom_location_status'] = 'Pending Verification';
+        c['custom_location_status'] = 'Verified';
         c['custom_latitude'] = pos.latitude;
         c['custom_longitude'] = pos.longitude;
+        c['custom_verified_latitude'] = pos.latitude;
+        c['custom_verified_longitude'] = pos.longitude;
       });
-      _snack('Captured - sent for manager verification.');
+      _snack('Location captured ✓');
     } catch (e) {
       _snack(humanError(e));
     } finally {
@@ -258,9 +257,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             ? Icons.hourglass_top
             : Icons.my_location;
     final String label = verified
-        ? 'Verified'
+        ? 'Location captured'
         : submitted
-            ? 'Submitted for verification'
+            ? 'Captured'
             : 'Capture Location';
 
     return SizedBox(
