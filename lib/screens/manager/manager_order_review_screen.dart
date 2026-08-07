@@ -21,7 +21,6 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
-import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart';
@@ -186,26 +185,11 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
     if (mounted) setState(() => _init = _load());
   }
 
-  Future<void> _setLineMode(Map<String, dynamic> it, String mode) async {
-    if (_modeOf(it) == mode) return;
-    setState(() => _busy = true);
-    try {
-      await Api.setLineFulfilmentMode(
-        orderName: widget.orderName,
-        itemCode: '${it['item_code']}',
-        mode: mode,
-        isLead: _isLead,
-      );
-      _snack(mode == kFulfilMinimumStock
-          ? 'Booked against minimum stock.'
-          : 'Released — this line waits for production.');
-      setState(() => _init = _load());
-    } catch (e) {
-      _snack(humanError(e));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
+  // Switching a line between minimum stock and new production was removed:
+  // the pool goes to whoever booked it first, so there was never really a
+  // choice to make here. `Api.setLineFulfilmentMode` is left in place — it is
+  // still the only correct way to move a line between the two pools, should a
+  // reason to do that deliberately ever appear.
 
   Future<void> _decide(bool approve) async {
     // A lead that cannot be invoiced cannot be approved. Refused here rather
@@ -584,114 +568,47 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
             ]),
       );
 
-  /// Why this line's source can no longer be changed, or null while it can.
+  /// Where this line is being served from — reported, never chosen.
   ///
-  /// **Approval is the lock.** Where a line is served from only matters at the
-  /// moment production receives the order, and that moment is approval. The
-  /// manager decides stock or production as part of saying yes, and having
-  /// decided, has decided — production is already working to it.
+  /// This was a pair of chips the manager picked between, and it was the wrong
+  /// question to put to them. Two orders wanting more of a product than the
+  /// pool holds cannot both be served from it however anybody chooses; the
+  /// stock belongs to whoever booked first, because that booking is already
+  /// holding it. Offering a choice the booking had in effect already made only
+  /// invited a manager to "switch" a line and quietly take stock off a rep who
+  /// had it — and then wonder why the pool no longer added up.
   ///
-  /// If a rep edits an approved order it returns to the queue, and the manager
-  /// gets the choice again. That is correct: they are being asked to approve it
-  /// afresh, and the lines may not be the ones they decided on.
-  ///
-  /// The three below approval are backstops for states that should not be
-  /// reachable without it. They are kept because each one, on its own, would
-  /// mean releasing a reservation against goods the floor has already acted on
-  /// — at worst, stock that is physically on a van.
-  String? _modeLockReason(Map<String, dynamic> it) {
-    if (isDispatched(it['custom_production_stage'])) {
-      return 'this line has been dispatched';
-    }
-    if (Api.isOrderComplete(_order)) {
-      return 'the order is complete';
-    }
-    if (_approved) {
-      return 'the order is approved and production is working to it';
-    }
-    if (!orderEditWindowOpen(_order['delivery_date'])) {
-      return 'changes closed at 1 pm on the delivery date';
-    }
-    return null;
-  }
-
+  /// So the line reports what happened. First booking takes the shelf, a claim
+  /// takes the run, everything else is made to order.
   Widget _modeToggle(Map<String, dynamic> it, String mode) {
-    final locked = _modeLockReason(it);
-    if (locked != null) {
-      final stock = mode == kFulfilMinimumStock;
-      return Row(children: [
-        Icon(Icons.lock_outline, size: 14, color: Colors.grey.shade600),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-            'Served from ${stock ? 'minimum stock' : 'new production'} '
-            '— $locked.',
-            style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
-          ),
+    final (label, colour, icon) = switch (mode) {
+      kFulfilMinimumStock => (
+          'Served from minimum stock',
+          Colors.blue.shade700,
+          Icons.inventory_2_outlined
         ),
-      ]);
-    }
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Expanded(
-          child: _modeChip(
-            label: 'Minimum stock',
-            selected: mode == kFulfilMinimumStock,
-            colour: Colors.blue.shade700,
-            onTap: () => _setLineMode(it, kFulfilMinimumStock),
-          ),
+      kFulfilProductionRun => (
+          'Claimed from a production run — not made yet',
+          const Color(0xFF1A56A8),
+          Icons.precision_manufacturing_outlined
         ),
-        const SizedBox(width: 6),
-        Expanded(
-          child: _modeChip(
-            label: 'New production',
-            selected: mode == kFulfilNewProduction,
-            colour: Colors.deepPurple,
-            onTap: () => _setLineMode(it, kFulfilNewProduction),
-          ),
+      _ => (
+          'Made to order',
+          Colors.deepPurple,
+          Icons.precision_manufacturing_outlined
         ),
-      ]),
-      const SizedBox(height: 4),
-      // Said before the decision, not after it. A manager who only learns the
-      // choice was final once it is final has been told nothing useful.
-      Text('Fixed once you approve this order.',
-          style: TextStyle(fontSize: 10.5, color: Colors.grey.shade600)),
+    };
+
+    return Row(children: [
+      Icon(icon, size: 14, color: colour),
+      const SizedBox(width: 6),
+      Expanded(
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 11.5, fontWeight: FontWeight.w600, color: colour)),
+      ),
     ]);
   }
-
-  Widget _modeChip({
-    required String label,
-    required bool selected,
-    required Color colour,
-    required VoidCallback onTap,
-  }) =>
-      InkWell(
-        onTap: _busy ? null : onTap,
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-          decoration: BoxDecoration(
-            color: selected ? colour.withValues(alpha: 0.12) : Colors.white,
-            border: Border.all(
-                color: selected ? colour : const Color(0xFFDDDDDD),
-                width: selected ? 1.5 : 1),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(selected ? Icons.radio_button_checked : Icons.radio_button_off,
-                size: 14, color: selected ? colour : Colors.black38),
-            const SizedBox(width: 4),
-            Flexible(
-              child: Text(label,
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: selected ? colour : Colors.black54,
-                      fontWeight:
-                          selected ? FontWeight.bold : FontWeight.normal)),
-            ),
-          ]),
-        ),
-      );
 
   Widget _decisionSection() {
     if (_approved) {
