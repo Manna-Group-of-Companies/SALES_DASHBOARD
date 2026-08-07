@@ -819,14 +819,21 @@ class Api {
     final order = isLead ? await getLeadOrder(orderName) : await getOrder(orderName);
     // Checked against the order as stored, not as the screen last saw it.
     //
-    // Completion closes this before the deadline does, and independently of
-    // it: an order is often dispatched days before its delivery date, and
-    // switching a dispatched line to new production would release a
-    // reservation against goods that have already gone out — putting stock
-    // back on offer that physically is not there.
+    // Approval is the lock: where a line is served from only matters when
+    // production receives the order, and approval is that moment. The two
+    // below it are backstops for states that should not be reachable without
+    // approval — each would otherwise release a reservation against goods the
+    // floor has already acted on.
+    //
+    // A lead order has no approval status of this kind and never carries
+    // minimum-stock bookings anyway, so the gate applies to Sales Orders.
     if (isOrderComplete(order)) {
       throw Exception('This order has been dispatched. Where its lines were '
           'served from can no longer be changed.');
+    }
+    if (!isLead && orderApproved(order)) {
+      throw Exception('This order is approved and production is working to it. '
+          'Where its lines are served from can no longer be changed.');
     }
     if (!orderEditWindowOpen(order['delivery_date'])) {
       throw Exception(orderLockReason(order));

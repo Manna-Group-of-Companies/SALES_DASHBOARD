@@ -586,18 +586,28 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
 
   /// Why this line's source can no longer be changed, or null while it can.
   ///
-  /// Three separate things close it, and the deadline is the weakest of them.
-  /// An order can be dispatched days before its delivery date — four of them
-  /// are, right now — so a rule that waited for 1 pm would leave the toggle
-  /// live on goods that have already left the building. Switching one of those
-  /// to new production would release a reservation against stock that is on a
-  /// van, and put it back on offer to another rep.
+  /// **Approval is the lock.** Where a line is served from only matters at the
+  /// moment production receives the order, and that moment is approval. The
+  /// manager decides stock or production as part of saying yes, and having
+  /// decided, has decided — production is already working to it.
+  ///
+  /// If a rep edits an approved order it returns to the queue, and the manager
+  /// gets the choice again. That is correct: they are being asked to approve it
+  /// afresh, and the lines may not be the ones they decided on.
+  ///
+  /// The three below approval are backstops for states that should not be
+  /// reachable without it. They are kept because each one, on its own, would
+  /// mean releasing a reservation against goods the floor has already acted on
+  /// — at worst, stock that is physically on a van.
   String? _modeLockReason(Map<String, dynamic> it) {
     if (isDispatched(it['custom_production_stage'])) {
       return 'this line has been dispatched';
     }
     if (Api.isOrderComplete(_order)) {
       return 'the order is complete';
+    }
+    if (_approved) {
+      return 'the order is approved and production is working to it';
     }
     if (!orderEditWindowOpen(_order['delivery_date'])) {
       return 'changes closed at 1 pm on the delivery date';
@@ -621,24 +631,31 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
         ),
       ]);
     }
-    return Row(children: [
-      Expanded(
-        child: _modeChip(
-          label: 'Minimum stock',
-          selected: mode == kFulfilMinimumStock,
-          colour: Colors.blue.shade700,
-          onTap: () => _setLineMode(it, kFulfilMinimumStock),
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Expanded(
+          child: _modeChip(
+            label: 'Minimum stock',
+            selected: mode == kFulfilMinimumStock,
+            colour: Colors.blue.shade700,
+            onTap: () => _setLineMode(it, kFulfilMinimumStock),
+          ),
         ),
-      ),
-      const SizedBox(width: 6),
-      Expanded(
-        child: _modeChip(
-          label: 'New production',
-          selected: mode == kFulfilNewProduction,
-          colour: Colors.deepPurple,
-          onTap: () => _setLineMode(it, kFulfilNewProduction),
+        const SizedBox(width: 6),
+        Expanded(
+          child: _modeChip(
+            label: 'New production',
+            selected: mode == kFulfilNewProduction,
+            colour: Colors.deepPurple,
+            onTap: () => _setLineMode(it, kFulfilNewProduction),
+          ),
         ),
-      ),
+      ]),
+      const SizedBox(height: 4),
+      // Said before the decision, not after it. A manager who only learns the
+      // choice was final once it is final has been told nothing useful.
+      Text('Fixed once you approve this order.',
+          style: TextStyle(fontSize: 10.5, color: Colors.grey.shade600)),
     ]);
   }
 
