@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
+import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart';
@@ -583,22 +584,38 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
             ]),
       );
 
-  Widget _modeToggle(Map<String, dynamic> it, String mode) {
-    // Where an order is served from is a change to the order like any other,
-    // and it stops being one at 1 pm on the delivery date. After that the
-    // goods are being picked or made against whatever was decided, and moving
-    // a line between stock and production would be describing a decision the
-    // floor has already acted on.
+  /// Why this line's source can no longer be changed, or null while it can.
+  ///
+  /// Three separate things close it, and the deadline is the weakest of them.
+  /// An order can be dispatched days before its delivery date — four of them
+  /// are, right now — so a rule that waited for 1 pm would leave the toggle
+  /// live on goods that have already left the building. Switching one of those
+  /// to new production would release a reservation against stock that is on a
+  /// van, and put it back on offer to another rep.
+  String? _modeLockReason(Map<String, dynamic> it) {
+    if (isDispatched(it['custom_production_stage'])) {
+      return 'this line has been dispatched';
+    }
+    if (Api.isOrderComplete(_order)) {
+      return 'the order is complete';
+    }
     if (!orderEditWindowOpen(_order['delivery_date'])) {
+      return 'changes closed at 1 pm on the delivery date';
+    }
+    return null;
+  }
+
+  Widget _modeToggle(Map<String, dynamic> it, String mode) {
+    final locked = _modeLockReason(it);
+    if (locked != null) {
       final stock = mode == kFulfilMinimumStock;
       return Row(children: [
-        Icon(Icons.lock_outline,
-            size: 14, color: Colors.grey.shade600),
+        Icon(Icons.lock_outline, size: 14, color: Colors.grey.shade600),
         const SizedBox(width: 6),
         Expanded(
           child: Text(
             'Served from ${stock ? 'minimum stock' : 'new production'} '
-            '— fixed at 1 pm on the delivery date.',
+            '— $locked.',
             style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
           ),
         ),

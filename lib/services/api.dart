@@ -817,10 +817,17 @@ class Api {
   }) async {
     final ref = OrderRef(orderName, isLead: isLead);
     final order = isLead ? await getLeadOrder(orderName) : await getOrder(orderName);
-    // The same 1 pm deadline that closes the rest of the order. Moving a line
-    // between stock and production after it would release or claim goods the
-    // floor has already committed, so the window is checked against the order
-    // as stored rather than as the screen last saw it.
+    // Checked against the order as stored, not as the screen last saw it.
+    //
+    // Completion closes this before the deadline does, and independently of
+    // it: an order is often dispatched days before its delivery date, and
+    // switching a dispatched line to new production would release a
+    // reservation against goods that have already gone out — putting stock
+    // back on offer that physically is not there.
+    if (isOrderComplete(order)) {
+      throw Exception('This order has been dispatched. Where its lines were '
+          'served from can no longer be changed.');
+    }
     if (!orderEditWindowOpen(order['delivery_date'])) {
       throw Exception(orderLockReason(order));
     }
