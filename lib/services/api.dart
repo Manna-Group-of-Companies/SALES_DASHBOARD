@@ -1635,13 +1635,83 @@ class Api {
               'grand_total': l['total_amount'],
             });
           }
-          // Newest first across both, so the list reads as one history rather
-          // than as two lists stapled together.
-          rows.sort((a, b) => '${b['transaction_date'] ?? ''}'
+          final collapsed = await _collapseIntoWeeks(rows);
+          // Newest first across all of them, so the list reads as one history
+          // rather than as several lists stapled together.
+          collapsed.sort((a, b) => '${b['transaction_date'] ?? ''}'
               .compareTo('${a['transaction_date'] ?? ''}'));
-          return rows;
+          return collapsed;
         },
       );
+
+  /// Replaces each week's grouped orders with the one combined order holding
+  /// them.
+  ///
+  /// Once the production manager has closed a week, a customer's four orders
+  /// are one order as far as everybody afterwards is concerned — that is the
+  /// point of grouping. Listing both the group and its members would show the
+  /// same money twice and leave the rep counting it twice.
+  ///
+  /// Ungrouped orders are untouched, so a week still running reads exactly as
+  /// it did before it was closed.
+  static Future<List<Map<String, dynamic>>> _collapseIntoWeeks(
+      List<Map<String, dynamic>> rows) async {
+    final groups = <String, List<Map<String, dynamic>>>{};
+    for (final r in rows) {
+      final g = '${r['custom_combined_order'] ?? ''}'.trim();
+      if (g.isEmpty || g == 'null') continue;
+      groups.putIfAbsent(g, () => []).add(r);
+    }
+    if (groups.isEmpty) return rows;
+
+    // The combined orders are read rather than reconstructed from the members:
+    // the header carries the week and the totals for *every* order in the
+    // group, including any raised by another rep, and a rep looking at their
+    // customer's week should see the whole week.
+    List<Map<String, dynamic>> heads = const [];
+    try {
+      heads = await _list('Combined Order',
+          fields: '["name","customer","customer_name","week_start","week_end",'
+              '"status","order_count","total_amount"]',
+          filters: '[["name","in",${_inList(groups.keys.toList())}]]');
+    } catch (_) {
+      // If the headers cannot be read, leave the individual orders showing.
+      // A rep seeing their orders un-grouped is a worse list; a rep seeing
+      // neither the group nor its members has lost work off their screen.
+      return rows;
+    }
+    return collapseIntoWeeks(rows, heads);
+  }
+
+  /// The swap itself, given the headers. Separated from fetching them because
+  /// this is where an order could go missing, and that is worth testing without
+  /// a network.
+  @visibleForTesting
+  static List<Map<String, dynamic>> collapseIntoWeeks(
+      List<Map<String, dynamic>> rows, List<Map<String, dynamic>> heads) {
+    if (heads.isEmpty) return rows;
+    final found = {for (final h in heads) '${h['name']}'};
+
+    // Only members of a group that was actually read are dropped. An order
+    // pointing at a combined order that could not be found stays on the list:
+    // losing it from the rep's screen is far worse than showing it ungrouped.
+    final out = <Map<String, dynamic>>[
+      for (final r in rows)
+        if (!found.contains('${r['custom_combined_order'] ?? ''}'.trim())) r
+    ];
+    for (final h in heads) {
+      out.add({
+        ...h,
+        'is_combined': true,
+        // Mapped onto the same shape the list already speaks, so the row sorts
+        // and renders beside ordinary orders instead of needing its own path.
+        'customer': h['customer_name'] ?? h['customer'],
+        'transaction_date': h['week_end'] ?? h['week_start'],
+        'grand_total': h['total_amount'],
+      });
+    }
+    return out;
+  }
 
   static Future<Map<String, dynamic>> getOrder(String name) async {
     final r = await Session.I.dio.get(_res('Sales Order') + '/$name');

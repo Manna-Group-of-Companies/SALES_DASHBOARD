@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
+import 'package:manna_field_sales/screens/orders/combined_order_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/history_list.dart';
@@ -17,6 +18,26 @@ class MyOrdersScreen extends StatelessWidget {
       loader: Api.getMyOrders,
       cacheKey: CacheKeys.orders,
       tileBuilder: (ctx, r, _) {
+        // A closed week arrives as one row standing for all of its orders.
+        // Its members are not listed separately — see Api.getMyOrders — so the
+        // same money is never counted twice down the screen.
+        if (r['is_combined'] == true) {
+          final count = (r['order_count'] ?? 0);
+          return ListTile(
+            leading: const Icon(Icons.merge_type, color: Color(0xFF6D4C41)),
+            title: Text('${r['customer'] ?? r['name']}',
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            subtitle: Text(
+                '${r['name']}  ·  week ${r['week_start'] ?? ''} to ${r['week_end'] ?? ''}'
+                '\n$count ${count == 1 ? 'order' : 'orders'} combined  ·  '
+                'Rs ${r['grand_total'] ?? 0}'),
+            isThreeLine: true,
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(ctx).push(MaterialPageRoute(
+                builder: (_) => CombinedOrderScreen(combined: r))),
+          );
+        }
+
         final isLead = r['is_lead'] == true;
         // Set once the production manager has closed the week this order fell
         // in. The rep sees it so that a customer asking about "last week's
