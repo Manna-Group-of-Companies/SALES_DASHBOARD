@@ -88,12 +88,14 @@ class _ProductionOrderDetailScreenState
     }
   }
 
-  Future<void> _setStage(Map<String, dynamic> item, String stage) =>
+  Future<void> _setStage(Map<String, dynamic> item, String stage,
+          {bool stockPart = false}) =>
       _run(
           () => Api.setItemStage(
                 orderName: widget.orderName,
                 itemRowName: '${item['name']}',
                 stage: stage,
+                stockPart: stockPart,
               ),
           'Stage updated.');
 
@@ -277,11 +279,8 @@ class _ProductionOrderDetailScreenState
   Widget _itemCard(Map<String, dynamic> it) {
     final stages = stagesForItem(it);
     final current = '${it['custom_production_stage'] ?? ''}';
-    final index = stageIndex(stages, current);
-    final progress = stageProgress(stages, current);
     final fromStock =
         '${it['custom_fulfilment_mode'] ?? ''}' == 'From Minimum Stock';
-    final done = isDispatched(current);
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -347,48 +346,115 @@ class _ProductionOrderDetailScreenState
                     fontSize: 11, fontWeight: FontWeight.w600)),
           ]),
           const Divider(height: 18),
-          Row(children: [
-            Expanded(
-              child: Text(
-                  index < 0
-                      ? 'Stage "$current" is not in this product\'s cycle'
-                      : 'Stage ${index + 1} of ${stages.length}  ·  '
-                          '${current.isEmpty ? kStageNotStarted : current}',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: index < 0
-                          ? Colors.red.shade700
-                          : (done ? Colors.green : Colors.black87))),
+          // A split line is two pieces of work, and they are tracked apart.
+          // The half coming off the shelf only has to be picked and packed;
+          // running it against Curing and Extrusion described work nobody was
+          // doing and left the floor looking behind on goods already made.
+          if (_reservedRolls(it) > 0 || _reservedBelts(it) > 0)
+            _stageTrack(
+              it,
+              title: 'From minimum stock  ·  '
+                  '${trimQtyLocal(_reservedRolls(it))}'
+                  '${_reservedBelts(it) > 0 ? ' + ${_reservedBelts(it)} belts' : ''}',
+              stages: fromStockStages,
+              current: '${it['custom_stock_stage'] ?? ''}',
+              colour: Colors.blue.shade700,
+              stockPart: true,
             ),
-          ]),
-          const SizedBox(height: 4),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 5,
-              backgroundColor: const Color(0xFFEEEEEE),
-              valueColor: AlwaysStoppedAnimation(
-                  done ? Colors.green : const Color(0xFF7C3AED)),
+          if (_toMake(it) case (rolls: final r, belts: final b)
+              when r > 0.0001 || b > 0)
+            _stageTrack(
+              it,
+              title: 'To be made  ·  ${trimQtyLocal(r)}'
+                  '${b > 0 ? ' + $b belts' : ''}',
+              stages: stagesForLabel(it['custom_product_category']),
+              current: current,
+              colour: Colors.deepPurple,
+              stockPart: false,
             ),
-          ),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String>(
-            initialValue: stages.contains(current) ? current : null,
-            isExpanded: true,
-            decoration: const InputDecoration(
-                labelText: 'Move to stage',
-                border: OutlineInputBorder(),
-                isDense: true),
-            items: [
-              for (final s in stages)
-                DropdownMenuItem(value: s, child: Text(s))
-            ],
-            onChanged: _busy ? null : (v) => v == null ? null : _setStage(it, v),
-          ),
+          // Nothing reserved and nothing left to make means the split is not
+          // known — an order read before its reservations resolved. The line
+          // keeps the single track it always had.
+          if (_reservedRolls(it) <= 0 &&
+              _reservedBelts(it) <= 0 &&
+              _toMake(it).rolls <= 0.0001 &&
+              _toMake(it).belts <= 0)
+            _stageTrack(
+              it,
+              title: 'Progress',
+              stages: stages,
+              current: current,
+              colour: const Color(0xFF7C3AED),
+              stockPart: false,
+            ),
         ]),
       ),
+    );
+  }
+
+  double _reservedRolls(Map<String, dynamic> it) => _num(it['reserved_rolls']);
+  int _reservedBelts(Map<String, dynamic> it) =>
+      (it['reserved_belts'] as num?)?.toInt() ?? 0;
+
+  /// One half of a line: what it is, where it has got to, and how to move it.
+  Widget _stageTrack(
+    Map<String, dynamic> it, {
+    required String title,
+    required List<String> stages,
+    required String current,
+    required Color colour,
+    required bool stockPart,
+  }) {
+    final index = stageIndex(stages, current);
+    final progress = stageProgress(stages, current);
+    final done = isDispatched(current);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title,
+            style: TextStyle(
+                fontSize: 11.5, fontWeight: FontWeight.bold, color: colour)),
+        const SizedBox(height: 3),
+        Text(
+            index < 0
+                ? 'Stage "$current" is not in this cycle'
+                : 'Stage ${index + 1} of ${stages.length}  ·  '
+                    '${current.isEmpty ? kStageNotStarted : current}',
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: index < 0
+                    ? Colors.red.shade700
+                    : (done ? Colors.green : Colors.black87))),
+        const SizedBox(height: 4),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: LinearProgressIndicator(
+            value: progress,
+            minHeight: 5,
+            backgroundColor: const Color(0xFFEEEEEE),
+            valueColor:
+                AlwaysStoppedAnimation(done ? Colors.green : colour),
+          ),
+        ),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<String>(
+          initialValue: stages.contains(current) ? current : null,
+          isExpanded: true,
+          decoration: const InputDecoration(
+              labelText: 'Move to stage',
+              border: OutlineInputBorder(),
+              isDense: true),
+          items: [
+            for (final s in stages) DropdownMenuItem(value: s, child: Text(s))
+          ],
+          onChanged: _busy
+              ? null
+              : (v) =>
+                  v == null ? null : _setStage(it, v, stockPart: stockPart),
+        ),
+      ]),
     );
   }
 

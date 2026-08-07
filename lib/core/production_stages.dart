@@ -124,6 +124,12 @@ List<String> stagesForLabel(dynamic shortLabel,
 bool isFromMinimumStock(Map<String, dynamic> item) =>
     '${item['custom_fulfilment_mode'] ?? ''}' == kFulfilMinimumStock;
 
+/// The short cycle for goods already on a shelf, whatever they are made of.
+///
+/// Exposed so the production screen can draw the stock half of a split line
+/// against it while the made half runs the full family cycle.
+List<String> get fromStockStages => _fromStockStages;
+
 /// The sequence for one order line, read straight off the line.
 ///
 /// The single entry point the screens and the roll-up both use, so a stock line

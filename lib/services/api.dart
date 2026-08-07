@@ -3415,17 +3415,20 @@ class Api {
 
   /// One order for the production floor, with the customer stripped out the
   /// same way. Returns the raw document plus a `destination`.
-  static Future<Map<String, dynamic>> getOrderForProduction(String name) async {
-    final o = await getOrder(name);
-
-    // How much of each line the shelf covered, so production knows what is
-    // actually left to make. An order for eight rolls with four reserved needs
-    // four made, and nothing on the line itself says so — the reservation is a
-    // separate record.
+  /// Stamps each line with how much of it the shelf already covers.
+  ///
+  /// An order for eight rolls with four reserved needs four made, and nothing
+  /// on the line itself says so — the reservation is a separate record. Every
+  /// screen that has to split a line reads these two keys.
+  ///
+  /// Failing quietly is deliberate: without them a line shows no split, which
+  /// is what it did before. Losing the order over a failed lookup is worse.
+  static Future<void> _attachReservedSplit(String orderName, List items) async {
     try {
       final held = await _list('Manna Stock Reservation',
           fields: '["item_code","qty","loose_belts"]',
-          filters: '[["sales_order","=","$name"],["status","=","Active"]]');
+          filters:
+              '[["sales_order","=","$orderName"],["status","=","Active"]]');
       final byItem = <String, ({double qty, int belts})>{};
       for (final h in held) {
         final code = '${h['item_code']}';
@@ -3435,16 +3438,19 @@ class Api {
           belts: cur.belts + ((h['loose_belts'] as num?)?.toInt() ?? 0),
         );
       }
-      for (final it in ((o['items'] as List?) ?? [])) {
+      for (final it in items) {
         if (it is! Map) continue;
         final r = byItem['${it['item_code']}'] ?? (qty: 0.0, belts: 0);
         it['reserved_rolls'] = r.qty;
         it['reserved_belts'] = r.belts;
       }
-    } catch (_) {
-      // Without this the line simply shows no split, which is what it did
-      // before. Losing the whole order over it would be worse.
-    }
+    } catch (_) {}
+  }
+
+  static Future<Map<String, dynamic>> getOrderForProduction(String name) async {
+    final o = await getOrder(name);
+
+    await _attachReservedSplit(name, (o['items'] as List?) ?? []);
 
     final code = '${o['customer'] ?? ''}';
     var destination = 'No route set';
@@ -3594,18 +3600,30 @@ class Api {
   }
 
   /// Moves one line along its process cycle.
+  /// Moves one half of one line along its cycle.
+  ///
+  /// [stockPart] picks which: the portion served off the shelf, or the portion
+  /// being made. They are separate because they are separate work — the shelf
+  /// half only has to be picked and packed, and showing it against Curing and
+  /// Extrusion described work nobody was doing.
   static Future<void> setItemStage({
     required String orderName,
     required String itemRowName,
     required String stage,
+    bool stockPart = false,
   }) async {
     final order = await getOrder(orderName);
     final items = ((order['items'] as List?) ?? [])
         .map((e) => (e as Map).cast<String, dynamic>())
         .toList();
     for (final it in items) {
-      if ('${it['name']}' == itemRowName) it['custom_production_stage'] = stage;
+      if ('${it['name']}' != itemRowName) continue;
+      it[stockPart ? 'custom_stock_stage' : 'custom_production_stage'] = stage;
     }
+    // The roll-up reads the split off the reservations, which a plain getOrder
+    // does not carry. Resolved here so an order is not judged done because the
+    // half nobody has touched was invisible.
+    await _attachReservedSplit(orderName, items);
     await _put('Sales Order', orderName, {
       'items': items,
       // Rolled up to the order so the sales side can see it. Production moves
@@ -3638,9 +3656,11 @@ class Api {
     var allPackedOrBetter = true;
     var anyStarted = false;
 
-    for (final it in items) {
-      final stages = stagesForItem(it);
-      final current = '${it['custom_production_stage'] ?? ''}';
+    // A split line is two things being finished separately: the part off the
+    // shelf, which only has to be picked and packed, and the part being made,
+    // which runs the full cycle. Both must land before the line is done, so
+    // each is weighed on its own sequence and the order takes the slowest.
+    void weigh(List<String> stages, String current) {
       // A stage no longer in the sequence counts as unknown rather than as
       // finished, so revising the stage list cannot make an order look done.
       final rank = current.isEmpty ? 0 : stageIndex(stages, current);
@@ -3650,6 +3670,29 @@ class Api {
       if (current != kStageDispatched) allDispatched = false;
       // "Packed" is the last stage before Dispatched in every family.
       if (effective < stages.length - 2) allPackedOrBetter = false;
+    }
+
+    double n(dynamic v) =>
+        v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
+
+    for (final it in items) {
+      final stockPart = n(it['reserved_rolls']) > 0 ||
+          ((it['reserved_belts'] as num?)?.toInt() ?? 0) > 0;
+      final madePart = !stockPart ||
+          n(it['custom_rolls']) - n(it['reserved_rolls']) > 0.0001;
+
+      // Where the split is not known — an order read without its reservations
+      // resolved — this falls back to weighing the line once, exactly as it
+      // did before, rather than inventing a half that may not exist.
+      if (!stockPart) {
+        weigh(stagesForItem(it), '${it['custom_production_stage'] ?? ''}');
+        continue;
+      }
+      weigh(fromStockStages, '${it['custom_stock_stage'] ?? ''}');
+      if (madePart) {
+        weigh(stagesForLabel(it['custom_product_category']),
+            '${it['custom_production_stage'] ?? ''}');
+      }
     }
 
     if (allDispatched) return 'Dispatched';
