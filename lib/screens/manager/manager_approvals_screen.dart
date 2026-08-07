@@ -205,36 +205,6 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
                         Text('Rep: ${a.rep ?? '—'}',
                             style: const TextStyle(
                                 color: Colors.black54, fontSize: 12)),
-                        if (a.kind == 'so_po' || a.kind == 'lead_po') ...[
-                          const SizedBox(height: 6),
-                          if (a.kind == 'so_po')
-                            Text(
-                                'Customer outstanding: ₹${a.custOutstanding.toStringAsFixed(0)}',
-                                style: const TextStyle(fontSize: 12)),
-                          Text(
-                              'Rep outstanding: ₹${a.repOutstanding.toStringAsFixed(0)}'
-                                  '${a.repLimit > 0 ? '  /  limit ₹${a.repLimit.toStringAsFixed(0)}' : '  /  no limit set'}',
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  color: a.escalate
-                                      ? Colors.red
-                                      : Colors.black87,
-                                  fontWeight: a.escalate
-                                      ? FontWeight.bold
-                                      : FontWeight.normal)),
-                          if (a.escalate)
-                            Container(
-                              margin: const EdgeInsets.only(top: 6),
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                  color: const Color(0xFFFFF3E0),
-                                  borderRadius: BorderRadius.circular(6)),
-                              child: const Text(
-                                  '⚠ Rep is over the outstanding limit. Approving sends this to the General Manager for final approval.',
-                                  style: TextStyle(
-                                      fontSize: 12, color: Colors.deepOrange)),
-                            ),
-                        ],
                         if ((a.image ?? '').isNotEmpty &&
                             (a.kind == 'location' ||
                                 a.kind == 'site' ||

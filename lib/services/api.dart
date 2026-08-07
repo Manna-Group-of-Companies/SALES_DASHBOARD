@@ -1108,6 +1108,15 @@ class Api {
     return ((l.first['custom_outstanding_balance'] ?? 0) as num).toDouble();
   }
 
+  static Future<double> getCustomerCreditLimit(String customer) async {
+    final l = await _list('Customer',
+        fields: '["custom_credit_limit"]',
+        filters: '[["name","=","$customer"]]',
+        limit: 1);
+    if (l.isEmpty) return 0;
+    return ((l.first['custom_credit_limit'] ?? 0) as num).toDouble();
+  }
+
   static Future<void> upsertOutstandingLimit(String rep, double amount) =>
       _put('Sales Person', rep, {'custom_outstanding_limit': amount});
 

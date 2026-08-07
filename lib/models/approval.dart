@@ -12,16 +12,16 @@ class Approval {
   final dynamic lng;
   final String? image;
   double custOutstanding;
-  double repOutstanding;
-  double repLimit;
+  double custLimit;
+  double orderTotal;
   bool escalate;
   Approval(this.title, this.name, this.rep, this.party, this.amount, this.kind,
       {this.lat,
         this.lng,
         this.image,
         this.custOutstanding = 0,
-        this.repOutstanding = 0,
-        this.repLimit = 0,
+        this.custLimit = 0,
+        this.orderTotal = 0,
         this.escalate = false});
 }
 

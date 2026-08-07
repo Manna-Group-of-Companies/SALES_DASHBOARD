@@ -31,11 +31,6 @@ import 'package:manna_field_sales/services/api.dart';
 class ManagerOrderReviewScreen extends StatefulWidget {
   final String orderName;
 
-  /// True when approving would push the order past the rep's outstanding
-  /// limit, in which case the manager's yes escalates to the GM rather than
-  /// finalising anything.
-  final bool escalates;
-
   /// True for an order taken against a lead. The review is the same — same
   /// lines, same minimum stock, same per-line fulfilment decision — but
   /// approving one also converts the lead and raises the Sales Order, and it
@@ -45,7 +40,6 @@ class ManagerOrderReviewScreen extends StatefulWidget {
   const ManagerOrderReviewScreen({
     super.key,
     required this.orderName,
-    this.escalates = false,
     this.isLead = false,
   });
 
@@ -128,6 +122,15 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   /// the status rather than the rate flag: a rep who edits an approved order
   /// sends it back here, and it has to look like work to do again.
   bool get _approved => orderApproved(_order);
+
+  /// True when the sales manager cannot finish this alone.
+  ///
+  /// Over the customer's credit limit is a decision about how much this
+  /// business is willing to be owed, which is above a sales manager. A lead has
+  /// no limit and no trading history, so there is nothing to be over — and a
+  /// GM asked to approve credit for a party nobody has ever invoiced would be
+  /// deciding on no information at all.
+  bool get _escalates => !_isLead && _overLimit;
 
   static double _num(dynamic v) =>
       v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
@@ -230,9 +233,10 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
         if (mounted) Navigator.pop(context, true);
         return;
       }
-      if (approve && widget.escalates) {
+      if (approve && _escalates) {
         await Api.escalateSalesOrderPOToGM(widget.orderName);
-        _snack('Sent to the GM — the rep is over their outstanding limit.');
+        _snack('Sent to the GM — this takes the customer past their credit '
+            'limit.');
       } else {
         await Api.approveSalesOrderPO(widget.orderName, approve);
         _snack(approve
@@ -627,7 +631,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
       );
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      if (widget.escalates)
+      if (_escalates)
         Container(
           margin: const EdgeInsets.only(bottom: 8),
           padding: const EdgeInsets.all(8),
@@ -635,8 +639,8 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
               color: const Color(0xFFFFF3E0),
               borderRadius: BorderRadius.circular(6)),
           child: const Text(
-              'The rep is over their outstanding limit. Approving sends this '
-              'to the General Manager rather than finalising it.',
+              'This order takes the customer past their credit limit. Approving '
+              'sends it to the General Manager rather than finalising it.',
               style: TextStyle(fontSize: 12, color: Colors.deepOrange)),
         ),
       const Text('Approving fixes every rate on this order permanently.',
@@ -649,7 +653,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                 icon: const Icon(Icons.check),
                 label: Padding(
                     padding: const EdgeInsets.all(8),
-                    child: Text(widget.escalates ? 'Send to GM' : 'Approve')))),
+                    child: Text(_escalates ? 'Send to GM' : 'Approve')))),
         const SizedBox(width: 8),
         Expanded(
             child: OutlinedButton.icon(

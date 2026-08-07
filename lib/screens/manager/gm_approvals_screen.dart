@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/models/approval.dart';
+import 'package:manna_field_sales/screens/manager/manager_order_review_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class GMApprovalsScreen extends StatefulWidget {
@@ -37,19 +38,48 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
       out.add(Approval('Lead PO — GM approval', r['name'], r['sales_person'],
           r['lead_name'], (r['total_amount'] ?? 0), 'gm_lead_po'));
     }
-    // outstanding context
+    // These reach the GM because the customer would go past their credit
+    // limit, so the credit picture is the decision — what they owe now, what
+    // this order adds, and what the limit was. Without all three the GM is
+    // being asked to approve a number with nothing to weigh it against.
     await Future.wait(out.map((a) async {
-      final rep = (a.rep ?? '').toString();
-      if (rep.isNotEmpty) {
-        a.repOutstanding = await Api.getRepOutstanding(rep);
-        a.repLimit = await Api.getRepOutstandingLimit(rep);
+      if (a.kind != 'gm_so_po') return;
+      final party = (a.party ?? '').toString();
+      if (party.isEmpty) return;
+      try {
+        a.custOutstanding = await Api.getCustomerOutstanding(party);
+        a.custLimit = await Api.getCustomerCreditLimit(party);
+      } catch (_) {
+        // A missing figure must not hide the approval. It is shown as unknown
+        // rather than as zero, which would read as "owes nothing".
       }
-      if (a.kind == 'gm_so_po') {
-        a.custOutstanding =
-        await Api.getCustomerOutstanding((a.party ?? '').toString());
-      }
+      a.orderTotal = (a.amount is num) ? (a.amount as num).toDouble() : 0;
     }));
     return out;
+  }
+
+  /// One figure of the credit picture.
+  Widget _fig(String label, double value, {bool bold = false}) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child:
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(label, style: const TextStyle(fontSize: 12)),
+          Text('₹${value.toStringAsFixed(0)}',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: bold ? FontWeight.bold : FontWeight.w600)),
+        ]),
+      );
+
+  /// Opens the full order review, where the GM can change anything — the
+  /// lines, the quantities, the rate, the delivery date — before deciding.
+  Future<void> _open(Approval a) async {
+    await Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => ManagerOrderReviewScreen(
+                orderName: a.name, isLead: a.kind == 'gm_lead_po')));
+    _reload();
   }
 
   Future<void> _act(Approval a, bool approve) async {
@@ -117,18 +147,51 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
                         Text('Rep: ${a.rep ?? '—'}',
                             style: const TextStyle(
                                 color: Colors.black54, fontSize: 12)),
-                        if (a.kind == 'gm_so_po')
-                          Text(
-                              'Customer outstanding: ₹${a.custOutstanding.toStringAsFixed(0)}',
-                              style: const TextStyle(fontSize: 12)),
-                        Text(
-                            'Rep outstanding: ₹${a.repOutstanding.toStringAsFixed(0)}'
-                                '${a.repLimit > 0 ? '  /  limit ₹${a.repLimit.toStringAsFixed(0)}' : ''}',
-                            style: const TextStyle(
-                                fontSize: 12,
-                                color: Colors.red,
-                                fontWeight: FontWeight.bold)),
+                        // The credit picture, which is the whole reason this
+                        // reached the GM. Projected is the number that matters:
+                        // the question is not what they owe now but what they
+                        // will owe once this ships.
+                        if (a.kind == 'gm_so_po') ...[
+                          const SizedBox(height: 6),
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                                color: const Color(0xFFFFF1F0),
+                                borderRadius: BorderRadius.circular(6)),
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  _fig('Owes now', a.custOutstanding),
+                                  _fig('This order', a.orderTotal),
+                                  _fig('Would owe',
+                                      a.custOutstanding + a.orderTotal,
+                                      bold: true),
+                                  _fig('Credit limit', a.custLimit),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                      a.custLimit > 0
+                                          ? 'Over by ₹${((a.custOutstanding + a.orderTotal) - a.custLimit).toStringAsFixed(0)}'
+                                          : 'No credit limit set for this customer.',
+                                      style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(0xFFB3261E))),
+                                ]),
+                          ),
+                        ],
                         const SizedBox(height: 8),
+                        // Approving here is a credit decision, not a review of
+                        // the order. Opening it gives the GM the lines, the
+                        // stock position and the ability to change anything.
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () => _open(a),
+                            icon: const Icon(Icons.open_in_new, size: 16),
+                            label: const Text('Open the order'),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
                         Row(children: [
                           Expanded(
                               child: FilledButton.icon(

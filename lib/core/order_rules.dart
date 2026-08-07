@@ -42,6 +42,13 @@ bool orderEditWindowOpen(dynamic deliveryDate) {
 /// needs it because a customer who rings the office to change an order should
 /// not have to wait for their rep to come back into signal.
 bool canEditOrder(Map<String, dynamic> order) {
+  // The general manager is not bound by the deadline, by ownership, or by the
+  // rate lock. Everything below exists to stop an order changing under the
+  // people acting on it; the GM is the person those rules escalate *to*, and
+  // an escalation that arrives with no power to change anything is a rubber
+  // stamp. See [ratesLocked] for the price half of the same exemption.
+  if (Session.I.isGM) return true;
+
   if (!orderEditWindowOpen(order['delivery_date'])) return false;
 
   // A Sales Order names the rep in `custom_sales_person`; a Lead Order, which
@@ -146,8 +153,14 @@ bool orderApproved(Map<String, dynamic> order) =>
 /// locks manual pricing. Adding a line afterwards is still allowed — it just
 /// puts the order back in the manager's queue, because a line nobody priced is
 /// worse than one nobody re-checked.
+/// The general manager is exempt.
+///
+/// The lock exists so that a price the sales manager signed off cannot be
+/// quietly moved afterwards by the rep who quoted it. Somebody still has to be
+/// able to move it — a customer negotiates, a costing turns out wrong — and
+/// that authority sits with the GM and nowhere else.
 bool ratesLocked(Map<String, dynamic> order) =>
-    (order['custom_rate_approved'] ?? 0) == 1;
+    !Session.I.isGM && (order['custom_rate_approved'] ?? 0) == 1;
 
 // A note on what this does and does not guarantee.
 //
