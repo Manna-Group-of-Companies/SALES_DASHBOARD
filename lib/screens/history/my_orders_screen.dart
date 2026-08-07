@@ -6,6 +6,7 @@ import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/history_list.dart';
+import 'package:manna_field_sales/widgets/order_complete_tick.dart';
 
 class MyOrdersScreen extends StatelessWidget {
   const MyOrdersScreen({super.key});
@@ -17,6 +18,13 @@ class MyOrdersScreen extends StatelessWidget {
       cacheKey: CacheKeys.orders,
       tileBuilder: (ctx, r, _) {
         final isLead = r['is_lead'] == true;
+        // Set once the production manager has closed the week this order fell
+        // in. The rep sees it so that a customer asking about "last week's
+        // order" and the office looking at one combined document are talking
+        // about the same thing.
+        final combinedRaw = '${r['custom_combined_order'] ?? ''}'.trim();
+        final combined =
+            (combinedRaw.isEmpty || combinedRaw == 'null') ? '' : combinedRaw;
         final dd = '${r['delivery_date'] ?? ''}';
         final ddText =
             (dd.isNotEmpty && dd != 'null') ? '  ·  Required by: $dd' : '';
@@ -40,8 +48,15 @@ class MyOrdersScreen extends StatelessWidget {
         return ListTile(
           leading: Icon(isLead ? Icons.emoji_objects : Icons.shopping_cart,
               color: isLead ? const Color(0xFF5C6BC0) : null),
-          title: Text(r['customer'] ?? r['name']),
-          subtitle: Text('${r['transaction_date'] ?? ''}$ddText\n$statusLine'),
+          title: Row(children: [
+            Expanded(child: Text(r['customer'] ?? r['name'])),
+            // A lead order is not a Sales Order yet, so it has no production
+            // status to tick — showing an empty box against one would read as
+            // "not finished" rather than "not applicable".
+            if (!isLead) OrderCompleteTick(order: r, compact: true),
+          ]),
+          subtitle: Text('${r['transaction_date'] ?? ''}$ddText\n$statusLine'
+              '${combined.isEmpty ? '' : '\nWeek order: $combined'}'),
           isThreeLine: true,
           trailing: const Icon(Icons.chevron_right),
           onTap: () {

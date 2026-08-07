@@ -494,7 +494,8 @@ class Api {
           fields: '["name","customer","custom_sales_person","grand_total",'
               '"transaction_date","delivery_date","custom_po_status",'
               '"custom_rate_approved","custom_production_status",'
-              '"custom_production_finish_date","custom_proforma_status"]',
+              '"custom_production_finish_date","custom_proforma_status",'
+              '"custom_combined_order"]',
           filters: '[["custom_sales_person","in",${_inList(team)}],'
               '["transaction_date",">=","$from"],'
               '["transaction_date","<=","$to"]]',
@@ -1604,7 +1605,7 @@ class Api {
           final results = await Future.wait([
             _list('Sales Order',
                 fields:
-                    '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_proforma_required","custom_order_placed_at","custom_po_status","custom_production_status","custom_production_finish_date"]',
+                    '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_proforma_required","custom_order_placed_at","custom_po_status","custom_production_status","custom_production_finish_date","custom_combined_order"]',
                 filters: _mineFilter('custom_sales_person'),
                 limit: 50),
             // A rep's own lead orders. Failing here must not cost them their
@@ -3189,6 +3190,135 @@ class Api {
     o.remove('customer_name');
     o.remove('company_address_display');
     return o;
+  }
+
+  /// True once every line on an order has been dispatched.
+  ///
+  /// Derived, never stored. A separate "complete" flag would be one more thing
+  /// that can disagree with the floor — ticked on an order still being made, or
+  /// left unticked on one long gone. The order-level status is already rolled
+  /// up from the lines, so completion is read from it rather than kept beside
+  /// it.
+  static bool isOrderComplete(Map<String, dynamic> order) =>
+      '${order['custom_production_status'] ?? ''}' == kStageDispatched;
+
+  /// Complete, ungrouped orders from a closed week, ready to be combined.
+  ///
+  /// Only complete ones: grouping is the last thing that happens to a week, and
+  /// sweeping in an order still on the floor would close a combined order over
+  /// work that has not finished. Only ungrouped ones, so running the grouping
+  /// twice cannot put an order in two places.
+  static Future<List<Map<String, dynamic>>> groupableOrders({
+    required String weekStartIso,
+    required String weekEndIso,
+  }) async {
+    final rows = await _list('Sales Order',
+        fields: '["name","customer","customer_name","transaction_date",'
+            '"grand_total","custom_production_status","custom_combined_order",'
+            '"custom_sales_person","docstatus"]',
+        filters: '[["transaction_date",">=","$weekStartIso"],'
+            '["transaction_date","<=","$weekEndIso"],'
+            '["custom_production_status","=","$kStageDispatched"],'
+            '["docstatus","<",2]]',
+        orderBy: 'customer asc, transaction_date asc');
+    // Frappe treats an empty Link as '' or null depending on how it was
+    // written; both mean ungrouped, and `!= null` alone would miss one of them.
+    return rows.where((r) {
+      final g = '${r['custom_combined_order'] ?? ''}'.trim();
+      return g.isEmpty || g == 'null';
+    }).toList();
+  }
+
+  /// Groups a closed week's complete orders into one combined order per
+  /// customer, and returns the combined orders made.
+  ///
+  /// Each customer's orders are pointed at their combined order one at a time.
+  /// If a later write fails the earlier ones stay pointed at a combined order
+  /// that exists and is correct as far as it goes — the run can simply be
+  /// repeated, because [groupableOrders] excludes anything already grouped.
+  /// The alternative, unwinding the whole customer on any failure, would risk
+  /// leaving orders pointing at a combined order that had just been deleted.
+  static Future<List<Map<String, dynamic>>> combineWeek({
+    required String weekStartIso,
+    required String weekEndIso,
+  }) async {
+    final orders = await groupableOrders(
+        weekStartIso: weekStartIso, weekEndIso: weekEndIso);
+    if (orders.isEmpty) return const [];
+
+    final byCustomer = <String, List<Map<String, dynamic>>>{};
+    for (final o in orders) {
+      final c = '${o['customer'] ?? ''}'.trim();
+      if (c.isEmpty) continue;
+      byCustomer.putIfAbsent(c, () => []).add(o);
+    }
+
+    double n(dynamic v) =>
+        v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
+
+    final made = <Map<String, dynamic>>[];
+    for (final entry in byCustomer.entries) {
+      final total =
+          entry.value.fold<double>(0, (s, o) => s + n(o['grand_total']));
+      final r = await Session.I.dio.post(_res('Combined Order'), data: {
+        'customer': entry.key,
+        'week_start': weekStartIso,
+        'week_end': weekEndIso,
+        'status': 'Draft',
+        'order_count': entry.value.length,
+        'total_amount': double.parse(total.toStringAsFixed(2)),
+        if (Session.I.salesPerson != null) 'grouped_by': Session.I.salesPerson,
+      });
+      final combined = (r.data is Map) ? r.data['data'] : null;
+      if (combined is! Map || combined['name'] == null) {
+        throw Exception(_frappeError(r));
+      }
+      final name = '${combined['name']}';
+      for (final o in entry.value) {
+        await _put('Sales Order', '${o['name']}',
+            {'custom_combined_order': name});
+      }
+      made.add(combined.cast<String, dynamic>());
+    }
+    await OfflineCache.clear();
+    return made;
+  }
+
+  static Future<List<Map<String, dynamic>>> getCombinedOrders({
+    String? customer,
+    String? weekStartIso,
+  }) {
+    final f = <String>[];
+    if (customer != null && customer.isNotEmpty) {
+      f.add('["customer","=","$customer"]');
+    }
+    if (weekStartIso != null && weekStartIso.isNotEmpty) {
+      f.add('["week_start","=","$weekStartIso"]');
+    }
+    return _list('Combined Order',
+        fields: '["name","customer","customer_name","week_start","week_end",'
+            '"status","order_count","total_amount","grouped_by"]',
+        filters: f.isEmpty ? null : '[${f.join(',')}]',
+        orderBy: 'week_start desc, customer_name asc');
+  }
+
+  /// The individual orders inside one combined order.
+  ///
+  /// Read from the Sales Orders rather than from a list held on the combined
+  /// order itself. With membership stored in one place there is nothing to keep
+  /// in step, so a combined order can never claim to hold an order that does
+  /// not point back at it.
+  static Future<List<Map<String, dynamic>>> ordersInCombined(String name) =>
+      _list('Sales Order',
+          fields: '["name","customer","customer_name","transaction_date",'
+              '"grand_total","custom_production_status","custom_sales_person"]',
+          filters: '[["custom_combined_order","=","$name"]]',
+          orderBy: 'transaction_date asc');
+
+  /// Takes one order back out of its group.
+  static Future<void> ungroupOrder(String orderName) async {
+    await _put('Sales Order', orderName, {'custom_combined_order': ''});
+    await OfflineCache.clear();
   }
 
   /// Moves one line along its process cycle.

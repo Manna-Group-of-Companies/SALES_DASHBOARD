@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/screens/production/combine_week_screen.dart';
 import 'package:manna_field_sales/screens/production/production_order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/order_complete_tick.dart';
 
 class ProductionDashboardScreen extends StatefulWidget {
   const ProductionDashboardScreen({super.key});
@@ -45,6 +47,16 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
       appBar: AppBar(
           title: Text('Production · ${Session.I.productionCompany ?? ''}'),
           actions: [
+            IconButton(
+                icon: const Icon(Icons.merge_type),
+                tooltip: 'Close the week',
+                onPressed: () async {
+                  await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const CombineWeekScreen()));
+                  _reload();
+                }),
             IconButton(icon: const Icon(Icons.refresh), onPressed: _reload)
           ]),
       body: Column(children: [
@@ -119,9 +131,15 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
                                   color: Colors.red.shade700)),
                         ),
                     ]),
-                    subtitle: Text(
-                        '${r['name']}  ·  raised ${r['transaction_date'] ?? ''}'
-                        '\nDeliver by ${delivery.isEmpty || delivery == 'null' ? 'not set' : delivery}'),
+                    subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                              '${r['name']}  ·  raised ${r['transaction_date'] ?? ''}'
+                              '\nDeliver by ${delivery.isEmpty || delivery == 'null' ? 'not set' : delivery}'),
+                          const SizedBox(height: 4),
+                          OrderCompleteTick(order: r),
+                        ]),
                     trailing: Text('₹${(r['grand_total'] ?? 0)}',
                         style: const TextStyle(fontWeight: FontWeight.bold)),
                     onTap: () async {
