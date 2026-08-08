@@ -178,7 +178,13 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
             tooltip: 'Edit lead',
             onPressed: _busy ? null : _edit),
       ]),
-      body: Column(children: [
+      // The whole page scrolls. It used to be a fixed header above a scrolling
+      // order list, which was fine when the header was a name and a phone
+      // number — but it has since gained the route, the missing-details card,
+      // the location card, the visit timer, the order button and the sites
+      // list, and everything past the fold became unreachable.
+      body: SingleChildScrollView(
+        child: Column(children: [
         Padding(
           padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -309,22 +315,32 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                 style: TextStyle(fontWeight: FontWeight.bold)),
           ]),
         ),
-        Expanded(
-          child: FutureBuilder<List<Map<String, dynamic>>>(
+        FutureBuilder<List<Map<String, dynamic>>>(
             future: _ordersFut,
             builder: (context, snap) {
               if (snap.connectionState != ConnectionState.done) {
-                return const Center(child: CircularProgressIndicator());
+                return const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: CircularProgressIndicator()));
               }
               if (snap.hasError) {
-                return Center(child: Text(humanError(snap.error)));
+                return Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Center(child: Text(humanError(snap.error))));
               }
               final rows = snap.data!;
               if (rows.isEmpty) {
-                return const Center(
-                    child: Text('No orders for this lead yet.'));
+                return const Padding(
+                    padding: EdgeInsets.all(24),
+                    child:
+                        Center(child: Text('No orders for this lead yet.')));
               }
+              // Shrink-wrapped and non-scrolling: the page scrolls as one, and
+              // a list with its own scroll inside a scrolling page traps the
+              // gesture — which is what made everything above it unreachable.
               return ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
                 itemCount: rows.length,
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (ctx, i) {
@@ -347,8 +363,8 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
               );
             },
           ),
-        ),
       ]),
+      ),
     );
   }
 }
