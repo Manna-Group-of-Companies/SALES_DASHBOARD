@@ -323,12 +323,25 @@ itself**. One write:
   "custom_location_captured_by": "<Sales Person>" }
 ```
 
-Do not build a location-verification queue. Do not require a photo.
+**This applies to sales managers only.**
 
-The queue only existed because a photograph needed a human to confirm it matched
-the place. With no photo there is nothing to judge — and a queue nobody can act
-on is worse than none: the record sits `Pending Verification` for ever and the
-verified coordinates are never written.
+| Who captures | Photo | Status written | Verified coordinates |
+|---|---|---|---|
+| Sales manager | not asked | `Verified` | written immediately |
+| Sales rep | **required** | `Pending Verification` | written by the manager on approval |
+
+A rep's capture still goes to the manager's queue, because the photograph is the
+only evidence the coordinates belong to the shop rather than to wherever the
+phone happened to be, and it is a manager who says so. Only a manager's own
+capture skips both — routing it into their own inbox would ask them to approve
+themselves, and the photo exists solely for that check.
+
+Decide this from the role, in one place, so no screen can forget it and quietly
+let a rep self-verify.
+
+**The approvals inbox therefore holds four queues:** proforma release, sites,
+customer locations, lead locations. Approve writes `Verified` plus the verified
+coordinate pair; reject writes `Not Captured` so the rep captures again.
 
 Records still at `Pending Verification` are legacy. Treat them as captured.
 

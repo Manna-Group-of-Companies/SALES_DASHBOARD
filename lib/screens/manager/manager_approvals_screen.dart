@@ -31,20 +31,46 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
   /// belongs on a screen built to show what that decision rests on, not mixed
   /// in with sites to verify. Two places to look was two places to miss one.
   ///
-  /// Customer and lead locations are no longer here either. They were only
-  /// ever a queue because a photograph needed a human to say it matched the
-  /// place; the photo has gone, so there is nothing left to judge. A capture
-  /// is now trusted as taken and verifies itself.
+  /// Locations captured by a **rep** are here: they photograph the place and a
+  /// manager confirms the coordinates belong to it. A manager's own capture
+  /// never appears, because it would be asking them to approve themselves —
+  /// see `Api.locationPhotoRequired`.
   Future<List<Approval>> _load() async {
     final res = await Future.wait([
       Api.getPendingProformaReleases(),
       Api.getPendingSiteVerifications(),
+      Api.getPendingLocationVerifications(),
+      Api.getPendingLeadLocationVerifications(),
     ]);
     final out = <Approval>[];
     for (final r in res[0]) {
       out.add(Approval('Proforma credit release', r['name'],
           r['custom_sales_person'], r['customer'], (r['grand_total'] ?? 0),
           'proforma'));
+    }
+    for (final r in res[2]) {
+      out.add(Approval(
+          'Location verification',
+          r['name'],
+          r['custom_location_captured_by'],
+          r['customer_name'] ?? r['name'],
+          null,
+          'location',
+          lat: r['custom_latitude'],
+          lng: r['custom_longitude'],
+          image: r['custom_banner_photo']?.toString()));
+    }
+    for (final r in res[3]) {
+      out.add(Approval(
+          'Lead location verification',
+          r['name'],
+          r['custom_location_captured_by'],
+          r['lead_name'] ?? r['name'],
+          null,
+          'lead_location',
+          lat: r['custom_latitude'],
+          lng: r['custom_longitude'],
+          image: r['custom_banner_photo']?.toString()));
     }
     for (final r in res[1]) {
       // A site hangs off a customer or a lead, never both. Heading the card

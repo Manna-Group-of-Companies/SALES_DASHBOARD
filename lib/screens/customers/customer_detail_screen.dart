@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart' show XFile;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
@@ -11,6 +12,7 @@ import 'package:manna_field_sales/screens/complaints/complaint_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
 import 'package:manna_field_sales/widgets/route_required_gate.dart';
 import 'package:manna_field_sales/widgets/sites_section.dart';
 import 'package:manna_field_sales/services/location_service.dart';
@@ -60,10 +62,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   String get _status =>
       (c['custom_location_status'] ?? 'Not Captured').toString();
 
-  /// A visit can only start once the shop location is on record. Records left
-  /// 'Pending Verification' from when a manager still checked them count too —
-  /// there is nobody to move them on now, and stranding those reps would be a
-  /// consequence of removing the queue, not a decision anyone took.
+  /// A visit can only start once the shop location is on record. Awaiting the
+  /// manager's verification is enough -- the rep is not blocked by that queue.
   /// 'Rejected' does not count: that location has to be captured again.
   bool get _locationCaptured =>
       _status == 'Pending Verification' || _status == 'Verified';
@@ -71,13 +71,20 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   /// Captures the shop location once. This never logs a visit — punching in
   /// on the visit card is the only thing that creates a Sales Visit.
   ///
-  /// GPS only. The shop photo used to be taken here so a manager could confirm
-  /// the coordinates belonged to the shop; with that queue gone there is
-  /// nobody to look at it, and a photograph nobody examines is a minute of the
-  /// rep's time at every counter for nothing.
+  /// A rep photographs the shopfront and their capture waits for the manager
+  /// to confirm the coordinates belong to it. A manager's own capture skips
+  /// both — they are the person who would be checking it, and the photo exists
+  /// only for that check.
   Future<void> _capture() async {
     final rep = Session.I.salesPerson;
     if (rep == null) return _snack('No rep linked to this login.');
+
+    XFile? img;
+    if (Api.locationPhotoRequired) {
+      img = await pickPhoto(context, title: 'Shop banner photo');
+      if (img == null) return _snack('A shop banner photo is required.');
+    }
+
     setState(() => _busy = true);
     _snack('Getting GPS...');
     try {
@@ -88,14 +95,29 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         lat: pos.latitude,
         lng: pos.longitude,
       );
+      if (img != null) {
+        await Api.uploadPhoto(
+          doctype: 'Customer',
+          docname: c['name'],
+          fieldname: 'custom_banner_photo',
+          filePath: img.path,
+          filename: 'banner.jpg',
+        );
+      }
+      final selfVerified = !Api.locationPhotoRequired;
       setState(() {
-        c['custom_location_status'] = 'Verified';
+        c['custom_location_status'] =
+            selfVerified ? 'Verified' : 'Pending Verification';
         c['custom_latitude'] = pos.latitude;
         c['custom_longitude'] = pos.longitude;
-        c['custom_verified_latitude'] = pos.latitude;
-        c['custom_verified_longitude'] = pos.longitude;
+        if (selfVerified) {
+          c['custom_verified_latitude'] = pos.latitude;
+          c['custom_verified_longitude'] = pos.longitude;
+        }
       });
-      _snack('Location captured ✓');
+      _snack(selfVerified
+          ? 'Location captured ✓'
+          : 'Captured — sent for manager verification.');
     } catch (e) {
       _snack(humanError(e));
     } finally {

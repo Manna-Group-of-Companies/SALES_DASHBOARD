@@ -929,14 +929,15 @@ class Api {
     required double lat,
     required double lng,
   }) async {
-    // Captured and verified in one step — see captureCustomerLocation for why.
     await _put('Lead', lead, {
       'custom_latitude': lat,
       'custom_longitude': lng,
-      'custom_verified_latitude': lat,
-      'custom_verified_longitude': lng,
-      'custom_location_status': 'Verified',
+      'custom_location_status': _capturedStatus,
       'custom_location_captured_by': salesPerson,
+      if (_selfVerifies) ...{
+        'custom_verified_latitude': lat,
+        'custom_verified_longitude': lng,
+      },
     });
   }
 
@@ -2741,6 +2742,28 @@ class Api {
     }
   }
 
+  /// Whether this login's own capture stands without anyone checking it.
+  ///
+  /// Only a sales manager's does. They are the person the queue would send it
+  /// to, so routing their own capture into their own inbox asks them to
+  /// approve themselves — and the photo exists solely for that check, which is
+  /// why they are not asked for one either.
+  ///
+  /// A rep's capture still goes through both. The photograph is the only
+  /// evidence that the coordinates belong to the shop rather than to wherever
+  /// the phone happened to be, and it is a manager who says so.
+  ///
+  /// Decided here rather than on each screen, so no caller can forget it and
+  /// quietly let a rep self-verify.
+  static bool get _selfVerifies => Session.I.isManager;
+
+  static String get _capturedStatus =>
+      _selfVerifies ? 'Verified' : 'Pending Verification';
+
+  /// True when this login must photograph the place it is capturing.
+  /// Read by the capture screens; the same rule as [_selfVerifies], inverted.
+  static bool get locationPhotoRequired => !_selfVerifies;
+
   static Future<void> captureCustomerLocation({
     required String customer,
     required String salesPerson,
@@ -2749,22 +2772,19 @@ class Api {
   }) async {
     final stamp =
     DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
-    // Captured and verified in one step.
-    //
-    // The verification queue existed because a photograph needed a human to
-    // say it matched the place. With no photo there is nothing for a manager
-    // to look at, and a queue nobody can act on is worse than no queue: the
-    // record sits "Pending Verification" for ever, and the verified
-    // coordinates — the ones the 100 m punch-in check runs against — are never
-    // written, so the rep is quietly blocked from starting a visit.
     final body = {
       'custom_latitude': lat,
       'custom_longitude': lng,
-      'custom_verified_latitude': lat,
-      'custom_verified_longitude': lng,
-      'custom_location_status': 'Verified',
+      'custom_location_status': _capturedStatus,
       'custom_location_captured_by': salesPerson,
       'custom_location_captured_on': stamp,
+      // A self-verified capture has to write the verified pair as well.
+      // Nothing else will: there is no queue entry for anyone to approve, and
+      // those are the coordinates every later check reads.
+      if (_selfVerifies) ...{
+        'custom_verified_latitude': lat,
+        'custom_verified_longitude': lng,
+      },
     };
     final r = await Session.I.dio.put(
         '${_res('Customer')}/${Uri.encodeComponent(customer)}',

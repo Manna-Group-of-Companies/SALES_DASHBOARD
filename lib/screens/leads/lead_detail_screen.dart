@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart' show XFile;
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
@@ -10,6 +11,7 @@ import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
 import 'package:manna_field_sales/widgets/sites_section.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/widgets/route_picker.dart';
@@ -47,18 +49,17 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
   bool get _submitted => _locStatus == 'Pending Verification';
   bool get _verified => _locStatus == 'Verified';
 
-  /// A visit can only start once the location is on record. Records left
-  /// 'Pending Verification' from when a manager still checked them count too —
-  /// there is nobody to move them on now.
+  /// A visit can only start once the location is on record. Awaiting the
+  /// manager's verification is enough -- the rep is not blocked by that queue.
   /// 'Rejected' does not count: that location has to be captured again.
   bool get _locationCaptured => _submitted || _verified;
 
   /// One-time location capture for the lead. This never logs a visit —
   /// punching in on the visit card is the only thing that creates a visit.
   ///
-  /// GPS only, and verified on the spot. The banner photo used to be taken
-  /// here so a manager could confirm the coordinates belonged to the shop;
-  /// with that queue gone there is nobody to look at it.
+  /// A rep photographs the place and their capture waits for the manager to
+  /// confirm the coordinates belong to it. A manager's own capture skips both
+  /// -- they are the person who would be checking it.
   Future<void> _capture() async {
     final rep = Session.I.salesPerson;
     if (rep == null) return _snack('No rep linked to this login.');
@@ -77,20 +78,45 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
         exclude: {_l['name'] as String},
       );
       if (!clear || !mounted) return;
+
+      // Asked for after the duplicate check, not before. Photographing a
+      // shopfront and only then being told the shop is already on record
+      // wastes the one part of this that costs the rep time.
+      XFile? img;
+      if (Api.locationPhotoRequired) {
+        img = await pickPhoto(context, title: 'Location / banner photo');
+        if (img == null) return _snack('A location/banner photo is required.');
+      }
+
       await Api.captureLeadLocation(
         lead: _l['name'] as String,
         salesPerson: rep,
         lat: pos.latitude,
         lng: pos.longitude,
       );
+      if (img != null) {
+        await Api.uploadPhoto(
+          doctype: 'Lead',
+          docname: _l['name'] as String,
+          fieldname: 'custom_banner_photo',
+          filePath: img.path,
+          filename: 'lead_banner.jpg',
+        );
+      }
+      final selfVerified = !Api.locationPhotoRequired;
       setState(() {
-        _l['custom_location_status'] = 'Verified';
+        _l['custom_location_status'] =
+            selfVerified ? 'Verified' : 'Pending Verification';
         _l['custom_latitude'] = pos.latitude;
         _l['custom_longitude'] = pos.longitude;
-        _l['custom_verified_latitude'] = pos.latitude;
-        _l['custom_verified_longitude'] = pos.longitude;
+        if (selfVerified) {
+          _l['custom_verified_latitude'] = pos.latitude;
+          _l['custom_verified_longitude'] = pos.longitude;
+        }
       });
-      _snack('Location captured ✓');
+      _snack(selfVerified
+          ? 'Location captured ✓'
+          : 'Captured — sent for manager verification.');
     } catch (e) {
       _snack(humanError(e));
     } finally {
