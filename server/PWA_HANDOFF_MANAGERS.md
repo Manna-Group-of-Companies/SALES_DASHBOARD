@@ -539,10 +539,11 @@ When a lead's location is captured, or a rep punches in on a lead, the app looks
 for any Lead or Customer already on record within **1 km** and refuses if it
 finds one.
 
-- The search is across all reps **in the caller's own business unit**, taken
+- The search is across **other** reps in the caller's own business unit, taken
   from `Sales Person.custom_company` (`Manna Treads`, `Manna Tyre Retreads`,
-  `Manna Tyres UAE`). Not the caller's own records -- the duplicate belongs to a
-  teammate by definition -- but not other units either: the two sell different
+  `Manna Tyres UAE`). The caller's **own** leads and customers never block them:
+  a rep who has placed one shop and walks next door is working, not duplicating
+  themselves. Other units do not block either: the two sell different
   things to the same trade, so one tyre shop is legitimately a customer of both
   and neither record is a duplicate of the other. A record whose rep has no unit
   blocks nobody.

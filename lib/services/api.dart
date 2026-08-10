@@ -1474,15 +1474,20 @@ class Api {
   }
 
   /// Leads and customers already on record within [radiusMetres] of a point,
-  /// **within the caller's own business unit**.
+  /// belonging to **another rep in the caller's own business unit**.
   ///
-  /// Unfiltered by rep, because the whole point is to catch the shop a
-  /// *different* rep already raised — but filtered by team, because the two
-  /// units sell different things to the same trade. A tyre retreader is a
-  /// customer of Manna Treads and of Manna Tyre Retreads at once, and each
-  /// unit's rep must be able to put them on their own list without the other
-  /// unit's record standing in the way. The duplicate that matters is two reps
-  /// on the *same* team claiming one shop.
+  /// Two exclusions, for two different reasons:
+  ///
+  /// *Other units* do not count. Manna Treads and Manna Tyre Retreads sell
+  /// different things to the same trade, so one tyre shop is legitimately a
+  /// customer of both, and neither record is a duplicate of the other.
+  ///
+  /// *The caller's own records* do not count either. A rep who has already put
+  /// a shop on the map and walks next door is doing their job — and if the two
+  /// really are the same place, they are the one person who can see that.
+  ///
+  /// What is left is the thing this exists to stop: two different reps on one
+  /// team both claiming the same customer.
   ///
   /// A record whose rep has no unit set belongs to no team and blocks nobody.
   ///
@@ -1504,11 +1509,19 @@ class Api {
       throw Exception('No usable GPS fix — cannot check what is nearby.');
     }
     final unit = '${Session.I.company ?? ''}'.trim();
-    final mates = await _repsInUnit(unit);
-    // No unit, or a unit with nobody in it, means there is no team to be in
-    // conflict with. Blocking on every record in the country would be worse
-    // than letting this one through: it would stop a rep working for a clash
-    // with a team they are not on.
+    final me = '${Session.I.salesPerson ?? ''}'.trim();
+    // The caller's own records are not a conflict with anybody.
+    //
+    // A rep who has already put one shop on the map and walks next door is
+    // doing their job, not duplicating themselves — and if the two really are
+    // the same shop they are the one person who can see that. This rule
+    // exists to stop *two* reps claiming one customer, so the only records
+    // that can block are other people's.
+    final mates =
+        (await _repsInUnit(unit)).where((r) => r != me).toList();
+    // Nobody else on the team means nothing can clash. Blocking on every
+    // record in the country would be worse than letting this through: it
+    // would stop a rep working over a clash with a team they are not on.
     if (mates.isEmpty) return const [];
 
     final dLat = latSpanForMetres(radiusMetres);

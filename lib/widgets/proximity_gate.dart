@@ -75,20 +75,20 @@ Future<void> _showBlocked(
             children: [
               Text(
                 near.length == 1
-                    ? 'Someone on your team already has a place on record '
+                    ? 'Another rep on your team already has a place on record '
                         'within $km of where you are standing, so you cannot '
                         '$subject here.'
-                    : '${near.length} places on your team are already on '
-                        'record within $km of where you are standing, so you '
-                        'cannot $subject here.',
+                    : '${near.length} places belonging to other reps on your '
+                        'team are already on record within $km of where you '
+                        'are standing, so you cannot $subject here.',
                 style: const TextStyle(fontSize: 13.5, height: 1.4),
               ),
               const SizedBox(height: 6),
-              // Said plainly, because the first question a rep asks is whether
-              // the clash is the other unit's shop — which it never is.
+              // The two questions a rep asks on seeing this, answered before
+              // they ring the office to ask them.
               const Text(
-                'Only your own unit is checked. Another unit selling to the '
-                'same shop does not stand in your way.',
+                'Your own leads and customers never block you, and neither '
+                'does another unit selling to the same shop.',
                 style: TextStyle(fontSize: 12, color: Colors.black54),
               ),
               const SizedBox(height: 12),

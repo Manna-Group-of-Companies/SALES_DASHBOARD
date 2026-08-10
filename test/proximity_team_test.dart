@@ -25,16 +25,18 @@ NearbyPlace near(String name, String rep, {String kind = 'Lead'}) => NearbyPlace
       metres: metresBetween(kLat, kLng, kLat + 0.0018, kLng),
     );
 
-/// Stands in for the server-side filter: only records owned by a rep in the
-/// caller's unit are ever fetched.
+/// Stands in for the server-side filter: only records owned by **another** rep
+/// in the caller's unit are ever fetched.
 List<NearbyPlace> visibleTo(
-        List<NearbyPlace> all, Map<String, String> unitOf, String myUnit) =>
-    all.where((p) => unitOf[p.owner] == myUnit).toList();
+        List<NearbyPlace> all, Map<String, String> unitOf, String myUnit,
+        {String me = ''}) =>
+    all.where((p) => unitOf[p.owner] == myUnit && p.owner != me).toList();
 
 void main() {
   const units = {
     'Jaimon D': 'Manna Treads',
     'Pareeth Kb': 'Manna Treads',
+    'Amjad Pr': 'Manna Treads',
     'Subhash': 'Manna Tyre Retreads',
     'Prasad V': 'Manna Tyre Retreads',
     'Kailas Babu': 'Manna Tyres UAE',
@@ -69,16 +71,38 @@ void main() {
   });
 
   group('within one unit', () {
-    test('a teammate\'s record still blocks', () {
+    test('a teammate\'s record blocks', () {
       final all = [near('LEAD-MATE', 'Pareeth Kb')];
-      expect(visibleTo(all, units, 'Manna Treads'), hasLength(1));
+      expect(visibleTo(all, units, 'Manna Treads', me: 'Jaimon D'),
+          hasLength(1));
     });
 
-    test('every rep of the unit counts, not just the caller', () {
-      // Narrowing to the caller's own records would find nothing and report
-      // all-clear, which is the opposite of the point.
-      final all = [near('A', 'Jaimon D'), near('B', 'Pareeth Kb')];
-      expect(visibleTo(all, units, 'Manna Treads'), hasLength(2));
+    test('every other rep of the unit counts, not just one', () {
+      final all = [near('A', 'Pareeth Kb'), near('B', 'Amjad Pr')];
+      expect(visibleTo(all, units, 'Manna Treads', me: 'Jaimon D'),
+          hasLength(2));
+    });
+  });
+
+  group('a rep is never blocked by their own work', () {
+    test('my own lead next door does not stop me raising another', () {
+      // A rep who has put one shop on the map and walks next door is doing
+      // their job. If the two really are the same place, they are the one
+      // person who can see that.
+      final all = [near('MY-LEAD', 'Jaimon D')];
+      expect(visibleTo(all, units, 'Manna Treads', me: 'Jaimon D'), isEmpty);
+    });
+
+    test('my own record is skipped but a teammate\'s beside it is not', () {
+      final all = [near('MINE', 'Jaimon D'), near('THEIRS', 'Pareeth Kb')];
+      final seen = visibleTo(all, units, 'Manna Treads', me: 'Jaimon D');
+      expect(seen.map((p) => p.name), ['THEIRS']);
+    });
+
+    test('the only rep on a unit can never be blocked', () {
+      final solo = {'Solo Rep': 'Manna Solo'};
+      final all = [near('MINE-1', 'Solo Rep'), near('MINE-2', 'Solo Rep')];
+      expect(visibleTo(all, solo, 'Manna Solo', me: 'Solo Rep'), isEmpty);
     });
   });
 
