@@ -1460,12 +1460,31 @@ class Api {
         orderBy: 'lead_name asc');
   }
 
-  /// Leads and customers already on record within [radiusMetres] of a point.
+  /// Every Sales Person in one business unit.
   ///
-  /// Deliberately unfiltered by rep: the whole point is to catch the shop a
-  /// *different* rep already raised, so narrowing this to the caller's own
-  /// records would find nothing and report all-clear. Reps can read every lead
-  /// and customer, so this sees the same ground the office does.
+  /// The unit is the team: `Manna Treads`, `Manna Tyre Retreads`,
+  /// `Manna Tyres UAE`. It lives on the Sales Person, and a lead or customer
+  /// belongs to whichever unit its rep does.
+  static Future<List<String>> _repsInUnit(String unit) async {
+    if (unit.isEmpty) return const [];
+    final rows = await _list('Sales Person',
+        fields: '["name"]',
+        filters: '[["custom_company","=","$unit"],["is_group","=",0]]');
+    return rows.map((e) => '${e['name']}').toList();
+  }
+
+  /// Leads and customers already on record within [radiusMetres] of a point,
+  /// **within the caller's own business unit**.
+  ///
+  /// Unfiltered by rep, because the whole point is to catch the shop a
+  /// *different* rep already raised — but filtered by team, because the two
+  /// units sell different things to the same trade. A tyre retreader is a
+  /// customer of Manna Treads and of Manna Tyre Retreads at once, and each
+  /// unit's rep must be able to put them on their own list without the other
+  /// unit's record standing in the way. The duplicate that matters is two reps
+  /// on the *same* team claiming one shop.
+  ///
+  /// A record whose rep has no unit set belongs to no team and blocks nobody.
   ///
   /// Two stages, because neither alone is right. The backend narrows by a
   /// latitude/longitude box, which SQL can do against an index; the box is a
@@ -1484,22 +1503,33 @@ class Api {
     if (!isRealCoordinate(lat, lng)) {
       throw Exception('No usable GPS fix — cannot check what is nearby.');
     }
+    final unit = '${Session.I.company ?? ''}'.trim();
+    final mates = await _repsInUnit(unit);
+    // No unit, or a unit with nobody in it, means there is no team to be in
+    // conflict with. Blocking on every record in the country would be worse
+    // than letting this one through: it would stop a rep working for a clash
+    // with a team they are not on.
+    if (mates.isEmpty) return const [];
+
     final dLat = latSpanForMetres(radiusMetres);
     final dLng = lngSpanForMetres(radiusMetres, lat);
     String box(String latField, String lngField) => '["$latField",">=",'
         '${lat - dLat}],["$latField","<=",${lat + dLat}],'
         '["$lngField",">=",${lng - dLng}],["$lngField","<=",${lng + dLng}]';
+    final team = _inList(mates);
 
     final results = await Future.wait([
       _list('Lead',
           fields: '["name","lead_name","company_name","custom_sales_person",'
               '"custom_latitude","custom_longitude"]',
-          filters: '[${box('custom_latitude', 'custom_longitude')}]',
+          filters: '[${box('custom_latitude', 'custom_longitude')},'
+              '["custom_sales_person","in",$team]]',
           orderBy: 'modified desc'),
       _list('Customer',
           fields: '["name","customer_name","custom_assigned_reps",'
               '"custom_latitude","custom_longitude"]',
-          filters: '[${box('custom_latitude', 'custom_longitude')}]',
+          filters: '[${box('custom_latitude', 'custom_longitude')},'
+              '["custom_assigned_reps","in",$team]]',
           orderBy: 'modified desc'),
     ]);
 

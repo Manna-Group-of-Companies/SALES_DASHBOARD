@@ -539,8 +539,13 @@ When a lead's location is captured, or a rep punches in on a lead, the app looks
 for any Lead or Customer already on record within **1 km** and refuses if it
 finds one.
 
-- The search is across **all reps**, not the caller's own — the record being
-  duplicated belongs to somebody else by definition.
+- The search is across all reps **in the caller's own business unit**, taken
+  from `Sales Person.custom_company` (`Manna Treads`, `Manna Tyre Retreads`,
+  `Manna Tyres UAE`). Not the caller's own records -- the duplicate belongs to a
+  teammate by definition -- but not other units either: the two sell different
+  things to the same trade, so one tyre shop is legitimately a customer of both
+  and neither record is a duplicate of the other. A record whose rep has no unit
+  blocks nobody.
 - The record being captured is excluded from its own check.
 - Records with no coordinates are invisible to it. `(0, 0)` is open ocean and
   means "never captured", not a place.
