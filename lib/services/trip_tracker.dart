@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
+import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
+import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/trip_points.dart';
 
 class TripTracker {
@@ -12,6 +14,16 @@ class TripTracker {
 
   final ValueNotifier<String?> activeTrip = ValueNotifier<String?>(null);
   StreamSubscription<Position>? _sub;
+
+  /// Asks for a fix on a schedule, rather than waiting to be given one.
+  ///
+  /// The position stream alone was not enough. Android's fused provider emits
+  /// on *change*, so a phone sitting still in a shop — or parked, or in a
+  /// pocket while the rep has a cup of tea — can produce nothing for an hour,
+  /// and the route came back with one point on it. This timer asks outright
+  /// every five minutes, so a stationary rep still leaves a trail.
+  Timer? _ticker;
+
   DateTime? _lastSaved;
   static const Duration interval = Duration(minutes: 5);
 
@@ -62,7 +74,46 @@ class TripTracker {
         _save(tripName, pos);
       }
     }, onError: (_) {});
+
+    // Belt and braces with the stream above. Whichever produces a fix first
+    // wins; the throttle in _save stops them recording the same minute twice.
+    _ticker?.cancel();
+    _ticker = Timer.periodic(interval, (_) async {
+      if (activeTrip.value != tripName) return;
+      final now = DateTime.now();
+      if (_lastSaved != null && now.difference(_lastSaved!) < interval) return;
+      try {
+        final pos = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+                accuracy: LocationAccuracy.high,
+                timeLimit: Duration(seconds: 45)));
+        await _save(tripName, pos);
+      } catch (_) {
+        // No fix this time — indoors, or the radio is busy. The next tick
+        // tries again, and nothing is lost because nothing was recorded.
+      }
+    });
     return null;
+  }
+
+  /// Picks recording back up if it should be running and is not.
+  ///
+  /// The tracker lives in memory, so an app that Android has killed and the
+  /// rep has reopened is no longer recording even though the trip is still
+  /// Active on the server. There is a banner offering to resume, but it only
+  /// helps a rep who opens the app and notices it — and a rep driving all
+  /// afternoon has no reason to.
+  ///
+  /// Safe to call as often as you like: it does nothing when already running.
+  Future<void> resumeIfNeeded() async {
+    if (activeTrip.value != null) return;
+    if (Session.I.salesPerson == null) return;
+    try {
+      final trip = await Api.getActiveTrip();
+      final name = '${trip?['name'] ?? ''}';
+      if (name.isEmpty || name == 'null') return;
+      await start(name);
+    } catch (_) {}
   }
 
   /// Records a point on the phone, then tries to send what is queued.
@@ -92,6 +143,8 @@ class TripTracker {
   Future<void> stop() async {
     await _sub?.cancel();
     _sub = null;
+    _ticker?.cancel();
+    _ticker = null;
     _lastSaved = null;
     activeTrip.value = null;
     // A trip that has just ended is the moment its route matters most, so the

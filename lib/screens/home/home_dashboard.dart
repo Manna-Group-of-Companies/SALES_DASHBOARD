@@ -69,6 +69,10 @@ class _HomeDashboardState extends State<HomeDashboard>
     // gets back into coverage. Waiting for the next five-minute fix would
     // leave a morning's driving sitting on the phone until lunchtime.
     unawaited(TripTracker.I.flushPending());
+    // Recording lives in memory, so an app Android killed comes back not
+    // recording even though the trip is still Active. Picked up here rather
+    // than waiting for a rep to notice the banner.
+    unawaited(TripTracker.I.resumeIfNeeded());
   }
 
   Future<void> _loadUnsent() async {
