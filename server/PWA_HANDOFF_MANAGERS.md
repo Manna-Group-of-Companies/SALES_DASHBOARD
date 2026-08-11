@@ -39,7 +39,7 @@ Ten commits. Each is expanded later; this is the index.
 | 2 | `custom_assigned_reps` is a **Link to Sales Person**, not text | Both |
 | 3 | Incomplete-lead warning; trips read Sales Route not Territory | Sales mgr |
 | 4 | Reps can fill in missing Item packing details, write-once | Both |
-| 5 | Duplicate-place block within 1 km | Sales mgr |
+| 5 | Duplicate-place block within 250 m | Sales mgr |
 | 6 | Minimum-stock lines skip the making stages | Production |
 | 7 | **Combined Order** — weekly grouping per customer | Both |
 | 8 | Route is mandatory before an order can be taken | Both |
@@ -536,7 +536,7 @@ A misconfigured item must **never price at zero**. Refuse the line.
 ## 8. NEW — duplicate place block (1 km)
 
 When a lead's location is captured, or a rep punches in on a lead, the app looks
-for any Lead or Customer already on record within **1 km** and refuses if it
+for any Lead or Customer already on record within **250 m** and refuses if it
 finds one.
 
 - The search is across **other** reps in the caller's own business unit, taken

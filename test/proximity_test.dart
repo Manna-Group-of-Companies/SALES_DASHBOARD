@@ -172,7 +172,7 @@ void main() {
     });
   });
 
-  test('the radius is one kilometre', () {
-    expect(kDuplicateRadiusMetres, 1000);
+  test('the radius is 250 metres', () {
+    expect(kDuplicateRadiusMetres, 250);
   });
 }

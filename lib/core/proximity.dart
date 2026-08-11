@@ -12,7 +12,11 @@ import 'dart:math' as math;
 
 /// How close counts as "the same place". A shop found inside this radius is
 /// treated as already on record.
-const double kDuplicateRadiusMetres = 1000;
+///
+/// 250 m, not a kilometre. A kilometre covers most of a market town and was
+/// refusing genuinely separate shops on the same street; a quarter of that is
+/// close enough that two records almost certainly describe one place.
+const double kDuplicateRadiusMetres = 250;
 
 /// Metres between two coordinates, by the haversine formula.
 ///

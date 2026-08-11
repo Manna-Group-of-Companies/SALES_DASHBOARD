@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
-import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/core/utils.dart';
+import 'package:manna_field_sales/services/trip_points.dart';
 
 class TripTracker {
   static final TripTracker I = TripTracker._();
@@ -64,18 +65,38 @@ class TripTracker {
     return null;
   }
 
+  /// Records a point on the phone, then tries to send what is queued.
+  ///
+  /// The order is the whole fix. This used to upload directly and mark the
+  /// throttle *before* trying — so a point that failed to send was lost, and
+  /// the failure also blocked the next attempt for five minutes. A patchy
+  /// signal did not thin the route out, it emptied it.
+  ///
+  /// Writing to the phone cannot fail for want of a network, so the throttle
+  /// now advances on something that actually happened.
   Future<void> _save(String tripName, Position pos) async {
     _lastSaved = DateTime.now();
-    try {
-      await Api.appendTripGpsPoint(tripName, pos.latitude, pos.longitude);
-    } catch (_) {}
+    await TripPoints.add(
+        TripPoint(tripName, pos.latitude, pos.longitude, nowStamp()));
+    // Best effort. Anything that does not go stays queued for the next one.
+    unawaited(TripPoints.flush());
   }
+
+  /// Sends whatever is waiting. Safe to call at any time — on resume, on the
+  /// dashboard refresh, or when a trip ends.
+  Future<int> flushPending() => TripPoints.flush();
+
+  /// How many points are still on the phone.
+  Future<int> pendingCount() => TripPoints.count();
 
   Future<void> stop() async {
     await _sub?.cancel();
     _sub = null;
     _lastSaved = null;
     activeTrip.value = null;
+    // A trip that has just ended is the moment its route matters most, so the
+    // queue is pushed once more rather than waiting for the next fix.
+    unawaited(TripPoints.flush());
   }
 }
 

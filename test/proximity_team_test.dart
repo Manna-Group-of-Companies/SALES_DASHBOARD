@@ -124,6 +124,6 @@ void main() {
   });
 
   test('the radius is unchanged by any of this', () {
-    expect(kDuplicateRadiusMetres, 1000);
+    expect(kDuplicateRadiusMetres, 250);
   });
 }

@@ -21,6 +21,7 @@ import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/services/offline_cache.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/services/stock_service.dart';
+import 'package:manna_field_sales/services/trip_points.dart';
 
 /// Builds the REST path for an ERPNext doctype. Private to this library —
 /// only [Api] ever needs it.
@@ -3167,26 +3168,46 @@ class Api {
 
   // Append one GPS point to a trip's route (read-modify-write the child list,
   // same pattern as legs/expenses). Used by the 20-min route tracker.
-  static Future<void> appendTripGpsPoint(
-      String tripName, double lat, double lng) async {
+  /// Appends a batch of recorded points to a trip in one write.
+  ///
+  /// A batch rather than one call per point, because a phone coming back into
+  /// signal after an hour has a dozen waiting, and each one otherwise re-reads
+  /// the whole trip and rewrites the whole child table.
+  ///
+  /// Each point carries the time it was actually taken. Stamping them on
+  /// arrival would draw the route through wherever the rep happened to regain
+  /// signal rather than where they had been.
+  static Future<void> appendTripGpsPoints(
+      String tripName, List<TripPoint> points) async {
+    if (points.isEmpty) return;
     final trip = await getTrip(tripName);
     final existing =
-    ((trip?['gps_points'] as List?) ?? []).cast<Map<String, dynamic>>();
-    final stamp = DateTime.now()
-        .toIso8601String()
-        .substring(0, 19)
-        .replaceFirst('T', ' ');
+        ((trip?['gps_points'] as List?) ?? []).cast<Map<String, dynamic>>();
     final rows = existing
         .map((p) => {
-      if (p['name'] != null) 'name': p['name'],
-      'timestamp': p['timestamp'],
-      'latitude': p['latitude'],
-      'longitude': p['longitude'],
-    })
+              if (p['name'] != null) 'name': p['name'],
+              'timestamp': p['timestamp'],
+              'latitude': p['latitude'],
+              'longitude': p['longitude'],
+            })
         .toList();
-    rows.add({'timestamp': stamp, 'latitude': lat, 'longitude': lng});
+    final seen = <String>{
+      for (final r in rows) '${r['timestamp']}|${r['latitude']}|${r['longitude']}'
+    };
+    for (final p in points) {
+      // A flush that half-succeeded and was retried would otherwise double the
+      // route back on itself.
+      final key = '${p.at}|${p.lat}|${p.lng}';
+      if (!seen.add(key)) continue;
+      rows.add({'timestamp': p.at, 'latitude': p.lat, 'longitude': p.lng});
+    }
     await _put('Trip', tripName, {'gps_points': rows});
   }
+
+  static Future<void> appendTripGpsPoint(
+          String tripName, double lat, double lng) =>
+      appendTripGpsPoints(
+          tripName, [TripPoint(tripName, lat, lng, nowStamp())]);
 
   // -------- Leave (financial-year allowance of 12 days) --------
   static Future<List<Map<String, dynamic>>> getMyLeaves() => _cachedRows(

@@ -64,6 +64,11 @@ class _HomeDashboardState extends State<HomeDashboard>
     setState(() { _counts = _loadCounts(); _activeTrip = _loadActiveTrip(); });
     _loadAtt();
     _loadUnsent();
+    // Route points recorded without signal are pushed whenever the app is in
+    // front of somebody, which in practice is the first moment after a rep
+    // gets back into coverage. Waiting for the next five-minute fix would
+    // leave a morning's driving sitting on the phone until lunchtime.
+    unawaited(TripTracker.I.flushPending());
   }
 
   Future<void> _loadUnsent() async {
