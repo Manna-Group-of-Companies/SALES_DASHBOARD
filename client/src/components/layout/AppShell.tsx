@@ -142,6 +142,7 @@ export function AppShell() {
     { to: '/hr/regularizations', label: 'Regularizations', icon: '🕓', roles: ['hr'], group: 'People' },
     { to: '/hr/calendar', label: 'Monthly Calendar', icon: '📅', roles: ['hr'], group: 'People' },
     { to: '/hr/odometer', label: 'Odometer Check', icon: '🛞', roles: ['hr'], group: 'People' },
+    { to: '/hr/trips', label: 'Trips & Routes', icon: '🗺', roles: ['hr'], group: 'People' },
 
     { to: '/reports/expenses', label: 'Monthly Expenses', icon: '🧾', roles: ['hr'], group: 'Reports' },
     { to: '/reports/summary', label: 'Range Summary', icon: '📈', roles: ['hr'], group: 'Reports' },

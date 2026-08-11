@@ -10,9 +10,9 @@
  * place to make them.
  */
 
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { SalesVisit, Trip, TripRates } from '@/domain/types';
+import type { SalesVisit, Trip, TripRates, TripTrack } from '@/domain/types';
 import {
   awaitingCorrection,
   billedExpenses,
@@ -31,6 +31,7 @@ import {
 } from '@/domain/trips';
 import { clockOf } from '@/domain/attendance';
 import { formatDate } from '@/domain/orderRules';
+import { checkDistance, hasFix, haversineKm, pathKm, routeOf, waypointsOf } from '@/domain/geo';
 import { Api } from '@/api/client';
 import { Alert, Badge, Card, Empty } from '@/components/ui';
 import { money } from '@/components/common/format';
@@ -38,31 +39,107 @@ import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import '@/components/layout/layout.css';
 import './attendance.css';
+import './trip-map.css';
+
+/*
+ * Leaflet and its CSS are ~165 kB and only this screen needs them, so they
+ * load when a trip is opened rather than on every page in the app.
+ */
+const TripMap = lazy(() => import('./TripMap').then((m) => ({ default: m.TripMap })));
+
+const VERDICT: Record<string, { label: string; tone: 'ok' | 'warn' | 'danger' | 'neutral' }> = {
+  consistent: { label: 'Consistent', tone: 'ok' },
+  far_above: { label: 'Well above the minimum', tone: 'warn' },
+  impossible: { label: 'Below the minimum — impossible', tone: 'danger' },
+  no_evidence: { label: 'No location evidence', tone: 'neutral' },
+  unknown: { label: 'Cannot be checked', tone: 'neutral' },
+};
 
 export function TripDetailPage() {
   const { tripId = '' } = useParams();
   const [trip, setTrip] = useState<Trip | null>(null);
   const [visits, setVisits] = useState<SalesVisit[]>([]);
   const [rates, setRates] = useState<TripRates | null>(null);
+  const [track, setTrack] = useState<TripTrack | null>(null);
+  const [roadKm, setRoadKm] = useState<number | undefined>(undefined);
   /** Bumped to re-run the load effect — the Refresh button's only job. */
   const [tick, setTick] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  /** The plotted route and the verdict on the claimed distance. */
+  const geo = useMemo(() => {
+    if (!track) return { waypoints: [], check: checkDistance({ claimedKm: 0, straightKm: 0, stops: 0 }) };
+    const waypoints = waypointsOf({
+      start: track.start,
+      end: track.end,
+      visits: track.stops,
+      gpsPoints: track.gpsPoints,
+    });
+    const stops = routeOf(waypoints);
+    return {
+      waypoints,
+      check: checkDistance({
+        claimedKm: track.trip.distanceKm,
+        straightKm: pathKm(stops),
+        roadKm,
+        stops: stops.length,
+      }),
+    };
+  }, [track, roadKm]);
+
+  /**
+   * The GPS log, with the gap to the previous fix on each row.
+   *
+   * The gaps are what make the sparseness legible. A list of five coordinates
+   * looks like a track until you see that four hours passed between the first
+   * two — at which point it is obviously a handful of samples, and the reader
+   * stops expecting the map to show a journey.
+   */
+  const gps = useMemo(() => {
+    const points = track?.gpsPoints ?? [];
+    return points.map((g, i) => {
+      const prev = i > 0 ? points[i - 1] : undefined;
+      const moved = prev && hasFix(prev) && hasFix(g) ? haversineKm(prev, g) : undefined;
+      let gapLabel = '—';
+      if (prev?.at && g.at) {
+        const mins = Math.round(
+          (new Date(g.at.replace(' ', 'T')).getTime() -
+            new Date(prev.at.replace(' ', 'T')).getTime()) /
+            60000,
+        );
+        if (Number.isFinite(mins)) {
+          gapLabel =
+            mins >= 60 ? `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m` : `${mins}m`;
+        }
+      }
+      return {
+        ...g,
+        gapLabel,
+        movedLabel: moved == null ? '—' : `${moved.toFixed(1)} km`,
+      };
+    });
+  }, [track]);
+
   useEffect(() => {
     let live = true;
     setLoading(true);
     setError(null);
+    setRoadKm(undefined);
     Promise.all([
       Api.trips.get(tripId),
       Api.trips.listVisitsForTrip(tripId),
       Api.trips.getRates(),
+      // The route is assembled from several documents, so a failure here must
+      // not cost the rest of the page.
+      Api.trips.getTrack(tripId).catch(() => null),
     ])
-      .then(([t, v, r]) => {
+      .then(([t, v, r, k]) => {
         if (!live) return;
         setTrip(t);
         setVisits(v);
         setRates(r);
+        setTrack(k);
       })
       .catch((e: unknown) => {
         if (live) setError(e instanceof Error ? e.message : 'Could not read this trip.');
@@ -120,6 +197,21 @@ export function TripDetailPage() {
             <Tile label="Out of pocket" value={money(outOfPocket(trip), 2)} foot={`D.A ${money(dailyAllowance(trip), 0)} · bills ${money(billedExpenses(trip), 0)}`} />
             <Tile label="Total claim" value={money(tripClaim(trip, rates), 2)} tone="ok" foot="Travel + out of pocket" />
             <Tile label="Shop visits" value={String(visits.length)} foot="Checked in on this trip" />
+            {/*
+              How many GPS fixes the phone actually logged. This is the figure
+              that decides whether the distance can be checked at all, so it
+              belongs beside the money rather than buried below it.
+            */}
+            <Tile
+              label="GPS points"
+              value={String(track?.gpsPoints.length ?? 0)}
+              tone={(track?.gpsPoints.length ?? 0) < 2 ? 'warn' : undefined}
+              foot={
+                (track?.gpsPoints.length ?? 0) < 2
+                  ? 'Too few to trace'
+                  : 'Logged during the trip'
+              }
+            />
           </div>
 
           <div className="cols cols--2" style={{ marginTop: 16 }}>
@@ -180,6 +272,127 @@ export function TripDetailPage() {
               )}
             </Card>
           </div>
+
+          {/*
+            The route, and what it can honestly say about the claim.
+            Placed above the legs because the odometer figures below only mean
+            something once you know where the rep actually went.
+          */}
+          <Card title="Route" className="mt-16">
+            {!track ? (
+              <Empty icon="—" title="No route could be assembled for this trip" />
+            ) : geo.waypoints.length === 0 ? (
+              <Empty icon="—" title="Nothing was recorded to plot">
+                No punch-in fix, and none of the shops visited have coordinates on file.
+              </Empty>
+            ) : (
+              <>
+                <div className="tm__verdict">
+                  <Badge tone={VERDICT[geo.check.verdict].tone}>
+                    {VERDICT[geo.check.verdict].label}
+                  </Badge>
+                  <span className="small">{geo.check.note}</span>
+                </div>
+
+                <Suspense fallback={<Empty icon="◔" title="Loading the map…" />}>
+                  <TripMap waypoints={geo.waypoints} onRoadDistance={setRoadKm} />
+                </Suspense>
+
+                {track.stops.length > 0 && (
+                  <table className="table tm__stops">
+                    <tbody>
+                      {track.stops.map((s, i) => (
+                        <tr key={s.visit.id}>
+                          <td className="dim small" style={{ width: 28 }}>
+                            {i + 1}
+                          </td>
+                          <td>{s.name}</td>
+                          <td className="num small">{s.visit.checkIn?.slice(11, 16) ?? '—'}</td>
+                          <td className="dim small">
+                            {s.place ? '' : 'no coordinates on this party'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+          </Card>
+
+          {/*
+            The raw GPS log.
+            Shown so HR can see for themselves whether the phone was recording,
+            rather than inferring it from a map that looks sparse. The gap
+            columns are the point: two fixes three hours apart cannot describe
+            what happened in between, however precise each one is.
+          */}
+          <Card
+            title="GPS points logged"
+            className="mt-16"
+            flush
+            actions={
+              <Badge tone={gps.length >= 2 ? 'ok' : 'warn'}>
+                {gps.length} {gps.length === 1 ? 'point' : 'points'}
+              </Badge>
+            }
+          >
+            {gps.length === 0 ? (
+              <Empty icon="—" title="The phone logged no GPS points on this trip">
+                Nothing can be verified against location for this trip. The claimed distance rests
+                on the odometer photographs alone.
+              </Empty>
+            ) : (
+              <>
+                <div className="scroll-x">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Time</th>
+                        <th>Coordinates</th>
+                        <th className="right">Gap</th>
+                        <th className="right">Moved</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {gps.map((g, i) => (
+                        <tr key={`${g.latitude},${g.longitude},${i}`}>
+                          <td className="dim small">{i + 1}</td>
+                          <td className="num small">{g.at ? clockOf(g.at) : '—'}</td>
+                          <td className="num small">
+                            <a
+                              href={`https://www.google.com/maps?q=${g.latitude},${g.longitude}`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {g.latitude.toFixed(5)}, {g.longitude.toFixed(5)}
+                            </a>
+                          </td>
+                          <td className="right num small dim">{g.gapLabel}</td>
+                          <td className="right num small dim">{g.movedLabel}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="note" style={{ padding: '10px 12px 12px' }}>
+                  {gps.length < 2 ? (
+                    <>
+                      A single fix records where the rep was at one moment. It cannot show a
+                      journey, so no distance can be derived from it.
+                    </>
+                  ) : (
+                    <>
+                      These are samples, not a track — the app logs a fix occasionally rather than
+                      continuously, so the straight lines between them are not the roads taken. The
+                      route above is built from the shops checked in at, which is firmer evidence.
+                    </>
+                  )}
+                </p>
+              </>
+            )}
+          </Card>
 
           <Card title="Vehicle legs" flush className="mt-16">
             {trip.legs.length === 0 ? (

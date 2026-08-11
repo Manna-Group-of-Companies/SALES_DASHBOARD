@@ -42,6 +42,7 @@ import { LeaveRequestsPage } from '@/features/hr/LeaveRequestsPage';
 import { CalendarPage } from '@/features/hr/CalendarPage';
 import { OdometerVerificationPage } from '@/features/hr/OdometerVerificationPage';
 import { TripDetailPage } from '@/features/hr/TripDetailPage';
+import { TripsPage } from '@/features/hr/TripsPage';
 import { RegularizationsPage } from '@/features/hr/RegularizationsPage';
 import { MonthlyExpensePage } from '@/features/reports/MonthlyExpensePage';
 import { RangeSummaryPage } from '@/features/reports/RangeSummaryPage';
@@ -307,6 +308,14 @@ export function AppRoutes() {
           element={
             <RoleRoute allow={HR}>
               <OdometerVerificationPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="hr/trips"
+          element={
+            <RoleRoute allow={HR}>
+              <TripsPage />
             </RoleRoute>
           }
         />
