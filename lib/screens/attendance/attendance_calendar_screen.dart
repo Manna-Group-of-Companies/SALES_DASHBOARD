@@ -101,6 +101,15 @@ class _AttendanceCalendarScreenState extends State<AttendanceCalendarScreen> {
     final today = ServerClock.I.now();
     final d0 = DateTime(day.year, day.month, day.day);
     final t0 = DateTime(today.year, today.month, today.day);
+
+    // Sunday is the weekly off, so nothing is expected and nothing is marked.
+    // It was showing red for every past Sunday — a rep looked back over a
+    // month and saw four days of absence for not working the day nobody works.
+    //
+    // Checked before leave as well: a leave request that happens to fall on a
+    // Sunday is not a day off anybody spent.
+    if (day.weekday == DateTime.sunday) return null;
+
     final leave = _leaves[_key(day)];
     if (leave != null) {
       final full = (leave['half_day'] ?? 0) != 1;
@@ -171,7 +180,14 @@ class _AttendanceCalendarScreenState extends State<AttendanceCalendarScreen> {
             Center(
               child: Text('$d',
                   style: TextStyle(
-                      color: color == null ? Colors.black87 : Colors.white,
+                      // A Sunday carries no status colour, so the date itself
+                      // is greyed to say it is the weekly off rather than a
+                      // working day nothing has been recorded against yet.
+                      color: color != null
+                          ? Colors.white
+                          : (day.weekday == DateTime.sunday
+                              ? Colors.black38
+                              : Colors.black87),
                       fontWeight: FontWeight.w600)),
             ),
             if (hasReg)
@@ -253,6 +269,14 @@ class _AttendanceCalendarScreenState extends State<AttendanceCalendarScreen> {
         chip(const Color(0xFFF59E0B), 'Missed punch-out'),
         chip(Colors.red, 'Absent'),
         chip(const Color(0xFF2563EB), 'On leave'),
+        // Not a colour chip, because a Sunday has no fill to show.
+        Row(mainAxisSize: MainAxisSize.min, children: const [
+          Text('7', style: TextStyle(fontSize: 11, color: Colors.black38,
+              fontWeight: FontWeight.w600)),
+          SizedBox(width: 4),
+          Text('Sunday — weekly off',
+              style: TextStyle(fontSize: 11)),
+        ]),
       ]),
     );
   }
