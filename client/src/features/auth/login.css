@@ -1,0 +1,24 @@
+.login {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(1000px 500px at 15% -10%, var(--accent-soft), transparent 60%),
+    var(--bg);
+}
+
+.login__panel {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.login__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.login__brand h1 { font-size: 21px; letter-spacing: -0.02em; }

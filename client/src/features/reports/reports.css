@@ -1,0 +1,46 @@
+/*
+ * Expense sheet.
+ *
+ * Wide by nature — the typed odometer and the reading taken off the photo sit
+ * side by side, which is the comparison the sheet exists to make. It scrolls
+ * inside its own container so the page never moves sideways.
+ */
+
+.exp { font-size: 12px; }
+
+/* The two paired columns are grouped under one heading each. */
+.exp__grouphead {
+  text-align: center;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+/*
+ * A joined row is somebody else's claim. It is recessed rather than hidden:
+ * the day must still be visible, or a passenger's sheet reads as a blank day.
+ */
+.exp__joined td { background: var(--surface-2); color: var(--text-2); }
+.exp__joined .mono { color: var(--text-3); }
+
+.exp__total td {
+  background: var(--surface-3);
+  font-weight: 650;
+  border-top: 2px solid var(--border-strong);
+}
+
+.exp th.right,
+.exp td.right { text-align: right; }
+
+/* A reading HR corrected - the one that moved the money. */
+.exp__corrected { color: var(--warn); font-weight: 650; }
+
+/* Free date range, with quick presets underneath. */
+.rangebar {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.rangebar .input { max-width: 170px; }
+.rangebar__presets { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }

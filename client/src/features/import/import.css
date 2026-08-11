@@ -1,0 +1,43 @@
+.dropzone {
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+  padding: 44px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s;
+}
+.dropzone:hover,
+.dropzone.is-dragging {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.dropzone__icon { font-size: 30px; color: var(--text-3); }
+.dropzone__title { font-size: 15px; font-weight: 600; margin: 8px 0 3px; }
+
+.col-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+.col-list b { color: var(--text); }
+
+.issue {
+  display: flex;
+  gap: 10px;
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--border);
+}
+.issue:last-child { border-bottom: none; }
+.issue__row {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--r-sm);
+  padding: 1px 6px;
+  height: fit-content;
+}

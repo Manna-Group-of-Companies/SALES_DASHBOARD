@@ -1,0 +1,255 @@
+/*
+ * Attendance screens.
+ *
+ * The calendar is a real month grid — seven columns, one person at a time —
+ * because the shape of a month is itself information: thin weeks, clustered
+ * absences, Sundays being worked. A cell has room for the actual punch times,
+ * which is what HR checks a salary against.
+ */
+
+/* Label on the left, figure on the right — used above each turnout meter. */
+.row-between {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scroll-x { overflow-x: auto; }
+
+/* --------------------------------------------------------------- toolbar --- */
+.cal__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.cal__toolbar .select { min-width: 240px; }
+
+.cal__nav { display: flex; align-items: center; gap: 6px; }
+.cal__title {
+  min-width: 132px;
+  text-align: center;
+  font-size: 13.5px;
+  font-weight: 640;
+}
+
+/* ----------------------------------------------------------- month grid --- */
+.month {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border-top: 1px solid var(--border);
+}
+
+.month__dow {
+  background: var(--surface-2);
+  padding: 7px 8px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  text-align: left;
+}
+.month__dow.is-off { color: var(--danger); }
+
+.month__cell {
+  background: var(--surface);
+  min-height: 78px;
+  padding: 6px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.month__cell.is-blank { background: var(--surface-2); }
+
+.month__num {
+  font-size: 11.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+.month__cell.is-today .month__num {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.month__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.month__times { font-variant-numeric: tabular-nums; color: var(--text); }
+.month__hours { font-weight: 650; font-variant-numeric: tabular-nums; }
+.month__flag { color: var(--danger); font-weight: 620; }
+.month__tag { font-weight: 620; }
+.month__muted { color: var(--text-3); }
+
+/*
+ * State is carried by a tinted background *and* by the text in the cell, so
+ * the grid stays readable without relying on colour alone.
+ */
+.month__cell.s-worked { background: var(--ok-soft); }
+.month__cell.s-worked .month__hours { color: var(--ok); }
+.month__cell.s-open { background: var(--danger-soft); }
+.month__cell.s-leave { background: var(--accent-soft); }
+.month__cell.s-leave .month__tag { color: var(--accent); }
+.month__cell.s-half { background: var(--warn-soft); }
+.month__cell.s-half .month__tag { color: var(--warn); }
+.month__cell.s-none { background: var(--surface); }
+.month__cell.s-future { background: var(--surface-2); }
+
+/* ------------------------------------------------- odometer verification --- */
+/*
+ * Photo beside figures. The image has to be big enough to read a dial from,
+ * which is the whole point of the screen, so it gets the larger half on wide
+ * viewports and stacks above the numbers when there is no room.
+ */
+.odo { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 860px) { .odo { grid-template-columns: 1fr; } }
+
+.odo__photos { display: flex; flex-direction: column; gap: 10px; }
+.odo__photo {
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-2);
+  line-height: 0;
+}
+.odo__photo img { width: 100%; height: auto; display: block; }
+.odo__photo.is-empty {
+  line-height: 1.4;
+  padding: 22px 10px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.odo__photo:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.odo__data { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.odo__table td:first-child { color: var(--text-2); }
+.odo__table .input { max-width: 120px; }
+.odo__up { color: var(--warn); }
+.odo__down { color: var(--ok); }
+
+.odo__chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+
+.odo__toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.odo__toolbar .select { min-width: 210px; }
+
+/* The trip a reading belongs to, and the way into its full record. */
+.odo__title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.odo__triplink {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 1px 7px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  white-space: nowrap;
+}
+.odo__triplink:hover { text-decoration: underline; }
+.odo__triplink:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.mt-16 { margin-top: 16px; }
+
+.odo__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.odo__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.odo__check input { cursor: pointer; }
+
+/* ------------------------------------------------------------- legend --- */
+.cal__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 12px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.cal__key { display: inline-flex; align-items: center; gap: 6px; }
+.cal__swatch {
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  display: inline-block;
+  border: 1px solid var(--border);
+}
+.cal__swatch.s-worked { background: var(--ok-soft); border-color: var(--ok-border); }
+.cal__swatch.s-open { background: var(--danger-soft); border-color: var(--danger-border); }
+.cal__swatch.s-leave { background: var(--accent-soft); border-color: var(--accent-border); }
+.cal__swatch.s-half { background: var(--warn-soft); border-color: var(--warn-border); }
+.cal__swatch.s-none { background: var(--surface); }
+
+@media (max-width: 720px) {
+  .month__cell { min-height: 62px; padding: 5px 6px 6px; }
+  .month__body { font-size: 10px; }
+  .cal__toolbar .select { min-width: 0; width: 100%; }
+}
+
+/* Approve / Reject sit together at the end of a queue row. */
+.lv__actions { display: inline-flex; gap: 6px; justify-content: flex-end; }
+
+/* The two outcomes are mutually exclusive - ticking one clears the other. */
+.odo__checks { display: flex; flex-direction: column; gap: 4px; }
+
+/* ---------------------------------------------------- day editing --- */
+/*
+ * Month cells are buttons now, so they need the button reset: without it the
+ * browser centres the content and overrides the grid's own type.
+ */
+.month__cell {
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+}
+button.month__cell:hover { outline: 1px solid var(--border-strong); outline-offset: -1px; }
+button.month__cell:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.month__cell.s-future { cursor: default; }
+.month__cell.is-editing { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.dayedit {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.dayedit .input { max-width: 140px; }
+.dayedit__hours {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  padding: 6px 0;
+}
+.dayedit__actions { display: flex; gap: 8px; margin-left: auto; }
+
+.dayedit__card { margin-bottom: 14px; }
