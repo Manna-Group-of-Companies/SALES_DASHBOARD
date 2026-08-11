@@ -34,6 +34,14 @@ npm run dev
 Opens on <http://localhost:5174>. Sign in with an ERPNext username and
 password; the dashboard has no accounts of its own.
 
+**No env setup is needed.** `client/.env.development` is committed and points
+the dev proxy at the live site. It holds no secrets — the URL is public and
+every user authenticates with their own ERPNext login.
+
+`client/.env.local` is deliberately *not* in the repository. It is a personal
+override for anyone pointing at a different site, and it takes precedence over
+the committed file.
+
 Useful checks:
 
 ```bash
