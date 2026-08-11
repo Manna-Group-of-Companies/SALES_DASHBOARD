@@ -6,3 +6,7 @@ dist-ssr
 .env.local
 .DS_Store
 *.tsbuildinfo
+
+# Cloudflare local dev state
+.wrangler
+wrangler.log

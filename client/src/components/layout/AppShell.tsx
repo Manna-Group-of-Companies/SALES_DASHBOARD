@@ -21,11 +21,9 @@ import {
   selectPendingAcks,
   selectPendingApproval,
   selectPendingLeave,
-  selectProductionQueue,
   selectUnreadCount,
   selectUser,
   selectVisibleOrders,
-  selectWeeklyBuckets,
 } from '@/store/selectors';
 import { loadNotifications, togglePanel } from '@/store/slices/notificationsSlice';
 import { loadOrders } from '@/store/slices/ordersSlice';
@@ -61,8 +59,6 @@ export function AppShell() {
 
   const myOrders = useAppSelector(selectVisibleOrders);
   const awaitingApproval = useAppSelector(selectPendingApproval);
-  const productionQueue = useAppSelector(selectProductionQueue);
-  const weeklyBuckets = useAppSelector(selectWeeklyBuckets);
   const lowStock = useAppSelector(selectLowStockItems);
   const freezingSoon = useAppSelector(selectFreezingSoon);
   const headcount = useAppSelector(selectActiveEmployees).length;
@@ -125,19 +121,30 @@ export function AppShell() {
     // "/" only ever redirects. HR keeps its people overview.
     { to: '/', label: 'HR Dashboard', icon: '◫', roles: ['hr'], group: 'Overview' },
 
-    { to: '/customers', label: 'Customers', icon: '👥', roles: ['sales_manager'], group: 'Sales' },
-    { to: '/orders', label: 'All Orders', icon: '📄', roles: ['sales_manager'], count: myOrders.length, group: 'Sales' },
+    { to: '/gm', label: 'Escalated to You', icon: '⚖', roles: ['general_manager'], group: 'Overview' },
+    { to: '/customers', label: 'Customers', icon: '👥', roles: ['sales_manager', 'general_manager'], group: 'Sales' },
+    { to: '/leads', label: 'Leads', icon: '🌱', roles: ['sales_manager'], group: 'Sales' },
+    { to: '/orders', label: 'Team Orders', icon: '📄', roles: ['sales_manager', 'general_manager'], count: myOrders.length, group: 'Sales' },
     { to: '/approvals', label: 'Approvals', icon: '✔', roles: ['sales_manager'], count: awaitingApproval.length, urgent: awaitingApproval.length > 0, group: 'Sales' },
+    { to: '/combined', label: 'Combined Orders', icon: '⑃', roles: ['sales_manager'], group: 'Sales' },
 
-    { to: '/production', label: 'Production Board', icon: '⚙', roles: ['production_manager'], count: productionQueue.length, group: 'Production' },
-    { to: '/dispatch', label: 'Weekly Compile', icon: '🗂', roles: ['production_manager'], count: weeklyBuckets.length, group: 'Production' },
+    { to: '/production', label: 'Production Queue', icon: '⚙', roles: ['production_manager'], group: 'Production' },
+    { to: '/production/stock', label: 'Minimum Stock', icon: '📦', roles: ['production_manager'], group: 'Production' },
+    { to: '/production/close-week', label: 'Close the Week', icon: '🗂', roles: ['production_manager'], group: 'Production' },
 
-    { to: '/stock', label: 'Minimum Stock', icon: '📦', roles: ['sales_manager', 'production_manager', 'stock_manager'], count: lowStock.length, urgent: lowStock.length > 0, group: 'Stock' },
-    { to: '/stock/aging', label: 'Aging Stock', icon: '🕰', roles: ['sales_manager', 'production_manager'], group: 'Stock' },
-    { to: '/stock/replenish', label: 'Replenishment', icon: '↻', roles: ['stock_manager', 'production_manager'], group: 'Stock' },
+    { to: '/stock', label: 'Minimum Stock', icon: '📦', roles: ['sales_manager', 'general_manager'], group: 'Sales' },
+    { to: '/stock/ledger', label: 'Stock Ledger', icon: '📦', roles: ['stock_manager'], count: lowStock.length, urgent: lowStock.length > 0, group: 'Stock' },
+    { to: '/stock/aging', label: 'Aging Stock', icon: '🕰', roles: ['stock_manager'], group: 'Stock' },
+    { to: '/stock/replenish', label: 'Replenishment', icon: '↻', roles: ['stock_manager'], group: 'Stock' },
 
     { to: '/hr/employees', label: 'Employees', icon: '🧑', roles: ['hr'], count: headcount, group: 'People' },
     { to: '/hr/leave', label: 'Leave Requests', icon: '🗓', roles: ['hr'], count: pendingLeave.length, urgent: pendingLeave.length > 0, group: 'People' },
+    { to: '/hr/regularizations', label: 'Regularizations', icon: '🕓', roles: ['hr'], group: 'People' },
+    { to: '/hr/calendar', label: 'Monthly Calendar', icon: '📅', roles: ['hr'], group: 'People' },
+    { to: '/hr/odometer', label: 'Odometer Check', icon: '🛞', roles: ['hr'], group: 'People' },
+
+    { to: '/reports/expenses', label: 'Monthly Expenses', icon: '🧾', roles: ['hr'], group: 'Reports' },
+    { to: '/reports/summary', label: 'Range Summary', icon: '📈', roles: ['hr'], group: 'Reports' },
 
     { to: '/import', label: 'Data Import', icon: '⬆', roles: ['sales_manager', 'stock_manager'], group: 'Admin' },
   ];

@@ -1,243 +1,221 @@
 /**
- * The employee directory.
+ * The people roster.
  *
- * One row per person on the books, searchable by name, designation or phone
- * because that is how someone is actually looked for. Relieved staff are kept
- * behind a toggle rather than deleted — HR still needs to answer questions
- * about people who have left.
+ * These are `Sales Person` records, not `Employee` — see `domain/attendance`.
+ * Each row carries the identity HR needs (team, business unit, login) plus
+ * this month's attendance so far, because "who is this person and how have
+ * they been working" is one question, not two.
  */
 
-import { useMemo, useState } from 'react';
-import type { Department, Employee, LeaveRequest } from '@/domain/types';
-import { DEPARTMENTS, EMPLOYMENT_TYPE_LABEL } from '@/domain/types';
-import { formatDate, toIsoDate } from '@/domain/orderRules';
-import { attendanceByEmployee, isActiveOn, tenureYears } from '@/domain/hrRules';
-import { useAppSelector } from '@/store/hooks';
-import { selectAttendance, selectEmployees, selectLeaveRequests } from '@/store/selectors';
-import { Badge, Button, Card, Empty, Input, Modal, Select } from '@/components/ui';
-import { initials } from '@/components/common/format';
-import { AttendanceBadge, LeaveStatusBadge } from '@/components/common/StatusBadge';
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import type { AttendanceLog, FieldLeaveRequest, SalesPerson } from '@/domain/types';
+import {
+  activeSalesPeople,
+  isoOf,
+  monthFor,
+  teamsOf,
+  todayLocalIso,
+} from '@/domain/attendance';
+import { Api } from '@/api/client';
+import { Alert, Badge, Card, Empty, Input, Segmented } from '@/components/ui';
+import { Tile } from '@/components/common/Tile';
+import { RefreshButton } from '@/components/common/RefreshButton';
+import '@/components/layout/layout.css';
+import './attendance.css';
 
 export function EmployeesPage() {
-  const employees = useAppSelector(selectEmployees);
-  const attendance = useAppSelector(selectAttendance);
-  const leave = useAppSelector(selectLeaveRequests);
+  const today = todayLocalIso();
+  const now = new Date();
+  const monthStart = isoOf(now.getFullYear(), now.getMonth(), 1);
 
+  const [people, setPeople] = useState<SalesPerson[]>([]);
+  const [logs, setLogs] = useState<AttendanceLog[]>([]);
+  const [leave, setLeave] = useState<FieldLeaveRequest[]>([]);
+  const [team, setTeam] = useState<string>('all');
   const [query, setQuery] = useState('');
-  const [department, setDepartment] = useState<Department | 'all'>('all');
-  const [includeLeavers, setIncludeLeavers] = useState(false);
-  const [open, setOpen] = useState<Employee | null>(null);
+  /** Bumped to re-run the load effect — the Refresh button's only job. */
+  const [tick, setTick] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const todayIso = toIsoDate(new Date());
-  const marked = useMemo(
-    () => attendanceByEmployee(attendance, todayIso),
-    [attendance, todayIso],
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    setError(null);
+    Promise.all([
+      Api.attendance.listSalesPeople(),
+      Api.attendance.listAttendanceLogs(monthStart),
+      Api.attendance.listLeaveRequests(),
+    ])
+      .then(([p, l, lv]) => {
+        if (!live) return;
+        setPeople(p);
+        setLogs(l);
+        setLeave(lv);
+      })
+      .catch((e: unknown) => {
+        if (live) setError(e instanceof Error ? e.message : 'Could not read the roster.');
+      })
+      .finally(() => {
+        if (live) setLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [monthStart, tick]);
+
+  const staff = useMemo(() => activeSalesPeople(people), [people]);
+  const teams = useMemo(() => teamsOf(people), [people]);
+
+  /** Identity plus this month's attendance, per person. */
+  const rows = useMemo(
+    () =>
+      staff
+        .map((person) => ({
+          person,
+          month: monthFor(person, now.getFullYear(), now.getMonth(), logs, leave, today),
+          onFloorToday: logs.some(
+            (l) => l.person === person.id && l.date === today && l.status === 'Punched In',
+          ),
+        }))
+        .filter((r) => (team === 'all' ? true : r.person.teamManager === team))
+        .filter((r) => {
+          const q = query.trim().toLowerCase();
+          if (!q) return true;
+          return (
+            r.person.name.toLowerCase().includes(q) ||
+            (r.person.unit ?? '').toLowerCase().includes(q) ||
+            (r.person.userId ?? '').toLowerCase().includes(q)
+          );
+        })
+        .sort((a, b) => a.person.name.localeCompare(b.person.name)),
+    [staff, logs, leave, today, team, query, now],
   );
 
-  const rows = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return employees
-      .filter((e) => includeLeavers || isActiveOn(e, todayIso))
-      .filter((e) => department === 'all' || e.department === department)
-      .filter(
-        (e) =>
-          !needle ||
-          e.name.toLowerCase().includes(needle) ||
-          e.designation.toLowerCase().includes(needle) ||
-          (e.phone ?? '').includes(needle) ||
-          e.id.toLowerCase().includes(needle),
-      )
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [employees, includeLeavers, department, query, todayIso]);
-
-  const leavers = employees.filter((e) => !isActiveOn(e, todayIso)).length;
+  const disabled = useMemo(() => people.filter((p) => !p.isGroup && !p.enabled), [people]);
 
   return (
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">Employees</div>
+          <div className="page-head__title">Sales people</div>
           <div className="page-head__sub">
-            {rows.length} of {employees.length} on file
-            {leavers > 0 && ` · ${leavers} relieved`}
+            {staff.length} active across {teams.length} {teams.length === 1 ? 'team' : 'teams'} ·
+            attendance shown for this month
           </div>
         </div>
+        <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
       </div>
 
-      <Card flush>
-        <div className="row gap-2" style={{ padding: 14, flexWrap: 'wrap' }}>
-          <Input
-            placeholder="Search name, designation or phone…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            style={{ maxWidth: 320 }}
-            aria-label="Search employees"
-          />
-          <Select
-            value={department}
-            onChange={(e) => setDepartment(e.target.value as Department | 'all')}
-            aria-label="Filter by department"
-          >
-            <option value="all">All departments</option>
-            {DEPARTMENTS.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </Select>
-          <div className="grow" />
-          <Button
-            size="sm"
-            variant={includeLeavers ? 'primary' : 'ghost'}
-            onClick={() => setIncludeLeavers((v) => !v)}
-          >
-            {includeLeavers ? 'Hide relieved' : 'Show relieved'}
-          </Button>
-        </div>
+      {error && (
+        <Alert tone="danger" title="Could not read the roster">
+          {error}
+        </Alert>
+      )}
 
-        {rows.length === 0 ? (
-          <Empty icon="👥" title="Nobody matches">
-            Try a different department, or clear the search.
-          </Empty>
-        ) : (
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Employee</th>
-                  <th>Department</th>
-                  <th>Type</th>
-                  <th>Joined</th>
-                  <th>Today</th>
-                  <th className="right">Leave balance</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((employee) => {
-                  const active = isActiveOn(employee, todayIso);
-                  return (
-                    <tr key={employee.id} className="is-clickable" onClick={() => setOpen(employee)}>
+      <div className="tiles" style={{ marginBottom: 14 }}>
+        <Tile label="Active" value={String(staff.length)} foot="On the books" />
+        {teams.map((t) => (
+          <Tile
+            key={t.manager}
+            label={t.manager}
+            value={String(t.members.length)}
+            foot={t.unit}
+          />
+        ))}
+      </div>
+
+      <div className="cal__toolbar">
+        <Input
+          placeholder="Search name, unit or login…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="Search people"
+        />
+        <Segmented
+          ariaLabel="Team"
+          value={team}
+          onChange={setTeam}
+          options={[
+            { value: 'all', label: 'All teams' },
+            ...teams.map((t) => ({ value: t.manager, label: t.manager })),
+          ]}
+        />
+      </div>
+
+      {loading && <Empty icon="◔" title="Reading roster…" />}
+
+      {!loading && !error && (
+        <Card flush>
+          {rows.length === 0 ? (
+            <Empty icon="—" title="Nobody matches" />
+          ) : (
+            <div className="scroll-x">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Team manager</th>
+                    <th>Business unit</th>
+                    <th>Login</th>
+                    <th>Today</th>
+                    <th className="right">Worked</th>
+                    <th className="right">Hours</th>
+                    <th className="right">Leave</th>
+                    <th className="right">Open</th>
+                    <th className="right">Calendar</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(({ person, month, onFloorToday }) => (
+                    <tr key={person.id}>
+                      <td>{person.name}</td>
+                      <td className="dim">{person.teamManager || '—'}</td>
+                      <td className="dim">{person.unit || '—'}</td>
+                      <td className="mono small">
+                        {person.userId ? person.userId.split('@')[0] : <span className="dim">no login</span>}
+                      </td>
                       <td>
-                        <div className="row gap-2">
-                          <div className="avatar">{initials(employee.name)}</div>
-                          <div style={{ minWidth: 0 }}>
-                            <div className="small strong">{employee.name}</div>
-                            <div className="tiny dim">
-                              {employee.designation} · <span className="mono">{employee.id}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="small">
-                        {employee.department}
-                        {employee.location && <div className="tiny dim">{employee.location}</div>}
-                      </td>
-                      <td className="small">{EMPLOYMENT_TYPE_LABEL[employee.employmentType]}</td>
-                      <td className="small">
-                        {formatDate(employee.joinedOn)}
-                        <div className="tiny dim">
-                          {tenureYears(employee, todayIso)} yr
-                          {tenureYears(employee, todayIso) === 1 ? '' : 's'}
-                        </div>
-                      </td>
-                      <td>
-                        {active ? (
-                          <AttendanceBadge status={marked.get(employee.id)?.status} />
+                        {onFloorToday ? (
+                          <Badge tone="ok" dot>
+                            On floor
+                          </Badge>
                         ) : (
-                          <Badge tone="neutral">Relieved {formatDate(employee.leftOn!)}</Badge>
+                          <span className="dim small">—</span>
                         )}
                       </td>
+                      <td className="right num">{month.worked}</td>
+                      <td className="right num">{month.hours}</td>
+                      <td className="right num">{month.leaveDays || <span className="dim">—</span>}</td>
                       <td className="right num">
-                        {active ? `${employee.leaveBalance} d` : <span className="dim">—</span>}
+                        {month.open ? (
+                          <span style={{ color: 'var(--danger)', fontWeight: 650 }}>{month.open}</span>
+                        ) : (
+                          <span className="dim">—</span>
+                        )}
                       </td>
                       <td className="right">
-                        <span className="tiny dim">View →</span>
+                        <Link to="/hr/calendar" className="small">
+                          Open
+                        </Link>
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-
-      {open && (
-        <EmployeeModal
-          employee={open}
-          manager={employees.find((e) => e.id === open.reportsTo)}
-          leave={leave.filter((r) => r.employeeId === open.id)}
-          todayIso={todayIso}
-          onClose={() => setOpen(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-function EmployeeModal({
-  employee,
-  manager,
-  leave,
-  todayIso,
-  onClose,
-}: {
-  employee: Employee;
-  manager?: Employee;
-  leave: LeaveRequest[];
-  todayIso: string;
-  onClose: () => void;
-}) {
-  return (
-    <Modal title={employee.name} onClose={onClose} width="wide">
-      <div className="stack gap-4">
-        <div className="row gap-4" style={{ flexWrap: 'wrap' }}>
-          <Detail label="Employee ID" value={employee.id} mono />
-          <Detail label="Designation" value={employee.designation} />
-          <Detail label="Department" value={employee.department} />
-          <Detail label="Type" value={EMPLOYMENT_TYPE_LABEL[employee.employmentType]} />
-          <Detail
-            label="Joined"
-            value={`${formatDate(employee.joinedOn)} (${tenureYears(employee, todayIso)} yrs)`}
-          />
-          <Detail label="Reports to" value={manager?.name ?? '—'} />
-          <Detail label="Phone" value={employee.phone ?? '—'} />
-          <Detail label="Email" value={employee.email ?? '—'} />
-          <Detail label="Location" value={employee.location ?? '—'} />
-          <Detail label="Leave balance" value={`${employee.leaveBalance} days`} />
-        </div>
-
-        <div>
-          <div className="detail-item__label" style={{ marginBottom: 6 }}>
-            Leave history
-          </div>
-          {leave.length === 0 ? (
-            <div className="small dim">No leave applied for.</div>
-          ) : (
-            <div className="stack gap-2">
-              {leave.map((request) => (
-                <div key={request.id} className="row gap-2">
-                  <span className="small grow">
-                    {formatDate(request.fromDate)} – {formatDate(request.toDate)}
-                    <span className="dim"> · {request.days}d</span>
-                  </span>
-                  <LeaveStatusBadge status={request.status} />
-                </div>
-              ))}
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
-        </div>
-      </div>
-    </Modal>
-  );
-}
+        </Card>
+      )}
 
-function Detail({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div style={{ minWidth: 130 }}>
-      <div className="detail-item__label">{label}</div>
-      <div className={`small strong ${mono ? 'mono' : ''}`}>{value}</div>
+      {disabled.length > 0 && (
+        <p className="note" style={{ marginTop: 12 }}>
+          {disabled.length} disabled record{disabled.length === 1 ? '' : 's'} hidden (
+          {disabled.map((d) => d.name).join(', ')}), along with the “Sales Team” group node — those
+          are not people and would inflate every headcount.
+        </p>
+      )}
     </div>
   );
 }

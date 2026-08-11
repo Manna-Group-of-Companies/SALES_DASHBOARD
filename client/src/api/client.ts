@@ -26,7 +26,23 @@ import axios, { AxiosError, type AxiosInstance, type AxiosRequestConfig } from '
 
 import type {
   AppNotification,
+  AttendanceLog,
   AttendanceRecord,
+  AttendanceRegularization,
+  FieldLeaveRequest,
+  OrderDetail,
+  OrderLine,
+  LocationCheck,
+  SalesCustomer,
+  SalesLead,
+  SalesRoute,
+  SalesPerson,
+  SalesVisit,
+  TeamOrder,
+  Trip,
+  TripExpense,
+  TripLeg,
+  TripRates,
   AttendanceStatus,
   Customer,
   Department,
@@ -36,7 +52,13 @@ import type {
   LeaveRequest,
   LeaveStatus,
   LeaveType,
+  CombinedOrder,
+  ItemOption,
+  LeadOrder,
   MinStockItem,
+  MinStockLine,
+  ProductionOrderRow,
+  StockReservationRow,
   NotificationKind,
   NotificationSeverity,
   Order,
@@ -63,9 +85,19 @@ import {
   weekEndOf,
   weekStartOf,
 } from '@/domain/orderRules';
-import { orderTotal } from '@/domain/productRules';
+import { normaliseWeights, orderTotal } from '@/domain/productRules';
+import { parseTagged, RATE_FALLBACK } from '@/domain/trips';
 import { allItemsReady, firstStage, isTerminalStage, stageLabel } from '@/domain/processStages';
 import { availableQty, isBelowThreshold } from '@/domain/aging';
+import { noteServerDate, serverNow } from '@/domain/serverClock';
+import { rollUp } from '@/domain/production';
+import { heldBy } from '@/domain/minimumStock';
+import {
+  PRODUCTION_STATUS,
+  PO_STATUS,
+  LEAD_ORDER_STATUS,
+  isSet as isLinkSet,
+} from '@/domain/orderStatus';
 
 import { USE_MOCK } from './config';
 import {
@@ -74,8 +106,36 @@ import {
   DOCTYPE,
   EMPLOYEE_FIELD,
   ITEM_FIELD,
+  ITEM_CATEGORIES,
+  ITEM_CATEGORY_TO_LINE,
+  LINE_CATEGORY_TO_ITEM,
+  MIN_STOCK_FIELD,
+  MIN_STOCK_BATCH_FIELD,
+  FULFILMENT_MODE,
+  RESERVATION_SOURCE,
+  STOCK_RESERVATION_FIELD,
+  LEAD_ORDER_FIELD,
+  LEAD_ORDER_ITEM_FIELD,
+  COMBINED_ORDER_FIELD,
+  PROFORMA_STATUS,
+  ATTENDANCE_LOG_FIELD,
   LEAVE_FIELD,
+  LEAD_FIELD,
+  SALES_CUSTOMER_FIELD,
+  SALES_ROUTE_FIELD,
+  SALES_ORDER_FIELD,
+  SALES_ORDER_ITEM_FIELD,
+  SALES_VISIT_FIELD,
+  TRIP_EXPENSE_FIELD,
+  TRIP_FIELD,
+  TRIP_LEG_FIELD,
+  TRIP_RATE_FIELD,
+  LEAVE_REQUEST_FIELD,
   METHOD,
+  REGULARIZATION_FIELD,
+  SALES_PERSON_FIELD,
+  OPTIONAL_EMPLOYEE_FIELD,
+  USER_FIELD,
 } from './endpoints';
 import { clone, delay, getDb, mutate, nextOrderNo, nowIso, uid } from './mock/db';
 import { MOCK_CREDENTIALS } from './mock/fixtures';
@@ -153,9 +213,21 @@ export class ApiError extends Error {
   }
 }
 
+/*
+ * Every response carries the server's clock in its `Date` header, so the
+ * offset is learned from ordinary traffic rather than a dedicated request.
+ * Read it on failures too: a 403 is as good a clock reading as a 200, and the
+ * deadlines it feeds must not go stale just because a call went wrong.
+ */
 http.interceptors.response.use(
-  (r) => r,
-  (error: AxiosError) => Promise.reject(toApiError(error)),
+  (r) => {
+    noteServerDate(r.headers?.date as string | undefined);
+    return r;
+  },
+  (error: AxiosError) => {
+    noteServerDate(error.response?.headers?.date as string | undefined);
+    return Promise.reject(toApiError(error));
+  },
 );
 
 /**
@@ -199,8 +271,19 @@ export function toApiError(error: unknown): ApiError {
       return new ApiError(stripHtml(message), status, data);
     }
 
-    if (status === 401 || status === 403) {
+    // 401 and 403 are different problems and sending the user to the login
+    // screen for a 403 wastes their time: signing in again cannot grant a
+    // permission their ERPNext account does not have.
+    if (status === 401) {
       return new ApiError('Your session has expired. Please sign in again.', status, data);
+    }
+    if (status === 403) {
+      return new ApiError(
+        'Your ERPNext account does not have permission to read this. Ask an administrator to ' +
+          'grant your user read access to it in Role Permissions Manager.',
+        status,
+        data,
+      );
     }
     return new ApiError(`Request failed (${status}).`, status, data);
   }
@@ -266,8 +349,35 @@ export async function listDocs<T>(doctype: string, options: ListOptions = {}): P
   if (options.limit != null) params.limit_page_length = options.limit;
   if (options.start != null) params.limit_start = options.start;
 
-  const { data } = await http.get<{ data: T[] }>(resourceUrl(doctype), { params });
-  return data.data ?? [];
+  try {
+    const { data } = await http.get<{ data: T[] }>(resourceUrl(doctype), { params });
+    return data.data ?? [];
+  } catch (e) {
+    /*
+     * Frappe fails the *whole* query with a 417 if a single requested field
+     * does not exist on the doctype. One absent custom field therefore reads
+     * exactly like an empty table, which is how a populated Employee list can
+     * render as "no data".
+     *
+     * So ask again for everything the user is allowed to read and let the
+     * mappers pick out what is present — a field the site has not got simply
+     * arrives undefined, which every `to*` mapper already tolerates. Only the
+     * explicit-field form can hit this, so there is nothing to retry when the
+     * caller did not name any.
+     */
+    const status = toApiError(e).status;
+    if (status !== 417 || !options.fields?.length) throw e;
+
+    const retry = { ...params, fields: JSON.stringify(['*']) };
+    const { data } = await http.get<{ data: T[] }>(resourceUrl(doctype), { params: retry });
+    if (import.meta.env.DEV) {
+      console.warn(
+        `[manna] ${doctype}: a requested field does not exist on this site, so the query was ` +
+          `re-issued with fields=["*"]. Requested: ${options.fields.join(', ')}`,
+      );
+    }
+    return data.data ?? [];
+  }
 }
 
 export async function getDoc<T>(doctype: string, name: string): Promise<T> {
@@ -384,18 +494,41 @@ function saveSession(user: User): void {
  * would be the one mistake with real consequences: a rep on the production
  * board, or in the approval queue.
  */
+/**
+ * Is a Frappe flag switched on?
+ *
+ * A Check field arrives as `1`, but the same idea modelled as Data or Select
+ * arrives as `"1"`, `"Yes"` or `"true"` — and a strict `=== 1` silently refuses
+ * a user whose flag is plainly set. Anything falsy, `0`, `"0"` or `"No"` stays
+ * off; nothing else is treated as permission.
+ */
+function isSet(value: unknown): boolean {
+  if (value === 1 || value === true) return true;
+  if (typeof value === 'string') {
+    return ['1', 'yes', 'true', 'y'].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
+/** Dev-only diagnostic: which `custom_*` fields this User actually carries. */
+function describeRoleFlags(u: Record<string, unknown>): string {
+  const flags = Object.keys(u)
+    .filter((k) => k.startsWith('custom_'))
+    .map((k) => `${k}=${JSON.stringify(u[k])}`);
+  return flags.length
+    ? `\n\n[dev] custom fields on this User: ${flags.join(', ')}`
+    : '\n\n[dev] this User record carries no custom_* fields at all.';
+}
+
 async function fetchCurrentUser(): Promise<User> {
   const { data } = await http.get<{ message: string }>(METHOD.loggedUser);
   const email = data.message;
 
   const { data: doc } = await http.get<{
-    data: {
+    data: Record<string, unknown> & {
       name: string;
       full_name?: string;
       custom_managed_team?: string;
-      custom_is_production_manager?: number;
-      custom_is_stock_manager?: number;
-      custom_is_hr?: number;
       custom_production_company?: string;
     };
   }>(`/api/resource/User/${encodeURIComponent(email)}`);
@@ -404,10 +537,14 @@ async function fetchCurrentUser(): Promise<User> {
 
   // The rep identity, if this login has one. `is_group=0` excludes the
   // roll-up nodes in the Sales Person tree.
-  const salesPersons = await listDocs<{ name: string; custom_company?: string }>(
+  const salesPersons = await listDocs<{
+    name: string;
+    custom_company?: string;
+    custom_team_manager?: string;
+  }>(
     DOCTYPE.salesPerson,
     {
-      fields: ['name', 'sales_person_name', 'custom_company'],
+      fields: ['name', 'sales_person_name', 'custom_company', 'custom_team_manager'],
       filters: [
         ['is_group', '=', 0],
         ['custom_user', '=', email],
@@ -417,19 +554,44 @@ async function fetchCurrentUser(): Promise<User> {
   ).catch(() => []);
 
   const salesPerson = salesPersons[0]?.name;
-  const managedTeam = (u.custom_managed_team ?? '').trim();
+  const managedTeam = String(u[USER_FIELD.managedTeam] ?? '').trim();
+
+  /*
+   * A sales manager is recognised from their own Sales Person record.
+   *
+   * `User.custom_managed_team` is documented but does not exist here. Team
+   * membership lives on `Sales Person.custom_team_manager`, which holds a
+   * SHORT token — `Pareeth` — while the manager's record is named
+   * `Pareeth Kb`. So the test is whether their own name begins with their own
+   * token; a rep's never does. Matching the token against the full name finds
+   * no reports and locks the manager out, which is exactly what happened.
+   */
+  const myToken = (salesPersons[0]?.custom_team_manager ?? '').trim().toLowerCase();
+  const managesTeam =
+    Boolean(myToken) && (salesPerson ?? '').trim().toLowerCase().startsWith(myToken);
 
   let role: Role | null = null;
-  if (u.custom_is_hr === 1) role = 'hr';
-  else if (u.custom_is_stock_manager === 1) role = 'stock_manager';
-  else if (u.custom_is_production_manager === 1) role = 'production_manager';
-  else if (managedTeam) role = 'sales_manager';
+  // The GM outranks the rest: they are who the other roles escalate to, and
+  // they carry exemptions nobody else does.
+  if (isSet(u[USER_FIELD.isGeneralManager])) role = 'general_manager';
+  else if (isSet(u[USER_FIELD.isHr])) role = 'hr';
+  else if (isSet(u[USER_FIELD.isStockManager])) role = 'stock_manager';
+  else if (isSet(u[USER_FIELD.isProductionManager])) role = 'production_manager';
+  else if (managedTeam || managesTeam) role = 'sales_manager';
 
   if (!role) {
+    // Nothing is guessed here on purpose: admitting an unrecognised login into
+    // some default role is the one mistake with real consequences — a rep on
+    // the production board, or in the approval queue.
+    //
+    // But a refusal that cannot be diagnosed is its own problem, so in dev the
+    // message names the `custom_*` fields the User record actually carries.
+    // That is schema, not data, and it never ships to production.
     throw new Error(
-      salesPerson
+      (salesPerson
         ? 'Sales Reps work in the field-sales app. This login has no access to the Sales & Production module.'
-        : 'This login has no role in the Sales & Production module. Contact the Sales Manager.',
+        : 'This login has no role in the Sales & Production module. Contact the Sales Manager.') +
+        (import.meta.env.DEV ? describeRoleFlags(u) : ''),
     );
   }
 
@@ -439,7 +601,8 @@ async function fetchCurrentUser(): Promise<User> {
     email,
     role,
     salesPerson,
-    productionUnit: u.custom_production_company || salesPersons[0]?.custom_company,
+    productionUnit:
+      (u[USER_FIELD.productionCompany] as string | undefined) || salesPersons[0]?.custom_company,
   };
 }
 
@@ -457,15 +620,17 @@ async function listProducts(): Promise<Product[]> {
       fields: [
         'name', 'item_name', 'stock_uom', 'standard_rate', 'gst_hsn_code', 'disabled',
         ITEM_FIELD.category,
-        ITEM_FIELD.avgWeightPerRoll,
+        ITEM_FIELD.weightPerBelt,
         ITEM_FIELD.beltsPerRoll,
-        ITEM_FIELD.exactWeightPerRoll,
-        ITEM_FIELD.tinSize,
-        ITEM_FIELD.size,
+        ITEM_FIELD.weightPerRoll,
+        ITEM_FIELD.packLitres,
       ],
       filters: [
         ['disabled', '=', 0],
-        [ITEM_FIELD.category, 'in', ['PCTR', 'CTR', 'BG', 'VS']],
+        // The Item master spells these `Precured`/`HOT`/…, not `PCTR`/`CTR`/….
+        // Filtering by the order-line codes matched nothing and returned an
+        // empty catalogue that read as a permissions failure.
+        [ITEM_FIELD.category, 'in', ITEM_CATEGORIES as unknown as string[]],
       ],
       limit: 0,
     });
@@ -518,15 +683,27 @@ function toProduct(row: Record<string, unknown>): Product {
     const v = row[k];
     return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
   };
-  const tin = n(ITEM_FIELD.tinSize);
+  // Vulcanising solution ships in 10 L and 30 L tins; `custom_pack_litres` is
+  // where the site records which. There is no `custom_tin_size` field.
+  const tin = n(ITEM_FIELD.packLitres);
+  // The one place the `custom_avg_weight_per_roll` misnomer is unpicked: it is
+  // a per-belt figure, and whichever of the three weights the master omits is
+  // derived from the other two.
+  const weights = normaliseWeights({
+    weightPerBelt: n(ITEM_FIELD.weightPerBelt),
+    beltsPerRoll: n(ITEM_FIELD.beltsPerRoll),
+    weightPerRoll: n(ITEM_FIELD.weightPerRoll),
+  });
+  const raw = String(row[ITEM_FIELD.category] ?? '');
   return {
     code: String(row.name),
     name: String(row.item_name ?? row.name),
-    category: String(row[ITEM_FIELD.category] ?? 'PCTR') as ProductCategory,
-    size: row[ITEM_FIELD.size] ? String(row[ITEM_FIELD.size]) : undefined,
-    avgWeightPerRoll: n(ITEM_FIELD.avgWeightPerRoll),
-    beltsPerRoll: n(ITEM_FIELD.beltsPerRoll),
-    exactWeightPerRoll: n(ITEM_FIELD.exactWeightPerRoll),
+    // Translated from the Item vocabulary; a value already in the order-line
+    // vocabulary (the inferred fallback path) passes through unchanged.
+    category: (ITEM_CATEGORY_TO_LINE[raw as keyof typeof ITEM_CATEGORY_TO_LINE] ??
+      raw ??
+      'PCTR') as ProductCategory,
+    ...weights,
     tinSize: tin === 10 || tin === 30 ? tin : undefined,
     defaultRate: n('standard_rate'),
     hsnCode: row.gst_hsn_code ? String(row.gst_hsn_code) : undefined,
@@ -557,6 +734,8 @@ async function listCustomers(salesPerson?: string): Promise<Customer[]> {
     CUSTOMER_FIELD.creditLimit,
     CUSTOMER_FIELD.assignedReps,
     CUSTOMER_FIELD.phone,
+    // Needed by the route gate: an order cannot be started without one.
+    SALES_CUSTOMER_FIELD.route,
   ];
 
   // `custom_assigned_reps` is pipe-delimited, matching the field-sales app.
@@ -575,7 +754,7 @@ async function listCustomers(salesPerson?: string): Promise<Customer[]> {
     // setup degrades to fewer columns instead of an empty screen.
     if (toApiError(e).status !== 417 && toApiError(e).status !== 500) throw e;
     return listDocs<Record<string, unknown>>(DOCTYPE.customer, {
-      fields: ['name', 'customer_name', 'territory', CUSTOMER_FIELD.outstanding, CUSTOMER_FIELD.creditLimit, CUSTOMER_FIELD.assignedReps],
+      fields: ['name', 'customer_name', 'territory', CUSTOMER_FIELD.outstanding, CUSTOMER_FIELD.creditLimit, CUSTOMER_FIELD.assignedReps, SALES_CUSTOMER_FIELD.route],
       filters,
       orderBy: 'customer_name asc',
       limit: 0,
@@ -605,6 +784,13 @@ function toCustomer(row: Record<string, unknown>): Customer {
     outstandingBalance: Number(row[CUSTOMER_FIELD.outstanding] ?? 0),
     creditLimit: Number(row[CUSTOMER_FIELD.creditLimit] ?? 0),
     assignedReps: reps,
+    /*
+     * Deliberately NOT falling back to `destination` or `territory`. An order
+     * cannot be started without a route, and substituting a plausible-looking
+     * value would let 258 routeless customers be ordered for and then found
+     * undeliverable.
+     */
+    route: str(row[SALES_CUSTOMER_FIELD.route]),
   };
 }
 
@@ -828,8 +1014,8 @@ async function listMinStock(): Promise<MinStockItem[]> {
   // the ledger is simply empty — which the UI already renders correctly as
   // "No minimum stock" on every row — rather than breaking the order screen.
   const [items, reservations] = await Promise.all([
-    listDocs<MinStockItem>(DOCTYPE.minStock, { limit: 0 }).catch(ifMissing([])),
-    listDocs<StockReservation>(DOCTYPE.stockReservation, { limit: 0 }).catch(ifMissing([])),
+    listDocs<MinStockItem>(DOCTYPE.minStock, { limit: 0 }).catch(ifMissing([], DOCTYPE.minStock)),
+    listDocs<StockReservation>(DOCTYPE.stockReservation, { limit: 0 }).catch(ifMissing([], DOCTYPE.stockReservation)),
   ]);
   return items.map((i) => ({
     ...i,
@@ -844,10 +1030,21 @@ async function listMinStock(): Promise<MinStockItem[]> {
  * failure — a real outage, a permission problem — still propagates, because
  * silently showing an empty list for those would hide a genuine fault.
  */
-function ifMissing<T>(fallback: T) {
+function ifMissing<T>(fallback: T, what = 'a doctype') {
   return (e: unknown): T => {
-    const status = toApiError(e).status;
-    if (status === 404 || status === 417) return fallback;
+    const err = toApiError(e);
+    if (err.status === 404 || err.status === 417) {
+      // Silent in production — an unbuilt doctype is an expected state there.
+      // Loud in dev, because "empty list" and "this does not exist" look
+      // identical on screen and that has already cost an afternoon.
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[manna] ${what} is missing on this site (HTTP ${err.status}) — rendering as empty. ` +
+            `${err.message}`,
+        );
+      }
+      return fallback;
+    }
     throw e;
   };
 }
@@ -868,7 +1065,7 @@ async function listReservations(): Promise<StockReservation[]> {
     sweepExpiredHolds();
     return delay(getDb().reservations, 40);
   }
-  return listDocs<StockReservation>(DOCTYPE.stockReservation, { limit: 0 }).catch(ifMissing([]));
+  return listDocs<StockReservation>(DOCTYPE.stockReservation, { limit: 0 }).catch(ifMissing([], DOCTYPE.stockReservation));
 }
 
 function sweepExpiredHolds(): void {
@@ -1068,7 +1265,7 @@ async function listProductionOrders(): Promise<ProductionOrder[]> {
   return listDocs<ProductionOrder>(DOCTYPE.productionOrder, {
     orderBy: 'raisedAt desc',
     limit: 0,
-  }).catch(ifMissing([]));
+  }).catch(ifMissing([], DOCTYPE.productionOrder));
 }
 
 /**
@@ -1609,7 +1806,7 @@ async function listWeeklyGroups(): Promise<WeeklyGroup[]> {
   return listDocs<WeeklyGroup>(DOCTYPE.weeklyGroup, {
     orderBy: 'compiledAt desc',
     limit: 0,
-  }).catch(ifMissing([]));
+  }).catch(ifMissing([], DOCTYPE.weeklyGroup));
 }
 
 // --- order helpers ---------------------------------------------------------
@@ -1718,9 +1915,11 @@ const PRODUCT_ALIASES: Record<string, string[]> = {
   name: ['item name', 'name', 'description', 'product', 'product name'],
   category: ['category', 'type', 'product category', 'group'],
   size: ['size', 'dimension', 'dimensions'],
-  avgWeightPerRoll: ['avg weight per roll', 'average weight', 'avg roll weight', 'avg weight', 'average weight per roll'],
+  // The sheets carry the same misnomer as ERPNext: an "avg weight per roll"
+  // column holds the weight of one *belt*. See `Product.weightPerBelt`.
+  weightPerBelt: ['avg weight per roll', 'average weight', 'avg roll weight', 'avg weight', 'average weight per roll', 'weight per belt', 'belt weight'],
   beltsPerRoll: ['belts per roll', 'belts/roll', 'no of belts', 'belts'],
-  exactWeightPerRoll: ['exact weight per roll', 'roll weight', 'weight per roll', 'exact weight'],
+  weightPerRoll: ['weight per roll', 'roll weight', 'exact weight per roll', 'exact weight', 'total roll weight'],
   tinSize: ['tin size', 'volume', 'litres', 'liters', 'size (l)'],
   defaultRate: ['rate', 'standard rate', 'default rate', 'price'],
   hsnCode: ['hsn', 'hsn code', 'hsn_code'],
@@ -1824,16 +2023,27 @@ async function parseProducts(file: ArrayBuffer): Promise<ParseResult<Product>> {
     // Each family needs the numbers its pricing maths depends on.
     switch (category) {
       case 'PCTR': {
-        product.avgWeightPerRoll = numOrUndef(get('avgWeightPerRoll'));
-        product.beltsPerRoll = numOrUndef(get('beltsPerRoll'));
-        if (!product.avgWeightPerRoll) push('Avg Weight Per Roll', 'PCTR needs an average roll weight in kg.');
-        if (!product.beltsPerRoll) push('Belts Per Roll', 'PCTR needs the number of belts per roll.');
+        const w = normaliseWeights({
+          weightPerBelt: numOrUndef(get('weightPerBelt')),
+          beltsPerRoll: numOrUndef(get('beltsPerRoll')),
+          weightPerRoll: numOrUndef(get('weightPerRoll')),
+        });
+        Object.assign(product, w);
+        if (!w.beltsPerRoll) push('Belts Per Roll', 'PCTR needs the number of belts per roll.');
+        if (!w.weightPerBelt) {
+          push(
+            'Avg Weight Per Roll',
+            'PCTR needs the per-belt weight in kg — the "Avg Weight Per Roll" column holds the weight of one belt, not one roll.',
+          );
+        }
         break;
       }
       case 'CTR': {
-        product.exactWeightPerRoll =
-          numOrUndef(get('exactWeightPerRoll')) ?? numOrUndef(get('avgWeightPerRoll'));
-        if (!product.exactWeightPerRoll) push('Weight Per Roll', 'CTR needs an exact roll weight in kg.');
+        // A conventional roll yields no belts, so the misnamed column cannot
+        // mean anything but the roll itself here.
+        product.weightPerRoll =
+          numOrUndef(get('weightPerRoll')) ?? numOrUndef(get('weightPerBelt'));
+        if (!product.weightPerRoll) push('Weight Per Roll', 'CTR needs an exact roll weight in kg.');
         break;
       }
       case 'VS': {
@@ -1885,6 +2095,7 @@ async function parseCustomers(file: ArrayBuffer): Promise<ParseResult<Customer>>
       id: String(get('id') ?? '').trim() || name,
       name,
       destination: str(get('destination')) ?? address.split(',').slice(-2)[0]?.trim() ?? address,
+      route: str(get('route')),
       address,
       gstin,
       state: str(get('state')) ?? '',
@@ -1929,12 +2140,16 @@ async function commitProducts(products: Product[]): Promise<CommitResult> {
       stock_uom: p.category === 'VS' ? 'Litre' : 'Kg',
       standard_rate: p.defaultRate ?? 0,
       gst_hsn_code: p.hsnCode,
-      [ITEM_FIELD.category]: p.category,
-      [ITEM_FIELD.avgWeightPerRoll]: p.avgWeightPerRoll,
+      // Back into the Item master's own vocabulary. `custom_product_category`
+      // is a Select there and rejects `PCTR`/`CTR`/`BG`/`VS` outright.
+      [ITEM_FIELD.category]: LINE_CATEGORY_TO_ITEM[p.category],
+      // Written back under ERPNext's names, misnomer and all: the site keeps
+      // the per-belt figure in `custom_avg_weight_per_roll`, and writing a roll
+      // weight there would corrupt the master for every other reader.
+      [ITEM_FIELD.weightPerBelt]: p.weightPerBelt,
       [ITEM_FIELD.beltsPerRoll]: p.beltsPerRoll,
-      [ITEM_FIELD.exactWeightPerRoll]: p.exactWeightPerRoll,
-      [ITEM_FIELD.tinSize]: p.tinSize,
-      [ITEM_FIELD.size]: p.size,
+      [ITEM_FIELD.weightPerRoll]: p.weightPerRoll,
+      [ITEM_FIELD.packLitres]: p.tinSize,
     };
     // Upsert: try an update, fall back to create when the item is new.
     try {
@@ -2058,6 +2273,2083 @@ function formatMoney(n: number): string {
  * translation happens here and nowhere else.
  */
 
+// ===========================================================================
+// FIELD ATTENDANCE — the real HR doctypes on this site
+// ===========================================================================
+//
+// `Sales Person` + `Attendance Log` + `Leave Request` + `Attendance
+// Regularization`. See `domain/attendance.ts` for why these and not the
+// Frappe HR ones, which are not installed.
+//
+// Read-only for now. Approvals live in the PWA rather than here because a
+// decision has to be attributable to the signed-in user, and this module is
+// the only place that knows who that is.
+
+async function listSalesPeople(): Promise<SalesPerson[]> {
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.salesPerson, {
+    fields: ['name', ...Object.values(SALES_PERSON_FIELD)],
+    orderBy: `${SALES_PERSON_FIELD.personName} asc`,
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.salesPerson));
+
+  return rows.map((r) => ({
+    id: String(r.name),
+    name: str(r[SALES_PERSON_FIELD.personName]) ?? String(r.name),
+    teamManager: str(r[SALES_PERSON_FIELD.teamManager]) ?? '',
+    unit: str(r[SALES_PERSON_FIELD.unit]) ?? '',
+    userId: str(r[SALES_PERSON_FIELD.user]),
+    enabled: Number(r[SALES_PERSON_FIELD.enabled]) === 1,
+    isGroup: Number(r[SALES_PERSON_FIELD.isGroup]) === 1,
+  }));
+}
+
+/** Punch records from `fromIso` onward. The calendar needs months, not days. */
+async function listAttendanceLogs(fromIso: string): Promise<AttendanceLog[]> {
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.attendanceLog, {
+    fields: ['name', ...Object.values(ATTENDANCE_LOG_FIELD)],
+    filters: [[ATTENDANCE_LOG_FIELD.date, '>=', fromIso]],
+    orderBy: `${ATTENDANCE_LOG_FIELD.date} desc`,
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.attendanceLog));
+
+  return rows.map((r) => ({
+    id: String(r.name),
+    person: str(r[ATTENDANCE_LOG_FIELD.person]) ?? '',
+    date: (str(r[ATTENDANCE_LOG_FIELD.date]) ?? '').slice(0, 10),
+    punchIn: str(r[ATTENDANCE_LOG_FIELD.punchIn]),
+    punchOut: str(r[ATTENDANCE_LOG_FIELD.punchOut]),
+    status: (str(r[ATTENDANCE_LOG_FIELD.status]) as AttendanceLog['status']) ?? 'Punched In',
+    workingHours: Number(r[ATTENDANCE_LOG_FIELD.workingHours]) || 0,
+    remarks: str(r[ATTENDANCE_LOG_FIELD.remarks]),
+  }));
+}
+
+async function listLeaveRequestsLive(): Promise<FieldLeaveRequest[]> {
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.leaveRequest, {
+    fields: ['name', ...Object.values(LEAVE_REQUEST_FIELD)],
+    orderBy: `${LEAVE_REQUEST_FIELD.date} desc`,
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.leaveRequest));
+
+  return rows.map(toFieldLeaveRequest);
+}
+
+function toFieldLeaveRequest(r: Record<string, unknown>): FieldLeaveRequest {
+  return ({
+    id: String(r.name),
+    person: str(r[LEAVE_REQUEST_FIELD.person]) ?? '',
+    date: (str(r[LEAVE_REQUEST_FIELD.date]) ?? '').slice(0, 10),
+    days: Number(r[LEAVE_REQUEST_FIELD.days]) || 1,
+    halfDay: Number(r[LEAVE_REQUEST_FIELD.halfDay]) === 1,
+    halfDayPeriod: str(r[LEAVE_REQUEST_FIELD.halfDayPeriod]) as FieldLeaveRequest['halfDayPeriod'],
+    reason: str(r[LEAVE_REQUEST_FIELD.reason]),
+    status: (str(r[LEAVE_REQUEST_FIELD.status]) as FieldLeaveRequest['status']) ?? 'Pending Approval',
+    approverType:
+      (str(r[LEAVE_REQUEST_FIELD.approverType]) as FieldLeaveRequest['approverType']) ?? 'Sales Manager',
+    teamManager: str(r[LEAVE_REQUEST_FIELD.teamManager]),
+    requesterIsManager: Number(r[LEAVE_REQUEST_FIELD.requesterIsManager]) === 1,
+    decidedBy: str(r[LEAVE_REQUEST_FIELD.decidedBy]),
+    managerApproved: Number(r[LEAVE_REQUEST_FIELD.managerApproved]) === 1,
+    managerApprovedBy: str(r[LEAVE_REQUEST_FIELD.managerApprovedBy]),
+    hrApproved: Number(r[LEAVE_REQUEST_FIELD.hrApproved]) === 1,
+    hrApprovedBy: str(r[LEAVE_REQUEST_FIELD.hrApprovedBy]),
+  });
+}
+
+/**
+ * Record one party's decision on a leave request.
+ *
+ * The two approvals are independent, so this only ever writes the caller's own
+ * flag. `status` is promoted to `Approved` solely when BOTH are set — the read
+ * is done first so the other party's flag is the current one, not whatever the
+ * screen last saw.
+ *
+ * A rejection is final from either side and does not wait for the other.
+ */
+async function decideLeaveRequest(input: {
+  id: string;
+  as: 'hr' | 'manager';
+  approve: boolean;
+  by: string;
+}): Promise<FieldLeaveRequest> {
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.leaveRequest, input.id);
+
+  if (!input.approve) {
+    const rejected = await updateDoc<Record<string, unknown>>(DOCTYPE.leaveRequest, input.id, {
+      [LEAVE_REQUEST_FIELD.status]: 'Rejected',
+      [LEAVE_REQUEST_FIELD.decidedBy]: input.by,
+    });
+    return toFieldLeaveRequest(rejected);
+  }
+
+  /*
+   * The other party's approval may have been made outside this dashboard, in
+   * which case only `status`/`approver_type` record it — see
+   * `managerHasApproved` in `domain/approvals`. Reading the raw flag alone
+   * would drop an approval that already exists and re-open a granted leave.
+   */
+  const legacyApproved = str(doc[LEAVE_REQUEST_FIELD.status]) === 'Approved';
+  const approverType = str(doc[LEAVE_REQUEST_FIELD.approverType]);
+  const managerApproved =
+    input.as === 'manager'
+      ? true
+      : Number(doc[LEAVE_REQUEST_FIELD.managerApproved]) === 1 ||
+        (legacyApproved && approverType === 'Sales Manager');
+  const hrApproved =
+    input.as === 'hr'
+      ? true
+      : Number(doc[LEAVE_REQUEST_FIELD.hrApproved]) === 1 ||
+        (legacyApproved && approverType === 'HR');
+
+  // A manager's own leave needs HR alone — there is no second signature to
+  // wait for, and requiring one would leave it permanently ungranted.
+  const requesterIsManager = Number(doc[LEAVE_REQUEST_FIELD.requesterIsManager]) === 1;
+  const complete = requesterIsManager ? hrApproved : managerApproved && hrApproved;
+
+  const patch: Record<string, unknown> = {
+    [LEAVE_REQUEST_FIELD.managerApproved]: managerApproved ? 1 : 0,
+    [LEAVE_REQUEST_FIELD.hrApproved]: hrApproved ? 1 : 0,
+    [LEAVE_REQUEST_FIELD.status]: complete ? 'Approved' : 'Pending Approval',
+  };
+  if (input.as === 'manager') patch[LEAVE_REQUEST_FIELD.managerApprovedBy] = input.by;
+  if (input.as === 'hr') patch[LEAVE_REQUEST_FIELD.hrApprovedBy] = input.by;
+  if (complete) patch[LEAVE_REQUEST_FIELD.decidedBy] = input.by;
+
+  const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.leaveRequest, input.id, patch);
+  return toFieldLeaveRequest(saved);
+}
+
+/**
+ * Take back this party's decision on a leave request.
+ *
+ * Clears only the caller's own flag — the other party's approval is theirs to
+ * withdraw, not ours — and drops the request back to pending, since it is by
+ * definition no longer fully approved. A revoked rejection returns to pending
+ * too, so it can be decided again rather than staying dead.
+ */
+async function revokeLeaveDecision(input: {
+  id: string;
+  as: 'hr' | 'manager';
+}): Promise<FieldLeaveRequest> {
+  const patch: Record<string, unknown> = {
+    [LEAVE_REQUEST_FIELD.status]: 'Pending Approval',
+    [LEAVE_REQUEST_FIELD.decidedBy]: '',
+  };
+  if (input.as === 'manager') {
+    patch[LEAVE_REQUEST_FIELD.managerApproved] = 0;
+    patch[LEAVE_REQUEST_FIELD.managerApprovedBy] = '';
+  } else {
+    patch[LEAVE_REQUEST_FIELD.hrApproved] = 0;
+    patch[LEAVE_REQUEST_FIELD.hrApprovedBy] = '';
+  }
+  const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.leaveRequest, input.id, patch);
+  return toFieldLeaveRequest(saved);
+}
+
+/**
+ * Take back a regularization decision.
+ *
+ * `completion_status` is deliberately left alone: if the attendance log was
+ * already rewritten, un-approving does not un-rewrite it, and silently
+ * clearing the flag would hide that the log and the request now disagree.
+ */
+async function revokeRegularization(input: {
+  id: string;
+  by: string;
+  remarks?: string;
+}): Promise<AttendanceRegularization> {
+  const saved = await updateDoc<Record<string, unknown>>(
+    DOCTYPE.attendanceRegularization,
+    input.id,
+    {
+      [REGULARIZATION_FIELD.status]: 'Pending Approval',
+      [REGULARIZATION_FIELD.decidedBy]: '',
+      [REGULARIZATION_FIELD.decisionRemarks]:
+        input.remarks ?? `Decision revoked by ${input.by}`,
+    },
+  );
+  return toRegularization(saved);
+}
+
+/** Whole hours between two Frappe timestamps, to 2dp. Never negative. */
+function hoursBetween(from?: string, to?: string): number {
+  if (!from || !to) return 0;
+  const a = new Date(from.replace(' ', 'T')).getTime();
+  const b = new Date(to.replace(' ', 'T')).getTime();
+  if (Number.isNaN(a) || Number.isNaN(b) || b <= a) return 0;
+  return Math.round(((b - a) / 3_600_000) * 100) / 100;
+}
+
+/** "2026-08-05" + "09:30" -> "2026-08-05 09:30:00". */
+export function stampFor(dateIso: string, hhmm: string): string {
+  return `${dateIso} ${hhmm.length === 5 ? `${hhmm}:00` : hhmm}`;
+}
+
+export interface AttendanceEdit {
+  person: string;
+  date: string;
+  /** Full timestamps. Omit both to leave the day with no punches. */
+  punchIn?: string;
+  punchOut?: string;
+  remarks?: string;
+}
+
+/**
+ * Write one person's attendance for one day, creating the record if needed.
+ *
+ * `working_hours` is always recomputed here rather than trusted from the
+ * caller: it is what payroll multiplies, and letting a screen supply it would
+ * make two places responsible for the same number. A day with a punch-in and
+ * no punch-out stays `Punched In` with zero hours — an open shift is a real
+ * state, not a zero-length one.
+ */
+async function upsertAttendanceLog(edit: AttendanceEdit): Promise<AttendanceLog> {
+  const existing = await listDocs<{ name: string }>(DOCTYPE.attendanceLog, {
+    fields: ['name'],
+    filters: [
+      [ATTENDANCE_LOG_FIELD.person, '=', edit.person],
+      [ATTENDANCE_LOG_FIELD.date, '=', edit.date],
+    ],
+    limit: 1,
+  }).catch(() => []);
+
+  const closed = Boolean(edit.punchIn && edit.punchOut);
+  const body: Record<string, unknown> = {
+    [ATTENDANCE_LOG_FIELD.person]: edit.person,
+    [ATTENDANCE_LOG_FIELD.date]: edit.date,
+    [ATTENDANCE_LOG_FIELD.punchIn]: edit.punchIn ?? null,
+    [ATTENDANCE_LOG_FIELD.punchOut]: edit.punchOut ?? null,
+    [ATTENDANCE_LOG_FIELD.status]: closed ? 'Punched Out' : 'Punched In',
+    [ATTENDANCE_LOG_FIELD.workingHours]: hoursBetween(edit.punchIn, edit.punchOut),
+  };
+  if (edit.remarks != null) body[ATTENDANCE_LOG_FIELD.remarks] = edit.remarks;
+
+  const saved = existing.length
+    ? await updateDoc<Record<string, unknown>>(DOCTYPE.attendanceLog, existing[0]!.name, body)
+    : await createDoc<Record<string, unknown>>(DOCTYPE.attendanceLog, body);
+
+  return toAttendanceLog(saved);
+}
+
+function toAttendanceLog(r: Record<string, unknown>): AttendanceLog {
+  return {
+    id: String(r.name),
+    person: str(r[ATTENDANCE_LOG_FIELD.person]) ?? '',
+    date: (str(r[ATTENDANCE_LOG_FIELD.date]) ?? '').slice(0, 10),
+    punchIn: str(r[ATTENDANCE_LOG_FIELD.punchIn]),
+    punchOut: str(r[ATTENDANCE_LOG_FIELD.punchOut]),
+    status: (str(r[ATTENDANCE_LOG_FIELD.status]) as AttendanceLog['status']) ?? 'Punched In',
+    workingHours: Number(r[ATTENDANCE_LOG_FIELD.workingHours]) || 0,
+    remarks: str(r[ATTENDANCE_LOG_FIELD.remarks]),
+  };
+}
+
+/**
+ * Write an approved regularization into the attendance log.
+ *
+ * This is the step that used to be done by hand, and the reason twelve
+ * approved corrections are sitting with the hours never moved. The remark
+ * follows the wording already in the data so a rewritten day is recognisable
+ * either from here or from Desk.
+ *
+ * `completion_status` is set only after the log write succeeds. If it fails,
+ * the regularization stays `Approved` / `Not Completed` — which is exactly the
+ * state the dashboard already surfaces, so a failure is visible rather than
+ * silently swallowed.
+ */
+async function applyRegularization(input: {
+  id: string;
+  person: string;
+  date: string;
+  punchIn?: string;
+  punchOut?: string;
+}): Promise<{ created: boolean }> {
+  const existing = await listDocs<{ name: string }>(DOCTYPE.attendanceLog, {
+    fields: ['name'],
+    filters: [
+      [ATTENDANCE_LOG_FIELD.person, '=', input.person],
+      [ATTENDANCE_LOG_FIELD.date, '=', input.date],
+    ],
+    limit: 1,
+  }).catch(() => []);
+
+  const created = existing.length === 0;
+  await upsertAttendanceLog({
+    person: input.person,
+    date: input.date,
+    punchIn: input.punchIn,
+    punchOut: input.punchOut,
+    remarks: created
+      ? `Created per ${input.id} (approved) - no punch was recorded on this date`
+      : `Regularized as per ${input.id} (approved)`,
+  });
+
+  await updateDoc(DOCTYPE.attendanceRegularization, input.id, {
+    [REGULARIZATION_FIELD.completionStatus]: 'Completed',
+  });
+
+  return { created };
+}
+
+/** Decide a regularization. Routing lives in `domain/approvals`. */
+async function decideRegularization(input: {
+  id: string;
+  approve: boolean;
+  by: string;
+  remarks?: string;
+  /** Skip the attendance write — for the rare correction-only decision. */
+  applyToLog?: boolean;
+}): Promise<AttendanceRegularization> {
+  const saved = await updateDoc<Record<string, unknown>>(
+    DOCTYPE.attendanceRegularization,
+    input.id,
+    {
+      [REGULARIZATION_FIELD.status]: input.approve ? 'Approved' : 'Rejected',
+      [REGULARIZATION_FIELD.decidedBy]: input.by,
+      ...(input.remarks ? { [REGULARIZATION_FIELD.decisionRemarks]: input.remarks } : {}),
+    },
+  );
+  const ar = toRegularization(saved);
+
+  /*
+   * Approving and applying are one event now. They were two, and that is why
+   * twelve approved corrections sat with the hours never moved — a manual
+   * second step is a step that gets forgotten.
+   */
+  if (input.approve && input.applyToLog !== false) {
+    await applyRegularization({
+      id: ar.id,
+      person: ar.person,
+      date: ar.date,
+      punchIn: ar.requestedPunchIn,
+      punchOut: ar.requestedPunchOut,
+    });
+    return { ...ar, completionStatus: 'Completed' };
+  }
+  return ar;
+}
+
+async function listRegularizations(): Promise<AttendanceRegularization[]> {
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.attendanceRegularization, {
+    fields: ['name', ...Object.values(REGULARIZATION_FIELD)],
+    orderBy: 'creation desc',
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.attendanceRegularization));
+
+  return rows.map(toRegularization);
+}
+
+function toRegularization(r: Record<string, unknown>): AttendanceRegularization {
+  return ({
+    id: String(r.name),
+    person: str(r[REGULARIZATION_FIELD.person]) ?? '',
+    date: (str(r[REGULARIZATION_FIELD.date]) ?? '').slice(0, 10),
+    requestedPunchIn: str(r[REGULARIZATION_FIELD.requestedPunchIn]),
+    requestedPunchOut: str(r[REGULARIZATION_FIELD.requestedPunchOut]),
+    reason: str(r[REGULARIZATION_FIELD.reason]),
+    status:
+      (str(r[REGULARIZATION_FIELD.status]) as AttendanceRegularization['status']) ??
+      'Pending Approval',
+    approverType:
+      (str(r[REGULARIZATION_FIELD.approverType]) as AttendanceRegularization['approverType']) ??
+      'Sales Manager',
+    teamManager: str(r[REGULARIZATION_FIELD.teamManager]),
+    requesterIsManager: Number(r[REGULARIZATION_FIELD.requesterIsManager]) === 1,
+    decidedBy: str(r[REGULARIZATION_FIELD.decidedBy]),
+    decisionRemarks: str(r[REGULARIZATION_FIELD.decisionRemarks]),
+    // An empty completion field means nobody has applied it, which is the
+    // same operational state as an explicit "Not Completed".
+    completionStatus:
+      str(r[REGULARIZATION_FIELD.completionStatus]) === 'Completed' ? 'Completed' : 'Not Completed',
+  });
+}
+
+// ===========================================================================
+// CUSTOMERS AND TEAM ORDERS
+// ===========================================================================
+
+/**
+ * Every customer, or only those assigned to the given reps.
+ *
+ * `custom_assigned_reps` is a Link field holding a bare Sales Person name, so
+ * the filter is an `in` on exact names. It was once pipe-wrapped free text
+ * matched with LIKE; that changed, and a LIKE here silently returns nothing.
+ */
+async function listSalesCustomers(reps?: string[]): Promise<SalesCustomer[]> {
+  const filters: Filter[] = [];
+  if (reps && reps.length) filters.push([SALES_CUSTOMER_FIELD.assignedRep, 'in', reps]);
+
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.customer, {
+    fields: ['name', ...Object.values(SALES_CUSTOMER_FIELD)],
+    filters,
+    orderBy: `${SALES_CUSTOMER_FIELD.customerName} asc`,
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.customer));
+
+  return rows.map((r) => ({
+    id: String(r.name),
+    name: str(r[SALES_CUSTOMER_FIELD.customerName]) ?? String(r.name),
+    assignedRep: str(r[SALES_CUSTOMER_FIELD.assignedRep]),
+    route: str(r[SALES_CUSTOMER_FIELD.route]),
+    gstin: str(r[SALES_CUSTOMER_FIELD.gstin]),
+    creditLimit: Number(r[SALES_CUSTOMER_FIELD.creditLimit]) || 0,
+    outstanding: Number(r[SALES_CUSTOMER_FIELD.outstanding]) || 0,
+    locationStatus: str(r[SALES_CUSTOMER_FIELD.locationStatus]) as SalesCustomer['locationStatus'],
+    latitude: Number(r[SALES_CUSTOMER_FIELD.latitude]) || 0,
+    longitude: Number(r[SALES_CUSTOMER_FIELD.longitude]) || 0,
+    capturedBy: str(r[SALES_CUSTOMER_FIELD.capturedBy]),
+    bannerPhoto: str(r[SALES_CUSTOMER_FIELD.bannerPhoto]),
+  }));
+}
+
+/** Leads, optionally narrowed to a set of reps. */
+async function listLeads(reps?: string[]): Promise<SalesLead[]> {
+  const filters: Filter[] = [];
+  if (reps && reps.length) filters.push([LEAD_FIELD.rep, 'in', reps]);
+
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.lead, {
+    fields: ['name', ...Object.values(LEAD_FIELD)],
+    filters,
+    orderBy: 'modified desc',
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.lead));
+
+  return rows.map((r) => ({
+    id: String(r.name),
+    name: str(r[LEAD_FIELD.leadName]) ?? str(r[LEAD_FIELD.companyName]) ?? String(r.name),
+    rep: str(r[LEAD_FIELD.rep]),
+    route: str(r[LEAD_FIELD.route]),
+    gstin: str(r[LEAD_FIELD.gstin]),
+    address: str(r[LEAD_FIELD.address]),
+    city: str(r[LEAD_FIELD.city]),
+    mobile: str(r[LEAD_FIELD.mobile]),
+    shopType: str(r[LEAD_FIELD.shopType]),
+    status: str(r[LEAD_FIELD.status]),
+    customer: str(r[LEAD_FIELD.customer]),
+    locationStatus: str(r[LEAD_FIELD.locationStatus]) as SalesLead['locationStatus'],
+    capturedBy: str(r[LEAD_FIELD.capturedBy]),
+    latitude: Number(r[LEAD_FIELD.latitude]) || 0,
+    longitude: Number(r[LEAD_FIELD.longitude]) || 0,
+    bannerPhoto: str(r[LEAD_FIELD.bannerPhoto]),
+  }));
+}
+
+/**
+ * Routes belonging to one rep.
+ *
+ * Routes are named `<Rep> - <Place>` and owned by a rep, so a customer of
+ * Prashanth's can only sensibly be put on one of Prashanth's runs. Offering
+ * the whole list of 98 would invite exactly the wrong choice.
+ */
+async function listRoutesFor(rep?: string): Promise<SalesRoute[]> {
+  const filters: Filter[] = [[SALES_ROUTE_FIELD.isActive, '=', 1]];
+  if (rep) filters.push([SALES_ROUTE_FIELD.rep, '=', rep]);
+
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.salesRoute, {
+    fields: ['name', ...Object.values(SALES_ROUTE_FIELD)],
+    filters,
+    orderBy: `${SALES_ROUTE_FIELD.routeName} asc`,
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.salesRoute));
+
+  return rows.map((r) => ({
+    id: String(r.name),
+    name: str(r[SALES_ROUTE_FIELD.routeName]) ?? String(r.name),
+    rep: str(r[SALES_ROUTE_FIELD.rep]),
+    isActive: Number(r[SALES_ROUTE_FIELD.isActive]) === 1,
+  }));
+}
+
+/** Put a customer or a lead on a route. */
+async function assignRoute(input: {
+  kind: 'customer' | 'lead';
+  id: string;
+  route: string;
+}): Promise<void> {
+  const doctype = input.kind === 'customer' ? DOCTYPE.customer : DOCTYPE.lead;
+  const field = input.kind === 'customer' ? SALES_CUSTOMER_FIELD.route : LEAD_FIELD.route;
+  await updateDoc(doctype, input.id, { [field]: input.route });
+}
+
+/**
+ * Decide a captured location.
+ *
+ * Approving copies the captured coordinates into the **verified** fields —
+ * those are what the 100 m punch-in check runs against, so a location that is
+ * approved but not copied verifies nobody. Rejecting returns it to
+ * `Not Captured` so the rep is asked to capture it again, rather than leaving
+ * a rejected reading that looks like a location.
+ */
+async function decideLocation(input: {
+  kind: 'customer' | 'lead';
+  id: string;
+  approve: boolean;
+  latitude: number;
+  longitude: number;
+}): Promise<void> {
+  const isCustomer = input.kind === 'customer';
+  const doctype = isCustomer ? DOCTYPE.customer : DOCTYPE.lead;
+  const f = isCustomer ? SALES_CUSTOMER_FIELD : LEAD_FIELD;
+
+  const body: Record<string, unknown> = input.approve
+    ? {
+        [f.locationStatus]: 'Verified',
+        [f.verifiedLatitude]: input.latitude,
+        [f.verifiedLongitude]: input.longitude,
+      }
+    : { [f.locationStatus]: 'Not Captured' };
+
+  await updateDoc(doctype, input.id, body);
+}
+
+/** Everything waiting on a location decision, customers and leads together. */
+async function listLocationQueue(reps?: string[]): Promise<LocationCheck[]> {
+  const [customers, leads] = await Promise.all([
+    listSalesCustomers(reps),
+    listLeads(reps),
+  ]);
+
+  const out: LocationCheck[] = [];
+  for (const c of customers) {
+    if (c.locationStatus !== 'Pending Verification') continue;
+    out.push({
+      kind: 'customer',
+      id: c.id,
+      name: c.name,
+      rep: c.assignedRep,
+      route: c.route,
+      capturedBy: c.capturedBy,
+      latitude: c.latitude,
+      longitude: c.longitude,
+      bannerPhoto: c.bannerPhoto,
+    });
+  }
+  for (const l of leads) {
+    if (l.locationStatus !== 'Pending Verification') continue;
+    out.push({
+      kind: 'lead',
+      id: l.id,
+      name: l.name,
+      rep: l.rep,
+      route: l.route,
+      capturedBy: l.capturedBy,
+      latitude: l.latitude,
+      longitude: l.longitude,
+      bannerPhoto: l.bannerPhoto,
+      address: l.address,
+    });
+  }
+  return out;
+}
+
+/** Orders raised by a set of reps. No reps means every order. */
+async function listTeamOrders(reps?: string[]): Promise<TeamOrder[]> {
+  const filters: Filter[] = [];
+  if (reps && reps.length) filters.push([SALES_ORDER_FIELD.rep, 'in', reps]);
+
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.salesOrder, {
+    fields: ['name', ...Object.values(SALES_ORDER_FIELD)],
+    filters,
+    orderBy: `${SALES_ORDER_FIELD.placedOn} desc`,
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.salesOrder));
+
+  return rows.map(toTeamOrder);
+}
+
+function toTeamOrder(r: Record<string, unknown>): TeamOrder {
+  return {
+    id: String(r.name),
+    customer: str(r[SALES_ORDER_FIELD.customer]) ?? '',
+    customerName: str(r[SALES_ORDER_FIELD.customerName]) ?? str(r[SALES_ORDER_FIELD.customer]) ?? '',
+    rep: str(r[SALES_ORDER_FIELD.rep]) ?? '',
+    unit: str(r[SALES_ORDER_FIELD.unit]),
+    placedOn: (str(r[SALES_ORDER_FIELD.placedOn]) ?? '').slice(0, 10),
+    deliveryDate: (str(r[SALES_ORDER_FIELD.deliveryDate]) ?? '').slice(0, 10) || undefined,
+    total: Number(r[SALES_ORDER_FIELD.total]) || 0,
+    poStatus: str(r[SALES_ORDER_FIELD.poStatus]) ?? '',
+    productionStatus: str(r[SALES_ORDER_FIELD.productionStatus]),
+    combinedOrder: str(r[SALES_ORDER_FIELD.combinedOrder]),
+    ratesApproved: Number(r[SALES_ORDER_FIELD.ratesApproved]) === 1,
+  };
+}
+
+/** One order with its lines, for the approval screen. */
+async function getSalesOrder(id: string): Promise<OrderDetail> {
+  return toOrderDetail(await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, id));
+}
+
+/**
+ * A Sales Order document, as the detail screen models it.
+ *
+ * Shared by every read and every write so a screen showing a just-saved order
+ * cannot disagree with the same screen after a refresh.
+ */
+function toOrderDetail(doc: Record<string, unknown>): OrderDetail {
+  const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+  return {
+    ...toTeamOrder(doc),
+    proformaStatus: str(doc.custom_proforma_status),
+    changedAfterApproval: Number(doc.custom_changed_after_approval) === 1,
+    placedAt: str(doc.custom_order_placed_at),
+    lines: items.map(toOrderLine),
+  };
+}
+
+function toOrderLine(r: Record<string, unknown>): OrderLine {
+  const n = (k: string) => Number(r[k]) || 0;
+  return {
+    id: String(r.name),
+    itemCode: str(r.item_code) ?? '',
+    itemName: str(r.item_name) ?? str(r.item_code) ?? '',
+    itemGroup: str(r.item_group),
+    category: str(r[SALES_ORDER_ITEM_FIELD.category]),
+    qty: n('qty'),
+    uom: str(r.uom),
+    rate: n('rate'),
+    amount: n('amount'),
+    ratePerKg: n(SALES_ORDER_ITEM_FIELD.ratePerKg),
+    totalWeight: n(SALES_ORDER_ITEM_FIELD.totalWeight),
+    rolls: n(SALES_ORDER_ITEM_FIELD.rolls),
+    looseBelts: n(SALES_ORDER_ITEM_FIELD.looseBelts),
+    packingNote: str(r[SALES_ORDER_ITEM_FIELD.packingNote]),
+    rateApproved: Number(r[SALES_ORDER_ITEM_FIELD.rateApproved]) === 1,
+    fulfilmentMode: str(r[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
+    productionStage: str(r[SALES_ORDER_ITEM_FIELD.productionStage]),
+    stockStage: str(r[SALES_ORDER_ITEM_FIELD.stockStage]),
+    agedBatch: str(r[SALES_ORDER_ITEM_FIELD.agedBatch]),
+  };
+}
+
+export type OrderDecision = 'approve' | 'reject' | 'escalate';
+
+/**
+ * Decide an order.
+ *
+ * Approving writes THREE things, not one:
+ *
+ *   - `custom_po_status` to the approved string,
+ *   - `custom_rate_approved = 1` on the order, and
+ *   - `custom_rate_approved = 1` on **every line**.
+ *
+ * The per-line stamp is the only way the app can later tell a price that was
+ * signed off from one the rep typed afterwards. Skipping it silently unlocks
+ * every rate on the order.
+ *
+ * The lines are re-read here rather than taken from the screen: a rep may have
+ * edited the order since it was opened, and re-sending a stale `items` array
+ * would revert their change while approving it.
+ */
+async function decideSalesOrder(input: {
+  id: string;
+  decision: OrderDecision;
+  /** Per-line rate edits, keyed by the child row name. */
+  rateEdits?: Record<string, number>;
+}): Promise<OrderDetail> {
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.id);
+  const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+
+  const approving = input.decision === 'approve';
+  const status =
+    input.decision === 'approve'
+      ? 'PO Approved - Ready for SAP'
+      : input.decision === 'reject'
+        ? 'Rejected'
+        : 'Pending GM Approval';
+
+  const nextItems = items.map((l) => {
+    const edited = input.rateEdits?.[String(l.name)];
+    const next: Record<string, unknown> = { ...l };
+
+    if (edited != null && edited > 0) {
+      /*
+       * ERPNext holds one qty and one rate, but tread rubber is counted in
+       * rolls and priced by the kilogram. Keeping
+       * `qty x rate == totalWeight x ratePerKg` is what makes the order total
+       * agree with the proforma; writing ratePerKg alone would leave the two
+       * describing different money.
+       */
+      const qty = Number(l.qty) || 0;
+      const weight = Number(l[SALES_ORDER_ITEM_FIELD.totalWeight]) || 0;
+      const perUnit = qty > 0 && weight > 0 ? (edited * weight) / qty : edited;
+      next[SALES_ORDER_ITEM_FIELD.ratePerKg] = edited;
+      next.rate = Math.round(perUnit * 100) / 100;
+      next.amount = Math.round(qty * perUnit * 100) / 100;
+    }
+
+    // Only approval locks a rate. A rejection leaves the prices editable so
+    // the rep can fix what was wrong with them.
+    if (approving) next[SALES_ORDER_ITEM_FIELD.rateApproved] = 1;
+    return next;
+  });
+
+  const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.id, {
+    [SALES_ORDER_FIELD.poStatus]: status,
+    [SALES_ORDER_FIELD.ratesApproved]: approving ? 1 : 0,
+    items: nextItems,
+  });
+
+  return toOrderDetail(saved);
+}
+
+/**
+ * The minimum-stock pool.
+ *
+ * Read whole rather than per item: an order has a handful of lines but the
+ * screen has to answer "could this have come off the shelf?" for every one of
+ * them at once, and 164 rows is one small request against N round trips.
+ */
+async function listMinimumStock(): Promise<MinStockLine[]> {
+  /*
+   * Two doctypes, because the pool holds the **target** and the batch holds
+   * the **stock**. `Manna Minimum Stock Item.qty` is the minimum to hold —
+   * reading it as the shelf is the mistake that makes every availability
+   * figure wrong. Proven live: `120 AJAX 69` is minimum 2 / shelf 4, and
+   * `160 RTS 99` is minimum 10 / shelf 0.
+   */
+  const [rows, batches] = await Promise.all([
+    listDocs<Record<string, unknown>>(DOCTYPE.minStock, {
+      fields: ['name', ...Object.values(MIN_STOCK_FIELD), 'disabled'],
+      filters: [['disabled', '=', 0]],
+      limit: 0,
+    }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.minStock)),
+    listDocs<Record<string, unknown>>(DOCTYPE.stockBatch, {
+      fields: ['name', ...Object.values(MIN_STOCK_BATCH_FIELD)],
+      limit: 0,
+    }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.stockBatch)),
+  ]);
+
+  const n = (r: Record<string, unknown>, k: string) => Number(r[k]) || 0;
+
+  // An item can carry more than one batch, so the shelf is their sum and the
+  // stock age comes from the oldest.
+  const shelf = new Map<string, { rolls: number; belts: number; oldest?: string }>();
+  for (const b of batches) {
+    const code = str(b[MIN_STOCK_BATCH_FIELD.itemCode]) ?? '';
+    if (!code) continue;
+    const cur = shelf.get(code) ?? { rolls: 0, belts: 0 };
+    const date = str(b[MIN_STOCK_BATCH_FIELD.batchDate]);
+    shelf.set(code, {
+      rolls: cur.rolls + n(b, MIN_STOCK_BATCH_FIELD.rolls),
+      belts: cur.belts + n(b, MIN_STOCK_BATCH_FIELD.looseBelts),
+      oldest: !cur.oldest || (date && date < cur.oldest) ? (date ?? cur.oldest) : cur.oldest,
+    });
+  }
+
+  return rows.map((r) => {
+    const itemCode = str(r[MIN_STOCK_FIELD.itemCode]) ?? String(r.name);
+    const s = shelf.get(itemCode);
+    return {
+      itemCode,
+      minimumRolls: n(r, MIN_STOCK_FIELD.minimumRolls),
+      minimumBelts: n(r, MIN_STOCK_FIELD.minimumBelts),
+      // No batch at all means nothing on the shelf, not "unknown". A pool with
+      // no batch is exactly the empty one production needs to see.
+      shelfRolls: s?.rolls ?? 0,
+      shelfBelts: s?.belts ?? 0,
+      reservedRolls: n(r, MIN_STOCK_FIELD.reservedRolls),
+      reservedBelts: n(r, MIN_STOCK_FIELD.reservedLooseBelts),
+      inProductionRolls: n(r, MIN_STOCK_FIELD.inProductionRolls),
+      inProductionBelts: n(r, MIN_STOCK_FIELD.inProductionBelts),
+      reservedInProductionRolls: n(r, MIN_STOCK_FIELD.reservedInProductionRolls),
+      reservedInProductionBelts: n(r, MIN_STOCK_FIELD.reservedInProductionBelts),
+      runStage: str(r[MIN_STOCK_FIELD.runStage]),
+      runUpdatedOn: str(r[MIN_STOCK_FIELD.inProductionUpdatedOn]),
+      runUpdatedBy: str(r[MIN_STOCK_FIELD.inProductionUpdatedBy]),
+      lastSoldOn: str(r[MIN_STOCK_FIELD.lastSoldOn]),
+      batchDate: s?.oldest,
+    };
+  });
+}
+
+/**
+ * Claim stock out of a production run.
+ *
+ * The run is a **second pool with its own counter**, and the two are never
+ * added together: an empty shelf with a full run still sells nothing off the
+ * shelf. This claims against `custom_reserved_in_production_qty` only.
+ *
+ * **Compare-and-swap, because there are no Server Scripts.** Two reps claiming
+ * the last rolls of a run at the same time would otherwise both read the same
+ * free figure and both succeed, promising rubber twice. The protocol is:
+ * re-read immediately before writing, refuse if the free quantity no longer
+ * covers the claim, write, then read back and confirm the counter holds what
+ * we put there. A lost update is detected rather than assumed away.
+ *
+ * There is **no roll-cutting on a run**: nothing has been made, so there is no
+ * roll to open into belts.
+ */
+async function claimFromRun(input: {
+  itemCode: string;
+  rolls: number;
+  belts: number;
+  salesOrder: string;
+  salesPerson?: string;
+  /** Bounded retries when another claim lands between our read and write. */
+  attempts?: number;
+}): Promise<{ claimed: boolean; available: number; reason?: string }> {
+  const want = { rolls: input.rolls || 0, belts: input.belts || 0 };
+  if (want.rolls <= 0 && want.belts <= 0) {
+    return { claimed: false, available: 0, reason: 'Nothing to claim.' };
+  }
+
+  const maxAttempts = input.attempts ?? 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const doc = await getDoc<Record<string, unknown>>(DOCTYPE.minStock, input.itemCode);
+    const runRolls = Number(doc[MIN_STOCK_FIELD.inProductionRolls]) || 0;
+    const runBelts = Number(doc[MIN_STOCK_FIELD.inProductionBelts]) || 0;
+    const takenRolls = Number(doc[MIN_STOCK_FIELD.reservedInProductionRolls]) || 0;
+    const takenBelts = Number(doc[MIN_STOCK_FIELD.reservedInProductionBelts]) || 0;
+
+    const freeRolls = Math.max(0, runRolls - takenRolls);
+    const freeBelts = Math.max(0, runBelts - takenBelts);
+
+    if (want.rolls > freeRolls || want.belts > freeBelts) {
+      return {
+        claimed: false,
+        available: freeRolls,
+        reason:
+          runRolls === 0
+            ? 'There is no production run recorded for this item.'
+            : `Only ${freeRolls} roll(s) of this run are unclaimed.`,
+      };
+    }
+
+    await updateDoc(DOCTYPE.minStock, input.itemCode, {
+      [MIN_STOCK_FIELD.reservedInProductionRolls]: takenRolls + want.rolls,
+      [MIN_STOCK_FIELD.reservedInProductionBelts]: takenBelts + want.belts,
+    });
+
+    // Read back. If somebody else's claim interleaved, the counter will not
+    // hold our figure and we start again rather than assume we won.
+    const after = await getDoc<Record<string, unknown>>(DOCTYPE.minStock, input.itemCode);
+    const nowTaken = Number(after[MIN_STOCK_FIELD.reservedInProductionRolls]) || 0;
+    if (nowTaken !== takenRolls + want.rolls) continue;
+
+    // Only once the counter is ours do we record the claim itself. A
+    // reservation without the counter behind it is the phantom booking that
+    // has already bitten this site once.
+    await createDoc(DOCTYPE.stockReservation, {
+      [STOCK_RESERVATION_FIELD.itemCode]: input.itemCode,
+      [STOCK_RESERVATION_FIELD.rolls]: want.rolls,
+      [STOCK_RESERVATION_FIELD.looseBelts]: want.belts,
+      [STOCK_RESERVATION_FIELD.salesOrder]: input.salesOrder,
+      [STOCK_RESERVATION_FIELD.salesPerson]: input.salesPerson,
+      [STOCK_RESERVATION_FIELD.status]: 'Active',
+      [STOCK_RESERVATION_FIELD.source]: RESERVATION_SOURCE.productionRun,
+      [STOCK_RESERVATION_FIELD.reservedOn]: serverNow()
+        .toISOString()
+        .slice(0, 19)
+        .replace('T', ' '),
+    });
+
+    return { claimed: true, available: freeRolls - want.rolls };
+  }
+
+  return {
+    claimed: false,
+    available: 0,
+    reason: 'Another claim landed on this run while yours was saving. Try again.',
+  };
+}
+
+/**
+ * Move a run's stage, and write it down onto every line claimed against it.
+ *
+ * **One batch is being made, not one job per order.** The stage lives on the
+ * run; pushing it down onto each claimed `custom_production_stage` is what
+ * keeps every other screen — the production order detail, the roll-up, the
+ * completion tick — working unchanged rather than needing to know runs exist.
+ */
+async function setRunStage(input: { itemCode: string; stage: string }): Promise<number> {
+  await updateDoc(DOCTYPE.minStock, input.itemCode, {
+    [MIN_STOCK_FIELD.runStage]: input.stage,
+  });
+
+  const reservations = await listStockReservations();
+  const claimed = reservations.filter(
+    (r) =>
+      r.status === 'Active' &&
+      r.itemCode === input.itemCode &&
+      r.source === RESERVATION_SOURCE.productionRun &&
+      r.salesOrder,
+  );
+
+  const orders = [...new Set(claimed.map((r) => r.salesOrder as string))];
+  let touched = 0;
+  for (const orderId of orders) {
+    try {
+      const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, orderId);
+      const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+      const nextItems = items.map((l) =>
+        str(l.item_code) === input.itemCode
+          ? { ...l, [SALES_ORDER_ITEM_FIELD.productionStage]: input.stage }
+          : l,
+      );
+      const status = rollUp(
+        nextItems.map((l) => {
+          const held = heldBy(reservations, str(l.item_code) ?? '', orderId);
+          const rolls = Number(l[SALES_ORDER_ITEM_FIELD.rolls]) || 0;
+          const belts = Number(l[SALES_ORDER_ITEM_FIELD.looseBelts]) || 0;
+          return {
+            category: str(l[SALES_ORDER_ITEM_FIELD.category]),
+            fulfilmentMode: str(l[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
+            productionStage: str(l[SALES_ORDER_ITEM_FIELD.productionStage]),
+            stockStage: str(l[SALES_ORDER_ITEM_FIELD.stockStage]),
+            reservedRolls: held.rolls,
+            reservedBelts: held.belts,
+            toMakeRolls: Math.max(0, rolls - held.rolls),
+            toMakeBelts: Math.max(0, belts - held.belts),
+            splitKnown: true,
+          };
+        }),
+      );
+      await updateDoc(DOCTYPE.salesOrder, orderId, {
+        items: nextItems,
+        [SALES_ORDER_FIELD.productionStatus]: status,
+      });
+      touched += 1;
+    } catch {
+      // One unreachable order must not strand the rest of the run.
+    }
+  }
+  return touched;
+}
+
+/**
+ * Receive a run: the goods have landed.
+ *
+ * Claims against the run become claims against the shelf, the run counters and
+ * its stage are cleared, and the reservations are re-labelled `Shelf`.
+ *
+ * **It does not create the batch.** Receiving physical stock is a Desk job, and
+ * inventing a batch here would put rubber on the shelf that nobody counted. So
+ * this raises the shelf's *reserved* figure and leaves the batch quantity to
+ * whoever actually books the goods in — which is why the pool will read
+ * over-reserved until they do. That is visible and correct; the alternative is
+ * invisible and wrong.
+ */
+async function receiveRun(itemCode: string): Promise<{ movedRolls: number; relabelled: number }> {
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.minStock, itemCode);
+  const claimedRolls = Number(doc[MIN_STOCK_FIELD.reservedInProductionRolls]) || 0;
+  const claimedBelts = Number(doc[MIN_STOCK_FIELD.reservedInProductionBelts]) || 0;
+  const shelfReservedRolls = Number(doc[MIN_STOCK_FIELD.reservedRolls]) || 0;
+  const shelfReservedBelts = Number(doc[MIN_STOCK_FIELD.reservedLooseBelts]) || 0;
+
+  // One write: the claims move across, the run is cleared, the stage goes.
+  await updateDoc(DOCTYPE.minStock, itemCode, {
+    [MIN_STOCK_FIELD.reservedRolls]: shelfReservedRolls + claimedRolls,
+    [MIN_STOCK_FIELD.reservedLooseBelts]: shelfReservedBelts + claimedBelts,
+    [MIN_STOCK_FIELD.inProductionRolls]: 0,
+    [MIN_STOCK_FIELD.inProductionBelts]: 0,
+    [MIN_STOCK_FIELD.reservedInProductionRolls]: 0,
+    [MIN_STOCK_FIELD.reservedInProductionBelts]: 0,
+    [MIN_STOCK_FIELD.runStage]: '',
+  });
+
+  const reservations = await listStockReservations();
+  let relabelled = 0;
+  for (const r of reservations) {
+    if (r.status !== 'Active') continue;
+    if (r.itemCode !== itemCode) continue;
+    if (r.source !== RESERVATION_SOURCE.productionRun) continue;
+    try {
+      await updateDoc(DOCTYPE.stockReservation, r.id, {
+        [STOCK_RESERVATION_FIELD.source]: RESERVATION_SOURCE.shelf,
+      });
+      relabelled += 1;
+    } catch {
+      // Leave it labelled as a run claim rather than losing the claim itself.
+    }
+  }
+
+  return { movedRolls: claimedRolls, relabelled };
+}
+
+/**
+ * Record a production run against a pool.
+ *
+ * The run is raised in SAP, which neither app can see; this only records it so
+ * everyone else knows stock is coming. It is **intent, not stock** — nothing
+ * downstream counts it towards availability. Setting 0 clears it.
+ */
+async function recordProductionRun(input: {
+  itemCode: string;
+  rolls: number;
+  belts: number;
+  by: string;
+}): Promise<void> {
+  await updateDoc(DOCTYPE.minStock, input.itemCode, {
+    [MIN_STOCK_FIELD.inProductionRolls]: input.rolls,
+    [MIN_STOCK_FIELD.inProductionBelts]: input.belts,
+    // Server clock, so the stamp agrees with every other deadline in the app.
+    [MIN_STOCK_FIELD.inProductionUpdatedOn]: serverNow().toISOString().slice(0, 19).replace('T', ' '),
+    [MIN_STOCK_FIELD.inProductionUpdatedBy]: input.by,
+    ...(input.rolls === 0 && input.belts === 0 ? { [MIN_STOCK_FIELD.runStage]: '' } : {}),
+  });
+}
+
+/**
+ * The sellable catalogue, for the order editor's item picker.
+ *
+ * Filtered on the **Item** category vocabulary (`Precured`, `HOT`, …), not the
+ * order line's (`PCTR`, `CTR`, …). Those are different Select lists on the same
+ * field name and nothing on the site reconciles them — filtering by the order
+ * codes matches zero rows and hands back an empty catalogue that looks like a
+ * permissions problem.
+ */
+async function listItemOptions(): Promise<ItemOption[]> {
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.item, {
+    fields: [
+      'name',
+      'item_name',
+      'item_group',
+      'stock_uom',
+      ITEM_FIELD.category,
+      ITEM_FIELD.weightPerBelt,
+      ITEM_FIELD.beltsPerRoll,
+      ITEM_FIELD.weightPerRoll,
+      ITEM_FIELD.packLitres,
+      ITEM_FIELD.sapCode,
+      ITEM_FIELD.weightStatus,
+    ],
+    filters: [
+      ['disabled', '=', 0],
+      ['is_sales_item', '=', 1],
+    ],
+    limit: 0,
+  });
+
+  const out: ItemOption[] = [];
+  for (const r of rows) {
+    const n = (k: string): number | undefined => {
+      const v = Number(r[k]);
+      return Number.isFinite(v) && v > 0 ? v : undefined;
+    };
+    const itemCategory = str(r[ITEM_FIELD.category]);
+    const mapped =
+      ITEM_CATEGORY_TO_LINE[itemCategory as keyof typeof ITEM_CATEGORY_TO_LINE] ??
+      inferCategory(`${r.name ?? ''} ${r.item_name ?? ''} ${r.item_group ?? ''}`);
+    // An item nobody can classify cannot be priced by any of the four rule
+    // sets, so it is left out rather than defaulted into one of them.
+    if (!mapped) continue;
+
+    const weights = normaliseWeights({
+      weightPerBelt: n(ITEM_FIELD.weightPerBelt),
+      beltsPerRoll: n(ITEM_FIELD.beltsPerRoll),
+      weightPerRoll: n(ITEM_FIELD.weightPerRoll),
+    });
+
+    out.push({
+      code: String(r.name),
+      name: String(r.item_name ?? r.name),
+      category: mapped as ProductCategory,
+      itemCategory,
+      itemGroup: str(r.item_group),
+      uom: str(r.stock_uom) ?? 'Kg',
+      ...weights,
+      packLitres: n(ITEM_FIELD.packLitres),
+      sapCode: str(r[ITEM_FIELD.sapCode]),
+      weightStatus: str(r[ITEM_FIELD.weightStatus]),
+    });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Set one line's fulfilment mode.
+ *
+ * Written through the parent because Frappe refuses a direct write to a child
+ * table — `Sales Order Item` answers 403 to its own endpoint. The order is
+ * re-read first so a rep's concurrent edit is not reverted by sending back a
+ * stale `items` array.
+ */
+async function setFulfilmentMode(input: {
+  orderId: string;
+  lineId: string;
+  mode: string;
+}): Promise<OrderDetail> {
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.orderId);
+  const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+
+  const nextItems = items.map((l) =>
+    String(l.name) === input.lineId
+      ? { ...l, [SALES_ORDER_ITEM_FIELD.fulfilmentMode]: input.mode }
+      : l,
+  );
+
+  const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.orderId, {
+    items: nextItems,
+  });
+  return toOrderDetail(saved);
+}
+
+/** One edited or added line, as the order editor hands it over. */
+export interface OrderLineWrite {
+  /** The existing child row's name, or undefined for a line being added. */
+  id?: string;
+  itemCode: string;
+  qty: number;
+  rate: number;
+  amount: number;
+  ratePerKg: number;
+  totalWeight: number;
+  rolls: number;
+  looseBelts: number;
+  category: string;
+  packingNote: string;
+  uom: string;
+  fulfilmentMode?: string;
+}
+
+/**
+ * Replace an order's lines with an edited set.
+ *
+ * The whole `items` array is sent because that is the only way Frappe accepts
+ * a child table: rows present are kept or updated, rows omitted are **deleted**.
+ * That makes a removal trivial and a mistake expensive, so the caller passes
+ * the complete intended set, never a delta.
+ *
+ * Existing rows keep their `name` so their history and any per-line approval
+ * survive; a new row is sent without one and Frappe names it.
+ */
+async function saveOrderLines(input: {
+  orderId: string;
+  lines: OrderLineWrite[];
+}): Promise<OrderDetail> {
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.orderId);
+  const existing = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+  const byName = new Map(existing.map((l) => [String(l.name), l]));
+
+  const items = input.lines.map((l) => {
+    // Spread the stored row first so warehouse, HSN code, tax fields and the
+    // rest survive an edit — rebuilding a line from scratch would drop them.
+    const base = l.id ? (byName.get(l.id) ?? {}) : {};
+    return {
+      ...base,
+      item_code: l.itemCode,
+      qty: l.qty,
+      rate: l.rate,
+      amount: l.amount,
+      uom: l.uom,
+      conversion_factor: 1,
+      delivery_date: str(doc.delivery_date),
+      [SALES_ORDER_ITEM_FIELD.category]: l.category,
+      [SALES_ORDER_ITEM_FIELD.rolls]: l.rolls,
+      [SALES_ORDER_ITEM_FIELD.looseBelts]: l.looseBelts,
+      [SALES_ORDER_ITEM_FIELD.totalWeight]: l.totalWeight,
+      [SALES_ORDER_ITEM_FIELD.ratePerKg]: l.ratePerKg,
+      [SALES_ORDER_ITEM_FIELD.packingNote]: l.packingNote,
+      [SALES_ORDER_ITEM_FIELD.fulfilmentMode]: l.fulfilmentMode ?? '',
+      // Cleared to match the order going back to Pending below. A line still
+      // flagged approved under an unapproved order reads as a locked price to
+      // every screen that checks the line rather than the status.
+      [SALES_ORDER_ITEM_FIELD.rateApproved]: 0,
+    };
+  });
+
+  const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.orderId, {
+    items,
+    /*
+     * Editing the lines changes the money, so the order goes back for a
+     * decision and every line rate reopens. Leaving it approved would ship a
+     * total nobody signed off — the exact failure `custom_changed_after_approval`
+     * exists to catch.
+     */
+    [SALES_ORDER_FIELD.poStatus]: 'Pending Approval',
+    [SALES_ORDER_FIELD.ratesApproved]: 0,
+  });
+  return toOrderDetail(saved);
+}
+
+// ======================================================= approvals inbox ===
+
+/**
+ * Everything the manager owes a decision on **except orders**.
+ *
+ * Orders are decided in the order-review screen and nowhere else: that
+ * decision needs the lines, the stock position and the credit picture, which
+ * an inbox row cannot carry. Two places to decide would be two places to miss
+ * one — so these four are only here, and orders are only there.
+ */
+export type InboxKind = 'proforma' | 'site';
+
+export interface InboxItem {
+  kind: InboxKind;
+  id: string;
+  title: string;
+  rep?: string;
+  party?: string;
+  amount?: number;
+  photo?: string;
+  latitude?: number;
+  longitude?: number;
+  route?: string;
+  address?: string;
+}
+
+async function listApprovalInbox(reps?: string[]): Promise<InboxItem[]> {
+  const teamFilter = (field: string): Filter[] =>
+    reps && reps.length ? [[field, 'in', reps]] : [];
+
+  const [proformas, sites] = await Promise.all([
+    listDocs<Record<string, unknown>>(DOCTYPE.salesOrder, {
+      fields: ['name', ...Object.values(SALES_ORDER_FIELD)],
+      filters: [
+        [SALES_ORDER_FIELD.proformaStatus, '=', PROFORMA_STATUS.pendingRelease],
+        ...teamFilter(SALES_ORDER_FIELD.rep),
+      ],
+      limit: 0,
+    }).catch(() => [] as Record<string, unknown>[]),
+
+    // `Customer Site` has no rows yet and its field names are unverified, so
+    // it is read with `*` rather than a named field list — an unknown field
+    // would 417 and take the whole inbox down with it.
+    listDocs<Record<string, unknown>>(DOCTYPE.customerSite, {
+      fields: ['*'],
+      limit: 0,
+    }).catch(() => [] as Record<string, unknown>[]),
+  ]);
+
+  const out: InboxItem[] = [];
+
+  for (const r of proformas) {
+    out.push({
+      kind: 'proforma',
+      id: String(r.name),
+      title: 'Proforma credit release',
+      rep: str(r[SALES_ORDER_FIELD.rep]),
+      party: str(r[SALES_ORDER_FIELD.customerName]) ?? str(r[SALES_ORDER_FIELD.customer]),
+      amount: Number(r[SALES_ORDER_FIELD.total]) || 0,
+    });
+  }
+
+  for (const r of sites) {
+    const status = str(r.custom_location_status) ?? str(r.location_status);
+    if (status !== 'Pending Verification') continue;
+    const owningRep = str(r.custom_sales_person) ?? str(r.sales_person);
+    if (reps && reps.length && owningRep && !reps.includes(owningRep)) continue;
+    // The owner is the customer if set, otherwise the lead. Heading the card
+    // with a blank tells the manager nothing about what they are approving.
+    const owner = str(r.customer) ?? str(r.lead) ?? 'unknown owner';
+    const siteName = str(r.site_name) ?? str(r.name1) ?? String(r.name);
+    out.push({
+      kind: 'site',
+      id: String(r.name),
+      title: `Site: ${siteName} (${owner})`,
+      rep: owningRep,
+      party: owner,
+      photo: str(r.custom_banner_photo) ?? str(r.banner_photo),
+      latitude: Number(r.custom_latitude ?? r.latitude) || undefined,
+      longitude: Number(r.custom_longitude ?? r.longitude) || undefined,
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Decide one inbox item — a proforma release, or a site.
+ *
+ * **Customer and lead locations are no longer here.** Capture is GPS-only and
+ * self-verifying: the app writes the captured coordinates into the verified
+ * fields at the moment of capture, so there is nothing left for a human to
+ * judge. The queue only ever existed because a photograph needed someone to
+ * confirm it matched the place, and a queue nobody can act on is worse than
+ * none — the record sits at `Pending Verification` for ever and the verified
+ * coordinates are never written at all.
+ *
+ * A **site** is different and keeps its approval: it is somebody asserting new
+ * premises exist, not a pin on a shop already on the books.
+ */
+async function decideInboxItem(input: {
+  kind: InboxKind;
+  id: string;
+  approve: boolean;
+  latitude?: number;
+  longitude?: number;
+}): Promise<void> {
+  if (input.kind === 'proforma') {
+    await updateDoc(DOCTYPE.salesOrder, input.id, {
+      [SALES_ORDER_FIELD.proformaStatus]: input.approve
+        ? PROFORMA_STATUS.released
+        : PROFORMA_STATUS.blocked,
+    });
+    return;
+  }
+
+  // Approving copies the captured coordinates into the verified fields. Those
+  // are what the 100 m punch-in check measures against; verifying without
+  // copying them verifies nobody.
+  await updateDoc(DOCTYPE.customerSite, input.id, {
+    custom_location_status: input.approve ? 'Verified' : 'Not Captured',
+    ...(input.approve
+      ? {
+          custom_verified_latitude: input.latitude,
+          custom_verified_longitude: input.longitude,
+        }
+      : {}),
+  });
+}
+
+/**
+ * Capture a location — GPS only, and it verifies itself.
+ *
+ * One write, and the captured coordinates go straight into the verified fields
+ * because there is no longer anything to check them against. No photo, no
+ * queue, no approval.
+ */
+async function captureLocation(input: {
+  kind: 'customer' | 'lead';
+  id: string;
+  latitude: number;
+  longitude: number;
+  capturedBy?: string;
+}): Promise<void> {
+  const body = {
+    custom_latitude: input.latitude,
+    custom_longitude: input.longitude,
+    custom_verified_latitude: input.latitude,
+    custom_verified_longitude: input.longitude,
+    custom_location_status: 'Verified',
+    ...(input.capturedBy ? { custom_location_captured_by: input.capturedBy } : {}),
+  };
+  await updateDoc(
+    input.kind === 'customer' ? DOCTYPE.customer : DOCTYPE.lead,
+    input.id,
+    body,
+  );
+}
+
+/** Live claims on the pool. Only `Active` rows hold anything. */
+async function listStockReservations(): Promise<StockReservationRow[]> {
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.stockReservation, {
+    fields: ['name', ...Object.values(STOCK_RESERVATION_FIELD)],
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.stockReservation));
+
+  return rows.map((r) => ({
+    id: String(r.name),
+    itemCode: str(r[STOCK_RESERVATION_FIELD.itemCode]) ?? '',
+    rolls: Number(r[STOCK_RESERVATION_FIELD.rolls]) || 0,
+    looseBelts: Number(r[STOCK_RESERVATION_FIELD.looseBelts]) || 0,
+    salesOrder: str(r[STOCK_RESERVATION_FIELD.salesOrder]),
+    leadOrder: str(r[STOCK_RESERVATION_FIELD.leadOrder]),
+    salesPerson: str(r[STOCK_RESERVATION_FIELD.salesPerson]),
+    batch: str(r[STOCK_RESERVATION_FIELD.batch]),
+    reservedOn: str(r[STOCK_RESERVATION_FIELD.reservedOn]),
+    status: str(r[STOCK_RESERVATION_FIELD.status]) ?? '',
+    source: str(r[STOCK_RESERVATION_FIELD.source]),
+  }));
+}
+
+// ---------------------------------------------------------- lead orders ---
+
+/** Lead orders raised by a set of reps, within a date range. */
+async function listLeadOrders(input: {
+  reps?: string[];
+  from?: string;
+  to?: string;
+}): Promise<LeadOrder[]> {
+  const filters: Filter[] = [];
+  if (input.reps?.length) filters.push([LEAD_ORDER_FIELD.rep, 'in', input.reps]);
+  if (input.from && input.to) {
+    filters.push([LEAD_ORDER_FIELD.orderDate, 'between', [input.from, input.to]]);
+  }
+
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.leadOrder, {
+    fields: ['name', ...Object.values(LEAD_ORDER_FIELD)],
+    filters,
+    orderBy: `${LEAD_ORDER_FIELD.orderDate} desc`,
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.leadOrder));
+
+  return rows.map((r) => toLeadOrder(r, []));
+}
+
+function toLeadOrder(r: Record<string, unknown>, items: Record<string, unknown>[]): LeadOrder {
+  return {
+    id: String(r.name),
+    lead: str(r[LEAD_ORDER_FIELD.lead]) ?? '',
+    leadName: str(r[LEAD_ORDER_FIELD.leadName]) ?? str(r[LEAD_ORDER_FIELD.lead]) ?? '',
+    rep: str(r[LEAD_ORDER_FIELD.rep]),
+    orderDate: (str(r[LEAD_ORDER_FIELD.orderDate]) ?? '').slice(0, 10),
+    total: Number(r[LEAD_ORDER_FIELD.total]) || 0,
+    status: str(r[LEAD_ORDER_FIELD.status]) ?? '',
+    poNumber: str(r[LEAD_ORDER_FIELD.poNumber]),
+    approvalRemarks: str(r[LEAD_ORDER_FIELD.approvalRemarks]),
+    lines: items.map((l) => {
+      const qty = Number(l[LEAD_ORDER_ITEM_FIELD.qty]) || 0;
+      const rate = Number(l[LEAD_ORDER_ITEM_FIELD.rate]) || 0;
+      const stored = Number(l[LEAD_ORDER_ITEM_FIELD.amount]) || 0;
+      return {
+        id: String(l.name),
+        itemCode: str(l[LEAD_ORDER_ITEM_FIELD.itemCode]) ?? '',
+        itemName: str(l[LEAD_ORDER_ITEM_FIELD.itemName]) ?? str(l[LEAD_ORDER_ITEM_FIELD.itemCode]) ?? '',
+        qty,
+        rate,
+        /*
+         * `amount` is a read-only Currency on a custom child table with no
+         * server script behind it, so rows written before the app started
+         * sending it hold zero. Falling back to qty x rate is the difference
+         * between a manager seeing the real order and seeing a nil one against
+         * rates the rep entered correctly.
+         */
+        amount: stored > 0 ? stored : Math.round(qty * rate * 100) / 100,
+      };
+    }),
+  };
+}
+
+async function getLeadOrder(id: string): Promise<LeadOrder> {
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.leadOrder, id);
+  const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+  return toLeadOrder(doc, items);
+}
+
+/** The three fields a lead must have before it can become a customer. */
+export interface LeadGaps {
+  gstin: boolean;
+  address: boolean;
+  route: boolean;
+}
+
+export function missingCount(g: LeadGaps): number {
+  return Number(g.gstin) + Number(g.address) + Number(g.route);
+}
+
+/**
+ * What this lead is still missing, read **live**.
+ *
+ * Checked at the moment of approval and not against whatever the page was
+ * loaded with: a rep may have filled the gaps minutes ago, and a manager
+ * blocked by stale data will go and ask them for something they already did.
+ */
+async function checkLeadGaps(leadId: string): Promise<LeadGaps> {
+  const lead = await getDoc<Record<string, unknown>>(DOCTYPE.lead, leadId);
+  return {
+    gstin: !isLinkSet(str(lead[LEAD_FIELD.gstin])),
+    address: !isLinkSet(str(lead[LEAD_FIELD.address])),
+    route: !isLinkSet(str(lead[LEAD_FIELD.route])),
+  };
+}
+
+/**
+ * Approve a lead order: convert the lead, raise the Sales Order, write back.
+ *
+ * The Sales Order is created **already approved**. The manager approving the
+ * lead order is making exactly the decision they would make on a Sales Order,
+ * and sending it back to their own queue would ask them to approve the same
+ * order twice.
+ *
+ * A lead order carries no roll/belt breakdown and no bookings — `Lead Order
+ * Item` holds only item, qty, rate and amount — so the Sales Order it raises
+ * always reads as new production.
+ *
+ * **Not atomic, and cannot be.** With no server scripts these are three
+ * separate writes. They are ordered so a failure leaves the least damage: the
+ * customer exists before anything points at it, and the lead order is only
+ * marked converted once the Sales Order is real. A partial run leaves an
+ * unlinked Sales Order, which is visible and fixable; the reverse would leave
+ * a lead order claiming an order that was never raised.
+ */
+async function approveLeadOrder(input: {
+  leadOrderId: string;
+}): Promise<{ customer: string; salesOrder: string; linkageStored: boolean }> {
+  const lo = await getLeadOrder(input.leadOrderId);
+
+  const gaps = await checkLeadGaps(lo.lead);
+  if (gaps.gstin || gaps.address || gaps.route) {
+    const missing = [
+      gaps.gstin ? 'GST number' : null,
+      gaps.address ? 'address' : null,
+      gaps.route ? 'sales route' : null,
+    ].filter(Boolean);
+    throw new ApiError(
+      `This lead becomes a customer on approval and is invoiced from there, so it still needs: ${missing.join(', ')}.`,
+      412,
+    );
+  }
+
+  const lead = await getDoc<Record<string, unknown>>(DOCTYPE.lead, lo.lead);
+  const partyName = str(lead[LEAD_FIELD.leadName]) ?? lo.leadName;
+
+  // 1. The customer.
+  const customer = await createDoc<Record<string, unknown>>(DOCTYPE.customer, {
+    customer_name: partyName,
+    customer_type: 'Company',
+    [SALES_CUSTOMER_FIELD.assignedRep]: lo.rep,
+    [SALES_CUSTOMER_FIELD.route]: str(lead[LEAD_FIELD.route]),
+    [SALES_CUSTOMER_FIELD.gstin]: str(lead[LEAD_FIELD.gstin]),
+    [SALES_CUSTOMER_FIELD.latitude]: Number(lead[LEAD_FIELD.latitude]) || undefined,
+    [SALES_CUSTOMER_FIELD.longitude]: Number(lead[LEAD_FIELD.longitude]) || undefined,
+    [SALES_CUSTOMER_FIELD.locationStatus]: str(lead[LEAD_FIELD.locationStatus]),
+  });
+  const customerId = String(customer.name);
+
+  // 2. The Sales Order, created already approved.
+  const so = await createDoc<Record<string, unknown>>(DOCTYPE.salesOrder, {
+    customer: customerId,
+    transaction_date: lo.orderDate,
+    delivery_date: lo.orderDate,
+    [SALES_ORDER_FIELD.rep]: lo.rep,
+    [SALES_ORDER_FIELD.poStatus]: PO_STATUS.approved,
+    [SALES_ORDER_FIELD.ratesApproved]: 1,
+    items: lo.lines.map((l) => ({
+      item_code: l.itemCode,
+      qty: l.qty,
+      rate: l.rate,
+      delivery_date: lo.orderDate,
+      // No breakdown exists on the lead side, so the line is new production.
+      [SALES_ORDER_ITEM_FIELD.fulfilmentMode]: FULFILMENT_MODE.newProduction,
+      [SALES_ORDER_ITEM_FIELD.rateApproved]: 1,
+    })),
+  });
+  const salesOrderId = String(so.name);
+
+  /*
+   * 3. Write back to the lead order.
+   *
+   * The handoff specifies a `sales_order` field here. **It does not exist on
+   * this site** — the live `Lead Order` doctype has no such field — so the
+   * linkage is recorded in `approval_remarks`, which does exist, and the
+   * caller is told the structured link could not be stored.
+   */
+  await updateDoc(DOCTYPE.leadOrder, input.leadOrderId, {
+    [LEAD_ORDER_FIELD.status]: LEAD_ORDER_STATUS.converted,
+    [LEAD_ORDER_FIELD.approvalRemarks]: `Converted to customer ${customerId}, raised as ${salesOrderId}`,
+  });
+
+  return { customer: customerId, salesOrder: salesOrderId, linkageStored: false };
+}
+
+/** Reject a lead order. No conversion, nothing else touched. */
+async function rejectLeadOrder(leadOrderId: string): Promise<void> {
+  await updateDoc(DOCTYPE.leadOrder, leadOrderId, {
+    [LEAD_ORDER_FIELD.status]: LEAD_ORDER_STATUS.rejected,
+  });
+}
+
+// ------------------------------------------------------ combined orders ---
+
+async function listCombinedOrders(input: { from?: string; to?: string } = {}): Promise<
+  CombinedOrder[]
+> {
+  const filters: Filter[] = [];
+  if (input.from && input.to) {
+    filters.push([COMBINED_ORDER_FIELD.weekStart, 'between', [input.from, input.to]]);
+  }
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.combinedOrder, {
+    fields: ['name', ...Object.values(COMBINED_ORDER_FIELD)],
+    filters,
+    orderBy: `${COMBINED_ORDER_FIELD.weekStart} desc`,
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.combinedOrder));
+
+  return rows.map((r) => ({
+    id: String(r.name),
+    customer: str(r[COMBINED_ORDER_FIELD.customer]) ?? '',
+    customerName:
+      str(r[COMBINED_ORDER_FIELD.customerName]) ?? str(r[COMBINED_ORDER_FIELD.customer]) ?? '',
+    weekStart: (str(r[COMBINED_ORDER_FIELD.weekStart]) ?? '').slice(0, 10),
+    weekEnd: (str(r[COMBINED_ORDER_FIELD.weekEnd]) ?? '').slice(0, 10),
+    status: str(r[COMBINED_ORDER_FIELD.status]) ?? '',
+    orderCount: Number(r[COMBINED_ORDER_FIELD.orderCount]) || 0,
+    total: Number(r[COMBINED_ORDER_FIELD.total]) || 0,
+    groupedBy: str(r[COMBINED_ORDER_FIELD.groupedBy]),
+  }));
+}
+
+/**
+ * Orders eligible for grouping into a week's combined orders.
+ *
+ * All four conditions from the spec, and the `custom_combined_order` one is
+ * checked in the client because Frappe writes an unset Link as `''` on one
+ * path and `null` on another — a single `=` filter misses half of them.
+ */
+async function listGroupableOrders(week: { start: string; end: string }): Promise<TeamOrder[]> {
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.salesOrder, {
+    fields: ['name', 'docstatus', ...Object.values(SALES_ORDER_FIELD)],
+    filters: [
+      [SALES_ORDER_FIELD.placedOn, 'between', [week.start, week.end]],
+      [SALES_ORDER_FIELD.productionStatus, '=', PRODUCTION_STATUS.dispatched],
+    ],
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.salesOrder));
+
+  return rows
+    .filter((r) => Number(r.docstatus) < 2 && !isLinkSet(str(r[SALES_ORDER_FIELD.combinedOrder])))
+    .map(toTeamOrder);
+}
+
+/**
+ * Group a week's completed orders, one `Combined Order` per customer.
+ *
+ * **Repeatable, never unwound.** Because already-grouped orders are excluded
+ * from the eligible set, a run that fails halfway is finished by running it
+ * again. There is deliberately no rollback: deleting a partially-populated
+ * combined order risks pointing member orders at a record that no longer
+ * exists, which is worse than the half-done state it was trying to tidy.
+ *
+ * Membership is written only to `Sales Order.custom_combined_order`. There is
+ * no child table on `Combined Order`, on purpose — with no server scripts, two
+ * records of the same fact drift the first time a save half-fails.
+ */
+async function closeWeek(input: {
+  week: { start: string; end: string };
+  groupedBy?: string;
+}): Promise<{ groups: number; orders: number; failed: string[] }> {
+  const eligible = await listGroupableOrders(input.week);
+
+  const byCustomer = new Map<string, TeamOrder[]>();
+  for (const o of eligible) {
+    if (!o.customer) continue;
+    const list = byCustomer.get(o.customer) ?? [];
+    list.push(o);
+    byCustomer.set(o.customer, list);
+  }
+
+  let groups = 0;
+  let orders = 0;
+  const failed: string[] = [];
+
+  for (const [customer, list] of byCustomer) {
+    try {
+      const combined = await createDoc<Record<string, unknown>>(DOCTYPE.combinedOrder, {
+        [COMBINED_ORDER_FIELD.customer]: customer,
+        [COMBINED_ORDER_FIELD.weekStart]: input.week.start,
+        [COMBINED_ORDER_FIELD.weekEnd]: input.week.end,
+        [COMBINED_ORDER_FIELD.status]: 'Draft',
+        [COMBINED_ORDER_FIELD.orderCount]: list.length,
+        [COMBINED_ORDER_FIELD.total]: Math.round(list.reduce((s, o) => s + o.total, 0) * 100) / 100,
+        // Usually null: a production manager is rarely a Sales Person. Omitted
+        // rather than sent empty, so Frappe does not try to validate a Link
+        // against a blank string.
+        ...(input.groupedBy ? { [COMBINED_ORDER_FIELD.groupedBy]: input.groupedBy } : {}),
+      });
+      groups += 1;
+
+      for (const o of list) {
+        try {
+          await updateDoc(DOCTYPE.salesOrder, o.id, {
+            [SALES_ORDER_FIELD.combinedOrder]: String(combined.name),
+          });
+          orders += 1;
+        } catch {
+          failed.push(o.id);
+        }
+      }
+    } catch {
+      failed.push(`group for ${customer}`);
+    }
+  }
+
+  return { groups, orders, failed };
+}
+
+// -------------------------------------------------------------- production ---
+
+/**
+ * The production queue — **with the customer removed before it is returned**.
+ *
+ * Production must never see who the order is for. The customer is used here
+ * only to resolve a route, and is then dropped: it is not returned to the
+ * caller in any field, so no screen can render it and no search can match it
+ * even by accident.
+ */
+async function listProductionQueue(unit?: string): Promise<ProductionOrderRow[]> {
+  const filters: Filter[] = [[SALES_ORDER_FIELD.poStatus, '=', PO_STATUS.approved]];
+  if (unit) filters.push([SALES_ORDER_FIELD.unit, '=', unit]);
+
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.salesOrder, {
+    fields: ['name', ...Object.values(SALES_ORDER_FIELD)],
+    filters,
+    orderBy: `${SALES_ORDER_FIELD.deliveryDate} asc`,
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.salesOrder));
+
+  // One lookup for the whole queue rather than one per order.
+  const parties = await listSalesCustomers().catch(() => []);
+  const routeOf = new Map(parties.map((c) => [c.id, c.route]));
+
+  return rows.map((r) => {
+    const customer = str(r[SALES_ORDER_FIELD.customer]) ?? '';
+    const route = routeOf.get(customer);
+    return {
+      id: String(r.name),
+      /*
+       * "No route set" is correct and must not be improved on. This used to
+       * fall back to `territory`, and since every customer sits in the single
+       * territory "India", the floor was shown "India (no route set)" — a
+       * string that reads like a destination, sorts like one, and is nowhere
+       * you can drive. A blank cannot be mistaken for an answer.
+       */
+      route: isLinkSet(route) ? (route as string) : 'No route set',
+      rep: str(r[SALES_ORDER_FIELD.rep]) ?? '',
+      unit: str(r[SALES_ORDER_FIELD.unit]),
+      placedOn: (str(r[SALES_ORDER_FIELD.placedOn]) ?? '').slice(0, 10),
+      deliveryDate: (str(r[SALES_ORDER_FIELD.deliveryDate]) ?? '').slice(0, 10) || undefined,
+      originalDeliveryDate:
+        (str(r[SALES_ORDER_FIELD.originalDeliveryDate]) ?? '').slice(0, 10) || undefined,
+      total: Number(r[SALES_ORDER_FIELD.total]) || 0,
+      productionStatus: str(r[SALES_ORDER_FIELD.productionStatus]),
+      productionFinishDate:
+        (str(r[SALES_ORDER_FIELD.productionFinishDate]) ?? '').slice(0, 10) || undefined,
+      changedAfterApproval: Number(r[SALES_ORDER_FIELD.changedAfterApproval]) === 1,
+      combinedOrder: str(r[SALES_ORDER_FIELD.combinedOrder]),
+    };
+  });
+}
+
+/** One order for the floor: lines and stages, with the customer stripped. */
+async function getOrderForProduction(
+  id: string,
+): Promise<ProductionOrderRow & { lines: OrderLine[] }> {
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, id);
+  const customer = str(doc[SALES_ORDER_FIELD.customer]) ?? '';
+  const parties = await listSalesCustomers().catch(() => []);
+  const route = parties.find((c) => c.id === customer)?.route;
+
+  const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+  return {
+    id: String(doc.name),
+    route: isLinkSet(route) ? (route as string) : 'No route set',
+    rep: str(doc[SALES_ORDER_FIELD.rep]) ?? '',
+    unit: str(doc[SALES_ORDER_FIELD.unit]),
+    placedOn: (str(doc[SALES_ORDER_FIELD.placedOn]) ?? '').slice(0, 10),
+    deliveryDate: (str(doc[SALES_ORDER_FIELD.deliveryDate]) ?? '').slice(0, 10) || undefined,
+    originalDeliveryDate:
+      (str(doc[SALES_ORDER_FIELD.originalDeliveryDate]) ?? '').slice(0, 10) || undefined,
+    total: Number(doc[SALES_ORDER_FIELD.total]) || 0,
+    productionStatus: str(doc[SALES_ORDER_FIELD.productionStatus]),
+    productionFinishDate:
+      (str(doc[SALES_ORDER_FIELD.productionFinishDate]) ?? '').slice(0, 10) || undefined,
+    changedAfterApproval: Number(doc[SALES_ORDER_FIELD.changedAfterApproval]) === 1,
+    combinedOrder: str(doc[SALES_ORDER_FIELD.combinedOrder]),
+    lines: items.map(toOrderLine),
+  };
+}
+
+/**
+ * Set one line's production stage, and roll the order up to match.
+ *
+ * Two fields of different types are written together, and getting them the
+ * wrong way round is fatal: the line's `custom_production_stage` is free text
+ * and takes the fine stage name, while the order's `custom_production_status`
+ * is a Select of four values and rejects anything else — taking the whole
+ * update down with it, including the line change that was the point.
+ */
+async function setProductionStage(input: {
+  orderId: string;
+  lineId: string;
+  stage: string;
+  /**
+   * Which half of the line moved. `stockStage` is the portion coming off the
+   * shelf; `productionStage` is the portion being made. A split line has both
+   * and they finish separately.
+   */
+  field?: 'stockStage' | 'productionStage';
+}): Promise<ProductionOrderRow & { lines: OrderLine[] }> {
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.orderId);
+  const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+
+  const target =
+    input.field === 'stockStage'
+      ? SALES_ORDER_ITEM_FIELD.stockStage
+      : SALES_ORDER_ITEM_FIELD.productionStage;
+
+  const nextItems = items.map((l) =>
+    String(l.name) === input.lineId ? { ...l, [target]: input.stage } : l,
+  );
+
+  // The roll-up weighs BOTH halves of a split line, so it needs the live
+  // reservations: four rolls dispatched off the shelf while four are still
+  // being made is not a finished order.
+  const reservations = await listStockReservations().catch(() => [] as StockReservationRow[]);
+  const status = rollUp(
+    nextItems.map((l) => {
+      const code = str(l.item_code) ?? '';
+      const held = heldBy(reservations, code, input.orderId);
+      const rolls = Number(l[SALES_ORDER_ITEM_FIELD.rolls]) || 0;
+      const belts = Number(l[SALES_ORDER_ITEM_FIELD.looseBelts]) || 0;
+      return {
+        category: str(l[SALES_ORDER_ITEM_FIELD.category]),
+        fulfilmentMode: str(l[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
+        productionStage: str(l[SALES_ORDER_ITEM_FIELD.productionStage]),
+        stockStage: str(l[SALES_ORDER_ITEM_FIELD.stockStage]),
+        reservedRolls: held.rolls,
+        reservedBelts: held.belts,
+        toMakeRolls: Math.max(0, rolls - held.rolls),
+        toMakeBelts: Math.max(0, belts - held.belts),
+        splitKnown: true,
+      };
+    }),
+  );
+
+  await updateDoc(DOCTYPE.salesOrder, input.orderId, {
+    items: nextItems,
+    [SALES_ORDER_FIELD.productionStatus]: status,
+  });
+  return getOrderForProduction(input.orderId);
+}
+
+/**
+ * Move an order's delivery date.
+ *
+ * Writes `delivery_date`, and captures the previous value into
+ * `custom_original_delivery_date` **the first time only**. Without that
+ * capture the new date is just a number and nobody — including whoever moved
+ * it — can see that it moved, or from what. Overwriting it on a second move
+ * would lose what the customer actually asked for.
+ *
+ * `custom_order_placed_at` is deliberately never sent: the moment the order
+ * was raised is not production's to move, and every deadline measures from it.
+ */
+async function moveDeliveryDate(input: {
+  orderId: string;
+  date: string;
+}): Promise<ProductionOrderRow & { lines: OrderLine[] }> {
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.orderId);
+  const current = (str(doc[SALES_ORDER_FIELD.deliveryDate]) ?? '').slice(0, 10);
+  const alreadyCaptured = isLinkSet(str(doc[SALES_ORDER_FIELD.originalDeliveryDate]));
+
+  const body: Record<string, unknown> = { [SALES_ORDER_FIELD.deliveryDate]: input.date };
+  if (!alreadyCaptured && current) {
+    body[SALES_ORDER_FIELD.originalDeliveryDate] = current;
+  }
+
+  await updateDoc(DOCTYPE.salesOrder, input.orderId, body);
+  return getOrderForProduction(input.orderId);
+}
+
+/** Clear the "edited after approval" flag once the floor has taken it in. */
+async function acknowledgeProductionChange(orderId: string): Promise<void> {
+  await updateDoc(DOCTYPE.salesOrder, orderId, {
+    [SALES_ORDER_FIELD.changedAfterApproval]: 0,
+  });
+}
+
+// ===========================================================================
+// TRIPS, EXPENSES AND ODOMETER VERIFICATION
+// ===========================================================================
+
+/** Per-km rates. A Single, so it is fetched by name, never listed. */
+async function getTripRates(): Promise<TripRates> {
+  const doc = await getDoc<Record<string, unknown>>(
+    DOCTYPE.tripRateSettings,
+    DOCTYPE.tripRateSettings,
+  ).catch(() => null);
+  if (!doc) return RATE_FALLBACK;
+  const n = (k: string) => Number(doc[k]) || 0;
+  return {
+    ownCar: n(TRIP_RATE_FIELD.ownCar),
+    ownBike: n(TRIP_RATE_FIELD.ownBike),
+    companyCar: n(TRIP_RATE_FIELD.companyCar),
+    companyBike: n(TRIP_RATE_FIELD.companyBike),
+    mixed: n(TRIP_RATE_FIELD.mixed),
+  };
+}
+
+function toLeg(r: Record<string, unknown>): TripLeg {
+  const n = (k: string) => Number(r[k]) || 0;
+  return {
+    id: String(r.name),
+    mode: str(r[TRIP_LEG_FIELD.mode]) ?? '',
+    vehicleNo: str(r[TRIP_LEG_FIELD.vehicleNo]),
+    hasOdometer: Number(r[TRIP_LEG_FIELD.hasOdometer]) === 1,
+    startOdometer: n(TRIP_LEG_FIELD.startOdometer),
+    endOdometer: n(TRIP_LEG_FIELD.endOdometer),
+    distanceKm: n(TRIP_LEG_FIELD.distanceKm),
+    startOdometerPhoto: str(r[TRIP_LEG_FIELD.startOdometerPhoto]),
+    endOdometerPhoto: str(r[TRIP_LEG_FIELD.endOdometerPhoto]),
+    notVerified: Number(r[TRIP_LEG_FIELD.notVerified]) === 1,
+    actualStartOdometer: n(TRIP_LEG_FIELD.actualStartOdometer),
+    actualEndOdometer: n(TRIP_LEG_FIELD.actualEndOdometer),
+    claimedAmount: n(TRIP_LEG_FIELD.claimedAmount),
+    approvedAmount: n(TRIP_LEG_FIELD.approvedAmount),
+    status: str(r[TRIP_LEG_FIELD.status]),
+    remarks: str(r[TRIP_LEG_FIELD.remarks]),
+  };
+}
+
+function toTripExpense(r: Record<string, unknown>): TripExpense {
+  return {
+    id: String(r.name),
+    category: str(r[TRIP_EXPENSE_FIELD.category]) ?? '',
+    expenseName: str(r[TRIP_EXPENSE_FIELD.expenseName]),
+    amount: Number(r[TRIP_EXPENSE_FIELD.amount]) || 0,
+    approvedAmount: Number(r[TRIP_EXPENSE_FIELD.approvedAmount]) || 0,
+    hasBill: Number(r[TRIP_EXPENSE_FIELD.hasBill]) === 1,
+    billPhoto: str(r[TRIP_EXPENSE_FIELD.billPhoto]),
+    status: str(r[TRIP_EXPENSE_FIELD.status]),
+    remarks: str(r[TRIP_EXPENSE_FIELD.remarks]),
+  };
+}
+
+function toTrip(r: Record<string, unknown>): Trip {
+  const legs = Array.isArray(r.legs) ? (r.legs as Record<string, unknown>[]).map(toLeg) : [];
+  const expenses = Array.isArray(r.expenses)
+    ? (r.expenses as Record<string, unknown>[]).map(toTripExpense)
+    : [];
+  return {
+    id: String(r.name),
+    person: str(r[TRIP_FIELD.person]) ?? '',
+    date: (str(r[TRIP_FIELD.date]) ?? '').slice(0, 10),
+    startTime: str(r[TRIP_FIELD.startTime]),
+    endTime: str(r[TRIP_FIELD.endTime]),
+    primaryMode: str(r[TRIP_FIELD.primaryMode]) ?? '',
+    costBasis: str(r[TRIP_FIELD.costBasis]),
+    distanceKm: Number(r[TRIP_FIELD.distanceKm]) || 0,
+    estimatedCost: Number(r[TRIP_FIELD.estimatedCost]) || 0,
+    totalExpenses: Number(r[TRIP_FIELD.totalExpenses]) || 0,
+    status: str(r[TRIP_FIELD.status]) ?? '',
+    expenseStatus: str(r[TRIP_FIELD.expenseStatus]),
+    purpose: str(r[TRIP_FIELD.purpose]),
+    taggedReps: parseTagged(str(r[TRIP_FIELD.taggedCsv])),
+    legs,
+    expenses,
+  };
+}
+
+/**
+ * Trips in a date range, with their child tables.
+ *
+ * A list query cannot return child tables, so this lists the names in range
+ * and then fetches each document. Bounded by the range rather than paginated:
+ * a month is a few dozen trips, and the caller always wants the whole month.
+ */
+async function listTrips(fromIso: string, toIso: string): Promise<Trip[]> {
+  const rows = await listDocs<{ name: string }>(DOCTYPE.trip, {
+    fields: ['name'],
+    filters: [
+      [TRIP_FIELD.date, '>=', fromIso],
+      [TRIP_FIELD.date, '<=', toIso],
+    ],
+    orderBy: `${TRIP_FIELD.date} asc`,
+    limit: 0,
+  }).catch(ifMissing<{ name: string }[]>([], DOCTYPE.trip));
+
+  const docs = await Promise.all(
+    rows.map((r) =>
+      getDoc<Record<string, unknown>>(DOCTYPE.trip, r.name).catch(() => null),
+    ),
+  );
+  return docs.filter(Boolean).map((d) => toTrip(d as Record<string, unknown>));
+}
+
+/** One trip with its child tables, for the detail view. */
+async function getTrip(tripId: string): Promise<Trip> {
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.trip, tripId);
+  return toTrip(doc);
+}
+
+/** Shop visits recorded against one trip. */
+async function listVisitsForTrip(tripId: string): Promise<SalesVisit[]> {
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.salesVisit, {
+    fields: ['name', ...Object.values(SALES_VISIT_FIELD)],
+    filters: [[SALES_VISIT_FIELD.trip, '=', tripId]],
+    orderBy: `${SALES_VISIT_FIELD.checkIn} asc`,
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.salesVisit));
+  return rows.map(toSalesVisit);
+}
+
+function toSalesVisit(r: Record<string, unknown>): SalesVisit {
+  return {
+    id: String(r.name),
+    person: str(r[SALES_VISIT_FIELD.person]) ?? '',
+    date: (str(r[SALES_VISIT_FIELD.date]) ?? '').slice(0, 10),
+    tripId: str(r[SALES_VISIT_FIELD.trip]),
+    leadId: str(r[SALES_VISIT_FIELD.lead]),
+    customerId: str(r[SALES_VISIT_FIELD.customer]),
+    checkIn: str(r[SALES_VISIT_FIELD.checkIn]),
+    checkOut: str(r[SALES_VISIT_FIELD.checkOut]),
+    durationMinutes: Number(r[SALES_VISIT_FIELD.durationMinutes]) || 0,
+    purpose: str(r[SALES_VISIT_FIELD.purpose]),
+    status: str(r[SALES_VISIT_FIELD.status]),
+  };
+}
+
+async function listSalesVisits(fromIso: string, toIso: string): Promise<SalesVisit[]> {
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.salesVisit, {
+    fields: ['name', ...Object.values(SALES_VISIT_FIELD)],
+    filters: [
+      [SALES_VISIT_FIELD.date, '>=', fromIso],
+      [SALES_VISIT_FIELD.date, '<=', toIso],
+    ],
+    orderBy: `${SALES_VISIT_FIELD.date} desc`,
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.salesVisit));
+
+  return rows.map(toSalesVisit);
+}
+
+export interface VerifyLegInput {
+  tripId: string;
+  legId: string;
+  /**
+   * `verified` — the photo agrees with what the rep typed. The typed figures
+   *   are copied into the actual-reading fields so the expense sheet can show
+   *   that somebody looked, rather than leaving a blank that reads the same as
+   *   never having been checked.
+   * `corrected` — the photo disagrees; `actualStart`/`actualEnd` are HR's.
+   * `clear` — undo, back to unchecked.
+   */
+  outcome: 'verified' | 'corrected' | 'clear';
+  actualStart?: number;
+  actualEnd?: number;
+  remarks?: string;
+}
+
+/**
+ * Record HR's odometer check.
+ *
+ * `Trip Vehicle Leg` is a child table, so it cannot be written directly —
+ * Frappe only accepts child rows through their parent. The whole `legs` array
+ * is therefore re-sent with the one leg amended, which is also why the read
+ * happens immediately before the write rather than from cached state: another
+ * leg may have been checked in between, and re-sending stale rows would
+ * quietly revert someone else's work.
+ */
+async function verifyLeg(input: VerifyLegInput): Promise<Trip> {
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.trip, input.tripId);
+  const legs = Array.isArray(doc.legs) ? (doc.legs as Record<string, unknown>[]) : [];
+
+  const next = legs.map((l) => {
+    if (String(l.name) !== input.legId) return l;
+
+    // "Verified" means the photo matched, so the confirmed readings ARE the
+    // typed ones — written through rather than left blank.
+    const typedStart = Number(l[TRIP_LEG_FIELD.startOdometer]) || 0;
+    const typedEnd = Number(l[TRIP_LEG_FIELD.endOdometer]) || 0;
+
+    let notVerified = 0;
+    let actualStart = 0;
+    let actualEnd = 0;
+    if (input.outcome === 'verified') {
+      actualStart = typedStart;
+      actualEnd = typedEnd;
+    } else if (input.outcome === 'corrected') {
+      notVerified = 1;
+      actualStart = input.actualStart ?? 0;
+      actualEnd = input.actualEnd ?? 0;
+    }
+
+    return {
+      ...l,
+      [TRIP_LEG_FIELD.notVerified]: notVerified,
+      [TRIP_LEG_FIELD.actualStartOdometer]: actualStart,
+      [TRIP_LEG_FIELD.actualEndOdometer]: actualEnd,
+      [TRIP_LEG_FIELD.remarks]: input.remarks ?? l[TRIP_LEG_FIELD.remarks] ?? '',
+    };
+  });
+
+  const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.trip, input.tripId, {
+    legs: next,
+  });
+  return toTrip(saved);
+}
+
 async function listEmployees(): Promise<Employee[]> {
   if (USE_MOCK) return delay(getDb().employees, 80);
 
@@ -2068,7 +4360,7 @@ async function listEmployees(): Promise<Employee[]> {
     ],
     orderBy: `${EMPLOYEE_FIELD.employeeName} asc`,
     limit: 0,
-  }).catch(ifMissing<Record<string, unknown>[]>([]));
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.employee));
 
   return rows.map(toEmployee);
 }
@@ -2087,7 +4379,7 @@ async function listAttendance(fromIso: string, toIso: string): Promise<Attendanc
       [ATTENDANCE_FIELD.date, '<=', toIso],
     ],
     limit: 0,
-  }).catch(ifMissing<Record<string, unknown>[]>([]));
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.attendance));
 
   return rows.map(toAttendance);
 }
@@ -2137,7 +4429,7 @@ async function markAttendance(input: {
       [ATTENDANCE_FIELD.date, '=', input.date],
     ],
     limit: 1,
-  }).catch(ifMissing<{ name: string }[]>([]));
+  }).catch(ifMissing<{ name: string }[]>([], DOCTYPE.attendance));
 
   const body = {
     [ATTENDANCE_FIELD.employee]: input.employeeId,
@@ -2162,7 +4454,7 @@ async function listLeaveRequests(): Promise<LeaveRequest[]> {
     fields: ['name', 'creation', 'department', ...Object.values(LEAVE_FIELD)],
     orderBy: 'creation desc',
     limit: 0,
-  }).catch(ifMissing<Record<string, unknown>[]>([]));
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.leaveApplication));
 
   return rows.map(toLeaveRequest);
 }
@@ -2273,7 +4565,8 @@ function toEmployee(row: Record<string, unknown>): Employee {
     name: str(row[EMPLOYEE_FIELD.employeeName]) ?? String(row.name),
     designation: str(row[EMPLOYEE_FIELD.designation]) ?? '—',
     department: toDepartment(str(row[EMPLOYEE_FIELD.department])),
-    employmentType: toEmploymentType(str(row[EMPLOYEE_FIELD.employmentType])),
+    // Absent on this site; `toEmploymentType` supplies its own default.
+    employmentType: toEmploymentType(str(row[OPTIONAL_EMPLOYEE_FIELD.employmentType])),
     joinedOn: (str(row[EMPLOYEE_FIELD.joinedOn]) ?? nowIso()).slice(0, 10),
     // ERPNext keeps a relieving date on some active records; `status` is what
     // actually decides whether someone is still on the books.
@@ -2283,7 +4576,7 @@ function toEmployee(row: Record<string, unknown>): Employee {
     location: str(row[EMPLOYEE_FIELD.branch]),
     reportsTo: str(row[EMPLOYEE_FIELD.reportsTo]),
     userId: str(row[EMPLOYEE_FIELD.user]),
-    leaveBalance: Number(row[EMPLOYEE_FIELD.leaveBalance] ?? 0) || 0,
+    leaveBalance: Number(row[OPTIONAL_EMPLOYEE_FIELD.leaveBalance] ?? 0) || 0,
   };
 }
 
@@ -2419,6 +4712,72 @@ export const Api = {
     markAttendance,
     listLeaveRequests,
     decideLeave,
+  },
+
+  /**
+   * The real HR surface on this site — see `domain/attendance.ts`. Reads only;
+   * approvals will be added here once the two-stage leave fields exist.
+   */
+  trips: {
+    getRates: getTripRates,
+    list: listTrips,
+    get: getTrip,
+    listVisitsForTrip,
+    listVisits: listSalesVisits,
+    verifyLeg,
+  },
+
+  sales: {
+    listCustomers: listSalesCustomers,
+    listOrders: listTeamOrders,
+    getOrder: getSalesOrder,
+    decideOrder: decideSalesOrder,
+    listMinimumStock,
+    recordProductionRun,
+    claimFromRun,
+    setRunStage,
+    receiveRun,
+    listReservations: listStockReservations,
+    listItemOptions,
+    setFulfilmentMode,
+    saveOrderLines,
+    listLeadOrders,
+    getLeadOrder,
+    checkLeadGaps,
+    approveLeadOrder,
+    rejectLeadOrder,
+    listCombinedOrders,
+    listGroupableOrders,
+    closeWeek,
+    listApprovalInbox,
+    decideInboxItem,
+    captureLocation,
+    listLeads,
+    listRoutesFor,
+    assignRoute,
+    decideLocation,
+    listLocationQueue,
+  },
+
+  production: {
+    listQueue: listProductionQueue,
+    getOrder: getOrderForProduction,
+    setStage: setProductionStage,
+    moveDeliveryDate,
+    acknowledgeChange: acknowledgeProductionChange,
+  },
+
+  attendance: {
+    listSalesPeople,
+    listAttendanceLogs,
+    listLeaveRequests: listLeaveRequestsLive,
+    listRegularizations,
+    decideLeave: decideLeaveRequest,
+    revokeLeave: revokeLeaveDecision,
+    decideRegularization,
+    revokeRegularization,
+    applyRegularization,
+    setAttendance: upsertAttendanceLog,
   },
 } as const;
 

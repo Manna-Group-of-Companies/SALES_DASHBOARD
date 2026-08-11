@@ -31,6 +31,18 @@ export default defineConfig(({ mode }) => {
           // leaves every following request unauthenticated.
           cookieDomainRewrite: '',
         },
+        /*
+         * Attachments — odometer photos and expense bills.
+         *
+         * Frappe stores them under `/private/files/...` (session-gated) and
+         * `/files/...` (public), NOT under `/api`. Without these an <img>
+         * pointing at a photo is served by Vite, 404s, and silently degrades
+         * to a broken image — which is exactly what a reviewer needs to see.
+         *
+         * `/assets` is deliberately NOT proxied: that is Vite's own namespace.
+         */
+        '/private': { target, changeOrigin: true, cookieDomainRewrite: '' },
+        '/files': { target, changeOrigin: true, cookieDomainRewrite: '' },
       },
     },
   };

@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { canStartOrder, NO_ROUTE_MESSAGE } from '@/domain/sales';
 import type { MinStockItem, OrderItem, Product, ProductCategory } from '@/domain/types';
 import { CATEGORY_LABEL } from '@/domain/types';
 import {
@@ -257,6 +258,26 @@ export function TakeOrderPage() {
         action={<Button onClick={() => navigate('/customers')}>Back to customers</Button>}
       >
         Pick a customer to take an order against.
+      </Empty>
+    );
+  }
+
+  /*
+   * §7.7 — a party with no sales route cannot be ordered for at all.
+   *
+   * Refused before the screen opens rather than at submit: letting someone key
+   * a full order and then rejecting it wastes the work and teaches nothing
+   * about what to fix. The route decides which delivery run the goods go out
+   * on, and nothing downstream asks for it again.
+   */
+  if (!canStartOrder({ route: customer.route })) {
+    return (
+      <Empty
+        icon="🛣"
+        title={`${customer.name} has no sales route`}
+        action={<Button onClick={() => navigate('/customers')}>Assign a route</Button>}
+      >
+        {NO_ROUTE_MESSAGE}
       </Empty>
     );
   }

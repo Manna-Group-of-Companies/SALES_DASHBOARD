@@ -1,0 +1,809 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>*,*::before,*::after{box-sizing:border-box}</style>
+<title>Manna Treads — HR attendance</title>
+
+<style>
+  /* Tokens lifted from the app's own global.css so this reads as part of it. */
+  :root {
+    --bg: #f4f6f8;
+    --surface: #ffffff;
+    --surface-2: #f8fafc;
+    --surface-3: #eef2f6;
+    --border: #dbe2ea;
+    --border-strong: #c3ced9;
+
+    --text: #16212e;
+    --text-2: #55647a;
+    --text-3: #8494a8;
+
+    --accent: #1f5fbf;
+    --accent-soft: #e8f0fc;
+    --accent-border: #b9d0f2;
+
+    --ok: #16794b;
+    --ok-soft: #e3f5ec;
+    --ok-border: #a9dcc4;
+
+    --warn: #9a6206;
+    --warn-soft: #fdf3e2;
+    --warn-border: #f0d3a0;
+
+    --danger: #b3261e;
+    --danger-soft: #fdecea;
+    --danger-border: #f3bfba;
+
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+    --side-w: 236px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1319; --surface: #161d26; --surface-2: #1b232e; --surface-3: #212b38;
+      --border: #2a3644; --border-strong: #3b4a5c;
+      --text: #e6edf5; --text-2: #9fb0c4; --text-3: #6c7f94;
+      --accent: #5b9bf5; --accent-soft: #16283f; --accent-border: #2c4d78;
+      --ok: #4ec78d; --ok-soft: #11291f; --ok-border: #245c42;
+      --warn: #e5a743; --warn-soft: #2a2013; --warn-border: #5c4520;
+      --danger: #f28b82; --danger-soft: #2c1715; --danger-border: #63302c;
+    }
+  }
+
+  /* The viewer's toggle stamps data-theme and must beat the media query. */
+  :root[data-theme="dark"] {
+    --bg: #0e1319; --surface: #161d26; --surface-2: #1b232e; --surface-3: #212b38;
+    --border: #2a3644; --border-strong: #3b4a5c;
+    --text: #e6edf5; --text-2: #9fb0c4; --text-3: #6c7f94;
+    --accent: #5b9bf5; --accent-soft: #16283f; --accent-border: #2c4d78;
+    --ok: #4ec78d; --ok-soft: #11291f; --ok-border: #245c42;
+    --warn: #e5a743; --warn-soft: #2a2013; --warn-border: #5c4520;
+    --danger: #f28b82; --danger-soft: #2c1715; --danger-border: #63302c;
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f6f8; --surface: #ffffff; --surface-2: #f8fafc; --surface-3: #eef2f6;
+    --border: #dbe2ea; --border-strong: #c3ced9;
+    --text: #16212e; --text-2: #55647a; --text-3: #8494a8;
+    --accent: #1f5fbf; --accent-soft: #e8f0fc; --accent-border: #b9d0f2;
+    --ok: #16794b; --ok-soft: #e3f5ec; --ok-border: #a9dcc4;
+    --warn: #9a6206; --warn-soft: #fdf3e2; --warn-border: #f0d3a0;
+    --danger: #b3261e; --danger-soft: #fdecea; --danger-border: #f3bfba;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    /* The page itself never scrolls — only the main panel does. */
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .shell {
+    display: grid;
+    grid-template-columns: var(--side-w) 1fr;
+    height: 100dvh;
+  }
+
+  /* ------------------------------------------------------------ sidebar --- */
+  .side {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 16px 15px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .brand__mark {
+    width: 30px; height: 30px; border-radius: 7px; flex: none;
+    background: var(--accent);
+    color: #fff;
+    display: grid; place-items: center;
+    font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em;
+  }
+  .brand__name { font-size: 13.5px; font-weight: 650; line-height: 1.2; }
+  .brand__sub { font-size: 11px; color: var(--text-3); }
+
+  .nav { padding: 10px 9px; display: flex; flex-direction: column; gap: 2px; }
+  .nav__label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--text-3); font-weight: 650;
+    padding: 9px 7px 5px;
+  }
+  .nav__item {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 9px;
+    border: none;
+    border-radius: 7px;
+    background: none;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .nav__item:hover { background: var(--surface-2); color: var(--text); }
+  .nav__item[aria-current="page"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 620;
+  }
+  .nav__item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .pill {
+    font-size: 11px; font-weight: 650;
+    padding: 1px 7px; border-radius: 999px;
+    background: var(--surface-3); color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+  }
+  .pill--warn { background: var(--warn-soft); color: var(--warn); }
+  .pill--alert { background: var(--danger-soft); color: var(--danger); }
+
+  .side__foot {
+    margin-top: auto;
+    padding: 13px 15px 16px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-3);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .side__foot code { font-family: var(--mono); font-size: 10.5px; }
+
+  /* --------------------------------------------------------------- main --- */
+  .main { min-height: 0; overflow-y: auto; }
+  .main__inner {
+    padding: 22px 26px 44px;
+    max-width: 1080px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+
+  .topbar {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+  }
+  .topbar h1 {
+    margin: 0; font-size: 19px; font-weight: 650;
+    letter-spacing: -0.015em; text-wrap: balance;
+  }
+  .topbar .sub { color: var(--text-2); font-size: 12.5px; margin-top: 2px; }
+  .stamp {
+    font-size: 11px; color: var(--text-3);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 10px; white-space: nowrap;
+  }
+
+  .view[hidden] { display: none; }
+  .view { display: flex; flex-direction: column; gap: 16px; }
+
+  /* -------------------------------------------------------------- tiles --- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 11px; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 2px;
+    border-left: 3px solid var(--border-strong);
+  }
+  .tile.is-ok { border-left-color: var(--ok); }
+  .tile.is-warn { border-left-color: var(--warn); }
+  .tile.is-alert { border-left-color: var(--danger); }
+  .tile__label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
+    font-weight: 650; color: var(--text-3);
+  }
+  .tile__value {
+    font-size: 25px; font-weight: 640; letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums; line-height: 1.15;
+  }
+  .tile.is-warn .tile__value { color: var(--warn); }
+  .tile.is-alert .tile__value { color: var(--danger); }
+  .tile.is-ok .tile__value { color: var(--ok); }
+  .tile__foot { font-size: 11px; color: var(--text-2); }
+
+  /* -------------------------------------------------------------- cards --- */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 11px; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .card__head {
+    padding: 11px 14px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  }
+  .card__title { font-size: 13px; font-weight: 640; }
+  .card__note { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+  .card__body { padding: 13px 14px; }
+  .card__body--flush { padding: 0; }
+
+  .note { margin: 0; font-size: 12px; color: var(--text-2); }
+
+  /* ------------------------------------------------------------- tables --- */
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th {
+    text-align: left; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-3); font-weight: 650;
+    padding: 9px 14px; background: var(--surface-2);
+    border-bottom: 1px solid var(--border); white-space: nowrap;
+  }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  .num { font-variant-numeric: tabular-nums; }
+  .right { text-align: right; }
+  .mono { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); }
+  .dim { color: var(--text-2); }
+
+  /* -------------------------------------------------------------- chips --- */
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 620; white-space: nowrap; border: 1px solid;
+  }
+  .chip--ok { background: var(--ok-soft); color: var(--ok); border-color: var(--ok-border); }
+  .chip--warn { background: var(--warn-soft); color: var(--warn); border-color: var(--warn-border); }
+  .chip--danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+  .chip--mute { background: var(--surface-3); color: var(--text-2); border-color: var(--border); }
+  .chip__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+
+  /* --------------------------------------------------------- team meter --- */
+  .teams { display: flex; flex-direction: column; gap: 12px; }
+  .team__row { display: flex; flex-direction: column; gap: 5px; }
+  .team__top {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 10px; font-size: 12.5px;
+  }
+  .team__name { font-weight: 620; }
+  .team__unit { color: var(--text-3); font-size: 11px; }
+  .team__count { font-variant-numeric: tabular-nums; color: var(--text-2); font-size: 12px; }
+  .meter { height: 7px; background: var(--surface-3); border-radius: 4px; overflow: hidden; }
+  .meter__fill { height: 100%; border-radius: 4px; background: var(--accent); }
+  .meter__fill.is-part { background: var(--warn); }
+  .meter__fill.is-none { background: var(--danger); }
+
+  /* ---------------------------------------------------------- list rows --- */
+  .rows { display: flex; flex-direction: column; gap: 6px; }
+  .row {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 9px; align-items: center;
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface-2); font-size: 12.5px;
+  }
+  .row__mid { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ------------------------------------------------------------ banners --- */
+  .banner {
+    display: flex; gap: 10px; align-items: flex-start;
+    border-radius: 9px; padding: 11px 13px; font-size: 12.5px;
+    border: 1px solid var(--accent-border); background: var(--accent-soft);
+  }
+  .banner--warn { border-color: var(--warn-border); background: var(--warn-soft); }
+  .banner code { font-family: var(--mono); font-size: 11.5px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+
+  /* --------------------------------------------------------- responsive --- */
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+  @media (max-width: 720px) {
+    body { height: auto; overflow: auto; }
+    .shell { grid-template-columns: 1fr; height: auto; }
+    .side { border-right: none; border-bottom: 1px solid var(--border); overflow: visible; }
+    .nav { flex-direction: row; overflow-x: auto; gap: 5px; }
+    .nav__label { display: none; }
+    .nav__item { width: auto; white-space: nowrap; }
+    .side__foot { display: none; }
+    .main { overflow: visible; }
+    .main__inner { padding: 18px 16px 40px; }
+  }
+</style>
+
+<div class="shell">
+
+  <!-- ============================================================ nav === -->
+  <aside class="side">
+    <div class="brand">
+      <div class="brand__mark" aria-hidden="true">MT</div>
+      <div>
+        <div class="brand__name">Manna Treads</div>
+        <div class="brand__sub">HR &amp; attendance</div>
+      </div>
+    </div>
+
+    <nav class="nav" aria-label="Sections">
+      <div class="nav__label">Attendance</div>
+      <button class="nav__item" data-view="overview" aria-current="page">
+        <span>Overview</span>
+      </button>
+      <button class="nav__item" data-view="floor">
+        <span>Today's floor</span><span class="pill">6</span>
+      </button>
+      <button class="nav__item" data-view="open">
+        <span>Open shifts</span><span class="pill pill--alert">8</span>
+      </button>
+
+      <div class="nav__label">Approvals</div>
+      <button class="nav__item" data-view="leave">
+        <span>Leave requests</span><span class="pill pill--warn">4</span>
+      </button>
+      <button class="nav__item" data-view="regs">
+        <span>Regularizations</span><span class="pill pill--warn">7</span>
+      </button>
+      <button class="nav__item" data-view="unapplied">
+        <span>Not applied</span><span class="pill pill--alert">9</span>
+      </button>
+
+      <div class="nav__label">Reference</div>
+      <button class="nav__item" data-view="people">
+        <span>People</span><span class="pill">15</span>
+      </button>
+      <button class="nav__item" data-view="source">
+        <span>Data source</span>
+      </button>
+    </nav>
+
+    <div class="side__foot">
+      <div>Snapshot · 6 Aug 2026, 17:10 IST</div>
+      <div><code>mannarubber.m.frappe.cloud</code></div>
+    </div>
+  </aside>
+
+  <!-- =========================================================== main === -->
+  <main class="main">
+    <div class="main__inner">
+
+      <div class="topbar">
+        <div>
+          <h1 id="view-title">Overview</h1>
+          <div class="sub" id="view-sub">Thursday 6 August 2026 · 15 active sales people across 3 teams</div>
+        </div>
+        <div class="stamp">Read-only snapshot</div>
+      </div>
+
+      <!-- ------------------------------------------------------ overview -->
+      <section class="view" data-view="overview">
+        <div class="tiles">
+          <div class="tile is-warn">
+            <div class="tile__label">On the floor</div>
+            <div class="tile__value">6<span style="font-size:14px;color:var(--text-3);font-weight:500"> / 15</span></div>
+            <div class="tile__foot">Punched in today</div>
+          </div>
+          <div class="tile is-warn">
+            <div class="tile__label">No punch today</div>
+            <div class="tile__value">9</div>
+            <div class="tile__foot">No record either way</div>
+          </div>
+          <div class="tile is-alert">
+            <div class="tile__label">Open shifts</div>
+            <div class="tile__value">8</div>
+            <div class="tile__foot">Punched in, never out</div>
+          </div>
+          <div class="tile is-warn">
+            <div class="tile__label">Leave to decide</div>
+            <div class="tile__value">4</div>
+            <div class="tile__foot">Oldest 23 Jul</div>
+          </div>
+          <div class="tile is-alert">
+            <div class="tile__label">Approved, not applied</div>
+            <div class="tile__value">9</div>
+            <div class="tile__foot">Decision never landed</div>
+          </div>
+        </div>
+
+        <div class="cols">
+          <div class="card">
+            <div class="card__head">
+              <div class="card__title">Turnout by team</div>
+              <div class="card__note">Punched in today</div>
+            </div>
+            <div class="card__body">
+              <div class="teams">
+                <div class="team__row">
+                  <div class="team__top">
+                    <span><span class="team__name">Pareeth</span> <span class="team__unit">· Manna Treads</span></span>
+                    <span class="team__count">4 / 5</span>
+                  </div>
+                  <div class="meter"><div class="meter__fill" style="width:80%"></div></div>
+                </div>
+                <div class="team__row">
+                  <div class="team__top">
+                    <span><span class="team__name">Saneesh</span> <span class="team__unit">· Manna Tyre Retreads</span></span>
+                    <span class="team__count">2 / 5</span>
+                  </div>
+                  <div class="meter"><div class="meter__fill is-part" style="width:40%"></div></div>
+                </div>
+                <div class="team__row">
+                  <div class="team__top">
+                    <span><span class="team__name">Renjith</span> <span class="team__unit">· Manna Tyres UAE</span></span>
+                    <span class="team__count">0 / 5</span>
+                  </div>
+                  <div class="meter"><div class="meter__fill is-none" style="width:2%"></div></div>
+                </div>
+              </div>
+              <p class="note" style="margin-top:13px">
+                Nobody on the UAE team has punched in. Thursday is a working day there, so this is
+                worth a question rather than an assumption.
+              </p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card__head">
+              <div class="card__title">Needs a decision</div>
+              <div class="card__note">11 items</div>
+            </div>
+            <div class="card__body">
+              <div class="rows">
+                <div class="row">
+                  <span class="chip chip--warn">4</span>
+                  <span class="row__mid">Leave requests, oldest 23 Jul</span>
+                  <span class="dim">Manikandan</span>
+                </div>
+                <div class="row">
+                  <span class="chip chip--warn">7</span>
+                  <span class="row__mid">Regularizations, oldest 25 Jul</span>
+                  <span class="dim">Prashanth ×5</span>
+                </div>
+                <div class="row">
+                  <span class="chip chip--danger">9</span>
+                  <span class="row__mid">Approved but never applied</span>
+                  <span class="dim">backend</span>
+                </div>
+              </div>
+              <p class="note" style="margin-top:13px">
+                The last row is not a decision — those were already approved. The attendance was
+                never written back, so the hours never moved.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- --------------------------------------------------------- floor -->
+      <section class="view" data-view="floor" hidden>
+        <div class="card">
+          <div class="card__head">
+            <div class="card__title">Punched in today</div>
+            <div class="card__note">6 of 15</div>
+          </div>
+          <div class="card__body card__body--flush">
+            <div class="scroll">
+              <table>
+                <thead>
+                  <tr><th>Sales person</th><th>Team</th><th>Unit</th><th class="right">In</th><th class="right">Status</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>Prashanth</td><td class="dim">Pareeth</td><td class="dim">Manna Treads</td><td class="right num">08:39</td><td class="right"><span class="chip chip--ok"><span class="chip__dot"></span>On floor</span></td></tr>
+                  <tr><td>Prasad V</td><td class="dim">Saneesh</td><td class="dim">Manna Tyre Retreads</td><td class="right num">09:01</td><td class="right"><span class="chip chip--ok"><span class="chip__dot"></span>On floor</span></td></tr>
+                  <tr><td>Subhash</td><td class="dim">Saneesh</td><td class="dim">Manna Tyre Retreads</td><td class="right num">09:18</td><td class="right"><span class="chip chip--ok"><span class="chip__dot"></span>On floor</span></td></tr>
+                  <tr><td>Sirajudheen Kasim</td><td class="dim">Pareeth</td><td class="dim">Manna Treads</td><td class="right num">09:26</td><td class="right"><span class="chip chip--mute">Out · 0.48h</span></td></tr>
+                  <tr><td>Amjad Pr</td><td class="dim">Pareeth</td><td class="dim">Manna Treads</td><td class="right num">09:34</td><td class="right"><span class="chip chip--ok"><span class="chip__dot"></span>On floor</span></td></tr>
+                  <tr><td>Pareeth Kb</td><td class="dim">Pareeth</td><td class="dim">Manna Treads</td><td class="right num">12:35</td><td class="right"><span class="chip chip--ok"><span class="chip__dot"></span>On floor</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card__head">
+            <div class="card__title">No punch recorded today</div>
+            <div class="card__note">9 people</div>
+          </div>
+          <div class="card__body card__body--flush">
+            <div class="scroll">
+              <table>
+                <thead><tr><th>Sales person</th><th>Team</th><th>Unit</th></tr></thead>
+                <tbody>
+                  <tr><td>Jaimon D</td><td class="dim">Pareeth</td><td class="dim">Manna Treads</td></tr>
+                  <tr><td>Bibin Balaravi</td><td class="dim">Saneesh</td><td class="dim">Manna Tyre Retreads</td></tr>
+                  <tr><td>Nikhil Tk</td><td class="dim">Saneesh</td><td class="dim">Manna Tyre Retreads</td></tr>
+                  <tr><td>Saneesh</td><td class="dim">Saneesh</td><td class="dim">Manna Tyre Retreads</td></tr>
+                  <tr><td>Kailas Babu</td><td class="dim">Renjith</td><td class="dim">Manna Tyres UAE</td></tr>
+                  <tr><td>Manikandan</td><td class="dim">Renjith</td><td class="dim">Manna Tyres UAE</td></tr>
+                  <tr><td>Rajeev S</td><td class="dim">Renjith</td><td class="dim">Manna Tyres UAE</td></tr>
+                  <tr><td>Renjith</td><td class="dim">Renjith</td><td class="dim">Manna Tyres UAE</td></tr>
+                  <tr><td>Shihab K</td><td class="dim">Renjith</td><td class="dim">Manna Tyres UAE</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------------------------------------------------- open shifts -->
+      <section class="view" data-view="open" hidden>
+        <div class="card">
+          <div class="card__head">
+            <div class="card__title">Punched in on an earlier day and never punched out</div>
+            <div class="card__note">8 records</div>
+          </div>
+          <div class="card__body card__body--flush">
+            <div class="scroll">
+              <table>
+                <thead><tr><th>Record</th><th>Sales person</th><th>Date</th><th class="right">Punched in</th><th class="right">Punched out</th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">ATT-00292</td><td>Pareeth Kb</td><td class="num">5 Aug</td><td class="right num">08:55</td><td class="right"><span class="chip chip--danger">missing</span></td></tr>
+                  <tr><td class="mono">ATT-00293</td><td>Nikhil Tk</td><td class="num">5 Aug</td><td class="right num">09:06</td><td class="right"><span class="chip chip--danger">missing</span></td></tr>
+                  <tr><td class="mono">ATT-00296</td><td>Amjad Pr</td><td class="num">5 Aug</td><td class="right num">09:29</td><td class="right"><span class="chip chip--danger">missing</span></td></tr>
+                  <tr><td class="mono">ATT-00298</td><td>Prashanth</td><td class="num">5 Aug</td><td class="right num">09:47</td><td class="right"><span class="chip chip--danger">missing</span></td></tr>
+                  <tr><td class="mono">ATT-00282</td><td>Prashanth</td><td class="num">4 Aug</td><td class="right num">08:45</td><td class="right"><span class="chip chip--danger">missing</span></td></tr>
+                  <tr><td class="mono">ATT-00283</td><td>Pareeth Kb</td><td class="num">4 Aug</td><td class="right num">08:51</td><td class="right"><span class="chip chip--danger">missing</span></td></tr>
+                  <tr><td class="mono">ATT-00284</td><td>Nikhil Tk</td><td class="num">4 Aug</td><td class="right num">09:04</td><td class="right"><span class="chip chip--danger">missing</span></td></tr>
+                  <tr><td class="mono">ATT-00285</td><td>Jaimon D</td><td class="num">4 Aug</td><td class="right num">09:11</td><td class="right"><span class="chip chip--danger">missing</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          Pareeth Kb, Nikhil Tk and Prashanth each appear twice — two consecutive days with no
+          punch-out. That is what the regularization queue exists to correct.
+        </p>
+      </section>
+
+      <!-- --------------------------------------------------------- leave -->
+      <section class="view" data-view="leave" hidden>
+        <div class="card">
+          <div class="card__head">
+            <div class="card__title">Leave requests awaiting a decision</div>
+            <div class="card__note">4 pending</div>
+          </div>
+          <div class="card__body card__body--flush">
+            <div class="scroll">
+              <table>
+                <thead><tr><th>Record</th><th>Sales person</th><th>Leave date</th><th>Reason</th><th>Approver</th><th class="right">Days</th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">LREQ-00044</td><td>Manikandan</td><td class="num">23 Jul</td><td class="dim">—</td><td class="dim">Sales Manager · Renjith</td><td class="right num">1</td></tr>
+                  <tr><td class="mono">LREQ-00046</td><td>Manikandan</td><td class="num">24 Jul</td><td class="dim">—</td><td class="dim">Sales Manager · Renjith</td><td class="right num">1</td></tr>
+                  <tr><td class="mono">LREQ-00047</td><td>Manikandan</td><td class="num">25 Jul</td><td class="dim">—</td><td class="dim">Sales Manager · Renjith</td><td class="right num">1</td></tr>
+                  <tr><td class="mono">LREQ-00042</td><td>Manikandan</td><td class="num">25 Jul</td><td class="dim">function</td><td class="dim">Sales Manager · Renjith</td><td class="right"><span class="chip chip--danger">duplicate?</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          All four are Manikandan, all on Renjith's team, unanswered since July.
+          <b>LREQ-00042 and LREQ-00047 are both dated 25 July</b> — the same day appears to have been
+          requested twice.
+        </p>
+
+        <div class="card">
+          <div class="card__head">
+            <div class="card__title">Already decided</div>
+            <div class="card__note">5 records</div>
+          </div>
+          <div class="card__body card__body--flush">
+            <div class="scroll">
+              <table>
+                <thead><tr><th>Record</th><th>Sales person</th><th>Leave date</th><th>Reason</th><th>Decided by</th><th class="right">Days</th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">LREQ-00050</td><td>Jaimon D</td><td class="num">28 Jul</td><td class="dim">Health issues</td><td class="dim">pareeth@</td><td class="right num">1</td></tr>
+                  <tr><td class="mono">LREQ-00049</td><td>Sirajudheen Kasim</td><td class="num">27 Jul</td><td class="dim">—</td><td class="dim">—</td><td class="right num">0.5</td></tr>
+                  <tr><td class="mono">LREQ-00048</td><td>Bibin Balaravi</td><td class="num">23 Jul</td><td class="dim">hospital case</td><td class="dim">—</td><td class="right num">1</td></tr>
+                  <tr><td class="mono">LREQ-00045</td><td>Pareeth Kb</td><td class="num">22 Jul</td><td class="dim">personal</td><td class="dim">hr@</td><td class="right num">0.5</td></tr>
+                  <tr><td class="mono">LREQ-00041</td><td>Amjad Pr</td><td class="num">16 Jul</td><td class="dim">fever</td><td class="dim">—</td><td class="right num">1</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          LREQ-00045 is the only one with <code style="font-family:var(--mono);font-size:11.5px">approver_type: HR</code> —
+          it was Pareeth's own request, so his manager could not decide it. Every other approval ran
+          through a Sales Manager.
+        </p>
+      </section>
+
+      <!-- ------------------------------------------------------ regs -->
+      <section class="view" data-view="regs" hidden>
+        <div class="card">
+          <div class="card__head">
+            <div class="card__title">Attendance regularizations awaiting a decision</div>
+            <div class="card__note">7 pending</div>
+          </div>
+          <div class="card__body card__body--flush">
+            <div class="scroll">
+              <table>
+                <thead><tr><th>Record</th><th>Sales person</th><th>Date</th><th class="right">Requested in</th><th class="right">Requested out</th><th>Reason</th><th>Manager</th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">AREG-00032</td><td>Prashanth</td><td class="num">5 Aug</td><td class="right num">09:47</td><td class="right num">18:30</td><td class="dim">system problem</td><td class="dim">Pareeth</td></tr>
+                  <tr><td class="mono">AREG-00031</td><td>Prashanth</td><td class="num">4 Aug</td><td class="right num">08:45</td><td class="right num">18:30</td><td class="dim">system problem</td><td class="dim">Pareeth</td></tr>
+                  <tr><td class="mono">AREG-00030</td><td>Prashanth</td><td class="num">3 Aug</td><td class="right num">09:31</td><td class="right num">18:30</td><td class="dim">system problem</td><td class="dim">Pareeth</td></tr>
+                  <tr><td class="mono">AREG-00029</td><td>Prashanth</td><td class="num">1 Aug</td><td class="right num">09:03</td><td class="right num">18:30</td><td class="dim">system problem</td><td class="dim">Pareeth</td></tr>
+                  <tr><td class="mono">AREG-00019</td><td>Prashanth</td><td class="num">25 Jul</td><td class="right num">08:53</td><td class="right num">18:30</td><td class="dim">—</td><td class="dim">Pareeth</td></tr>
+                  <tr><td class="mono">AREG-00028</td><td>Manikandan</td><td class="num">27 Jul</td><td class="right num">09:30</td><td class="right num">18:30</td><td class="dim">—</td><td class="dim">Renjith</td></tr>
+                  <tr><td class="mono">AREG-00027</td><td>Manikandan</td><td class="num">25 Jul</td><td class="right num">00:55</td><td class="right num">18:13</td><td class="dim">—</td><td class="dim">Renjith</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          Prashanth has filed five, four citing “system problem” on consecutive working days — that
+          reads more like a device fault than five separate lapses. Note AREG-00027 requests a
+          <b>00:55</b> punch-in, which is almost certainly a mis-entry worth querying before approval.
+        </p>
+      </section>
+
+      <!-- ---------------------------------------------------- unapplied -->
+      <section class="view" data-view="unapplied" hidden>
+        <div class="banner banner--warn">
+          <span aria-hidden="true">⚠</span>
+          <div>
+            <b>These were approved. The attendance was never written back.</b>
+            AREG-00022, AREG-00023 and AREG-00026 show what success looks like — each carries
+            <code>completion_status: "Completed"</code> and a rewritten Attendance Log noting
+            <i>“Regularized as per AREG-00026 (approved)”</i>. The nine below still read
+            <code>"Not Completed"</code>, and no attendance record changed.
+          </div>
+        </div>
+        <div class="card">
+          <div class="card__head">
+            <div class="card__title">Approved but never applied</div>
+            <div class="card__note">9 records</div>
+          </div>
+          <div class="card__body card__body--flush">
+            <div class="scroll">
+              <table>
+                <thead><tr><th>Record</th><th>Sales person</th><th>Date</th><th>Reason</th><th>Decided by</th><th class="right">Applied</th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">AREG-00013</td><td>Sirajudheen Kasim</td><td class="num">24 Jul</td><td class="dim">forget</td><td class="dim">—</td><td class="right"><span class="chip chip--danger">No</span></td></tr>
+                  <tr><td class="mono">AREG-00014</td><td>Nikhil Tk</td><td class="num">23 Jul</td><td class="dim">—</td><td class="dim">—</td><td class="right"><span class="chip chip--danger">No</span></td></tr>
+                  <tr><td class="mono">AREG-00015</td><td>Bibin Balaravi</td><td class="num">25 Jul</td><td class="dim">forget to punchout</td><td class="dim">—</td><td class="right"><span class="chip chip--danger">No</span></td></tr>
+                  <tr><td class="mono">AREG-00016</td><td>Nikhil Tk</td><td class="num">27 Jul</td><td class="dim">—</td><td class="dim">—</td><td class="right"><span class="chip chip--danger">No</span></td></tr>
+                  <tr><td class="mono">AREG-00018</td><td>Nikhil Tk</td><td class="num">25 Jul</td><td class="dim">—</td><td class="dim">—</td><td class="right"><span class="chip chip--danger">No</span></td></tr>
+                  <tr><td class="mono">AREG-00020</td><td>Prashanth</td><td class="num">27 Jul</td><td class="dim">punch out</td><td class="dim">pradeep@</td><td class="right"><span class="chip chip--danger">No</span></td></tr>
+                  <tr><td class="mono">AREG-00021</td><td>Prashanth</td><td class="num">31 Jul</td><td class="dim">punch out</td><td class="dim">pradeep@</td><td class="right"><span class="chip chip--danger">No</span></td></tr>
+                  <tr><td class="mono">AREG-00024</td><td>Manikandan</td><td class="num">29 Jul</td><td class="dim">—</td><td class="dim">pradeep@</td><td class="right"><span class="chip chip--danger">No</span></td></tr>
+                  <tr><td class="mono">AREG-00025</td><td>Manikandan</td><td class="num">23 Jul</td><td class="dim">—</td><td class="dim">pradeep@</td><td class="right"><span class="chip chip--danger">No</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- -------------------------------------------------------- people -->
+      <section class="view" data-view="people" hidden>
+        <div class="card">
+          <div class="card__head">
+            <div class="card__title">Sales people</div>
+            <div class="card__note">15 active · 3 teams</div>
+          </div>
+          <div class="card__body card__body--flush">
+            <div class="scroll">
+              <table>
+                <thead><tr><th>Name</th><th>Team manager</th><th>Business unit</th><th>Login</th></tr></thead>
+                <tbody>
+                  <tr><td>Amjad Pr</td><td class="dim">Pareeth</td><td class="dim">Manna Treads</td><td class="mono">amjad@</td></tr>
+                  <tr><td>Jaimon D</td><td class="dim">Pareeth</td><td class="dim">Manna Treads</td><td class="mono">jaimon@</td></tr>
+                  <tr><td>Pareeth Kb</td><td class="dim">Pareeth</td><td class="dim">Manna Treads</td><td class="mono">pareeth@</td></tr>
+                  <tr><td>Prashanth</td><td class="dim">Pareeth</td><td class="dim">Manna Treads</td><td class="mono">prashanth@</td></tr>
+                  <tr><td>Sirajudheen Kasim</td><td class="dim">Pareeth</td><td class="dim">Manna Treads</td><td class="mono">sirajudheen@</td></tr>
+                  <tr><td>Bibin Balaravi</td><td class="dim">Saneesh</td><td class="dim">Manna Tyre Retreads</td><td class="mono">bibin@</td></tr>
+                  <tr><td>Nikhil Tk</td><td class="dim">Saneesh</td><td class="dim">Manna Tyre Retreads</td><td class="mono">nikhil@</td></tr>
+                  <tr><td>Prasad V</td><td class="dim">Saneesh</td><td class="dim">Manna Tyre Retreads</td><td class="mono">prasad@</td></tr>
+                  <tr><td>Saneesh</td><td class="dim">Saneesh</td><td class="dim">Manna Tyre Retreads</td><td class="mono">saneesh@</td></tr>
+                  <tr><td>Subhash</td><td class="dim">Saneesh</td><td class="dim">Manna Tyre Retreads</td><td class="mono">subhash@</td></tr>
+                  <tr><td>Kailas Babu</td><td class="dim">Renjith</td><td class="dim">Manna Tyres UAE</td><td class="mono">kailas@</td></tr>
+                  <tr><td>Manikandan</td><td class="dim">Renjith</td><td class="dim">Manna Tyres UAE</td><td class="mono">manikandan@</td></tr>
+                  <tr><td>Rajeev S</td><td class="dim">Renjith</td><td class="dim">Manna Tyres UAE</td><td class="mono">rajeev@</td></tr>
+                  <tr><td>Renjith</td><td class="dim">Renjith</td><td class="dim">Manna Tyres UAE</td><td class="mono">renjith@</td></tr>
+                  <tr><td>Shihab K</td><td class="dim">Renjith</td><td class="dim">Manna Tyres UAE</td><td class="mono">shihab@</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          These are <code style="font-family:var(--mono);font-size:11.5px">Sales Person</code> records.
+          Team comes from <code style="font-family:var(--mono);font-size:11.5px">custom_team_manager</code>,
+          unit from <code style="font-family:var(--mono);font-size:11.5px">custom_company</code>.
+          A 16th row, “Test Rep”, is disabled and excluded.
+        </p>
+      </section>
+
+      <!-- -------------------------------------------------------- source -->
+      <section class="view" data-view="source" hidden>
+        <div class="banner">
+          <span aria-hidden="true">◔</span>
+          <div>
+            <b>Snapshot, not a live view.</b> Read from ERPNext at 17:10 IST on 6 Aug 2026 through
+            the <code>integration@mannarubber.com</code> connection. These figures are exactly what
+            the site held at that moment and will not update.
+          </div>
+        </div>
+        <div class="card">
+          <div class="card__head"><div class="card__title">Where each number comes from</div></div>
+          <div class="card__body card__body--flush">
+            <div class="scroll">
+              <table>
+                <thead><tr><th>Doctype</th><th>Rows</th><th>Used for</th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">Sales Person</td><td class="num">15 active</td><td class="dim">People, teams, business units</td></tr>
+                  <tr><td class="mono">Attendance Log</td><td class="num">145</td><td class="dim">Punch in/out, working hours, open shifts</td></tr>
+                  <tr><td class="mono">Attendance Regularization</td><td class="num">24</td><td class="dim">Correction requests and their completion state</td></tr>
+                  <tr><td class="mono">Leave Request</td><td class="num">9</td><td class="dim">Leave and its approvals</td></tr>
+                  <tr><td class="mono">Employee</td><td class="num">1</td><td class="dim">Unused — a single disabled test row</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          People are <code style="font-family:var(--mono);font-size:11.5px">Sales Person</code> records,
+          not <code style="font-family:var(--mono);font-size:11.5px">Employee</code>. The doctypes
+          <code style="font-family:var(--mono);font-size:11.5px">Attendance</code> and
+          <code style="font-family:var(--mono);font-size:11.5px">Leave Application</code> do not exist
+          on this site — Frappe HR is not installed.
+        </p>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<script>
+  (function () {
+    var TITLES = {
+      overview:  ['Overview', 'Thursday 6 August 2026 · 15 active sales people across 3 teams'],
+      floor:     ["Today's floor", 'Who punched in on 6 August, and who has no record'],
+      open:      ['Open shifts', 'Punched in on an earlier day and never punched out'],
+      leave:     ['Leave requests', '4 waiting on a decision · 5 already decided'],
+      regs:      ['Regularizations', '7 waiting on a decision'],
+      unapplied: ['Not applied', 'Approved regularizations whose attendance was never written back'],
+      people:    ['People', '15 active sales people across 3 teams'],
+      source:    ['Data source', 'Where every figure on this page came from']
+    };
+
+    var items = Array.prototype.slice.call(document.querySelectorAll('.nav__item'));
+    var views = Array.prototype.slice.call(document.querySelectorAll('.view'));
+    var titleEl = document.getElementById('view-title');
+    var subEl = document.getElementById('view-sub');
+    var main = document.querySelector('.main');
+
+    function show(name) {
+      views.forEach(function (v) { v.hidden = v.getAttribute('data-view') !== name; });
+      items.forEach(function (b) {
+        if (b.getAttribute('data-view') === name) b.setAttribute('aria-current', 'page');
+        else b.removeAttribute('aria-current');
+      });
+      var t = TITLES[name];
+      if (t) { titleEl.textContent = t[0]; subEl.textContent = t[1]; }
+      // A new section starts at the top, not wherever the last one was scrolled to.
+      if (main) main.scrollTop = 0;
+      if (history.replaceState) history.replaceState(null, '', '#' + name);
+    }
+
+    items.forEach(function (b) {
+      b.addEventListener('click', function () { show(b.getAttribute('data-view')); });
+    });
+
+    var start = (location.hash || '').replace('#', '');
+    show(TITLES[start] ? start : 'overview');
+  })();
+</script>
+
+</body></html>

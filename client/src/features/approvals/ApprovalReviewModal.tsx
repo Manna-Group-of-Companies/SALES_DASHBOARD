@@ -42,7 +42,7 @@ import {
 } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { AgingPanel } from '@/features/stock/AgingPanel';
-import { describeEntry } from '@/features/orders/OrderDetailPage';
+import { describeEntry } from '@/domain/productRules';
 
 export function ApprovalReviewModal({ order, onClose }: { order: Order; onClose: () => void }) {
   const dispatch = useAppDispatch();

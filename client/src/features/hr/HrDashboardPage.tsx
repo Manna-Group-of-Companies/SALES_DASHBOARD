@@ -1,88 +1,128 @@
 /**
  * The HR landing page.
  *
- * Same idea as the sales dashboard: answer "what needs me right now?" without
- * anyone having to ask around. For HR that is three questions — who is not on
- * the floor today, who has not been marked yet, and what leave is waiting on a
- * decision — so the roster is markable straight from here rather than being a
- * read-only summary that sends you somewhere else to act.
+ * Answers "what needs me right now?" from the real doctypes — `Sales Person`,
+ * `Attendance Log`, `Leave Request`, `Attendance Regularization`. See
+ * `domain/attendance.ts` for why those and not the Frappe HR ones.
+ *
+ * Read-only on purpose. Approving belongs on the queue screens, where the
+ * decision and the record are in one place; a dashboard that also decides is
+ * a second place to miss something.
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { AttendanceStatus, Employee } from '@/domain/types';
-import { ATTENDANCE_LABEL, LEAVE_TYPE_LABEL } from '@/domain/types';
-import { formatDate, toIsoDate } from '@/domain/orderRules';
+import type {
+  AttendanceLog,
+  AttendanceRegularization,
+  FieldLeaveRequest,
+  SalesPerson,
+} from '@/domain/types';
 import {
-  attendanceByEmployee,
-  attendanceTrend,
-  newJoiners,
-  upcomingAnniversaries,
-} from '@/domain/hrRules';
-import { useAppDispatch, useAppSelector } from '@/store/hooks';
-import {
-  selectActiveEmployees,
-  selectAttendance,
-  selectHeadcountByDepartment,
-  selectPendingLeave,
-  selectTodayAttendance,
-  selectUser,
-} from '@/store/selectors';
-import { markAttendance } from '@/store/slices/hrSlice';
-import { pushToast } from '@/store/slices/notificationsSlice';
-import { Alert, Badge, Button, Card, Empty, Meter, Select } from '@/components/ui';
-import { greeting, initials, relativeTime } from '@/components/common/format';
-import { AttendanceBadge } from '@/components/common/StatusBadge';
+  activeSalesPeople,
+  clockOf,
+  duplicateLeaveKeys,
+  leaveKey,
+  openShifts,
+  shiftIso,
+  teamsOf,
+  todayLocalIso,
+} from '@/domain/attendance';
+import { arQueueFor } from '@/domain/approvals';
+import { formatDate } from '@/domain/orderRules';
+import { Api } from '@/api/client';
+import { useAppSelector } from '@/store/hooks';
+import { selectUser } from '@/store/selectors';
+import { Alert, Badge, Button, Card, Empty, Meter } from '@/components/ui';
+import { greeting } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
+import { RefreshButton } from '@/components/common/RefreshButton';
 import '@/components/layout/layout.css';
+import './attendance.css';
 
-/** The four an HR executive actually marks. `holiday` is a property of the day. */
-const MARKABLE: AttendanceStatus[] = ['present', 'half_day', 'on_leave', 'absent'];
+/** Enough history for the open-shift queue without dragging in months of rows. */
+const LOOKBACK_DAYS = 21;
 
 export function HrDashboardPage() {
-  const dispatch = useAppDispatch();
   const navigate = useNavigate();
-
   const user = useAppSelector(selectUser);
-  const employees = useAppSelector(selectActiveEmployees);
-  const attendance = useAppSelector(selectAttendance);
-  const today = useAppSelector(selectTodayAttendance);
-  const byDepartment = useAppSelector(selectHeadcountByDepartment);
-  const pending = useAppSelector(selectPendingLeave);
+  const today = todayLocalIso();
 
-  const todayIso = toIsoDate(new Date());
+  const [people, setPeople] = useState<SalesPerson[]>([]);
+  const [logs, setLogs] = useState<AttendanceLog[]>([]);
+  const [leave, setLeave] = useState<FieldLeaveRequest[]>([]);
+  const [regs, setRegs] = useState<AttendanceRegularization[]>([]);
+  /** Bumped to re-run the load effect — the Refresh button's only job. */
+  const [tick, setTick] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const marked = useMemo(
-    () => attendanceByEmployee(attendance, todayIso),
-    [attendance, todayIso],
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    setError(null);
+    Promise.all([
+      Api.attendance.listSalesPeople(),
+      Api.attendance.listAttendanceLogs(shiftIso(today, -LOOKBACK_DAYS)),
+      Api.attendance.listLeaveRequests(),
+      Api.attendance.listRegularizations(),
+    ])
+      .then(([p, l, lv, r]) => {
+        if (!live) return;
+        setPeople(p);
+        setLogs(l);
+        setLeave(lv);
+        setRegs(r);
+      })
+      .catch((e: unknown) => {
+        if (live) setError(e instanceof Error ? e.message : 'Could not read attendance.');
+      })
+      .finally(() => {
+        if (live) setLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [today, tick]);
+
+  const staff = useMemo(() => activeSalesPeople(people), [people]);
+  const teams = useMemo(() => teamsOf(people), [people]);
+
+  const todayLogs = useMemo(
+    () => logs.filter((l) => l.date === today).sort((a, b) => (a.punchIn ?? '').localeCompare(b.punchIn ?? '')),
+    [logs, today],
   );
-  const trend = useMemo(
-    () => attendanceTrend(employees, attendance, todayIso, 7),
-    [employees, attendance, todayIso],
+  const onFloor = useMemo(() => todayLogs.filter((l) => l.status === 'Punched In'), [todayLogs]);
+  const noPunch = useMemo(() => {
+    const seen = new Set(todayLogs.map((l) => l.person));
+    return staff.filter((p) => !seen.has(p.id));
+  }, [staff, todayLogs]);
+
+  const open = useMemo(() => openShifts(logs, today, LOOKBACK_DAYS), [logs, today]);
+
+  const pendingLeave = useMemo(
+    () =>
+      leave
+        .filter((l) => l.status === 'Pending Approval')
+        .sort((a, b) => b.date.localeCompare(a.date)),
+    [leave],
   );
-  const joiners = useMemo(() => newJoiners(employees, todayIso), [employees, todayIso]);
-  const anniversaries = useMemo(
-    () => upcomingAnniversaries(employees, todayIso),
-    [employees, todayIso],
-  );
+  const dupes = useMemo(() => duplicateLeaveKeys(leave), [leave]);
+
+  /**
+   * Only the ones HR can actually decide — a rep's own regularization belongs
+   * to their manager, so listing it here would be work HR cannot do.
+   */
+  const pendingRegs = useMemo(() => arQueueFor(regs, 'hr'), [regs]);
 
   if (!user) return null;
 
-  const mark = async (employee: Employee, status: AttendanceStatus) => {
-    const result = await dispatch(
-      markAttendance({
-        employeeId: employee.id,
-        date: todayIso,
-        status,
-        markedBy: user,
-      }),
-    );
-    if (markAttendance.fulfilled.match(result)) {
-      dispatch(pushToast(`${employee.name} marked ${ATTENDANCE_LABEL[status].toLowerCase()}.`));
-    }
+  const turnoutFor = (manager: string) => {
+    const members = teams.find((t) => t.manager === manager)?.members ?? [];
+    const ids = new Set(members.map((m) => m.id));
+    const inCount = onFloor.filter((l) => ids.has(l.person)).length;
+    return { inCount, total: members.length };
   };
-
-  const largest = byDepartment[0]?.count ?? 1;
 
   return (
     <div>
@@ -92,261 +132,233 @@ export function HrDashboardPage() {
             {greeting()}, {user.name.split(' ')[0]}
           </div>
           <div className="page-head__sub">
-            {formatDate(todayIso)} · {today.total} on the books
+            {formatDate(today)} · {staff.length} active sales {staff.length === 1 ? 'person' : 'people'} across{' '}
+            {teams.length} {teams.length === 1 ? 'team' : 'teams'}
           </div>
         </div>
+        <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
       </div>
 
-      {/* --- what cannot wait ------------------------------------------- */}
-      <div className="stack gap-3" style={{ marginBottom: 16 }}>
-        {pending.length > 0 && (
-          <Alert
-            tone="warn"
-            title={`${pending.length} leave request${pending.length === 1 ? '' : 's'} waiting on you`}
-            actions={
-              <Button size="sm" onClick={() => navigate('/hr/leave')}>
-                Open queue
-              </Button>
-            }
-          >
-            The earliest starts {formatDate(pending[0]!.fromDate)}.
-          </Alert>
-        )}
-        {today.unmarked > 0 && (
-          <Alert
-            tone="info"
-            title={`${today.unmarked} ${today.unmarked === 1 ? 'person has' : 'people have'} not been marked today`}
-          >
-            Unmarked is not the same as absent — mark them below so the day's record is complete.
-          </Alert>
-        )}
-      </div>
+      {error && (
+        <Alert tone="danger" title="Could not read attendance from ERPNext">
+          {error}
+        </Alert>
+      )}
 
-      {/* --- tiles ------------------------------------------------------ */}
-      <div className="tiles">
-        <Tile
-          label="Headcount"
-          value={String(today.total)}
-          foot={`${byDepartment.length} department${byDepartment.length === 1 ? '' : 's'}`}
-          onClick={() => navigate('/hr/employees')}
-        />
-        <Tile
-          label="Present today"
-          value={String(today.present + today.halfDay)}
-          tone="ok"
-          foot={
-            today.halfDay > 0
-              ? `${today.halfDay} on half day`
-              : `${Math.round(today.rate * 100)}% of those marked`
-          }
-        />
-        <Tile
-          label="On leave"
-          value={String(today.onLeave)}
-          foot={today.absent > 0 ? `${today.absent} absent without leave` : 'Nobody absent'}
-          tone={today.absent > 0 ? 'warn' : undefined}
-        />
-        <Tile
-          label="Leave to decide"
-          value={String(pending.length)}
-          tone={pending.length ? 'warn' : undefined}
-          foot="Needs your decision"
-          onClick={() => navigate('/hr/leave')}
-        />
-      </div>
+      {loading && !error && <Empty icon="◔" title="Reading attendance…" />}
 
-      <div className="cols cols--sidebar">
-        {/* --- the roster ---------------------------------------------- */}
-        <Card
-          title="Today's roster"
-          actions={
-            <Button size="sm" variant="ghost" onClick={() => navigate('/hr/employees')}>
-              Employee list →
-            </Button>
-          }
-          flush
-        >
-          {employees.length === 0 ? (
-            <Empty icon="👥" title="No employees on file">
-              Employee records come from the HR module.
-            </Empty>
-          ) : (
-            <div className="table-wrap">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Employee</th>
-                    <th>Department</th>
-                    <th>Status</th>
-                    <th>In / out</th>
-                    <th style={{ width: 150 }}>Mark</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {/* Unmarked first — they are the only rows needing a decision. */}
-                  {[...employees]
-                    .sort(
-                      (a, b) =>
-                        Number(marked.has(a.id)) - Number(marked.has(b.id)) ||
-                        a.name.localeCompare(b.name),
-                    )
-                    .map((employee) => {
-                      const row = marked.get(employee.id);
-                      return (
-                        <tr key={employee.id}>
-                          <td>
-                            <div className="row gap-2">
-                              <div className="avatar">{initials(employee.name)}</div>
-                              <div style={{ minWidth: 0 }}>
-                                <div className="small strong">{employee.name}</div>
-                                <div className="tiny dim">{employee.designation}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="small">{employee.department}</td>
-                          <td>
-                            <AttendanceBadge status={row?.status} />
-                          </td>
-                          <td className="tiny dim mono">
-                            {row?.checkIn ? `${row.checkIn} – ${row.checkOut ?? '…'}` : '—'}
-                          </td>
-                          <td>
-                            {row?.status === 'holiday' ? (
-                              <span className="tiny dim">Weekly off</span>
+      {!loading && !error && (
+        <>
+          <div className="stack gap-3" style={{ marginBottom: 16 }}>
+            {open.length > 0 && (
+              <Alert tone="warn" title={`${open.length} open shift${open.length === 1 ? '' : 's'}`}>
+                Punched in on an earlier day and never punched out. A day with no punch-out has no
+                measured hours, so it counts as nothing on the calendar until it is regularised.
+              </Alert>
+            )}
+          </div>
+
+          <div className="tiles">
+            <Tile
+              label="On the floor"
+              value={`${onFloor.length} / ${staff.length}`}
+              tone={onFloor.length ? 'ok' : 'warn'}
+              foot="Punched in today"
+            />
+            <Tile
+              label="No punch today"
+              value={String(noPunch.length)}
+              tone={noPunch.length ? 'warn' : undefined}
+              foot="No record either way"
+            />
+            <Tile
+              label="Open shifts"
+              value={String(open.length)}
+              tone={open.length ? 'alert' : undefined}
+              foot="Punched in, never out"
+            />
+            <Tile
+              label="Leave to decide"
+              value={String(pendingLeave.length)}
+              tone={pendingLeave.length ? 'warn' : undefined}
+              foot={pendingLeave.length ? `Oldest ${formatDate(pendingLeave[pendingLeave.length - 1]!.date)}` : 'Queue clear'}
+              onClick={() => navigate('/hr/leave')}
+            />
+            <Tile
+              label="Regularisations"
+              value={String(pendingRegs.length)}
+              tone={pendingRegs.length ? 'warn' : undefined}
+              foot="Managers' own, awaiting you"
+              onClick={() => navigate('/hr/regularizations')}
+            />
+          </div>
+
+          <div className="cols cols--sidebar">
+            <Card
+              title="Punched in today"
+              actions={
+                <Button size="sm" variant="ghost" onClick={() => navigate('/hr/calendar')}>
+                  Monthly calendar →
+                </Button>
+              }
+              flush
+            >
+              {todayLogs.length === 0 ? (
+                <Empty icon="—" title="Nobody has punched in today" />
+              ) : (
+                <div className="scroll-x">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Sales person</th>
+                        <th className="right">In</th>
+                        <th className="right">Out</th>
+                        <th className="right">Hours</th>
+                        <th className="right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {todayLogs.map((l) => {
+                        const out = l.status === 'Punched Out';
+                        return (
+                          <tr key={l.id}>
+                            <td>{l.person}</td>
+                            <td className="right num">{clockOf(l.punchIn)}</td>
+                            <td className="right num">{out ? clockOf(l.punchOut) : <span className="dim">—</span>}</td>
+                            <td className="right num">{out ? `${l.workingHours}h` : <span className="dim">—</span>}</td>
+                            <td className="right">
+                              {out ? (
+                                <Badge tone="neutral">Out</Badge>
+                              ) : (
+                                <Badge tone="ok" dot>
+                                  On floor
+                                </Badge>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+
+            <Card title="Punched in today, by team" >
+              <div className="stack gap-3">
+                {teams.map((t) => {
+                  const { inCount, total } = turnoutFor(t.manager);
+                  const pct = total ? inCount / total : 0;
+                  return (
+                    <div key={t.manager}>
+                      <div className="row-between small" style={{ marginBottom: 4 }}>
+                        <span>
+                          <b>{t.manager}</b> <span className="dim tiny">· {t.unit}</span>
+                        </span>
+                        <span className="num dim">
+                          {inCount} / {total}
+                        </span>
+                      </div>
+                      <Meter
+                        value={pct}
+                        tone={inCount === 0 ? 'danger' : pct < 0.6 ? 'warn' : 'accent'}
+                        label={`${inCount} of ${total} punched in today`}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          </div>
+
+          <div className="cols cols--2" style={{ marginTop: 16 }}>
+            <Card
+              title="Leave awaiting a decision"
+              actions={
+                <Button size="sm" variant="ghost" onClick={() => navigate('/hr/leave')}>
+                  Open queue →
+                </Button>
+              }
+              flush
+            >
+              {pendingLeave.length === 0 ? (
+                <Empty icon="✓" title="Nothing waiting" />
+              ) : (
+                <div className="scroll-x">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Request</th>
+                        <th>Sales person</th>
+                        <th>Date</th>
+                        <th className="right">Days</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pendingLeave.slice(0, 8).map((l) => (
+                        <tr key={l.id}>
+                          <td className="mono small">{l.id}</td>
+                          <td>{l.person}</td>
+                          <td className="num">{formatDate(l.date)}</td>
+                          <td className="right">
+                            {dupes.has(leaveKey(l)) ? (
+                              <Badge tone="danger">duplicate?</Badge>
                             ) : (
-                              <Select
-                                compact
-                                aria-label={`Mark attendance for ${employee.name}`}
-                                value={row?.status ?? ''}
-                                onChange={(e) =>
-                                  void mark(employee, e.target.value as AttendanceStatus)
-                                }
-                              >
-                                <option value="" disabled>
-                                  Not marked
-                                </option>
-                                {MARKABLE.map((s) => (
-                                  <option key={s} value={s}>
-                                    {ATTENDANCE_LABEL[s]}
-                                  </option>
-                                ))}
-                              </Select>
+                              <span className="num">{l.days}</span>
                             )}
                           </td>
                         </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-
-        {/* --- the sidebar ---------------------------------------------- */}
-        <div className="stack gap-3">
-          <Card title="Headcount by department">
-            <div className="stack gap-3">
-              {byDepartment.map(({ department, count }) => (
-                <div key={department}>
-                  <div className="row gap-2">
-                    <span className="small grow">{department}</span>
-                    <span className="small strong num">{count}</span>
-                  </div>
-                  <div style={{ marginTop: 4 }}>
-                    <Meter value={count / largest} label={`${count} in ${department}`} />
-                  </div>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card title="Attendance, last 7 days">
-            <div className="stack gap-2">
-              {trend.map((day) => (
-                <div key={day.date} className="row gap-2">
-                  <span className="tiny dim" style={{ width: 52 }}>
-                    {shortDate(day.date)}
-                  </span>
-                  <span className="grow">
-                    <Meter
-                      value={day.rate}
-                      tone={day.rate >= 0.9 ? 'ok' : day.rate >= 0.75 ? 'warn' : 'danger'}
-                      label={`${Math.round(day.rate * 100)}% present`}
-                    />
-                  </span>
-                  <span className="tiny num" style={{ width: 34, textAlign: 'right' }}>
-                    {day.present + day.halfDay + day.absent + day.onLeave === 0
-                      ? '—'
-                      : `${Math.round(day.rate * 100)}%`}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card title="Leave to decide" flush>
-            {pending.length === 0 ? (
-              <Empty icon="🗓" title="Nothing pending">
-                Every request has been decided.
-              </Empty>
-            ) : (
-              <div style={{ padding: 14 }} className="stack gap-3">
-                {pending.slice(0, 4).map((request) => (
-                  <div key={request.id}>
-                    <div className="row gap-2">
-                      <span className="small strong grow">{request.employeeName}</span>
-                      <Badge tone="warn">{request.days}d</Badge>
-                    </div>
-                    <div className="tiny dim">
-                      {LEAVE_TYPE_LABEL[request.type]} · {formatDate(request.fromDate)} –{' '}
-                      {formatDate(request.toDate)} · applied {relativeTime(request.appliedAt)}
-                    </div>
-                  </div>
-                ))}
-                <Button size="sm" block onClick={() => navigate('/hr/leave')}>
-                  Open the queue
-                </Button>
-              </div>
-            )}
-          </Card>
-
-          {(joiners.length > 0 || anniversaries.length > 0) && (
-            <Card title="Coming up">
-              <div className="stack gap-3">
-                {joiners.map((employee) => (
-                  <div key={`join-${employee.id}`} className="row gap-2">
-                    <span className="small grow">{employee.name}</span>
-                    <Badge tone="info">joined {formatDate(employee.joinedOn)}</Badge>
-                  </div>
-                ))}
-                {anniversaries.map((a) => (
-                  <div key={`anniv-${a.employee.id}`} className="row gap-2">
-                    <span className="small grow">{a.employee.name}</span>
-                    <Badge tone="accent">
-                      {a.years}
-                      {ordinal(a.years)} year {a.inDays === 0 ? 'today' : `in ${a.inDays}d`}
-                    </Badge>
-                  </div>
-                ))}
-              </div>
+              )}
             </Card>
-          )}
-        </div>
-      </div>
+
+            <Card
+              title="Regularisations awaiting HR"
+              actions={
+                <Button size="sm" variant="ghost" onClick={() => navigate('/hr/regularizations')}>
+                  All regularisations →
+                </Button>
+              }
+              flush
+            >
+              {pendingRegs.length === 0 ? (
+                <Empty icon="✓" title="Nothing waiting on HR">
+                  Reps' own corrections are decided by their manager.
+                </Empty>
+              ) : (
+                <div className="scroll-x">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Request</th>
+                        <th>Sales person</th>
+                        <th>Date</th>
+                        <th>Approver</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pendingRegs.slice(0, 8).map((r) => (
+                        <tr key={r.id}>
+                          <td className="mono small">{r.id}</td>
+                          <td>{r.person}</td>
+                          <td className="num">{formatDate(r.date)}</td>
+                          <td className="dim small">
+                            {r.approverType}
+                            {r.teamManager ? ` · ${r.teamManager}` : ''}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+          </div>
+        </>
+      )}
     </div>
   );
-}
-
-/** "04 Aug" — the trend rows have room for nothing longer. */
-function shortDate(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1).toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-  });
-}
-
-function ordinal(n: number): string {
-  if (n % 100 >= 11 && n % 100 <= 13) return 'th';
-  return ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th';
 }

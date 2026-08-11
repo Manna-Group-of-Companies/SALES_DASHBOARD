@@ -26,12 +26,82 @@ export function rateUnitFor(category: ProductCategory): string {
   return category === 'VS' ? 'per tin' : 'per kg';
 }
 
+// ------------------------------------------------------------- weights ---
+
+/** The three weight figures as they arrive, before anything is derived. */
+export interface RawWeights {
+  weightPerBelt?: number;
+  beltsPerRoll?: number;
+  weightPerRoll?: number;
+}
+
+/**
+ * Fill in whichever weight figure the master is missing.
+ *
+ * `weightPerBelt x beltsPerRoll = weightPerRoll` is an identity, so any two
+ * give the third. Every product enters the app through here — the REST
+ * boundary and the spreadsheet importer both — so no screen ever has to know
+ * that ERPNext's field name says "roll" while the number means "belt".
+ *
+ * Nothing is invented: a figure that cannot be derived stays undefined, and
+ * `isMisconfigured` refuses the line rather than letting it price at zero.
+ */
+export function normaliseWeights(raw: RawWeights): RawWeights {
+  const belts = raw.beltsPerRoll && raw.beltsPerRoll > 0 ? raw.beltsPerRoll : undefined;
+  let perBelt = raw.weightPerBelt && raw.weightPerBelt > 0 ? raw.weightPerBelt : undefined;
+  let perRoll = raw.weightPerRoll && raw.weightPerRoll > 0 ? raw.weightPerRoll : undefined;
+
+  if (perRoll == null && perBelt != null && belts != null) perRoll = round3(perBelt * belts);
+  if (perBelt == null && perRoll != null && belts != null) perBelt = round3(perRoll / belts);
+
+  return { weightPerBelt: perBelt, beltsPerRoll: belts, weightPerRoll: perRoll };
+}
+
+/** The weight of one whole roll, in kg. Zero when the master is incomplete. */
+export function rollWeight(product: Product): number {
+  if (product.weightPerRoll && product.weightPerRoll > 0) return product.weightPerRoll;
+  const perBelt = num(product.weightPerBelt);
+  const belts = num(product.beltsPerRoll);
+  return perBelt > 0 && belts > 0 ? round3(perBelt * belts) : 0;
+}
+
 /** PCTR only: the weight one loose belt carries (1.2). */
-export function weightPerBelt(product: Product): number {
-  const rollWeight = product.avgWeightPerRoll ?? 0;
-  const belts = product.beltsPerRoll ?? 0;
-  if (belts <= 0) return 0;
-  return rollWeight / belts;
+export function beltWeight(product: Product): number {
+  if (product.weightPerBelt && product.weightPerBelt > 0) return product.weightPerBelt;
+  const belts = num(product.beltsPerRoll);
+  const perRoll = num(product.weightPerRoll);
+  return belts > 0 && perRoll > 0 ? round3(perRoll / belts) : 0;
+}
+
+/**
+ * Why this product cannot be sold, or null when it can.
+ *
+ * An item missing its weight would price at `rate x 0` and look entirely
+ * normal on the proforma — the total is simply too low, and nothing on the
+ * page says why. Block the line instead, and name the missing field so
+ * whoever maintains the master can fix it.
+ */
+export function isMisconfigured(product: Product): string | null {
+  switch (product.category) {
+    case 'PCTR': {
+      if (!(num(product.beltsPerRoll) > 0)) {
+        return 'No belts-per-roll on this item, so no roll can be cut. Fix the item master before selling it.';
+      }
+      if (!(rollWeight(product) > 0)) {
+        return 'No roll weight on this item, so it would price at zero. Fix the item master before selling it.';
+      }
+      return null;
+    }
+    case 'CTR':
+      return rollWeight(product) > 0
+        ? null
+        : 'No roll weight on this item, so it would price at zero. Fix the item master before selling it.';
+    case 'VS':
+      return product.tinSize ? null : 'No tin size on this item, so it cannot be priced.';
+    case 'BG':
+      // Sold by the kilogram straight from the rep's entry — nothing to derive.
+      return null;
+  }
 }
 
 /** What the rep keys, before any derivation. */
@@ -68,8 +138,8 @@ export function computeLine(product: Product, input: LineInput): ComputedLine {
     case 'PCTR': {
       const rolls = num(input.rolls);
       const belts = num(input.looseBelts);
-      const perRoll = num(product.avgWeightPerRoll);
-      const perBelt = weightPerBelt(product);
+      const perRoll = rollWeight(product);
+      const perBelt = beltWeight(product);
       // Average weight, so this is an estimate until the rolls are weighed.
       const quantity = round3(rolls * perRoll + belts * perBelt);
       const parts: string[] = [];
@@ -86,7 +156,7 @@ export function computeLine(product: Product, input: LineInput): ComputedLine {
     case 'CTR': {
       // Fixed-weight rolls, so the weight is exact and belts do not apply (1.3).
       const rolls = num(input.rolls);
-      const perRoll = num(product.exactWeightPerRoll);
+      const perRoll = rollWeight(product);
       const quantity = round3(rolls * perRoll);
       return {
         quantity,
@@ -130,7 +200,7 @@ export function computeLine(product: Product, input: LineInput): ComputedLine {
 // ------------------------------------------------------------ validation ---
 
 export interface LineIssue {
-  field: 'rolls' | 'looseBelts' | 'kg' | 'tins' | 'rate';
+  field: 'rolls' | 'looseBelts' | 'kg' | 'tins' | 'rate' | 'product';
   message: string;
 }
 
@@ -141,6 +211,11 @@ export interface LineIssue {
 export function validateLine(product: Product, input: LineInput): LineIssue[] {
   const issues: LineIssue[] = [];
   const rate = num(input.rate);
+
+  // An incomplete master is not something the rep can key their way out of, so
+  // it is the only issue worth reporting — the rest would just be noise.
+  const broken = isMisconfigured(product);
+  if (broken) return [{ field: 'product', message: broken }];
 
   switch (product.category) {
     case 'PCTR': {
@@ -240,4 +315,143 @@ export function round2(n: number): number {
 
 export function round3(n: number): number {
   return Math.round(n * 1000) / 1000;
+}
+
+
+// -------------------------------------------- writing a Sales Order line ---
+
+/** What the manager keys when editing a line in the order. */
+export interface LineEdit {
+  rolls?: number;
+  looseBelts?: number;
+  kg?: number;
+  tins?: number;
+  /** Price per kilogram — what the rep quoted, and what people talk about. */
+  ratePerKg: number;
+}
+
+/** The five figures a Sales Order Item row must carry for the money to agree. */
+export interface OrderLineValues {
+  qty: number;
+  rate: number;
+  amount: number;
+  totalWeight: number;
+  packingNote: string;
+}
+
+/**
+ * Turn a manager's edit into the exact numbers ERPNext stores on the line.
+ *
+ * This mirrors a convention on the live site that looks wrong and is not:
+ * `qty` counts **rolls** while `uom` reads "Kg", and `rate` is therefore money
+ * per roll, not per kilogram. The live order SAL-ORD-2026-00104 shows it —
+ * `qty 9, rate 1075.20, amount 9676.80` against `total_weight 302.4` and
+ * `rate_per_kg 32`.
+ *
+ * Two identities have to survive every edit, because different screens read
+ * different ones:
+ *
+ *   - `qty x rate == amount` — what ERPNext totals the order from,
+ *   - `totalWeight x ratePerKg == amount` — what the proforma and the rep read.
+ *
+ * Solving both gives `qty = totalWeight / weightPerRoll`, which is why a part
+ * roll of loose belts lands as a fractional qty rather than being rounded. Set
+ * `qty` to a bare roll count instead and any order with loose belts bills the
+ * belts for free.
+ */
+export function orderLineValues(product: Product, edit: LineEdit): OrderLineValues {
+  const rate = num(edit.ratePerKg);
+  const computed = computeLine(product, { ...edit, rate });
+  const weight = computed.quantity;
+
+  switch (product.category) {
+    case 'PCTR':
+    case 'CTR': {
+      const perRoll = rollWeight(product);
+      // Guarded: a master with no roll weight is refused by `isMisconfigured`
+      // long before this, but a zero here would be an Infinity in the order.
+      const qty = perRoll > 0 ? round3(weight / perRoll) : 0;
+      const perUnit = round2(rate * perRoll);
+      /*
+       * Matches the note the field-sales app writes verbatim — "8 rolls + 2
+       * loose belts · 210.00 kg (avg)" on SAL-ORD-2026-00106 — so a line the
+       * manager edits reads identically to one the rep created, on the order
+       * and on the picking list.
+       */
+      const rolls = num(edit.rolls);
+      const belts = num(edit.looseBelts);
+      const parts = [`${rolls} roll${rolls === 1 ? '' : 's'}`];
+      if (belts) parts.push(`${belts} loose belt${belts === 1 ? '' : 's'}`);
+      return {
+        qty,
+        rate: perUnit,
+        /*
+         * `qty x rate`, NOT `weight x ratePerKg`.
+         *
+         * The two differ once qty is rounded: on SAL-ORD-2026-00106 the weight
+         * form gives 5250.00 and the app wrote 5249.79, which is 8.333 x 630.
+         * ERPNext recomputes `amount = qty x rate` on save anyway, so writing
+         * the weight form would be silently overwritten — and until it was,
+         * the manager's preview would disagree with the saved order by 21
+         * paise and shift `rounding_adjustment` with it.
+         */
+        amount: round2(qty * perUnit),
+        totalWeight: weight,
+        packingNote: `${parts.join(' + ')} · ${weight.toFixed(2)} kg${
+          product.category === 'PCTR' ? ' (avg)' : ''
+        }`,
+      };
+    }
+    case 'BG':
+      // Priced straight by the kilogram, so qty and weight are the same figure.
+      return {
+        qty: weight,
+        rate: round2(rate),
+        amount: round2(weight * rate),
+        totalWeight: weight,
+        packingNote: `${computed.breakdown}`,
+      };
+    case 'VS': {
+      // Priced per tin (1.5), so `ratePerKg` is really a per-tin rate here and
+      // the litres are the quantity.
+      const tins = num(edit.tins);
+      return {
+        qty: tins,
+        rate: round2(rate),
+        amount: round2(tins * rate),
+        totalWeight: weight,
+        packingNote: computed.breakdown,
+      };
+    }
+  }
+}
+
+/**
+ * How a saved line reads in words — "12 rolls + 3 belts", "2 boxes (40 kg)".
+ *
+ * Lives here rather than in a screen because three of them render it, and they
+ * must not describe the same line differently.
+ */
+export function describeEntry(item: OrderItem): string {
+  switch (item.category) {
+    case 'PCTR': {
+      const parts: string[] = [];
+      if (item.rolls) parts.push(`${item.rolls} roll${item.rolls === 1 ? '' : 's'}`);
+      if (item.looseBelts) parts.push(`${item.looseBelts} belt${item.looseBelts === 1 ? '' : 's'}`);
+      return parts.join(' + ') || '—';
+    }
+    case 'CTR':
+      return `${item.rolls ?? 0} roll${item.rolls === 1 ? '' : 's'}`;
+    case 'BG': {
+      const kg = item.kg ?? item.quantity;
+      const boxes = Math.floor(kg / 20);
+      const rolls = Math.round((kg % 20) / 5);
+      const parts: string[] = [];
+      if (boxes) parts.push(`${boxes} box${boxes === 1 ? '' : 'es'}`);
+      if (rolls) parts.push(`${rolls} roll${rolls === 1 ? '' : 's'}`);
+      return parts.length ? `${parts.join(' + ')} (${kg} kg)` : `${kg} kg`;
+    }
+    case 'VS':
+      return `${item.tins ?? 0} x ${item.tinSize ?? 10}L tin${(item.tins ?? 0) === 1 ? '' : 's'}`;
+  }
 }

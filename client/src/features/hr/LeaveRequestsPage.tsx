@@ -1,93 +1,110 @@
 /**
- * The leave queue.
+ * Leave requests — every request, and HR's half of the decision.
  *
- * The decision itself is one click, so the value of this screen is entirely in
- * what it puts in front of that click: whether the employee has the balance,
- * and who else from the same department is already off in the same week.
- * Both are checked before the approve button, not reported after it.
+ * Leave takes **two independent approvals**: the team manager and HR each
+ * decide for themselves, in any order, and the rep only has the day off once
+ * both have said yes. Neither waits for the other, so this screen never blocks
+ * HR on the manager — it just shows, per row, which of the two is still
+ * outstanding.
+ *
+ * The whole list is shown, not just the queue, because HR is asked "was that
+ * approved?" about requests they have already handled.
  */
 
-import { useMemo, useState } from 'react';
-import type { LeaveRequest, LeaveStatus } from '@/domain/types';
-import { LEAVE_TYPE_LABEL } from '@/domain/types';
-import { formatDate } from '@/domain/orderRules';
-import { clashingRequests, withinBalance, workingDaysBetween } from '@/domain/hrRules';
-import { useAppDispatch, useAppSelector } from '@/store/hooks';
-import { selectEmployeeById, selectLeaveRequests, selectUser } from '@/store/selectors';
-import { decideLeave } from '@/store/slices/hrSlice';
-import { pushToast } from '@/store/slices/notificationsSlice';
+import { useEffect, useMemo, useState } from 'react';
+import type { FieldLeaveRequest } from '@/domain/types';
 import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  Empty,
-  Field,
-  Modal,
-  Tabs,
-  Textarea,
-  type TabDef,
-} from '@/components/ui';
-import { relativeTime } from '@/components/common/format';
-import { LeaveStatusBadge } from '@/components/common/StatusBadge';
+  isGranted,
+  LEAVE_STAGE_LABEL,
+  hrHasApproved,
+  leaveCanRevoke,
+  leaveNeedsDecisionFrom,
+  managerHasApproved,
+  leaveStage,
+  requiredApprovals,
+  type LeaveStage,
+} from '@/domain/approvals';
+import { duplicateLeaveKeys, leaveKey } from '@/domain/attendance';
+import { formatDate } from '@/domain/orderRules';
+import { Api } from '@/api/client';
+import { useAppSelector } from '@/store/hooks';
+import { selectUser } from '@/store/selectors';
+import { Alert, Badge, Button, Card, Empty, Segmented } from '@/components/ui';
+import { Tile } from '@/components/common/Tile';
+import { RefreshButton } from '@/components/common/RefreshButton';
+import '@/components/layout/layout.css';
+import './attendance.css';
 
-type View = 'pending' | 'decided';
+type Filter = 'mine' | 'open' | 'all';
 
 export function LeaveRequestsPage() {
-  const dispatch = useAppDispatch();
   const user = useAppSelector(selectUser);
-  const requests = useAppSelector(selectLeaveRequests);
-  const employeeById = useAppSelector(selectEmployeeById);
+  const [leave, setLeave] = useState<FieldLeaveRequest[]>([]);
+  const [filter, setFilter] = useState<Filter>('mine');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  const [view, setView] = useState<View>('pending');
-  const [deciding, setDeciding] = useState<{ request: LeaveRequest; approve: boolean } | null>(null);
-  const [note, setNote] = useState('');
-  const [saving, setSaving] = useState(false);
+  const load = () => {
+    setLoading(true);
+    setError(null);
+    Api.attendance
+      .listLeaveRequests()
+      .then(setLeave)
+      .catch((e: unknown) =>
+        setError(e instanceof Error ? e.message : 'Could not read leave requests.'),
+      )
+      .finally(() => setLoading(false));
+  };
 
-  const pending = useMemo(
-    () =>
-      requests
-        .filter((r) => r.status === 'pending')
-        .sort((a, b) => a.fromDate.localeCompare(b.fromDate)),
-    [requests],
+  useEffect(load, []);
+
+  const dupes = useMemo(() => duplicateLeaveKeys(leave), [leave]);
+
+  const rows = useMemo(() => {
+    const sorted = [...leave].sort((a, b) => b.date.localeCompare(a.date));
+    if (filter === 'all') return sorted;
+    if (filter === 'open') return sorted.filter((l) => leaveStage(l) !== 'granted' && l.status !== 'Rejected');
+    return sorted.filter((l) => leaveNeedsDecisionFrom(l, 'hr'));
+  }, [leave, filter]);
+
+  const counts = useMemo(
+    () => ({
+      mine: leave.filter((l) => leaveNeedsDecisionFrom(l, 'hr')).length,
+      waitingManager: leave.filter((l) => leaveStage(l) === 'awaiting_manager').length,
+      granted: leave.filter(isGranted).length,
+      total: leave.length,
+    }),
+    [leave],
   );
-  const decided = useMemo(
-    () =>
-      requests
-        .filter((r) => r.status !== 'pending')
-        .sort((a, b) => (b.decidedAt ?? '').localeCompare(a.decidedAt ?? '')),
-    [requests],
-  );
 
-  const tabs: TabDef<View>[] = [
-    { id: 'pending', label: 'Waiting on you', count: pending.length },
-    { id: 'decided', label: 'Decided', count: decided.length },
-  ];
+  const revoke = async (l: FieldLeaveRequest) => {
+    setBusy(l.id);
+    try {
+      const updated = await Api.attendance.revokeLeave({ id: l.id, as: 'hr' });
+      setLeave((cur) => cur.map((x) => (x.id === updated.id ? updated : x)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not revoke the decision.');
+    } finally {
+      setBusy(null);
+    }
+  };
 
-  const rows = view === 'pending' ? pending : decided;
-
-  const confirm = async () => {
-    if (!deciding || !user) return;
-    setSaving(true);
-    const result = await dispatch(
-      decideLeave({
-        request: deciding.request,
-        approve: deciding.approve,
-        decidedBy: user,
-        note,
-      }),
-    );
-    setSaving(false);
-
-    if (decideLeave.fulfilled.match(result)) {
-      dispatch(
-        pushToast(
-          `Leave ${deciding.approve ? 'approved' : 'rejected'} for ${deciding.request.employeeName}.`,
-          deciding.approve ? 'success' : 'info',
-        ),
-      );
-      setDeciding(null);
-      setNote('');
+  const decide = async (l: FieldLeaveRequest, approve: boolean) => {
+    if (!user) return;
+    setBusy(l.id);
+    try {
+      const updated = await Api.attendance.decideLeave({
+        id: l.id,
+        as: 'hr',
+        approve,
+        by: user.email,
+      });
+      setLeave((cur) => cur.map((x) => (x.id === updated.id ? updated : x)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save the decision.');
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -97,264 +114,175 @@ export function LeaveRequestsPage() {
         <div className="grow">
           <div className="page-head__title">Leave requests</div>
           <div className="page-head__sub">
-            {pending.length === 0
-              ? 'Nothing waiting on a decision.'
-              : `${pending.length} waiting on a decision.`}
+            Manager and HR approve independently — the day is granted only when both have
           </div>
         </div>
-      </div>
-
-      <Card flush>
-        <div style={{ padding: '0 14px' }}>
-          <Tabs tabs={tabs} active={view} onChange={setView} />
-        </div>
-
-        {rows.length === 0 ? (
-          <Empty icon="🗓" title={view === 'pending' ? 'Queue is clear' : 'Nothing decided yet'}>
-            {view === 'pending'
-              ? 'Every request has been decided.'
-              : 'Approved and rejected requests appear here.'}
-          </Empty>
-        ) : (
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Employee</th>
-                  <th>Type</th>
-                  <th>Dates</th>
-                  <th className="right">Days</th>
-                  <th>Reason</th>
-                  <th>Status</th>
-                  {view === 'pending' && <th style={{ width: 170 }} />}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((request) => {
-                  const employee = employeeById.get(request.employeeId);
-                  const affordable = withinBalance(request, employee);
-                  const clashes = clashingRequests(request, requests);
-
-                  return (
-                    <tr key={request.id}>
-                      <td>
-                        <div className="small strong">{request.employeeName}</div>
-                        <div className="tiny dim">
-                          {request.department} · applied {relativeTime(request.appliedAt)}
-                        </div>
-                      </td>
-                      <td className="small">{LEAVE_TYPE_LABEL[request.type]}</td>
-                      <td className="small">
-                        {formatDate(request.fromDate)} – {formatDate(request.toDate)}
-                      </td>
-                      <td className="right num strong">{request.days}</td>
-                      <td className="small" style={{ maxWidth: 260 }}>
-                        {request.reason}
-                        {request.decisionNote && (
-                          <div className="tiny dim">↳ {request.decisionNote}</div>
-                        )}
-                      </td>
-                      <td>
-                        <LeaveStatusBadge status={request.status} />
-                        {request.status === 'pending' && (
-                          <div className="stack gap-1" style={{ marginTop: 4 }}>
-                            {!affordable && (
-                              <Badge tone="danger" title="More days than the paid balance allows">
-                                {employee ? `${employee.leaveBalance}d balance` : 'No record'}
-                              </Badge>
-                            )}
-                            {clashes.length > 0 && (
-                              <Badge
-                                tone="warn"
-                                title={clashes
-                                  .map((c) => `${c.employeeName}: ${c.fromDate} → ${c.toDate}`)
-                                  .join('\n')}
-                              >
-                                {clashes.length} clash{clashes.length === 1 ? '' : 'es'}
-                              </Badge>
-                            )}
-                          </div>
-                        )}
-                        {request.decidedAt && (
-                          <div className="tiny dim" style={{ marginTop: 3 }}>
-                            by {request.decidedBy} · {relativeTime(request.decidedAt)}
-                          </div>
-                        )}
-                      </td>
-                      {view === 'pending' && (
-                        <td className="right">
-                          <div className="row gap-2" style={{ justifyContent: 'flex-end' }}>
-                            <Button
-                              size="sm"
-                              variant="danger"
-                              onClick={() => {
-                                setNote('');
-                                setDeciding({ request, approve: false });
-                              }}
-                            >
-                              Reject
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="primary"
-                              onClick={() => {
-                                setNote('');
-                                setDeciding({ request, approve: true });
-                              }}
-                            >
-                              Approve
-                            </Button>
-                          </div>
-                        </td>
-                      )}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-
-      {deciding && (
-        <DecisionModal
-          request={deciding.request}
-          approve={deciding.approve}
-          balance={employeeById.get(deciding.request.employeeId)?.leaveBalance}
-          affordable={withinBalance(
-            deciding.request,
-            employeeById.get(deciding.request.employeeId),
-          )}
-          clashes={clashingRequests(deciding.request, requests)}
-          note={note}
-          onNote={setNote}
-          saving={saving}
-          onClose={() => setDeciding(null)}
-          onConfirm={() => void confirm()}
+        <RefreshButton onClick={load} loading={loading} />
+        <Segmented
+          ariaLabel="Filter"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { value: 'mine', label: `Needs HR (${counts.mine})` },
+            { value: 'open', label: 'Open' },
+            { value: 'all', label: `All (${counts.total})` },
+          ]}
         />
-      )}
-    </div>
-  );
-}
-
-function DecisionModal({
-  request,
-  approve,
-  balance,
-  affordable,
-  clashes,
-  note,
-  onNote,
-  saving,
-  onClose,
-  onConfirm,
-}: {
-  request: LeaveRequest;
-  approve: boolean;
-  balance?: number;
-  affordable: boolean;
-  clashes: LeaveRequest[];
-  note: string;
-  onNote: (v: string) => void;
-  saving: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-}) {
-  const working = workingDaysBetween(request.fromDate, request.toDate);
-
-  return (
-    <Modal
-      title={`${approve ? 'Approve' : 'Reject'} leave — ${request.employeeName}`}
-      onClose={onClose}
-      footer={
-        <>
-          <Button onClick={onClose} disabled={saving}>
-            Cancel
-          </Button>
-          <Button
-            variant={approve ? 'primary' : 'danger'}
-            loading={saving}
-            // A rejection without a reason is the one thing the employee will
-            // come back and ask about, so it is required.
-            disabled={!approve && !note.trim()}
-            onClick={onConfirm}
-          >
-            {approve ? 'Approve leave' : 'Reject leave'}
-          </Button>
-        </>
-      }
-    >
-      <div className="stack gap-3">
-        <div className="row gap-4" style={{ flexWrap: 'wrap' }}>
-          <Metric label="Type" value={LEAVE_TYPE_LABEL[request.type]} />
-          <Metric
-            label="Dates"
-            value={`${formatDate(request.fromDate)} – ${formatDate(request.toDate)}`}
-          />
-          <Metric label="Days claimed" value={String(request.days)} />
-          <Metric label="Working days" value={String(working)} />
-          <Metric label="Balance" value={balance == null ? '—' : `${balance} days`} />
-        </div>
-
-        <div className="small">{request.reason}</div>
-
-        {approve && !affordable && (
-          <Alert tone="warn" title="More than the paid balance">
-            {balance ?? 0} day{balance === 1 ? '' : 's'} left against {request.days} claimed.
-            Approving anyway will take the balance to zero, not negative — settle the difference as
-            unpaid leave.
-          </Alert>
-        )}
-
-        {approve && request.days !== working && (
-          <Alert tone="info" title="Claim does not match the calendar">
-            {request.days} day{request.days === 1 ? '' : 's'} claimed, {working} working day
-            {working === 1 ? '' : 's'} in the range. Sundays are not counted.
-          </Alert>
-        )}
-
-        {approve && clashes.length > 0 && (
-          <Alert
-            tone="warn"
-            title={`${clashes.length} other ${request.department} request${clashes.length === 1 ? '' : 's'} overlap${clashes.length === 1 ? 's' : ''}`}
-          >
-            <div className="stack gap-1" style={{ marginTop: 4 }}>
-              {clashes.map((c) => (
-                <div key={c.id} className="tiny">
-                  {c.employeeName} · {formatDate(c.fromDate)} – {formatDate(c.toDate)} ·{' '}
-                  {statusWord(c.status)}
-                </div>
-              ))}
-            </div>
-          </Alert>
-        )}
-
-        {approve && (
-          <Alert tone="info">
-            Approving marks every working day in the range as on-leave on the attendance sheet.
-          </Alert>
-        )}
-
-        <Field
-          label={approve ? 'Note (optional)' : 'Reason for rejection'}
-          hint={approve ? undefined : 'The employee will be told this.'}
-        >
-          <Textarea rows={3} value={note} onChange={(e) => onNote(e.target.value)} />
-        </Field>
       </div>
-    </Modal>
-  );
-}
 
-function statusWord(status: LeaveStatus): string {
-  return status === 'pending' ? 'also waiting' : status;
-}
+      {error && (
+        <Alert tone="danger" title="Could not read or save">
+          {error}
+        </Alert>
+      )}
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="detail-item__label">{label}</div>
-      <div className="small strong">{value}</div>
+      <div className="tiles" style={{ marginBottom: 14 }}>
+        <Tile
+          label="Waiting on you"
+          value={String(counts.mine)}
+          tone={counts.mine ? 'warn' : undefined}
+          foot="HR has not decided"
+        />
+        <Tile
+          label="Waiting on a manager"
+          value={String(counts.waitingManager)}
+          foot="You have approved, they have not"
+        />
+        <Tile label="Granted" value={String(counts.granted)} tone="ok" foot="Both approvals in" />
+        <Tile label="All requests" value={String(counts.total)} foot="Every record" />
+      </div>
+
+      {loading && <Empty icon="◔" title="Reading leave requests…" />}
+
+      {!loading && !error && (
+        <Card flush>
+          {rows.length === 0 ? (
+            <Empty icon="✓" title={filter === 'mine' ? 'Nothing waiting on HR' : 'No requests match'} />
+          ) : (
+            <div className="scroll-x">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Request</th>
+                    <th>Sales person</th>
+                    <th>Date</th>
+                    <th className="right">Days</th>
+                    <th>Reason</th>
+                    <th>Manager</th>
+                    <th>HR</th>
+                    <th>State</th>
+                    <th className="right">Decide</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((l) => {
+                    const stage = leaveStage(l);
+                    const canAct = leaveNeedsDecisionFrom(l, 'hr');
+                    return (
+                      <tr key={l.id}>
+                        <td className="mono small">{l.id}</td>
+                        <td>
+                          {l.person}
+                          {l.requesterIsManager && (
+                            <>
+                              {' '}
+                              <Badge tone="accent" title="A manager cannot approve their own leave">
+                                manager
+                              </Badge>
+                            </>
+                          )}
+                        </td>
+                        <td className="num">{formatDate(l.date)}</td>
+                        <td className="right num">
+                          {dupes.has(leaveKey(l)) ? <Badge tone="danger">dup?</Badge> : l.days}
+                        </td>
+                        <td className="dim small">{l.reason || '—'}</td>
+                        <td>
+                          {requiredApprovals(l).manager ? (
+                            <ApprovalMark
+                              done={managerHasApproved(l)}
+                              by={l.managerApprovedBy ?? (l.managerApproved ? undefined : l.decidedBy)}
+                              who={l.teamManager}
+                            />
+                          ) : (
+                            <span className="dim small" title="A manager's own leave needs HR only">
+                              not required
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <ApprovalMark done={hrHasApproved(l)} by={l.hrApprovedBy} who="HR" />
+                        </td>
+                        <td>
+                          <StageBadge stage={stage} />
+                        </td>
+                        <td className="right">
+                          {canAct ? (
+                            <span className="lv__actions">
+                              <Button
+                                size="sm"
+                                onClick={() => decide(l, true)}
+                                loading={busy === l.id}
+                                disabled={busy !== null}
+                              >
+                                Approve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => decide(l, false)}
+                                disabled={busy !== null}
+                              >
+                                Reject
+                              </Button>
+                            </span>
+                          ) : leaveCanRevoke(l, 'hr') ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => revoke(l)}
+                              loading={busy === l.id}
+                              disabled={busy !== null}
+                              title="Take back HR's approval and return this to pending"
+                            >
+                              Revoke
+                            </Button>
+                          ) : (
+                            <span className="dim small">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
+
+      <p className="note" style={{ marginTop: 12 }}>
+        Approving here records HR's decision only. If the manager has not approved yet the request
+        stays open and the rep does not have the day — the two columns above show which side is
+        outstanding.
+      </p>
     </div>
   );
+}
+
+function ApprovalMark({ done, by, who }: { done: boolean; by?: string; who?: string }) {
+  if (done) {
+    return (
+      <Badge tone="ok" title={by ? `Approved by ${by}` : undefined}>
+        ✓ {by ? by.split('@')[0] : 'approved'}
+      </Badge>
+    );
+  }
+  return <span className="dim small">{who ? `${who} —` : '—'}</span>;
+}
+
+function StageBadge({ stage }: { stage: LeaveStage }) {
+  const tone =
+    stage === 'granted' ? 'ok' : stage === 'rejected' ? 'danger' : 'warn';
+  return <Badge tone={tone}>{LEAVE_STAGE_LABEL[stage]}</Badge>;
 }

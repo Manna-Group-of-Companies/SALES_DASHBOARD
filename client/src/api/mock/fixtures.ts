@@ -97,19 +97,23 @@ export const USERS: User[] = [
 // -------------------------------------------------------------- products ---
 
 export const PRODUCTS: Product[] = [
-  // --- PCTR: average roll weight + belts per roll (1.2) --------------------
-  { code: 'PCTR-140-08', name: 'Precured Tread 140mm x 8mm', category: 'PCTR', size: '140 x 8', avgWeightPerRoll: 28.5, beltsPerRoll: 6, hsnCode: '40061000', active: true },
-  { code: 'PCTR-160-09', name: 'Precured Tread 160mm x 9mm', category: 'PCTR', size: '160 x 9', avgWeightPerRoll: 34.2, beltsPerRoll: 6, hsnCode: '40061000', active: true },
-  { code: 'PCTR-180-10', name: 'Precured Tread 180mm x 10mm', category: 'PCTR', size: '180 x 10', avgWeightPerRoll: 42.8, beltsPerRoll: 5, hsnCode: '40061000', active: true },
-  { code: 'PCTR-200-12', name: 'Precured Tread 200mm x 12mm', category: 'PCTR', size: '200 x 12', avgWeightPerRoll: 56.4, beltsPerRoll: 5, hsnCode: '40061000', active: true },
-  { code: 'PCTR-220-13', name: 'Precured Tread 220mm x 13mm', category: 'PCTR', size: '220 x 13', avgWeightPerRoll: 64.0, beltsPerRoll: 4, hsnCode: '40061000', active: true },
-  { code: 'PCTR-240-14', name: 'Precured Tread 240mm x 14mm', category: 'PCTR', size: '240 x 14', avgWeightPerRoll: 72.5, beltsPerRoll: 4, hsnCode: '40061000', active: true },
+  // --- PCTR: per-belt weight + belts per roll (1.2) ------------------------
+  // Stored the way the live master stores it — the per-belt figure, with the
+  // roll weight derived as `weightPerBelt x beltsPerRoll`. The roll weights
+  // here are unchanged from before the misnomer was unpicked (28.5, 34.2, …),
+  // so fixture order totals stay comparable.
+  { code: 'PCTR-140-08', name: 'Precured Tread 140mm x 8mm', category: 'PCTR', size: '140 x 8', weightPerBelt: 4.75, beltsPerRoll: 6, hsnCode: '40061000', active: true },
+  { code: 'PCTR-160-09', name: 'Precured Tread 160mm x 9mm', category: 'PCTR', size: '160 x 9', weightPerBelt: 5.7, beltsPerRoll: 6, hsnCode: '40061000', active: true },
+  { code: 'PCTR-180-10', name: 'Precured Tread 180mm x 10mm', category: 'PCTR', size: '180 x 10', weightPerBelt: 8.56, beltsPerRoll: 5, hsnCode: '40061000', active: true },
+  { code: 'PCTR-200-12', name: 'Precured Tread 200mm x 12mm', category: 'PCTR', size: '200 x 12', weightPerBelt: 11.28, beltsPerRoll: 5, hsnCode: '40061000', active: true },
+  { code: 'PCTR-220-13', name: 'Precured Tread 220mm x 13mm', category: 'PCTR', size: '220 x 13', weightPerBelt: 16.0, beltsPerRoll: 4, hsnCode: '40061000', active: true },
+  { code: 'PCTR-240-14', name: 'Precured Tread 240mm x 14mm', category: 'PCTR', size: '240 x 14', weightPerBelt: 18.125, beltsPerRoll: 4, hsnCode: '40061000', active: true },
 
-  // --- CTR: exact roll weight, no belts (1.3) ------------------------------
-  { code: 'CTR-06-400', name: 'Conventional Tread 6mm x 400mm', category: 'CTR', size: '6 x 400', exactWeightPerRoll: 25.0, hsnCode: '40061000', active: true },
-  { code: 'CTR-08-400', name: 'Conventional Tread 8mm x 400mm', category: 'CTR', size: '8 x 400', exactWeightPerRoll: 30.0, hsnCode: '40061000', active: true },
-  { code: 'CTR-10-450', name: 'Conventional Tread 10mm x 450mm', category: 'CTR', size: '10 x 450', exactWeightPerRoll: 40.0, hsnCode: '40061000', active: true },
-  { code: 'CTR-12-500', name: 'Conventional Tread 12mm x 500mm', category: 'CTR', size: '12 x 500', exactWeightPerRoll: 50.0, hsnCode: '40061000', active: true },
+  // --- CTR: whole-roll weight, no belts (1.3) ------------------------------
+  { code: 'CTR-06-400', name: 'Conventional Tread 6mm x 400mm', category: 'CTR', size: '6 x 400', weightPerRoll: 25.0, hsnCode: '40061000', active: true },
+  { code: 'CTR-08-400', name: 'Conventional Tread 8mm x 400mm', category: 'CTR', size: '8 x 400', weightPerRoll: 30.0, hsnCode: '40061000', active: true },
+  { code: 'CTR-10-450', name: 'Conventional Tread 10mm x 450mm', category: 'CTR', size: '10 x 450', weightPerRoll: 40.0, hsnCode: '40061000', active: true },
+  { code: 'CTR-12-500', name: 'Conventional Tread 12mm x 500mm', category: 'CTR', size: '12 x 500', weightPerRoll: 50.0, hsnCode: '40061000', active: true },
 
   // --- BG: 5 kg rolls, 4 to a box (1.4) ------------------------------------
   { code: 'BG-STD', name: 'Bonding Gum — Standard', category: 'BG', defaultRate: 185, hsnCode: '40059100', active: true },

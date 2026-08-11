@@ -270,6 +270,10 @@ export function roleCanSee(order: Order, role: Role): boolean {
   switch (role) {
     case 'sales_manager':
       return true;
+    // The GM decides escalated orders, so they see the whole book — they are
+    // who the credit-limit rule escalates to.
+    case 'general_manager':
+      return true;
     case 'production_manager':
       // The floor only ever sees orders the Sales Manager has released.
       return order.status === 'approved' || order.status === 'in_production' ||

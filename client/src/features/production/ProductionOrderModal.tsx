@@ -48,7 +48,7 @@ import {
 } from '@/components/ui';
 import { money, relativeTime } from '@/components/common/format';
 import { SourceBadge } from '@/components/common/StatusBadge';
-import { describeEntry } from '@/features/orders/OrderDetailPage';
+import { describeEntry } from '@/domain/productRules';
 
 export function ProductionOrderModal({ order, onClose }: { order: Order; onClose: () => void }) {
   const dispatch = useAppDispatch();

@@ -285,3 +285,292 @@
   border-bottom: 1px solid var(--border);
 }
 .stage-row:last-child { border-bottom: none; }
+
+/*
+ * Order detail: the item picker and the line editor.
+ *
+ * The picker is a search over a thousand items, so it is a list of rows rather
+ * than a dropdown, and each row carries its packing figures â€” those are what
+ * the choice actually turns on.
+ */
+
+.pick {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 12px;
+  margin-top: 12px;
+}
+
+.pick__head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.pick__head .input {
+  flex: 1;
+}
+
+.pick__list {
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.pick__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pick__row:last-child { border-bottom: none; }
+.pick__row:hover:not(:disabled) { background: var(--surface-2); }
+.pick__row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.pick__row:disabled { cursor: not-allowed; opacity: 0.55; }
+
+.pick__name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.pick__name > span:first-child {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick__facts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.pick__foot { margin-top: 8px; }
+
+/* ------------------------------------------------------------- lines --- */
+
+/*
+ * The fulfilment control is per line and narrow, so its labels are short.
+ * "Minimum stock" and "Production" read unambiguously in a table where the
+ * column header already says Fulfil from.
+ */
+.line__fulfil {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.line__stock {
+  font-size: 11px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+/* A row being edited is tinted so it is obvious which lines are unsaved. */
+.line--dirty { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.line--removed { opacity: 0.45; }
+.line--removed td { text-decoration: line-through; }
+
+.line__qty {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.line__qty .input { width: 68px; }
+.line__qty label {
+  font-size: 10.5px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.line__edit-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.line__edit-bar .grow { flex: 1; }
+
+/* The whole order row is a link target, so it has to look like one. */
+.row--link { cursor: pointer; }
+.row--link:hover { background: var(--surface-2); }
+.row--link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ------------------------------------------------ A1 team-order rows --- */
+
+/*
+ * An order row is a card, not a table row: it carries four independent facts
+ * (money, status, production, week grouping) and a table would force each into
+ * a column that is empty most of the time.
+ */
+.orders__count {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 4px 0 12px;
+}
+.orders__count.warn { color: #8a6100; }
+.orders__count.ok { color: #1b7f3b; }
+
+.orders__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ordrow {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ordrow:hover { background: var(--surface-2); }
+.ordrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.ordrow__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.ordrow__party {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  min-width: 0;
+}
+.ordrow__party a { color: inherit; text-decoration: none; }
+.ordrow__party a:hover { text-decoration: underline; }
+
+.ordrow__meta { font-size: 11.5px; color: var(--text-3); }
+
+.ordrow__status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ordrow__prod {
+  font-size: 12px;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ordrow__prod.done { color: #1b7f3b; font-weight: 600; }
+
+.ordrow__comb {
+  font-size: 12px;
+  color: #7a4b1e;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lines__lead { margin: 4px 0 8px; }
+
+/* --------------------------------------- the five-figure stock position --- */
+
+/*
+ * Five separate rows, because collapsing them once hid that an order was for
+ * eight rolls with only four in stock — and a production run raised off that
+ * screen would have been for double.
+ */
+.stockpos { font-size: 11.5px; line-height: 1.5; border-collapse: collapse; }
+.stockpos td { padding: 0 8px 0 0; white-space: nowrap; }
+.stockpos td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.stockpos tr.ok td { color: #1b7f3b; }
+.stockpos tr.warn td { color: #8a6100; font-weight: 600; }
+.stockpos tr.dim td { color: var(--text-3); }
+
+/* A run is coming but is not stock. Its own line, never beside a sellable figure. */
+.run__note {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #7a4b1e;
+  white-space: nowrap;
+}
+
+/* Served-from is reported, not chosen. */
+.served {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.served--stock {
+  color: #1a56a8;
+  background: color-mix(in srgb, #1a56a8 10%, transparent);
+  border-color: color-mix(in srgb, #1a56a8 28%, transparent);
+}
+.served--run {
+  color: #1a56a8;
+  background: color-mix(in srgb, #1a56a8 6%, transparent);
+  border-color: color-mix(in srgb, #1a56a8 20%, transparent);
+  border-style: dashed;
+}
+.served--make {
+  color: #5b2a86;
+  background: color-mix(in srgb, #5b2a86 10%, transparent);
+  border-color: color-mix(in srgb, #5b2a86 28%, transparent);
+}
+
+.gm__over {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-weight: 700;
+  color: #b3261e;
+  background: color-mix(in srgb, #b3261e 10%, transparent);
+}
+
+/* Two stage tracks on a split line. */
+.track {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-top: 8px;
+}
+.track__title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.track--stock .track__title { color: #1a56a8; }
+.track--make .track__title { color: #5b2a86; }
+
+.prod__split {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #7a4b1e;
+  margin-bottom: 8px;
+}

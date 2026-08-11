@@ -1,0 +1,47 @@
+/*
+ * Landing-page bits shared by the three role dashboards.
+ *
+ * Only one component lives here — everything else on those pages is a existing
+ * primitive (Tile, Card, Alert, Meter, Badge) so the dashboards cannot drift
+ * away from the rest of the app.
+ */
+
+/*
+ * A compact, keyboard-reachable row in a sidebar card: label on the left, a
+ * dim qualifier in the middle, a status chip on the right. It is a <button>
+ * rather than a styled <div> because every one of them navigates, and that
+ * should work from the keyboard and be announced as an action.
+ */
+.linkrow {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.linkrow:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+.linkrow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The middle column is the one that gives way when the card is narrow. */
+.linkrow > :nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

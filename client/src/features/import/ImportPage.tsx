@@ -12,6 +12,7 @@
 import { useRef, useState } from 'react';
 import type { Customer, Product } from '@/domain/types';
 import { CATEGORY_LABEL } from '@/domain/types';
+import { rollWeight } from '@/domain/productRules';
 import { Api, type ImportKind, type ParseResult, type RowIssue } from '@/api/client';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { loadCatalog } from '@/store/slices/catalogSlice';
@@ -153,8 +154,12 @@ export function ImportPage() {
               <ul className="col-list">
                 <li><b>Item Code</b>, <b>Item Name</b>, <b>Category</b> — required on every row</li>
                 <li>Category accepts PCTR / CTR / BG / VS or the full name</li>
-                <li><b>Avg Weight Per Roll</b> + <b>Belts Per Roll</b> — required for PCTR</li>
-                <li><b>Exact Weight Per Roll</b> — required for CTR</li>
+                <li>
+                  <b>Avg Weight Per Roll</b> + <b>Belts Per Roll</b> — required for PCTR.
+                  Despite its name, that column holds the weight of one <b>belt</b>;
+                  the roll weight is the two multiplied together.
+                </li>
+                <li><b>Weight Per Roll</b> — required for CTR</li>
                 <li><b>Tin Size</b> — must be 10 or 30 for VS</li>
                 <li>Rate, Size, HSN Code — optional</li>
               </ul>
@@ -289,7 +294,9 @@ function ProductPreview({ rows }: { rows: Product[] }) {
               <div className="tiny dim">{CATEGORY_LABEL[p.category]}</div>
             </td>
             <td className="right num">
-              {p.avgWeightPerRoll ? `${p.avgWeightPerRoll} kg (avg)` : p.exactWeightPerRoll ? `${p.exactWeightPerRoll} kg` : '—'}
+              {rollWeight(p)
+                ? `${rollWeight(p)} kg${p.category === 'PCTR' ? ' (avg)' : ''}`
+                : '—'}
             </td>
             <td className="right num">{p.beltsPerRoll ?? '—'}</td>
             <td className="right num">{p.tinSize ? `${p.tinSize}L` : '—'}</td>

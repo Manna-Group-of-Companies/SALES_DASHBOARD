@@ -17,12 +17,14 @@
  */
 export type Role =
   | 'sales_manager'
+  | 'general_manager'
   | 'production_manager'
   | 'stock_manager'
   | 'hr';
 
 export const ROLE_LABEL: Record<Role, string> = {
   sales_manager: 'Sales Manager',
+  general_manager: 'General Manager',
   production_manager: 'Production Manager',
   stock_manager: 'Stock Manager',
   hr: 'HR',
@@ -82,12 +84,31 @@ export interface Product {
   name: string;
   category: ProductCategory;
   size?: string;
-  /** PCTR: the *average* weight of one roll, in kg (1.2). */
-  avgWeightPerRoll?: number;
-  /** PCTR: how many belts one roll yields (1.2). */
+  /**
+   * PCTR: the weight of one *belt*, in kg (1.2).
+   *
+   * ERPNext holds this in `custom_avg_weight_per_roll`, whose name is wrong.
+   * The live master settles it — `field x belts_per_roll = roll weight` on
+   * every row (10.1 x 4 = 40.4; 2.4 x 14 = 33.6). The name is left alone on
+   * the site because every import sheet uses it, so it is corrected here, at
+   * the model boundary, and nowhere else. Read as a roll weight it prices a
+   * 40.4 kg roll at 10.1 kg — about a quarter of the money.
+   */
+  weightPerBelt?: number;
+  /**
+   * PCTR: how many belts one roll yields (1.2).
+   *
+   * Absent or zero means *no roll is cuttable* — an incomplete master, not a
+   * pack size to be guessed at.
+   */
   beltsPerRoll?: number;
-  /** CTR: the *exact* weight of one roll, in kg (1.3). */
-  exactWeightPerRoll?: number;
+  /**
+   * PCTR and CTR: the weight of one whole roll, in kg (1.2, 1.3).
+   *
+   * ERPNext holds this in `custom_weight_per_roll` for both families. Derived
+   * from `weightPerBelt x beltsPerRoll` when the site has not stored it.
+   */
+  weightPerRoll?: number;
   /** VS: tin volume in litres — 10 or 30 (1.5). */
   tinSize?: TinSize;
   /** VS / BG: default selling rate. Reps still key PCTR/CTR rates by hand. */
@@ -142,6 +163,470 @@ export interface StockReservation {
   repName: string;
   /** ISO timestamp. Soft holds on unsaved drafts expire; see minStock.service. */
   heldAt: string;
+}
+
+// ----------------------------------------------------- field attendance ---
+
+/**
+ * A person, as this site actually models one: a `Sales Person`, not an
+ * `Employee`. See `domain/attendance.ts` for why.
+ */
+export interface SalesPerson {
+  /** `Sales Person.name` — also the link target used by attendance and leave. */
+  id: string;
+  name: string;
+  /** `custom_team_manager` — Pareeth / Saneesh / Renjith. */
+  teamManager: string;
+  /** `custom_company` — the business unit, not the ERPNext Company. */
+  unit: string;
+  /** `custom_user` — their login, when they have one. */
+  userId?: string;
+  enabled: boolean;
+  /** Roll-up nodes in the Sales Person tree are not people. */
+  isGroup: boolean;
+}
+
+export type PunchStatus = 'Punched In' | 'Punched Out';
+
+/** One day's punch record from the field-sales app. */
+export interface AttendanceLog {
+  id: string;
+  person: string;
+  date: string;
+  punchIn?: string;
+  punchOut?: string;
+  status: PunchStatus;
+  /** Measured by the site; meaningless until the shift is closed. */
+  workingHours: number;
+  remarks?: string;
+}
+
+export type ApprovalStatus = 'Pending Approval' | 'Approved' | 'Rejected';
+export type ApproverType = 'Sales Manager' | 'HR';
+
+export interface FieldLeaveRequest {
+  id: string;
+  person: string;
+  /** A single day — this doctype has no from/to range. */
+  date: string;
+  /** 1 or 0.5. */
+  days: number;
+  halfDay: boolean;
+  halfDayPeriod?: 'Morning' | 'Afternoon';
+  reason?: string;
+  status: ApprovalStatus;
+  approverType: ApproverType;
+  teamManager?: string;
+  /** Set when the requester is themselves a manager. */
+  requesterIsManager: boolean;
+  decidedBy?: string;
+  /**
+   * The two approvals are INDEPENDENT and unordered: either party may act
+   * first, and the leave is granted only once both have. Neither is a
+   * precondition for the other.
+   */
+  managerApproved: boolean;
+  managerApprovedBy?: string;
+  hrApproved: boolean;
+  hrApprovedBy?: string;
+}
+
+/** Whether an approved regularization was actually written into the log. */
+export type CompletionStatus = 'Completed' | 'Not Completed';
+
+export interface AttendanceRegularization {
+  id: string;
+  person: string;
+  date: string;
+  requestedPunchIn?: string;
+  requestedPunchOut?: string;
+  reason?: string;
+  status: ApprovalStatus;
+  approverType: ApproverType;
+  teamManager?: string;
+  requesterIsManager: boolean;
+  decidedBy?: string;
+  decisionRemarks?: string;
+  /**
+   * The gap this module exists to close: a regularization can be `Approved`
+   * while still `Not Completed`, meaning nobody rewrote the attendance log and
+   * the hours never moved.
+   */
+  completionStatus: CompletionStatus;
+}
+
+// ------------------------------------------------- customers & sales orders ---
+
+/** A trading party, as the live site models one. */
+export interface SalesCustomer {
+  id: string;
+  name: string;
+  /** `custom_assigned_reps` — a Link to Sales Person holding a bare name. */
+  assignedRep?: string;
+  route?: string;
+  gstin?: string;
+  creditLimit: number;
+  outstanding: number;
+  locationStatus?: LocationStatus;
+  latitude: number;
+  longitude: number;
+  capturedBy?: string;
+  bannerPhoto?: string;
+}
+
+/** A Sales Order as the manager's screens need it. */
+export interface TeamOrder {
+  id: string;
+  customer: string;
+  customerName: string;
+  /** `custom_sales_person` — who raised it. */
+  rep: string;
+  /** Business unit (`custom_company`), not the ERPNext Company. */
+  unit?: string;
+  placedOn: string;
+  deliveryDate?: string;
+  total: number;
+  /** `custom_po_status` — the raw stored string; label it before display. */
+  poStatus: string;
+  productionStatus?: string;
+  /** Set once the week is closed and the order folded into a group. */
+  combinedOrder?: string;
+  ratesApproved: boolean;
+  route?: string;
+}
+
+/** Where a captured location stands. */
+export type LocationStatus =
+  | 'Not Captured'
+  | 'Pending Verification'
+  | 'Verified'
+  | 'Rejected';
+
+/** A lead — a party that has not yet placed an approved order. */
+export interface SalesLead {
+  id: string;
+  name: string;
+  rep?: string;
+  route?: string;
+  gstin?: string;
+  address?: string;
+  city?: string;
+  mobile?: string;
+  shopType?: string;
+  status?: string;
+  /** Set once the lead has been converted. */
+  customer?: string;
+  locationStatus?: LocationStatus;
+  capturedBy?: string;
+  latitude: number;
+  longitude: number;
+  bannerPhoto?: string;
+}
+
+/** A route a rep can be given. */
+export interface SalesRoute {
+  id: string;
+  name: string;
+  rep?: string;
+  isActive: boolean;
+}
+
+/**
+ * One thing waiting on a location decision — a customer or a lead.
+ *
+ * Both queues have the same shape and the same decision, so they are one type
+ * and one screen. The `kind` is what decides which doctype gets written.
+ */
+export interface LocationCheck {
+  kind: 'customer' | 'lead';
+  id: string;
+  name: string;
+  rep?: string;
+  route?: string;
+  capturedBy?: string;
+  latitude: number;
+  longitude: number;
+  bannerPhoto?: string;
+  address?: string;
+}
+
+/** One line of a Sales Order, as the approval screen needs it. */
+export interface OrderLine {
+  /** The child row's own name — required to write back to it. */
+  id: string;
+  itemCode: string;
+  itemName: string;
+  itemGroup?: string;
+  category?: string;
+  qty: number;
+  uom?: string;
+  /** Derived: ratePerKg x roll weight. ERPNext stores this, people read the other. */
+  rate: number;
+  amount: number;
+  /** What the rep actually quoted, per kilogram. */
+  ratePerKg: number;
+  totalWeight: number;
+  rolls: number;
+  looseBelts: number;
+  packingNote?: string;
+  /** Per-line: "this price is final". Survives an edit that reopens the order. */
+  rateApproved: boolean;
+  fulfilmentMode?: string;
+  /** Free text (`Data`) — the stage of the portion being MADE. */
+  productionStage?: string;
+  /** Free text (`Data`) — the stage of the portion coming off the SHELF. */
+  stockStage?: string;
+  /** Link to `Manna Minimum Stock Batch` when the line was filled from aged stock. */
+  agedBatch?: string;
+}
+
+/**
+ * One row of `Manna Stock Reservation` — a claim on pooled stock.
+ *
+ * Live and maintained by the field-sales app. The pool's `custom_reserved_qty`
+ * is the denormalised sum of the Active rows here, and the two are kept in
+ * step by whoever writes them; nothing on the server enforces it.
+ */
+export interface StockReservationRow {
+  id: string;
+  itemCode: string;
+  rolls: number;
+  looseBelts: number;
+  salesOrder?: string;
+  leadOrder?: string;
+  salesPerson?: string;
+  batch?: string;
+  reservedOn?: string;
+  /** `Active` | `Released`. Only Active rows hold anything. */
+  status: string;
+  /** `Shelf` | `Production Run` — which of the two pools this claim came from. */
+  source?: string;
+}
+
+/** A lead order — the pre-customer equivalent of a Sales Order. */
+export interface LeadOrder {
+  id: string;
+  lead: string;
+  leadName: string;
+  rep?: string;
+  orderDate: string;
+  total: number;
+  status: string;
+  poNumber?: string;
+  approvalRemarks?: string;
+  lines: LeadOrderLine[];
+}
+
+/**
+ * A lead order line. Deliberately thin: `Lead Order Item` holds only item,
+ * qty, rate and amount — no roll/belt breakdown and no bookings — so an order
+ * raised from one always reads as new production.
+ */
+export interface LeadOrderLine {
+  id: string;
+  itemCode: string;
+  itemName: string;
+  qty: number;
+  rate: number;
+  amount: number;
+}
+
+/**
+ * An order as the **production** dashboard sees it.
+ *
+ * Note what is not here: no `customer`, no `customerName`, no address. The
+ * production manager must never see who the order is for, and the way to
+ * guarantee that is for the identity never to reach the screen — not to hide
+ * it in CSS, and not to leave it on the object where a search box could match
+ * it. The customer is resolved to a `route` at the API boundary and dropped.
+ */
+export interface ProductionOrderRow {
+  id: string;
+  /** The destination route, or the literal "No route set". Never a territory. */
+  route: string;
+  rep: string;
+  unit?: string;
+  placedOn: string;
+  deliveryDate?: string;
+  /** What the customer originally asked for, if production has moved the date. */
+  originalDeliveryDate?: string;
+  total: number;
+  productionStatus?: string;
+  productionFinishDate?: string;
+  changedAfterApproval: boolean;
+  combinedOrder?: string;
+}
+
+/** A weekly grouping of one customer's completed orders. */
+export interface CombinedOrder {
+  id: string;
+  customer: string;
+  customerName: string;
+  weekStart: string;
+  weekEnd: string;
+  status: string;
+  orderCount: number;
+  total: number;
+  groupedBy?: string;
+}
+
+/** A Sales Order with everything a decision needs. */
+export interface OrderDetail extends TeamOrder {
+  lines: OrderLine[];
+  proformaStatus?: string;
+  changedAfterApproval: boolean;
+  placedAt?: string;
+}
+
+/**
+ * One item's position in the minimum-stock pool.
+ *
+ * `rolls` is what is on the shelf and `reservedRolls` is what other orders
+ * have already claimed; only the difference can be promised. See
+ * `domain/minimumStock.ts` for why the two are never collapsed into one figure.
+ */
+export interface MinStockLine {
+  /** The row's own name on the site, which is the item code itself. */
+  itemCode: string;
+  /** The level to hold — `Manna Minimum Stock Item.qty`, NOT the shelf. */
+  minimumRolls: number;
+  minimumBelts: number;
+  /** What physically exists — from the matching `Manna Minimum Stock Batch`. */
+  shelfRolls: number;
+  shelfBelts: number;
+  /** Booked off the shelf by reps. */
+  reservedRolls: number;
+  reservedBelts: number;
+  /** A run raised in SAP to refill this pool. Intent, never availability. */
+  inProductionRolls: number;
+  inProductionBelts: number;
+  /** Of that run, what reps have already claimed — a second, separate pool. */
+  reservedInProductionRolls: number;
+  reservedInProductionBelts: number;
+  runStage?: string;
+  runUpdatedOn?: string;
+  runUpdatedBy?: string;
+  lastSoldOn?: string;
+  /** Oldest batch date, for the stock-age note. */
+  batchDate?: string;
+}
+
+/**
+ * An `Item` as the order editor's picker needs it.
+ *
+ * Separate from `Product` because the picker shows the packing figures
+ * verbatim — belts per roll, the per-belt average, the exact roll weight — so
+ * the manager can see *why* a line will price the way it does before adding it.
+ */
+export interface ItemOption {
+  code: string;
+  name: string;
+  /** The order-line vocabulary (`PCTR`/`CTR`/`BG`/`VS`), already translated. */
+  category: ProductCategory;
+  /** How the Item master itself spells the category. */
+  itemCategory?: string;
+  itemGroup?: string;
+  uom: string;
+  weightPerBelt?: number;
+  beltsPerRoll?: number;
+  weightPerRoll?: number;
+  packLitres?: number;
+  sapCode?: string;
+  /** The master's own verdict — "No Data" means it cannot be priced. */
+  weightStatus?: string;
+}
+
+// ------------------------------------------------------ trips & expenses ---
+
+/** Transport modes a leg can use. Free text on the site; these are what exist. */
+export type TravelMode =
+  | 'Own Vehicle'
+  | 'Bike'
+  | 'Company Vehicle (Car)'
+  | 'Mixed'
+  | string;
+
+/** Per-km reimbursement rates, from the `Trip Rate Settings` Single. */
+export interface TripRates {
+  ownCar: number;
+  ownBike: number;
+  companyCar: number;
+  companyBike: number;
+  /** Fallback only — a "Mixed" trip really prices leg by leg. */
+  mixed: number;
+}
+
+/**
+ * One vehicle leg of a trip.
+ *
+ * `startOdometer`/`endOdometer` are what the rep typed. The photo is what the
+ * dial actually said. When those disagree, HR ticks `notVerified` and enters
+ * the real figures in `actualStart`/`actualEnd`, which then govern the claim.
+ */
+export interface TripLeg {
+  id: string;
+  mode: TravelMode;
+  vehicleNo?: string;
+  hasOdometer: boolean;
+  startOdometer: number;
+  endOdometer: number;
+  /** As recorded on the site; recomputed from the odometers when verifying. */
+  distanceKm: number;
+  startOdometerPhoto?: string;
+  endOdometerPhoto?: string;
+  notVerified: boolean;
+  actualStartOdometer: number;
+  actualEndOdometer: number;
+  claimedAmount: number;
+  approvedAmount: number;
+  status?: string;
+  remarks?: string;
+}
+
+export interface TripExpense {
+  id: string;
+  category: string;
+  expenseName?: string;
+  amount: number;
+  approvedAmount: number;
+  hasBill: boolean;
+  billPhoto?: string;
+  status?: string;
+  remarks?: string;
+}
+
+export interface Trip {
+  id: string;
+  person: string;
+  date: string;
+  startTime?: string;
+  endTime?: string;
+  primaryMode: TravelMode;
+  costBasis?: string;
+  distanceKm: number;
+  estimatedCost: number;
+  totalExpenses: number;
+  status: string;
+  expenseStatus?: string;
+  purpose?: string;
+  /** Names of reps who travelled along. Empty for a solo trip. */
+  taggedReps: string[];
+  legs: TripLeg[];
+  expenses: TripExpense[];
+}
+
+export interface SalesVisit {
+  id: string;
+  person: string;
+  date: string;
+  tripId?: string;
+  leadId?: string;
+  customerId?: string;
+  checkIn?: string;
+  checkOut?: string;
+  durationMinutes: number;
+  purpose?: string;
+  status?: string;
 }
 
 // --------------------------------------------------------------- orders ---
@@ -345,6 +830,13 @@ export interface Customer {
   name: string;
   /** Delivery destination shown to production (3.1). */
   destination: string;
+  /**
+   * `custom_sales_route` — which delivery run this party is on.
+   *
+   * Distinct from `destination`: the route decides the van, and an order
+   * cannot be started without one (see `canStartOrder`).
+   */
+  route?: string;
   address: string;
   gstin: string;
   state: string;

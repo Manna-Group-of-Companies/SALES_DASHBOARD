@@ -19,7 +19,9 @@ import {
   rateUnitFor,
   snapBgKg,
   validateLine,
-  weightPerBelt,
+  beltWeight,
+  isMisconfigured,
+  rollWeight,
   type LineInput,
 } from '@/domain/productRules';
 import { availableQty } from '@/domain/aging';
@@ -58,6 +60,12 @@ export const ProductRow = memo(function ProductRow({
   const issues = touched ? validateLine(product, input) : [];
   const issueFor = (field: string) => issues.find((i) => i.field === field)?.message;
 
+  // An item whose master is incomplete would price at `rate x 0` and look
+  // entirely normal on the proforma, so the row refuses it outright — before
+  // anything is keyed, since waiting for a quantity would mean the rep only
+  // finds out after doing the work.
+  const broken = isMisconfigured(product);
+
   // A minimum-stock line cannot exceed what is still free after other reps'
   // holds — the row says so before the rep gets as far as submitting (1.2).
   const available = minStock ? (freeQty ?? availableQty(minStock)) : null;
@@ -66,7 +74,11 @@ export const ProductRow = memo(function ProductRow({
   const set = (patch: Partial<LineInput>) => onChange({ ...input, ...patch });
 
   return (
-    <div className={`prow ${touched ? 'is-active' : ''} ${oversold ? 'is-blocked' : ''}`}>
+    <div
+      className={`prow ${touched ? 'is-active' : ''} ${oversold ? 'is-blocked' : ''} ${
+        broken ? 'is-broken' : ''
+      }`}
+    >
       {/* ---------------------------------------------------- identity --- */}
       <div>
         <div className="prow__name">{product.name}</div>
@@ -75,19 +87,19 @@ export const ProductRow = memo(function ProductRow({
           {product.category === 'PCTR' && (
             <>
               <span>
-                Avg <b>{product.avgWeightPerRoll} kg</b>/roll
+                Avg <b>{round(rollWeight(product))} kg</b>/roll
               </span>
               <span>
                 <b>{product.beltsPerRoll}</b> belts/roll
               </span>
               <span className="dim">
-                1 belt ≈ {round(weightPerBelt(product))} kg
+                1 belt = {round(beltWeight(product))} kg
               </span>
             </>
           )}
           {product.category === 'CTR' && (
             <span>
-              Exact <b>{product.exactWeightPerRoll} kg</b>/roll
+              Exact <b>{round(rollWeight(product))} kg</b>/roll
             </span>
           )}
           {product.category === 'BG' && (
@@ -108,6 +120,7 @@ export const ProductRow = memo(function ProductRow({
             reservedByOthers={reservedByOthers}
           />
         </div>
+        {broken && <div className="prow__broken">{broken}</div>}
       </div>
 
       {/* ------------------------------------------------------ inputs --- */}
