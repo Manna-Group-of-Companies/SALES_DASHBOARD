@@ -10,7 +10,14 @@ import 'package:manna_field_sales/services/api.dart';
 
 /// The day the app went live. Nobody was punching in before this, so days
 /// earlier than it are never marked absent.
-final DateTime kGoLiveDate = DateTime(2026, 7, 20);
+/// The first day the app was genuinely in use in the field.
+///
+/// Days before this are left blank rather than marked absent. Everything
+/// earlier was trial data entered while the app was being built, and a rep
+/// scrolling back should not find a wall of red for days nobody was expected
+/// to punch. Moved from 20 July to 10 August when the trial records were
+/// cleared out.
+final DateTime kGoLiveDate = DateTime(2026, 8, 10);
 
 class AttendanceCalendarScreen extends StatefulWidget {
   final String? rep; // defaults to logged-in person
