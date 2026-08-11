@@ -2196,12 +2196,47 @@ class Api {
     return list.isEmpty ? null : list.first;
   }
 
+  /// This rep's open visit anywhere, or null when they are not on one.
+  ///
+  /// A rep can only be in one shop at a time, so only one visit may be open.
+  /// Leaving one running while starting another produces two overlapping
+  /// visits, and the first then reads as however long it took the rep to
+  /// notice — which is not how long they were in the shop.
+  ///
+  /// Restricted to today for the same reason the per-party lookup is: a visit
+  /// somebody forgot to close last week should not stop them working this
+  /// morning. Those are cleaned up separately.
+  static Future<Map<String, dynamic>?> getAnyOpenVisit() async {
+    final rep = Session.I.salesPerson;
+    if (rep == null) return null;
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    final list = await _list('Sales Visit',
+        fields: '["name","check_in_time","customer","custom_lead"]',
+        filters: '[["sales_person","=","$rep"],["visit_date","=","$today"],'
+            '["check_out_time","is","not set"]]',
+        orderBy: 'check_in_time desc',
+        limit: 1);
+    return list.isEmpty ? null : list.first;
+  }
+
   static Future<String> punchInVisit(
       {String? customer,
         String? lead,
         required double lat,
         required double lng}) async {
     final rep = Session.I.salesPerson!;
+
+    // One visit at a time. The screen checks this first and explains it
+    // properly; this is the backstop, so a second visit cannot be opened by a
+    // draft synced later or by a screen added in future that forgets.
+    final open = await getAnyOpenVisit();
+    if (open != null) {
+      final where = '${open['customer'] ?? open['custom_lead'] ?? ''}'.trim();
+      throw Exception('You are still checked in'
+          '${where.isEmpty ? '' : ' at $where'}. '
+          'Punch out there before starting another visit.');
+    }
+
     final stamp = DateTime.now()
         .toIso8601String()
         .substring(0, 19)

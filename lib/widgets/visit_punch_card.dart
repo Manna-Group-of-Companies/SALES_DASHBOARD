@@ -37,12 +37,26 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
     _load();
   }
 
+  /// An open visit somewhere other than here, or null. Held so the card can
+  /// say so before the rep taps, rather than only when they are refused.
+  Map<String, dynamic>? _openElsewhere;
+
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
       _open =
       await Api.getOpenVisit(customer: widget.customer, lead: widget.lead);
     } catch (_) {}
+    try {
+      final any = await Api.getAnyOpenVisit();
+      // The visit at this counter is not "elsewhere" — that one is what the
+      // punch-out button is for.
+      _openElsewhere = (any == null || (_open != null && any['name'] == _open!['name']))
+          ? null
+          : any;
+    } catch (_) {
+      _openElsewhere = null;
+    }
     if (mounted) setState(() => _loading = false);
   }
 
@@ -59,7 +73,23 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
     if (Session.I.salesPerson == null) {
       return _snack('No rep linked to this login.');
     }
+
+    // Checked before the GPS fix, not after. Making a rep stand and wait for
+    // satellites only to refuse them is a worse way to say the same thing.
     setState(() => _busy = true);
+    try {
+      final open = await Api.getAnyOpenVisit();
+      if (open != null && mounted) {
+        setState(() => _busy = false);
+        return _showStillCheckedIn(open);
+      }
+    } catch (_) {
+      // A failed lookup must not stop a rep working. The API refuses a second
+      // visit anyway, so the worst case is the message arrives later and less
+      // gracefully rather than a rep being stranded at a counter.
+    }
+    if (!mounted) return;
+
     _snack('Getting GPS...');
     try {
       final pos = await getCurrentLocation();
@@ -90,6 +120,46 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Says where the rep is still checked in, and since when.
+  ///
+  /// Named rather than just refused: a rep who forgot to punch out two shops
+  /// ago cannot act on "you have a visit open" — they need to know which one,
+  /// because that is the screen they have to go back to.
+  Future<void> _showStillCheckedIn(Map<String, dynamic> open) {
+    final where =
+        '${open['customer'] ?? open['custom_lead'] ?? 'another place'}'.trim();
+    final since = _fmtT(open['check_in_time']);
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: const [
+          Icon(Icons.timer_outlined, color: Color(0xFFB3261E)),
+          SizedBox(width: 8),
+          Expanded(child: Text('Still on a visit')),
+        ]),
+        content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'You have been checked in at $where since $since. '
+                'You can only be on one visit at a time.',
+                style: const TextStyle(fontSize: 13.5, height: 1.4),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Go back and punch out there, then start this one.',
+                style: TextStyle(fontSize: 12.5, color: Colors.black54),
+              ),
+            ]),
+        actions: [
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+        ],
+      ),
+    );
   }
 
   Future<void> _punchOut() async {
@@ -154,6 +224,25 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
               ),
             ),
           ]),
+          // Said on the card, not just when the button is tapped, so a rep who
+          // forgot to punch out two shops ago finds out on arrival.
+          if (!_loading && !open && _openElsewhere != null) ...[
+            const SizedBox(height: 8),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.timer_outlined,
+                  size: 18, color: Color(0xFFB3261E)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                    'Still checked in at '
+                    '${_openElsewhere!['customer'] ?? _openElsewhere!['custom_lead'] ?? 'another place'}'
+                    ' since ${_fmtT(_openElsewhere!['check_in_time'])}. '
+                    'Punch out there first.',
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFFB3261E))),
+              ),
+            ]),
+          ],
           // Punching out is never gated — an already-open visit must always be
           // closable, even if the location was never captured.
           if (!_loading && !open && !widget.locationCaptured) ...[
