@@ -59,6 +59,7 @@ import type {
   MinStockLine,
   ProductionOrderRow,
   StockReservationRow,
+  TripTrack,
   NotificationKind,
   NotificationSeverity,
   Order,
@@ -4243,6 +4244,120 @@ async function getTrip(tripId: string): Promise<Trip> {
   return toTrip(doc);
 }
 
+/**
+ * Everywhere a trip is known to have been, in time order.
+ *
+ * Assembled from three sources because no single one is a track:
+ *
+ *   - the trip's own `start_*`/`end_*` fixes — where the rep punched in and out,
+ *   - the `Sales Visit` rows against the trip, resolved to the verified
+ *     coordinates of the customer or lead they name,
+ *   - any `gps_points` samples, plotted but never joined into the route.
+ *
+ * The visits are the substance. `Trip.gps_points` sounds like a breadcrumb
+ * trail and is not: TRP-00250 claims 179 km and holds one point.
+ *
+ * Coordinates come from the **verified** fields first. Those are what a
+ * manager signed off and what the 100 m punch-in check measures against; the
+ * captured pair is whatever the phone reported and may never have been looked
+ * at.
+ */
+async function getTripTrack(tripId: string): Promise<TripTrack> {
+  const [doc, visits] = await Promise.all([
+    getDoc<Record<string, unknown>>(DOCTYPE.trip, tripId),
+    listVisitsForTrip(tripId),
+  ]);
+
+  const wantCustomers = [...new Set(visits.map((v) => v.customerId).filter(Boolean))] as string[];
+  const wantLeads = [...new Set(visits.map((v) => v.leadId).filter(Boolean))] as string[];
+
+  const [customers, leads] = await Promise.all([
+    wantCustomers.length
+      ? listDocs<Record<string, unknown>>(DOCTYPE.customer, {
+          fields: ['name', ...Object.values(SALES_CUSTOMER_FIELD)],
+          filters: [['name', 'in', wantCustomers]],
+          limit: 0,
+        }).catch(() => [] as Record<string, unknown>[])
+      : Promise.resolve([] as Record<string, unknown>[]),
+    wantLeads.length
+      ? listDocs<Record<string, unknown>>(DOCTYPE.lead, {
+          fields: ['name', ...Object.values(LEAD_FIELD)],
+          filters: [['name', 'in', wantLeads]],
+          limit: 0,
+        }).catch(() => [] as Record<string, unknown>[])
+      : Promise.resolve([] as Record<string, unknown>[]),
+  ]);
+
+  /** Verified coordinates win; the captured pair is the fallback. */
+  const place = (
+    r: Record<string, unknown>,
+    f: { verifiedLatitude: string; verifiedLongitude: string; latitude: string; longitude: string },
+  ) => {
+    const vLat = Number(r[f.verifiedLatitude]);
+    const vLng = Number(r[f.verifiedLongitude]);
+    if (Number.isFinite(vLat) && Number.isFinite(vLng) && (vLat !== 0 || vLng !== 0)) {
+      return { latitude: vLat, longitude: vLng };
+    }
+    const lat = Number(r[f.latitude]);
+    const lng = Number(r[f.longitude]);
+    return { latitude: lat, longitude: lng };
+  };
+
+  const byCustomer = new Map(
+    customers.map((c) => [
+      String(c.name),
+      {
+        name: str(c[SALES_CUSTOMER_FIELD.customerName]) ?? String(c.name),
+        ...place(c, SALES_CUSTOMER_FIELD as never),
+      },
+    ]),
+  );
+  const byLead = new Map(
+    leads.map((l) => [
+      String(l.name),
+      {
+        name: str(l[LEAD_FIELD.leadName]) ?? String(l.name),
+        ...place(l, LEAD_FIELD as never),
+      },
+    ]),
+  );
+
+  const stops = visits.map((visit) => {
+    const found = visit.customerId
+      ? byCustomer.get(visit.customerId)
+      : visit.leadId
+        ? byLead.get(visit.leadId)
+        : undefined;
+    return {
+      visit,
+      name: found?.name ?? visit.customerId ?? visit.leadId ?? 'Unknown party',
+      place: found ? { latitude: found.latitude, longitude: found.longitude } : undefined,
+    };
+  });
+
+  const gps = Array.isArray(doc.gps_points) ? (doc.gps_points as Record<string, unknown>[]) : [];
+
+  return {
+    trip: toTrip(doc),
+    start: {
+      latitude: Number(doc.start_latitude) || 0,
+      longitude: Number(doc.start_longitude) || 0,
+      at: str(doc.start_time),
+    },
+    end: {
+      latitude: Number(doc.end_latitude) || 0,
+      longitude: Number(doc.end_longitude) || 0,
+      at: str(doc.end_time),
+    },
+    stops,
+    gpsPoints: gps.map((g) => ({
+      latitude: Number(g.latitude) || 0,
+      longitude: Number(g.longitude) || 0,
+      at: str(g.timestamp),
+    })),
+  };
+}
+
 /** Shop visits recorded against one trip. */
 async function listVisitsForTrip(tripId: string): Promise<SalesVisit[]> {
   const rows = await listDocs<Record<string, unknown>>(DOCTYPE.salesVisit, {
@@ -4723,6 +4838,7 @@ export const Api = {
     list: listTrips,
     get: getTrip,
     listVisitsForTrip,
+    getTrack: getTripTrack,
     listVisits: listSalesVisits,
     verifyLeg,
   },

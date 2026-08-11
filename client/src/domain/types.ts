@@ -629,6 +629,26 @@ export interface SalesVisit {
   status?: string;
 }
 
+/**
+ * Everywhere a trip is known to have been.
+ *
+ * The stops are the substance — real records of a rep checking in somewhere
+ * whose coordinates are known. `gpsPoints` is kept separate and deliberately
+ * not treated as a path: trips carry one or two samples, hours apart, and
+ * joining them would draw a route nobody took.
+ */
+export interface TripTrack {
+  trip: Trip;
+  start: { latitude: number; longitude: number; at?: string };
+  end: { latitude: number; longitude: number; at?: string };
+  stops: Array<{
+    visit: SalesVisit;
+    name: string;
+    place?: { latitude: number; longitude: number };
+  }>;
+  gpsPoints: Array<{ latitude: number; longitude: number; at?: string }>;
+}
+
 // --------------------------------------------------------------- orders ---
 
 export type OrderStatus =

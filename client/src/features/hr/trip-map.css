@@ -1,0 +1,75 @@
+/*
+ * The trip map.
+ *
+ * The map is the point of the screen, so it gets real height — a 200px strip
+ * of Kerala shows a cluster of dots and no route.
+ */
+
+.tm {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.tm__canvas {
+  height: 420px;
+  width: 100%;
+}
+@media (max-width: 720px) {
+  .tm__canvas { height: 300px; }
+}
+
+.tm__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.tm__legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+.tm__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px var(--border);
+  display: inline-block;
+}
+
+.tm__caveat {
+  margin: 0;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.tm__when { color: #666; font-size: 11px; }
+
+/*
+ * Leaflet ships its own light-themed tiles and controls. In dark mode the
+ * attribution and zoom buttons would otherwise be white-on-white.
+ */
+@media (prefers-color-scheme: dark) {
+  .leaflet-control-attribution,
+  .leaflet-bar a {
+    background: #1e1e1e !important;
+    color: #ddd !important;
+  }
+  .leaflet-bar a:hover { background: #2a2a2a !important; }
+}
+
+/* Trip row expanded to show its map. */
+.tm__cell { padding: 12px !important; background: var(--surface-2); }
+.tm__caret { color: var(--text-3); }
+.row--open { background: var(--surface-2); font-weight: 600; }
+.tm__verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.tm__stops { margin-top: 10px; background: var(--surface); }
