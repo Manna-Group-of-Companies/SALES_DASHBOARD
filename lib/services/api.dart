@@ -2811,6 +2811,61 @@ class Api {
         'Trip', tripName, {'expenses': clean, 'total_expenses': total});
   }
 
+  /// This rep's trips between two dates, with distance and expenses.
+  ///
+  /// Both the trips they own and the ones they were tagged onto, because a rep
+  /// riding with a colleague still travelled the distance and a summary that
+  /// omitted those days would read as time off.
+  ///
+  /// Each row carries `_mine`, false when the trip belongs to a colleague who
+  /// tagged this rep onto it. Whether the cost is *shared* is read off
+  /// `tagged_csv` by `isSharedTrip` rather than flagged here, so one definition
+  /// serves both the totals and the row.
+  static Future<List<Map<String, dynamic>>> getExpenseSummary({
+    required String from,
+    required String to,
+  }) async {
+    final me = Session.I.salesPerson;
+    if (me == null) return [];
+    const f = '["name","trip_date","purpose","status","sales_person",'
+        '"total_distance_km","odometer_distance_km","total_expenses",'
+        '"estimated_cost","final_cost","tagged_csv"]';
+    final range = '["trip_date",">=","$from"],["trip_date","<=","$to"],'
+        '["status","!=","Cancelled"]';
+
+    final results = await Future.wait([
+      _list('Trip',
+          fields: f,
+          filters: '[$range,["sales_person","=","$me"]]',
+          orderBy: 'trip_date desc',
+          limit: 0),
+      // Trips somebody else raised and tagged this rep onto.
+      _list('Trip',
+              fields: f,
+              filters: '[$range,["tagged_csv","like","%|$me|%"]]',
+              orderBy: 'trip_date desc',
+              limit: 0)
+          .catchError((_) => <Map<String, dynamic>>[]),
+    ]);
+
+    final byName = <String, Map<String, dynamic>>{};
+    for (final t in results[0]) {
+      t['_mine'] = true;
+      byName['${t['name']}'] = t;
+    }
+    for (final t in results[1]) {
+      // A trip this rep owns *and* is tagged on is still one trip.
+      final n = '${t['name']}';
+      if (byName.containsKey(n)) continue;
+      t['_mine'] = false;
+      byName[n] = t;
+    }
+
+    final list = byName.values.toList()
+      ..sort((a, b) => '${b['trip_date']}'.compareTo('${a['trip_date']}'));
+    return list;
+  }
+
   // HR: all trips with expense totals + tagged members.
   static Future<List<Map<String, dynamic>>> getAllTripsForHR() => _list('Trip',
       fields:

@@ -31,6 +31,7 @@ import 'package:manna_field_sales/screens/production/production_dashboard_screen
 import 'package:manna_field_sales/screens/retread/retread_orders_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_proforma_list_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_ready_tyres_screen.dart';
+import 'package:manna_field_sales/screens/trips/expense_summary_screen.dart';
 import 'package:manna_field_sales/screens/trips/hr_trip_expenses_screen.dart';
 import 'package:manna_field_sales/screens/trips/trip_rates_screen.dart';
 import 'package:manna_field_sales/screens/trips/trips_screen.dart';
@@ -531,6 +532,11 @@ class _HomeDashboardState extends State<HomeDashboard>
                 () => _go(const MyCollectionsScreen())),
         _Tile('Map', Icons.map, () => _go(const MapScreen())),
         _Tile('Trips', Icons.directions_car, () => _go(const TripsScreen())),
+        // Separate from Trips: that screen is one day's work, this is the
+        // month's claim, and a rep looking for what they are owed was
+        // otherwise adding trips up on paper.
+        _Tile('My Expenses', Icons.receipt_long,
+                () => _go(const ExpenseSummaryScreen())),
         _Tile('Leave', Icons.beach_access, () => _go(const LeaveScreen())),
       ],
       // Minimum stock is how Treads sells; Retreads and UAE run a different
