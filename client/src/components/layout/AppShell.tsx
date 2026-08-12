@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import type { Role } from '@/domain/types';
 import { ROLE_LABEL } from '@/domain/types';
+import { canOpen, type ManagerScreen } from '@/domain/sales';
 import { USE_MOCK, MIN_STOCK_POLL_MS } from '@/api/config';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import {
@@ -43,6 +44,14 @@ interface NavItem {
   label: string;
   icon: string;
   roles: Role[];
+  /**
+   * Sales screens are gated on the team this login manages, not on the role.
+   *
+   * Saneesh and Renjith run party records only; Pareeth has the order pipeline
+   * as well. `screensFor` in `domain/sales.ts` holds that, so the decision
+   * lives in one place rather than across half a dozen `roles:` arrays.
+   */
+  screen?: ManagerScreen;
   /** Live count shown on the right of the item. */
   count?: number;
   urgent?: boolean;
@@ -122,18 +131,19 @@ export function AppShell() {
     { to: '/', label: 'HR Dashboard', icon: '◫', roles: ['hr'], group: 'Overview' },
 
     { to: '/gm', label: 'Escalated to You', icon: '⚖', roles: ['general_manager'], group: 'Overview' },
-    { to: '/customers', label: 'Customers', icon: '👥', roles: ['sales_manager', 'general_manager'], group: 'Sales' },
-    { to: '/leads', label: 'Leads', icon: '🌱', roles: ['sales_manager'], group: 'Sales' },
-    { to: '/orders', label: 'Team Orders', icon: '📄', roles: ['sales_manager', 'general_manager'], count: myOrders.length, group: 'Sales' },
-    { to: '/locations', label: 'Location Checks', icon: '📍', roles: ['sales_manager'], group: 'Sales' },
-    { to: '/approvals', label: 'Approvals', icon: '✔', roles: ['sales_manager'], count: awaitingApproval.length, urgent: awaitingApproval.length > 0, group: 'Sales' },
-    { to: '/combined', label: 'Combined Orders', icon: '⑃', roles: ['sales_manager'], group: 'Sales' },
+    { to: '/customers', label: 'Customers', icon: '👥', roles: ['sales_manager', 'general_manager'], screen: 'customers', group: 'Sales' },
+    { to: '/leads', label: 'Leads', icon: '🌱', roles: ['sales_manager'], screen: 'leads', group: 'Sales' },
+    { to: '/orders', label: 'Team Orders', icon: '📄', roles: ['sales_manager', 'general_manager'], screen: 'orders', count: myOrders.length, group: 'Sales' },
+    { to: '/locations', label: 'Location Checks', icon: '📍', roles: ['sales_manager'], screen: 'locations', group: 'Sales' },
+    { to: '/team/regularizations', label: 'Attendance Corrections', icon: '🕓', roles: ['sales_manager'], screen: 'regularizations', group: 'Sales' },
+    { to: '/approvals', label: 'Approvals', icon: '✔', roles: ['sales_manager'], screen: 'approvals', count: awaitingApproval.length, urgent: awaitingApproval.length > 0, group: 'Sales' },
+    { to: '/combined', label: 'Combined Orders', icon: '⑃', roles: ['sales_manager'], screen: 'combined', group: 'Sales' },
 
     { to: '/production', label: 'Production Queue', icon: '⚙', roles: ['production_manager'], group: 'Production' },
     { to: '/production/stock', label: 'Minimum Stock', icon: '📦', roles: ['production_manager'], group: 'Production' },
     { to: '/production/close-week', label: 'Close the Week', icon: '🗂', roles: ['production_manager'], group: 'Production' },
 
-    { to: '/stock', label: 'Minimum Stock', icon: '📦', roles: ['sales_manager', 'general_manager'], group: 'Sales' },
+    { to: '/stock', label: 'Minimum Stock', icon: '📦', roles: ['sales_manager', 'general_manager'], screen: 'stock', group: 'Sales' },
     { to: '/stock/ledger', label: 'Stock Ledger', icon: '📦', roles: ['stock_manager'], count: lowStock.length, urgent: lowStock.length > 0, group: 'Stock' },
     { to: '/stock/aging', label: 'Aging Stock', icon: '🕰', roles: ['stock_manager'], group: 'Stock' },
     { to: '/stock/replenish', label: 'Replenishment', icon: '↻', roles: ['stock_manager'], group: 'Stock' },
@@ -151,7 +161,19 @@ export function AppShell() {
     { to: '/import', label: 'Data Import', icon: '⬆', roles: ['sales_manager', 'stock_manager'], group: 'Admin' },
   ];
 
-  const visible = items.filter((i) => i.roles.includes(user.role));
+  /*
+   * Two gates, deliberately.
+   *
+   * `roles` is what the login mainly is. `screen` is what this particular
+   * manager's team is asked to work — Saneesh and Renjith get party records
+   * only. A user who manages a team reaches those screens whatever their role
+   * says: Renjith is flagged a production manager AND runs the UAE sales team,
+   * and without this he would have no route to his own reps.
+   */
+  const visible = items.filter((i) => {
+    if (i.screen) return canOpen(user.managedTeam, i.screen);
+    return i.roles.includes(user.role);
+  });
   const groups = [...new Set(visible.map((i) => i.group))];
 
   // Matched against the visible items, not all of them: "/" is the Dashboard

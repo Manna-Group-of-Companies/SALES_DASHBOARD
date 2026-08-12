@@ -16,6 +16,8 @@ export const DOCTYPE = {
   customer: 'Customer',
   item: 'Item',
   salesPerson: 'Sales Person',
+  /** Attachments. The shop photo lives here, not on the party's own field. */
+  file: 'File',
   user: 'User',
 
   /*

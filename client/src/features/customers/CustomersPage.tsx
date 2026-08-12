@@ -17,7 +17,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { SalesCustomer, SalesPerson, SalesRoute } from '@/domain/types';
 import { activeSalesPeople } from '@/domain/attendance';
-import { creditBreached, hasRoute, teamOf } from '@/domain/sales';
+import { creditBreached, hasRoute, scopeFor, teamOf, NO_TEAM_MESSAGE } from '@/domain/sales';
 import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
@@ -54,9 +54,14 @@ export function CustomersPage() {
         if (!live) return;
         setPeople(p);
         // Only ever this manager's team — other teams are not their business.
-        const team = teamOf(p, user?.salesPerson);
+        const team = scopeFor(p, user?.salesPerson);
+        /* Fail closed: an unresolved team must show nothing, never everyone. */
+        if (!team) {
+          setError(NO_TEAM_MESSAGE);
+          return;
+        }
         const [c, r] = await Promise.all([
-          Api.sales.listCustomers(team.length ? team : undefined),
+          Api.sales.listCustomers(team),
           Api.sales.listRoutesFor(),
         ]);
         if (!live) return;

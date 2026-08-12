@@ -58,6 +58,18 @@ export interface User {
   salesPerson?: string;
   /** Production unit (ERPNext company). Production/stock managers only. */
   productionUnit?: string;
+  /**
+   * The team token this login manages — `Pareeth`, `Saneesh`, `Renjith` — from
+   * `User.custom_managed_team`.
+   *
+   * Held separately from `role` because the two are not the same question.
+   * `renjith@mannauae.com` carries `custom_is_production_manager = 1` *and*
+   * manages the UAE sales team; role resolution picks production because it is
+   * checked first, and without this field he could never reach a sales screen
+   * even though five reps report to him. A role is what someone mainly is; this
+   * is a capability they also hold.
+   */
+  managedTeam?: string;
 }
 
 // ------------------------------------------------------------- products ---
@@ -306,6 +318,8 @@ export type LocationStatus =
 export interface SalesLead {
   id: string;
   name: string;
+  /** `company_name` — the trading name, often the same as `lead_name`. */
+  companyName?: string;
   rep?: string;
   route?: string;
   gstin?: string;
@@ -337,10 +351,22 @@ export interface SalesRoute {
  * Both queues have the same shape and the same decision, so they are one type
  * and one screen. The `kind` is what decides which doctype gets written.
  */
+/**
+ * One capture waiting on a manager's eye.
+ *
+ * Carries the party's full detail, not just a name and a pin. The manager is
+ * deciding whether a photograph is the place the record claims — and a shop
+ * sign matches a *name*, a *town* and a *trade*, not a document id. Without
+ * the mobile number there is also no way to query a doubtful one except by
+ * going back through the rep.
+ */
 export interface LocationCheck {
-  kind: 'customer' | 'lead';
+  /** A site is new premises being asserted; the judgement is the same. */
+  kind: 'customer' | 'lead' | 'site';
   id: string;
   name: string;
+  /** Lead only: the trading name, when it differs from the contact name. */
+  companyName?: string;
   rep?: string;
   route?: string;
   capturedBy?: string;
@@ -348,6 +374,12 @@ export interface LocationCheck {
   longitude: number;
   bannerPhoto?: string;
   address?: string;
+  city?: string;
+  mobile?: string;
+  shopType?: string;
+  gstin?: string;
+  /** Lead only: where it sits in the CRM pipeline. */
+  status?: string;
 }
 
 /** One line of a Sales Order, as the approval screen needs it. */

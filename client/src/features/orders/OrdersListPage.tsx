@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { LeadOrder, SalesPerson, TeamOrder } from '@/domain/types';
 import { activeSalesPeople } from '@/domain/attendance';
-import { teamOf } from '@/domain/sales';
+import { scopeFor, teamOf, NO_TEAM_MESSAGE } from '@/domain/sales';
 import {
   awaitingManager,
   isApproved,
@@ -89,7 +89,12 @@ export function OrdersListPage() {
       .then(async (p) => {
         if (!live) return;
         setPeople(p);
-        const team = teamOf(p, user?.salesPerson);
+        const team = scopeFor(p, user?.salesPerson);
+        /* Fail closed: an unresolved team must show nothing, never everyone. */
+        if (!team) {
+          setError(NO_TEAM_MESSAGE);
+          return;
+        }
         const list = recentWeeks(serverNow(), 13);
         const chosen = weekStart || list[0].start;
         const week = list.find((w) => w.start === chosen) ?? list[0];
@@ -97,10 +102,10 @@ export function OrdersListPage() {
         setWeekStart(week.start);
 
         const [so, lo] = await Promise.all([
-          Api.sales.listOrders(team.length ? team : undefined),
+          Api.sales.listOrders(team),
           Api.sales
             .listLeadOrders({
-              reps: team.length ? team : undefined,
+              reps: team,
               from: week.start,
               to: week.end,
             })

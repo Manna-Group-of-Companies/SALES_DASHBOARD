@@ -12,7 +12,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { SalesLead, SalesPerson, SalesRoute } from '@/domain/types';
-import { hasRoute, teamOf } from '@/domain/sales';
+import { hasRoute, scopeFor, teamOf, NO_TEAM_MESSAGE } from '@/domain/sales';
 import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
@@ -49,9 +49,14 @@ export function LeadsPage() {
       .then(async (p) => {
         if (!live) return;
         setPeople(p);
-        const team = teamOf(p, user?.salesPerson);
+        const team = scopeFor(p, user?.salesPerson);
+        /* Fail closed: an unresolved team must show nothing, never everyone. */
+        if (!team) {
+          setError(NO_TEAM_MESSAGE);
+          return;
+        }
         const [l, r] = await Promise.all([
-          Api.sales.listLeads(team.length ? team : undefined),
+          Api.sales.listLeads(team),
           Api.sales.listRoutesFor(),
         ]);
         if (!live) return;

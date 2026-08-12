@@ -20,7 +20,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { LocationCheck, SalesPerson } from '@/domain/types';
-import { teamOf } from '@/domain/sales';
+import { scopeFor, NO_TEAM_MESSAGE } from '@/domain/sales';
 import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
@@ -31,7 +31,7 @@ import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import './approvals.css';
 
-type Kind = 'all' | 'customer' | 'lead';
+type Kind = 'all' | 'customer' | 'lead' | 'site';
 
 export function LocationVerificationPage() {
   const user = useAppSelector(selectUser);
@@ -58,8 +58,13 @@ export function LocationVerificationPage() {
         if (!live) return;
         setPeople(p);
         // A manager only ever decides their own team's captures.
-        const team = teamOf(p, user?.salesPerson);
-        const q = await Api.sales.listLocationQueue(team.length ? team : undefined);
+        const team = scopeFor(p, user?.salesPerson);
+        /* Fail closed: an unresolved team must show nothing, never everyone. */
+        if (!team) {
+          setError(NO_TEAM_MESSAGE);
+          return;
+        }
+        const q = await Api.sales.listLocationQueue(team);
         if (live) setQueue(q);
       })
       .catch((e: unknown) => {
@@ -233,7 +238,9 @@ export function LocationVerificationPage() {
               title={
                 <span className="odo__title">
                   <span>{item.name}</span>
-                  <Badge tone={item.kind === 'lead' ? 'accent' : 'neutral'}>{item.kind}</Badge>
+                  <Badge tone={item.kind === 'lead' ? 'accent' : item.kind === 'site' ? 'warn' : 'neutral'}>
+                    {item.kind}
+                  </Badge>
                 </span>
               }
             >
@@ -258,8 +265,52 @@ export function LocationVerificationPage() {
                 )}
               </div>
 
+              {/*
+                Everything on the record, because the decision is whether the
+                photograph is this place. A sign matches a name, a town and a
+                trade — not a document id — and the mobile number is the only
+                way to query a doubtful one without going back through the rep.
+              */}
               <table className="table loc__facts">
                 <tbody>
+                  {item.companyName && (
+                    <tr>
+                      <td className="dim">Trading as</td>
+                      <td>{item.companyName}</td>
+                    </tr>
+                  )}
+                  {item.shopType && (
+                    <tr>
+                      <td className="dim">Trade</td>
+                      <td>{item.shopType}</td>
+                    </tr>
+                  )}
+                  {(item.city || item.address) && (
+                    <tr>
+                      <td className="dim">Place</td>
+                      <td>
+                        {item.city && <b>{item.city}</b>}
+                        {item.city && item.address && item.address !== item.city && ' · '}
+                        {item.address !== item.city ? item.address : ''}
+                      </td>
+                    </tr>
+                  )}
+                  <tr>
+                    <td className="dim">Mobile</td>
+                    <td>
+                      {item.mobile ? (
+                        <a href={`tel:${item.mobile}`}>{item.mobile}</a>
+                      ) : (
+                        <span className="dim">not recorded</span>
+                      )}
+                    </td>
+                  </tr>
+                  {item.gstin && (
+                    <tr>
+                      <td className="dim">GST</td>
+                      <td className="mono small">{item.gstin}</td>
+                    </tr>
+                  )}
                   <tr>
                     <td className="dim">Captured by</td>
                     <td>{item.capturedBy || item.rep || '—'}</td>
@@ -268,12 +319,6 @@ export function LocationVerificationPage() {
                     <td className="dim">Route</td>
                     <td>{item.route || <span className="dim">none set</span>}</td>
                   </tr>
-                  {item.address && (
-                    <tr>
-                      <td className="dim">Address</td>
-                      <td>{item.address}</td>
-                    </tr>
-                  )}
                   <tr>
                     <td className="dim">Coordinates</td>
                     <td className="num">
@@ -289,6 +334,10 @@ export function LocationVerificationPage() {
                         <span className="dim">not captured</span>
                       )}
                     </td>
+                  </tr>
+                  <tr>
+                    <td className="dim">Record</td>
+                    <td className="mono tiny dim">{item.id}</td>
                   </tr>
                 </tbody>
               </table>

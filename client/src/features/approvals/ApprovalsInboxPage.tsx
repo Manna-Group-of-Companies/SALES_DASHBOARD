@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { teamOf } from '@/domain/sales';
+import { scopeFor, NO_TEAM_MESSAGE } from '@/domain/sales';
 import { Api, type InboxItem, type InboxKind } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
@@ -52,8 +52,13 @@ export function ApprovalsInboxPage() {
       .listSalesPeople()
       .then(async (p) => {
         if (!live) return;
-        const team = teamOf(p, user?.salesPerson);
-        const list = await Api.sales.listApprovalInbox(team.length ? team : undefined);
+        const team = scopeFor(p, user?.salesPerson);
+        /* Fail closed: an unresolved team must show nothing, never everyone. */
+        if (!team) {
+          setError(NO_TEAM_MESSAGE);
+          return;
+        }
+        const list = await Api.sales.listApprovalInbox(team);
         if (live) setItems(list);
       })
       .catch((e: unknown) => {

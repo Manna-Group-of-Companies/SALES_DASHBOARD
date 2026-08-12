@@ -604,6 +604,12 @@ async function fetchCurrentUser(): Promise<User> {
     salesPerson,
     productionUnit:
       (u[USER_FIELD.productionCompany] as string | undefined) || salesPersons[0]?.custom_company,
+    /*
+     * Kept even when `role` came out as something else. Renjith is flagged a
+     * production manager and also manages the UAE sales team; the flag wins the
+     * role, so without this he would have no route to his own reps.
+     */
+    managedTeam: managedTeam || (managesTeam ? myToken : undefined),
   };
 }
 
@@ -2718,6 +2724,7 @@ async function listLeads(reps?: string[]): Promise<SalesLead[]> {
   return rows.map((r) => ({
     id: String(r.name),
     name: str(r[LEAD_FIELD.leadName]) ?? str(r[LEAD_FIELD.companyName]) ?? String(r.name),
+    companyName: str(r[LEAD_FIELD.companyName]),
     rep: str(r[LEAD_FIELD.rep]),
     route: str(r[LEAD_FIELD.route]),
     gstin: str(r[LEAD_FIELD.gstin]),
@@ -2782,15 +2789,24 @@ async function assignRoute(input: {
  * a rejected reading that looks like a location.
  */
 async function decideLocation(input: {
-  kind: 'customer' | 'lead';
+  kind: 'customer' | 'lead' | 'site';
   id: string;
   approve: boolean;
   latitude: number;
   longitude: number;
 }): Promise<void> {
-  const isCustomer = input.kind === 'customer';
-  const doctype = isCustomer ? DOCTYPE.customer : DOCTYPE.lead;
-  const f = isCustomer ? SALES_CUSTOMER_FIELD : LEAD_FIELD;
+  /*
+   * All three carry the same `custom_location_*` field names — the Site
+   * doctype was built to match Customer and Lead — so the only thing that
+   * varies is which doctype to write to.
+   */
+  const doctype =
+    input.kind === 'customer'
+      ? DOCTYPE.customer
+      : input.kind === 'lead'
+        ? DOCTYPE.lead
+        : DOCTYPE.customerSite;
+  const f = input.kind === 'customer' ? SALES_CUSTOMER_FIELD : LEAD_FIELD;
 
   const body: Record<string, unknown> = input.approve
     ? {
@@ -2805,9 +2821,18 @@ async function decideLocation(input: {
 
 /** Everything waiting on a location decision, customers and leads together. */
 async function listLocationQueue(reps?: string[]): Promise<LocationCheck[]> {
-  const [customers, leads] = await Promise.all([
+  const [customers, leads, sites] = await Promise.all([
     listSalesCustomers(reps),
     listLeads(reps),
+    /*
+     * `Customer Site` has no rows yet and only one custom field is declared on
+     * it, so its remaining field names are unverified. Read with `*` rather
+     * than a named list: an unknown field answers 417 and would take the whole
+     * queue down with it, losing the customers and leads too.
+     */
+    listDocs<Record<string, unknown>>(DOCTYPE.customerSite, { fields: ['*'], limit: 0 }).catch(
+      () => [] as Record<string, unknown>[],
+    ),
   ]);
 
   const out: LocationCheck[] = [];
@@ -2823,6 +2848,7 @@ async function listLocationQueue(reps?: string[]): Promise<LocationCheck[]> {
       latitude: c.latitude,
       longitude: c.longitude,
       bannerPhoto: c.bannerPhoto,
+      gstin: c.gstin,
     });
   }
   for (const l of leads) {
@@ -2831,6 +2857,12 @@ async function listLocationQueue(reps?: string[]): Promise<LocationCheck[]> {
       kind: 'lead',
       id: l.id,
       name: l.name,
+      /*
+       * Only when it differs from the name. On the live master they are
+       * usually identical — "Janatha Tyres" in both — and printing the same
+       * words twice on a card teaches the reader to skip the line.
+       */
+      companyName: l.companyName && l.companyName !== l.name ? l.companyName : undefined,
       rep: l.rep,
       route: l.route,
       capturedBy: l.capturedBy,
@@ -2838,8 +2870,84 @@ async function listLocationQueue(reps?: string[]): Promise<LocationCheck[]> {
       longitude: l.longitude,
       bannerPhoto: l.bannerPhoto,
       address: l.address,
+      city: l.city,
+      mobile: l.mobile,
+      shopType: l.shopType,
+      gstin: l.gstin,
+      status: l.status,
     });
   }
+
+  /*
+   * Sites join the same queue rather than having their own screen.
+   *
+   * A site is somebody asserting new premises exist, which is the same
+   * judgement as a shopfront: does this photograph show the place the record
+   * claims? Two screens asking one question means the smaller queue is the one
+   * nobody remembers to open.
+   */
+  for (const s of sites) {
+    const status = str(s.custom_location_status) ?? str(s.location_status);
+    if (status !== 'Pending Verification') continue;
+    const owningRep = str(s.custom_sales_person) ?? str(s.sales_person);
+    if (reps && reps.length && owningRep && !reps.includes(owningRep)) continue;
+    // The owner is the customer if set, otherwise the lead. Heading a card with
+    // a blank tells the manager nothing about what they are approving.
+    const owner = str(s.customer) ?? str(s.lead);
+    const siteName = str(s.site_name) ?? str(s.title) ?? String(s.name);
+    out.push({
+      kind: 'site',
+      id: String(s.name),
+      name: owner ? `${siteName} — ${owner}` : siteName,
+      rep: owningRep,
+      capturedBy: str(s.custom_location_captured_by) ?? owningRep,
+      route: str(s.route) ?? str(s.custom_sales_route),
+      latitude: Number(s.custom_latitude ?? s.latitude) || 0,
+      longitude: Number(s.custom_longitude ?? s.longitude) || 0,
+      bannerPhoto: str(s.custom_banner_photo) ?? str(s.banner_photo),
+      address: str(s.custom_address) ?? str(s.address),
+    });
+  }
+
+  /*
+   * The shop photo is usually an ATTACHMENT, not a field.
+   *
+   * The field-sales app uploads it as a File against the Lead or Customer and
+   * leaves `custom_banner_photo` empty — CRM-LEAD-2026-04116 is the proof: the
+   * field is null and `lead_bannereedd65.jpg` is attached in the same second
+   * the lead was created. The records that *do* carry the field are legacy
+   * imports from salesfokuz, a different system.
+   *
+   * Read the field alone and every recent capture looks photo-less, which is
+   * exactly the queue a manager most needs to see.
+   *
+   * The attachment wins where both exist: a re-captured shop gets a new
+   * attachment while the stale legacy field stays put, and showing the old
+   * photo for a re-shot place is the failure that actually misleads.
+   */
+  const ids = out.map((o) => o.id);
+  if (ids.length) {
+    const files = await listDocs<Record<string, unknown>>(DOCTYPE.file, {
+      fields: ['name', 'file_url', 'attached_to_name', 'attached_to_doctype', 'creation'],
+      filters: [['attached_to_name', 'in', ids]],
+      orderBy: 'creation desc',
+      limit: 0,
+    }).catch(() => [] as Record<string, unknown>[]);
+
+    // `creation desc` means the first one seen per record is the newest.
+    const newest = new Map<string, string>();
+    for (const f of files) {
+      const owner = str(f.attached_to_name);
+      const url = str(f.file_url);
+      if (!owner || !url || newest.has(owner)) continue;
+      newest.set(owner, url);
+    }
+    for (const o of out) {
+      const attached = newest.get(o.id);
+      if (attached) o.bannerPhoto = attached;
+    }
+  }
+
   return out;
 }
 
