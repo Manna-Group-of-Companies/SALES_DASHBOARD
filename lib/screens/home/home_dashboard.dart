@@ -216,15 +216,49 @@ class _HomeDashboardState extends State<HomeDashboard>
           builder: (context, active, _) {
             final recording = active == tripName;
             if (recording) {
+              // Recording on "while using the app" logs the route only while
+              // Android feels like it. Said here, while the trip is running
+              // and can still be fixed, rather than left for the rep to work
+              // out from an empty route this evening.
+              final partial = TripTracker.I.needsAlwaysPermission;
               return Card(
-                color: const Color(0xFFE8F5E9),
-                child: ListTile(
-                  leading: const Icon(Icons.fiber_manual_record,
-                      color: Colors.red),
-                  title: const Text('Recording trip route',
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('$purpose · a point about every 5 min'),
-                ),
+                color: partial
+                    ? const Color(0xFFFFF3E0)
+                    : const Color(0xFFE8F5E9),
+                child: Column(children: [
+                  ListTile(
+                    leading: Icon(Icons.fiber_manual_record,
+                        color: partial ? const Color(0xFFD97706) : Colors.red),
+                    title: const Text('Recording trip route',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Text('$purpose · a point about every 5 min'),
+                  ),
+                  if (partial)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                                'Location is set to "while using the app", so '
+                                'the route may stop being recorded once your '
+                                'screen is off. Set it to "Allow all the time" '
+                                'to record the whole trip.',
+                                style: TextStyle(
+                                    fontSize: 12, color: Color(0xFF92400E))),
+                            const SizedBox(height: 6),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: OutlinedButton.icon(
+                                onPressed: () =>
+                                    TripTracker.I.openLocationSettings(),
+                                icon: const Icon(Icons.settings, size: 16),
+                                label: const Text('Open settings'),
+                              ),
+                            ),
+                          ]),
+                    ),
+                ]),
               );
             }
             return Card(

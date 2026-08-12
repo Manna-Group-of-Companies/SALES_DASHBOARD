@@ -27,6 +27,18 @@ class TripTracker {
   DateTime? _lastSaved;
   static const Duration interval = Duration(minutes: 5);
 
+  /// True when recording is running on "while using the app" only.
+  ///
+  /// The route will still be logged, but it is at the mercy of the handset:
+  /// lock the phone or leave the app for long enough and Android may stop
+  /// feeding it. Surfaced so a screen can say so rather than letting a rep
+  /// discover it from an empty route at the end of the day.
+  bool needsAlwaysPermission = false;
+
+  /// Opens this app's settings page, where "Allow all the time" lives.
+  /// Android will not grant it from a dialog — the rep has to set it there.
+  Future<void> openLocationSettings() => Geolocator.openAppSettings();
+
   bool isRecording(String tripName) => activeTrip.value == tripName;
 
   Future<String?> start(String tripName) async {
@@ -44,6 +56,26 @@ class TripTracker {
     if (perm == LocationPermission.denied ||
         perm == LocationPermission.deniedForever) {
       return 'Location permission denied. Allow location to record the route.';
+    }
+
+    // "While using the app" is not enough for a trip.
+    //
+    // Android grants that first, and it keeps location alive only while the
+    // app is on screen or a foreground service is running. The service does
+    // run — but a rep who locks the phone and drives for an hour is exactly
+    // the case this has to survive, and on many handsets whileInUse is quietly
+    // dropped once the screen goes off.
+    //
+    // Asking a second time is what Android requires: "Allow all the time"
+    // cannot be requested until the basic grant exists. Recording still starts
+    // if they refuse — a partial route beats none — and the caller is told so
+    // it can explain.
+    needsAlwaysPermission = perm == LocationPermission.whileInUse;
+    if (needsAlwaysPermission) {
+      try {
+        final again = await Geolocator.requestPermission();
+        needsAlwaysPermission = again != LocationPermission.always;
+      } catch (_) {}
     }
     final settings = AndroidSettings(
       accuracy: LocationAccuracy.high,
