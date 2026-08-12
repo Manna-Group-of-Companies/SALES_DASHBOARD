@@ -2219,6 +2219,57 @@ class Api {
     return list.isEmpty ? null : list.first;
   }
 
+  /// Every place a visit to this party may legitimately be punched at.
+  ///
+  /// The party's own registered pin, plus each of its sites — a customer with
+  /// a shop and a godown is two drops, and a rep at the godown is not in the
+  /// wrong place.
+  ///
+  /// Verified coordinates are preferred, falling back to the captured ones.
+  /// A rep's capture waits on their manager, and refusing every punch until
+  /// that queue is cleared would stop the work the queue exists to record.
+  static Future<List<RegisteredPlace>> registeredPlacesFor(
+      {String? customer, String? lead}) async {
+    final out = <RegisteredPlace>[];
+
+    double n(dynamic v) =>
+        v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
+
+    void addFrom(Map<String, dynamic> d, String label, String prefix) {
+      final vLat = n(d['${prefix}verified_latitude']);
+      final vLng = n(d['${prefix}verified_longitude']);
+      if (isRealCoordinate(vLat, vLng)) {
+        out.add(RegisteredPlace(label, vLat, vLng));
+        return;
+      }
+      final cLat = n(d['${prefix}latitude']);
+      final cLng = n(d['${prefix}longitude']);
+      if (isRealCoordinate(cLat, cLng)) {
+        out.add(RegisteredPlace(label, cLat, cLng));
+      }
+    }
+
+    try {
+      if (customer != null && customer.isNotEmpty) {
+        addFrom(await getCustomerDoc(customer), customer, 'custom_');
+        for (final s in await getCustomerSites(customer)) {
+          addFrom(s, '${s['site_name'] ?? 'site'}', '');
+        }
+      } else if (lead != null && lead.isNotEmpty) {
+        final d = await getLeadDoc(lead);
+        addFrom(d, '${d['lead_name'] ?? lead}', 'custom_');
+        for (final s in await getLeadSites(lead)) {
+          addFrom(s, '${s['site_name'] ?? 'site'}', '');
+        }
+      }
+    } catch (_) {
+      // Whatever was gathered before the failure still counts. An empty list
+      // reads as "cannot tell", which the caller treats as permission rather
+      // than refusal.
+    }
+    return out;
+  }
+
   static Future<String> punchInVisit(
       {String? customer,
         String? lead,

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/proximity.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
@@ -93,6 +94,24 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
     _snack('Getting GPS...');
     try {
       final pos = await getCurrentLocation();
+
+      // Punching in from somewhere else entirely is what this stops. Measured
+      // against the nearest registered place — the shop's own pin or any of
+      // its sites — so a rep at the godown is not refused for failing to stand
+      // at the front counter.
+      //
+      // A null result means nothing usable is on record to measure against.
+      // That is a data gap, not a rep in the wrong place, and refusing would
+      // strand them at a counter they are genuinely standing in.
+      final places = await Api.registeredPlacesFor(
+          customer: widget.customer, lead: widget.lead);
+      final near = nearestRegistered(pos.latitude, pos.longitude, places);
+      if (near != null && near.metres > kPunchInRadiusMetres) {
+        if (!mounted) return;
+        setState(() => _busy = false);
+        return _showTooFar(near.place.label, near.metres);
+      }
+
       // Leads only. Established customers genuinely sit close together in a
       // town, and blocking a rep from starting a visit at a shop they already
       // sell to would stop real work to prevent a duplicate that cannot happen
@@ -151,6 +170,50 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
               const SizedBox(height: 10),
               const Text(
                 'Go back and punch out there, then start this one.',
+                style: TextStyle(fontSize: 12.5, color: Colors.black54),
+              ),
+            ]),
+        actions: [
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+        ],
+      ),
+    );
+  }
+
+  /// Says how far off the rep is, and from what.
+  ///
+  /// The distance is quoted because it is the difference between "your GPS is
+  /// drifting" and "you are in the wrong town", and the rep can tell those
+  /// apart at a glance where the app cannot.
+  Future<void> _showTooFar(String place, double metres) {
+    final away = metres < 1000
+        ? '${metres.round()} m'
+        : '${(metres / 1000).toStringAsFixed(1)} km';
+    final limit = kPunchInRadiusMetres >= 1000
+        ? '${(kPunchInRadiusMetres / 1000).toStringAsFixed(0)} km'
+        : '${kPunchInRadiusMetres.round()} m';
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: const [
+          Icon(Icons.wrong_location_outlined, color: Color(0xFFB3261E)),
+          SizedBox(width: 8),
+          Expanded(child: Text('Too far to punch in')),
+        ]),
+        content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'You are $away from $place. A visit can only be started '
+                'within $limit of where the place is registered.',
+                style: const TextStyle(fontSize: 13.5, height: 1.4),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'If you are at the right shop, its saved location is wrong — '
+                'ask your manager to have it captured again.',
                 style: TextStyle(fontSize: 12.5, color: Colors.black54),
               ),
             ]),

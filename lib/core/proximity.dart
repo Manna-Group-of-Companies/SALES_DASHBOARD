@@ -18,6 +18,49 @@ import 'dart:math' as math;
 /// close enough that two records almost certainly describe one place.
 const double kDuplicateRadiusMetres = 250;
 
+/// How far from a shop's registered position a rep may punch in.
+///
+/// Generous on purpose. This is not a test of whether the rep is standing in
+/// the doorway — it is a check that they are at the place they say they are.
+/// The registered pin is wherever somebody happened to stand when they first
+/// captured it, a customer may have several premises, and a phone in a shed
+/// behind a workshop can read a few hundred metres out. Two kilometres passes
+/// every honest visit and still refuses a punch from the next town.
+const double kPunchInRadiusMetres = 2000;
+
+/// A place a visit can legitimately be punched at: the party's own registered
+/// position, or one of its sites.
+class RegisteredPlace {
+  /// What to call it if this is the nearest one — the shop's name, or the
+  /// site's.
+  final String label;
+  final double lat;
+  final double lng;
+
+  const RegisteredPlace(this.label, this.lat, this.lng);
+}
+
+/// The closest registered place to where the rep is standing, or null when
+/// none of them has a usable coordinate.
+///
+/// Null means "cannot tell", not "too far". The caller must not treat it as a
+/// refusal: a party whose location was never captured would otherwise strand
+/// the rep at the counter, and the capture gate already covers that case.
+({RegisteredPlace place, double metres})? nearestRegistered(
+    double lat, double lng, Iterable<RegisteredPlace> places) {
+  RegisteredPlace? best;
+  var bestMetres = double.infinity;
+  for (final p in places) {
+    if (!isRealCoordinate(p.lat, p.lng)) continue;
+    final d = metresBetween(lat, lng, p.lat, p.lng);
+    if (d < bestMetres) {
+      bestMetres = d;
+      best = p;
+    }
+  }
+  return best == null ? null : (place: best, metres: bestMetres);
+}
+
 /// Metres between two coordinates, by the haversine formula.
 ///
 /// Great-circle rather than flat-earth: over a kilometre the difference is
