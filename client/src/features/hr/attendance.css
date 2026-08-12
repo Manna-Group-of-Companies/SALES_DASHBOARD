@@ -253,3 +253,6 @@ button.month__cell:focus-visible { outline: 2px solid var(--accent); outline-off
 .dayedit__actions { display: flex; gap: 8px; margin-left: auto; }
 
 .dayedit__card { margin-bottom: 14px; }
+
+/* The day's roster: counts sit beside the card title. */
+.roster__legend { display: flex; gap: 6px; flex-wrap: wrap; }

@@ -20,6 +20,9 @@ import type {
 } from '@/domain/types';
 import {
   activeSalesPeople,
+  DAY_STATUS_LABEL,
+  rosterCounts,
+  rosterFor,
   clockOf,
   duplicateLeaveKeys,
   leaveKey,
@@ -93,10 +96,19 @@ export function HrDashboardPage() {
     [logs, today],
   );
   const onFloor = useMemo(() => todayLogs.filter((l) => l.status === 'Punched In'), [todayLogs]);
-  const noPunch = useMemo(() => {
-    const seen = new Set(todayLogs.map((l) => l.person));
-    return staff.filter((p) => !seen.has(p.id));
-  }, [staff, todayLogs]);
+  /**
+   * Everyone, and where they stood today.
+   *
+   * Replaces a naive "has no log" list, which counted people on approved leave
+   * and on a weekly off as missing — and so reported absences that were fully
+   * explained on the record.
+   */
+  const roster = useMemo(() => rosterFor(today, people, logs, leave), [today, people, logs, leave]);
+  const counts = useMemo(() => rosterCounts(roster), [roster]);
+  const notAtWork = useMemo(
+    () => roster.filter((r) => r.status !== 'present' && r.status !== 'on_floor'),
+    [roster],
+  );
 
   const open = useMemo(() => openShifts(logs, today, LOOKBACK_DAYS), [logs, today]);
 
@@ -165,11 +177,21 @@ export function HrDashboardPage() {
               tone={onFloor.length ? 'ok' : 'warn'}
               foot="Punched in today"
             />
+            {/* Absent means unexplained: leave and weekly offs are excluded. */}
             <Tile
-              label="No punch today"
-              value={String(noPunch.length)}
-              tone={noPunch.length ? 'warn' : undefined}
-              foot="No record either way"
+              label="No punch yet"
+              value={String(counts.absent)}
+              tone={counts.absent ? 'warn' : undefined}
+              foot={
+                counts.leave_pending
+                  ? `+${counts.leave_pending} leave not yet granted`
+                  : 'No punch and no leave today'
+              }
+            />
+            <Tile
+              label="On leave"
+              value={String(counts.on_leave)}
+              foot="Granted, not absence"
             />
             <Tile
               label="Open shifts"
@@ -193,7 +215,82 @@ export function HrDashboardPage() {
             />
           </div>
 
-          <div className="cols cols--sidebar">
+          {/*
+            Who is not at work, and why.
+            Absent is the last resort: a punch, granted leave, an undecided
+            request and a Sunday are all checked first, so nobody lands in this
+            column who has an explanation on file. `leave_pending` is kept
+            separate from `on_leave` because an undecided request is not time
+            off — folding the two would let unapproved absence disappear into
+            the leave column.
+          */}
+          <Card
+            title={`Not at work — ${formatDate(today)}`}
+            className="mt-16"
+            actions={
+              <span className="roster__legend">
+                <Badge tone="ok">{counts.present} present</Badge>
+                {counts.on_floor > 0 && <Badge tone="ok" dot>{counts.on_floor} still out</Badge>}
+                {counts.on_leave > 0 && <Badge tone="neutral">{counts.on_leave} on leave</Badge>}
+                {counts.weekly_off > 0 && <Badge tone="neutral">{counts.weekly_off} weekly off</Badge>}
+                {counts.absent > 0 && <Badge tone="warn">{counts.absent} no punch yet</Badge>}
+              </span>
+            }
+            flush
+          >
+            {notAtWork.length === 0 ? (
+              <Empty icon="✓" title="Everyone is accounted for">
+                {counts.weekly_off > 0
+                  ? 'Today is a weekly off.'
+                  : 'Every active representative has punched in or is on approved leave.'}
+              </Empty>
+            ) : (
+              <div className="scroll-x">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Sales person</th>
+                      <th>Team</th>
+                      <th>Status</th>
+                      <th>Reason on file</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {notAtWork.map((r) => (
+                      <tr key={r.person.id}>
+                        <td>{r.person.name}</td>
+                        <td className="dim small">{r.person.teamManager || '—'}</td>
+                        <td>
+                          {r.status === 'absent' ? (
+                            /* The day is not over. Someone with no punch at
+                               10am has not been absent — they have not punched
+                               in yet, and the two are different accusations. */
+                            <Badge tone="warn">No punch yet</Badge>
+                          ) : r.status === 'leave_pending' ? (
+                            <Badge tone="warn">Leave not yet granted</Badge>
+                          ) : (
+                            <Badge tone="neutral">
+                              {DAY_STATUS_LABEL[r.status]}
+                              {r.halfDay ? ' (half day)' : ''}
+                            </Badge>
+                          )}
+                        </td>
+                        <td className="dim small">
+                          {r.status === 'absent'
+                            ? 'No punch and no leave — today is still running'
+                            : r.leave
+                              ? r.leave.reason || 'No reason given'
+                              : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+
+          <div className="cols cols--sidebar" style={{ marginTop: 16 }}>
             <Card
               title="Punched in today"
               actions={
