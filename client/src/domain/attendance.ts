@@ -16,6 +16,8 @@
  */
 
 import type { AttendanceLog, FieldLeaveRequest, SalesPerson } from './types';
+import { isGranted } from './approvals';
+import { isWeeklyOff } from './hrRules';
 
 // ---------------------------------------------------------------- people ---
 
@@ -101,6 +103,140 @@ export function openShifts(
 }
 
 // -------------------------------------------------------------- calendar ---
+
+// ------------------------------------------------------- the day's roster ---
+
+/**
+ * Where one person stood on one day.
+ *
+ * `absent` is deliberately the last resort. Calling somebody absent is a
+ * payroll consequence and, on a bad day, an accusation — so every innocent
+ * explanation is checked first: they worked, they are still out, their leave
+ * was granted, they asked for leave, or nobody works Sundays.
+ */
+export type DayStatus =
+  | 'present'
+  | 'on_floor'
+  | 'on_leave'
+  | 'leave_pending'
+  | 'weekly_off'
+  | 'absent';
+
+export interface RosterEntry {
+  person: SalesPerson;
+  status: DayStatus;
+  log?: AttendanceLog;
+  leave?: FieldLeaveRequest;
+  /** True when the leave covering this day is a half day. */
+  halfDay: boolean;
+}
+
+export const DAY_STATUS_LABEL: Record<DayStatus, string> = {
+  present: 'Present',
+  on_floor: 'Still out',
+  on_leave: 'On leave',
+  leave_pending: 'Leave not yet granted',
+  weekly_off: 'Weekly off',
+  absent: 'Absent',
+};
+
+/**
+ * Everyone, and where they stood on `date`.
+ *
+ * The order of the checks is the whole design:
+ *
+ *   1. **A punch beats everything.** Somebody who turned up worked, whatever
+ *      leave record exists — a rep who cancelled their leave and came in must
+ *      not be marked absent because the request was never withdrawn.
+ *   2. **Both punches, or they are still out.** A day counts as worked only
+ *      with a punch in *and* out; an open shift is not a complete day and is
+ *      not payroll-ready.
+ *   3. **Granted leave, then requested leave.** These are different facts. A
+ *      request nobody has decided is not time off, and treating it as such
+ *      would let unapproved absence disappear into the leave column.
+ *   4. **Sunday is nobody's absence.**
+ *
+ * Only what survives all four is absent.
+ */
+export function rosterFor(
+  date: string,
+  people: SalesPerson[],
+  logs: AttendanceLog[],
+  leave: FieldLeaveRequest[],
+): RosterEntry[] {
+  const logByPerson = new Map<string, AttendanceLog>();
+  for (const l of logs) {
+    if (l.date !== date) continue;
+    // Keep the earliest punch-in if a person somehow has two logs for a day.
+    const prev = logByPerson.get(l.person);
+    if (!prev || (l.punchIn ?? '') < (prev.punchIn ?? '')) logByPerson.set(l.person, l);
+  }
+
+  const leaveByPerson = new Map<string, FieldLeaveRequest>();
+  for (const l of leave) {
+    if (l.date !== date) continue;
+    const prev = leaveByPerson.get(l.person);
+    // A granted request outranks a pending one for the same day.
+    if (!prev || (isGranted(l) && !isGranted(prev))) leaveByPerson.set(l.person, l);
+  }
+
+  const off = isWeeklyOff(date);
+
+  return activeSalesPeople(people)
+    .map<RosterEntry>((person) => {
+      const log = logByPerson.get(person.id);
+      const lv = leaveByPerson.get(person.id);
+      const halfDay = Boolean(lv?.halfDay);
+
+      if (log) {
+        const worked = Boolean(log.punchIn && log.punchOut);
+        return {
+          person,
+          log,
+          leave: lv,
+          halfDay,
+          status: worked ? 'present' : 'on_floor',
+        };
+      }
+      if (lv && isGranted(lv)) return { person, leave: lv, halfDay, status: 'on_leave' };
+      /*
+       * A rejected request is decided, and the answer was no — so it explains
+       * nothing and must not sit in the pending column. The request is still
+       * attached, because "asked, was refused, did not come in" is exactly the
+       * context HR wants when they open the row.
+       */
+      if (lv && lv.status !== 'Rejected') {
+        return { person, leave: lv, halfDay, status: 'leave_pending' };
+      }
+      if (off) return { person, leave: lv, halfDay: false, status: 'weekly_off' };
+      return { person, leave: lv, halfDay: false, status: 'absent' };
+    })
+    .sort((a, b) => a.person.name.localeCompare(b.person.name));
+}
+
+/** How many people stand in each state. */
+export function rosterCounts(roster: RosterEntry[]): Record<DayStatus, number> {
+  const counts: Record<DayStatus, number> = {
+    present: 0,
+    on_floor: 0,
+    on_leave: 0,
+    leave_pending: 0,
+    weekly_off: 0,
+    absent: 0,
+  };
+  for (const r of roster) counts[r.status] += 1;
+  return counts;
+}
+
+/**
+ * Everyone who owes an explanation for the day.
+ *
+ * Unapproved absence and undecided leave, together — both are somebody not at
+ * work without a decision behind it, which is the thing HR chases.
+ */
+export function unexplained(roster: RosterEntry[]): RosterEntry[] {
+  return roster.filter((r) => r.status === 'absent' || r.status === 'leave_pending');
+}
 
 export interface PersonMonth {
   person: SalesPerson;
