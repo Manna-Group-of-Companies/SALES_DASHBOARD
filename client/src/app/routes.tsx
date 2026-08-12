@@ -26,6 +26,7 @@ import { LeadOrderPage } from '@/features/orders/LeadOrderPage';
 import { CombinedOrdersPage } from '@/features/orders/CombinedOrdersPage';
 import { GmQueuePage } from '@/features/orders/GmQueuePage';
 import { ApprovalsInboxPage } from '@/features/approvals/ApprovalsInboxPage';
+import { LocationVerificationPage } from '@/features/approvals/LocationVerificationPage';
 import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
 import { ProductionOrderPage } from '@/features/production/ProductionOrderPage';
 import { CloseWeekPage } from '@/features/production/CloseWeekPage';
@@ -186,6 +187,19 @@ export function AppRoutes() {
           element={
             <RoleRoute allow={GM}>
               <GmQueuePage />
+            </RoleRoute>
+          }
+        />
+
+        {/*
+          Its own screen, not a tab in the approvals inbox. 74 locations against
+          a handful of proformas means one queue would bury the other.
+        */}
+        <Route
+          path="locations"
+          element={
+            <RoleRoute allow={SALES}>
+              <LocationVerificationPage />
             </RoleRoute>
           }
         />
