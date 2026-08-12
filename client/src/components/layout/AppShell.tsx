@@ -125,6 +125,7 @@ export function AppShell() {
     { to: '/customers', label: 'Customers', icon: '👥', roles: ['sales_manager', 'general_manager'], group: 'Sales' },
     { to: '/leads', label: 'Leads', icon: '🌱', roles: ['sales_manager'], group: 'Sales' },
     { to: '/orders', label: 'Team Orders', icon: '📄', roles: ['sales_manager', 'general_manager'], count: myOrders.length, group: 'Sales' },
+    { to: '/locations', label: 'Location Checks', icon: '📍', roles: ['sales_manager'], group: 'Sales' },
     { to: '/approvals', label: 'Approvals', icon: '✔', roles: ['sales_manager'], count: awaitingApproval.length, urgent: awaitingApproval.length > 0, group: 'Sales' },
     { to: '/combined', label: 'Combined Orders', icon: '⑃', roles: ['sales_manager'], group: 'Sales' },
 
