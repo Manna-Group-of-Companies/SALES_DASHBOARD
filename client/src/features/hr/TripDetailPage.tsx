@@ -22,8 +22,11 @@ import {
   headcount,
   isImplausible,
   isShared,
+  displayMode,
   legClaim,
   legDistance,
+  primaryModeStale,
+  storedCostStale,
   outOfPocket,
   rateFor,
   travelClaim,
@@ -191,6 +194,36 @@ export function TripDetailPage() {
             </div>
           )}
 
+          {/*
+            ERPNext stores the trip's mode and cost separately from its legs,
+            and nothing keeps them in step. Editing a leg in the Desk leaves
+            both stale — so the claim below is worked out from the legs, and
+            the disagreement is stated rather than quietly resolved.
+          */}
+          {(primaryModeStale(trip) || storedCostStale(trip, rates)) && (
+            <div style={{ marginBottom: 14 }}>
+              <Alert tone="warn" title="ERPNext's trip-level figures are out of date">
+                {primaryModeStale(trip) && (
+                  <div>
+                    The trip records <b>{trip.primaryMode}</b>, but its legs were driven by{' '}
+                    <b>{displayMode(trip)}</b>.
+                  </div>
+                )}
+                {storedCostStale(trip, rates) && (
+                  <div>
+                    It stores a travel cost of <b>{money(trip.estimatedCost, 2)}</b>; the legs at
+                    today's rates come to <b>{money(travelClaim(trip, rates), 2)}</b>.
+                  </div>
+                )}
+                <div style={{ marginTop: 6 }}>
+                  Everything on this page is computed from the legs, which are the record of what
+                  was actually driven. The stored values are what the mobile app and ERPNext
+                  reports still show, so they are worth correcting there too.
+                </div>
+              </Alert>
+            </div>
+          )}
+
           <div className="tiles">
             <Tile label="Distance" value={`${trip.distanceKm} km`} foot={trip.costBasis ?? '—'} />
             <Tile label="Travel claim" value={money(travelClaim(trip, rates), 2)} foot="Legs × per-km rate" />
@@ -223,7 +256,7 @@ export function TripDetailPage() {
                     <Row label="Date" value={formatDate(trip.date)} />
                     <Row label="Started" value={clockOf(trip.startTime)} />
                     <Row label="Finished" value={trip.endTime ? clockOf(trip.endTime) : '— still open'} />
-                    <Row label="Primary mode" value={trip.primaryMode || '—'} />
+                    <Row label="Mode travelled" value={displayMode(trip)} />
                     <Row label="Cost basis" value={trip.costBasis ?? '—'} />
                     <Row label="Status" value={trip.status} />
                     <Row label="Expense status" value={trip.expenseStatus ?? '—'} />

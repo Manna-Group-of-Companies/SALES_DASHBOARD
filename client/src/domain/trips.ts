@@ -52,6 +52,62 @@ export function rateFor(mode: TravelMode, rates: TripRates): number {
   }
 }
 
+// ------------------------------------------------------- mode, from legs ---
+
+/**
+ * The modes actually travelled, taken from the legs.
+ *
+ * `Trip.primary_mode` is a **separate stored field**, not a summary of the
+ * legs, and nothing keeps the two in step — there are no server scripts here.
+ * Changing a leg from Own Vehicle to Bike in the Desk leaves `primary_mode`
+ * saying Own Vehicle, and reading it then reports a mode nobody drove and a
+ * rate nobody earned. TRP-00257 on 11 Aug 2026 is exactly that: leg `Bike`,
+ * `primary_mode` `Own Vehicle`, ₹553 stored against ₹276.50 actually due.
+ */
+export function modesOf(trip: Trip): TravelMode[] {
+  return [...new Set(trip.legs.map((l) => l.mode).filter(Boolean))];
+}
+
+/**
+ * What to show in a Mode column.
+ *
+ * Derived from the legs. Several modes read as "Mixed" plus the list, because
+ * a trip that was half bike and half car is not honestly either. With no legs
+ * at all there is nothing to derive, so the stored field is the only thing
+ * left — and it is at least what the rep originally chose.
+ */
+export function displayMode(trip: Trip): string {
+  const modes = modesOf(trip);
+  if (modes.length === 0) return trip.primaryMode || '—';
+  if (modes.length === 1) return modes[0];
+  return `Mixed — ${modes.join(', ')}`;
+}
+
+/**
+ * Whether `primary_mode` disagrees with the legs.
+ *
+ * Surfaced rather than silently corrected: the stale field is what the mobile
+ * app and any ERPNext report still read, so a disagreement is a live problem
+ * on other screens, not a display detail here.
+ */
+export function primaryModeStale(trip: Trip): boolean {
+  const modes = modesOf(trip);
+  if (modes.length === 0) return false;
+  if (modes.length > 1) return trip.primaryMode !== 'Mixed';
+  return modes[0] !== trip.primaryMode;
+}
+
+/**
+ * Whether the stored `estimated_cost` disagrees with what the legs now earn.
+ *
+ * A tolerance of one rupee absorbs rounding; anything above that is a real
+ * gap, and on TRP-00257 it is ₹276.50 against ₹553.
+ */
+export function storedCostStale(trip: Trip, rates: TripRates): boolean {
+  if (!trip.legs.length) return false;
+  return Math.abs(trip.estimatedCost - travelClaim(trip, rates)) > 1;
+}
+
 // ------------------------------------------------------------ odometers ---
 
 export interface Reading {

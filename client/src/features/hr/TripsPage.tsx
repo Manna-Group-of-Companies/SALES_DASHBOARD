@@ -14,7 +14,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { SalesPerson, Trip } from '@/domain/types';
 import { activeSalesPeople } from '@/domain/attendance';
-import { IMPLAUSIBLE_DAILY_KM, isImplausible, tripDistance } from '@/domain/trips';
+import {
+  IMPLAUSIBLE_DAILY_KM,
+  displayMode,
+  isImplausible,
+  primaryModeStale,
+  travelClaim,
+  tripDistance,
+} from '@/domain/trips';
+import type { TripRates } from '@/domain/types';
 
 import { formatDate } from '@/domain/orderRules';
 import { addDays, isoDate, mondayOf } from '@/domain/weeks';
@@ -46,6 +54,7 @@ export function TripsPage() {
 
   const [trips, setTrips] = useState<Trip[]>([]);
   const [people, setPeople] = useState<SalesPerson[]>([]);
+  const [rates, setRates] = useState<TripRates | null>(null);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [rep, setRep] = useState('');
@@ -66,11 +75,12 @@ export function TripsPage() {
     let live = true;
     setLoading(true);
     setError(null);
-    Promise.all([Api.trips.list(from, to), Api.attendance.listSalesPeople()])
-      .then(([t, p]) => {
+    Promise.all([Api.trips.list(from, to), Api.attendance.listSalesPeople(), Api.trips.getRates()])
+      .then(([t, p, r]) => {
         if (!live) return;
         setTrips(t);
         setPeople(p);
+        setRates(r);
       })
       .catch((e: unknown) => {
         if (live) setError(e instanceof Error ? e.message : 'Could not read trips.');
@@ -96,10 +106,10 @@ export function TripsPage() {
     () => ({
       trips: rows.length,
       km: Math.round(rows.reduce((n, t) => n + tripDistance(t), 0)),
-      claim: Math.round(rows.reduce((n, t) => n + t.estimatedCost, 0)),
+      claim: rates ? Math.round(rows.reduce((n, t) => n + travelClaim(t, rates), 0)) : 0,
       flagged: rows.filter(tripImplausible).length,
     }),
-    [rows],
+    [rows, rates],
   );
 
   if (!user) return null;
@@ -123,9 +133,9 @@ export function TripsPage() {
                 Trip: t.id,
                 Representative: t.person,
                 Date: t.date,
-                Mode: t.primaryMode,
+                Mode: displayMode(t),
                 'Distance (km)': tripDistance(t),
-                'Travel claim': t.estimatedCost,
+                'Travel claim': rates ? travelClaim(t, rates) : t.estimatedCost,
                 Expenses: t.totalExpenses,
                 Status: t.status,
                 'Tagged with': t.taggedReps.join(', '),
@@ -215,7 +225,20 @@ export function TripsPage() {
                     <td className="mono small">{t.id}</td>
                     <td>{t.person}</td>
                     <td className="num">{formatDate(t.date)}</td>
-                    <td className="dim small">{t.primaryMode}</td>
+                    <td className="dim small">
+                      {displayMode(t)}
+                      {/* ERPNext's primary_mode is a separate field that a leg
+                          edit does not update, so it can name a mode nobody
+                          drove — and a rate nobody earned. */}
+                      {primaryModeStale(t) && (
+                        <Badge
+                          tone="warn"
+                          title={`ERPNext still records the trip as "${t.primaryMode}". The legs say ${displayMode(t)}, and the claim below is worked out from the legs.`}
+                        >
+                          ERPNext says {t.primaryMode}
+                        </Badge>
+                      )}
+                    </td>
                     <td className="right num">
                       {tripDistance(t)} km
                       {/* 35,184 km in one day is a typo, not a journey. */}
@@ -225,7 +248,9 @@ export function TripsPage() {
                         </Badge>
                       )}
                     </td>
-                    <td className="right num">{money(t.estimatedCost, 0)}</td>
+                    <td className="right num">
+                      {rates ? money(travelClaim(t, rates), 0) : money(t.estimatedCost, 0)}
+                    </td>
                     <td className="right num dim">{money(t.totalExpenses, 0)}</td>
                     <td className="small">
                       <Badge tone={t.status === 'Completed' ? 'ok' : 'neutral'}>{t.status}</Badge>
