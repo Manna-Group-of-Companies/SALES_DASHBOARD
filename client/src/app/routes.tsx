@@ -13,6 +13,7 @@
 import { lazy, Suspense, type ReactElement } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import type { Role } from '@/domain/types';
+import { canOpen, type ManagerScreen } from '@/domain/sales';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import { AppShell } from '@/components/layout/AppShell';
@@ -27,6 +28,7 @@ import { CombinedOrdersPage } from '@/features/orders/CombinedOrdersPage';
 import { GmQueuePage } from '@/features/orders/GmQueuePage';
 import { ApprovalsInboxPage } from '@/features/approvals/ApprovalsInboxPage';
 import { LocationVerificationPage } from '@/features/approvals/LocationVerificationPage';
+import { TeamRegularizationsPage } from '@/features/approvals/TeamRegularizationsPage';
 import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
 import { ProductionOrderPage } from '@/features/production/ProductionOrderPage';
 import { CloseWeekPage } from '@/features/production/CloseWeekPage';
@@ -62,6 +64,25 @@ function RoleRoute({ allow, children }: { allow: Role[]; children: ReactElement 
 }
 
 /**
+ * A sales screen, gated on the team the login manages rather than on its role.
+ *
+ * Enforced here and not only in the sidebar: hiding a nav item is tidiness, not
+ * access control, and a URL typed into the address bar has to meet the same
+ * rule.
+ *
+ * This is also what lets Renjith in at all. His login carries
+ * `custom_is_production_manager = 1` *and* manages the UAE sales team, and the
+ * production flag wins role resolution — so judged on role alone he would have
+ * no route to his own five reps.
+ */
+function TeamRoute({ screen, children }: { screen: ManagerScreen; children: ReactElement }) {
+  const user = useAppSelector(selectUser);
+  if (!user) return <Navigate to="/login" replace />;
+  if (!canOpen(user.managedTeam, screen)) return <Navigate to="/" replace />;
+  return children;
+}
+
+/**
  * Every role opens onto its own landing page rather than straight into a work
  * screen. These replace an earlier set of tiles that were removed because they
  * had become a second place to act on an order — so the rule this time is that
@@ -73,6 +94,16 @@ function RoleRoute({ allow, children }: { allow: Role[]; children: ReactElement 
 function RoleHome() {
   const user = useAppSelector(selectUser);
   if (!user) return <Navigate to="/login" replace />;
+
+  /*
+   * A manager whose team runs party records only has no order pipeline to
+   * summarise, so the sales dashboard would open on a page of empty tiles.
+   * Send them to the customer list, which is the work.
+   */
+  if (user.managedTeam && !canOpen(user.managedTeam, 'orders')) {
+    return <Navigate to="/customers" replace />;
+  }
+
   switch (user.role) {
     case 'hr':
       return <HrDashboardPage />;
@@ -95,7 +126,6 @@ function RoleHome() {
   }
 }
 
-const SALES: Role[] = ['sales_manager', 'general_manager'];
 const GM: Role[] = ['general_manager'];
 const HR: Role[] = ['hr'];
 
@@ -121,26 +151,26 @@ export function AppRoutes() {
         <Route
           path="customers"
           element={
-            <RoleRoute allow={SALES}>
+            <TeamRoute screen="customers">
               <CustomersPage />
-            </RoleRoute>
+            </TeamRoute>
           }
         />
         <Route
           path="leads"
           element={
-            <RoleRoute allow={SALES}>
+            <TeamRoute screen="leads">
               <LeadsPage />
-            </RoleRoute>
+            </TeamRoute>
           }
         />
 
         <Route
           path="orders/new/:customerId"
           element={
-            <RoleRoute allow={SALES}>
+            <TeamRoute screen="orders">
               <TakeOrderPage />
-            </RoleRoute>
+            </TeamRoute>
           }
         />
         {/*
@@ -152,33 +182,33 @@ export function AppRoutes() {
         <Route
           path="orders"
           element={
-            <RoleRoute allow={SALES}>
+            <TeamRoute screen="orders">
               <OrdersListPage />
-            </RoleRoute>
+            </TeamRoute>
           }
         />
         <Route
           path="orders/:orderId"
           element={
-            <RoleRoute allow={SALES}>
+            <TeamRoute screen="orders">
               <OrderDetailPage />
-            </RoleRoute>
+            </TeamRoute>
           }
         />
         <Route
           path="lead-orders/:leadOrderId"
           element={
-            <RoleRoute allow={SALES}>
+            <TeamRoute screen="orders">
               <LeadOrderPage />
-            </RoleRoute>
+            </TeamRoute>
           }
         />
         <Route
           path="combined"
           element={
-            <RoleRoute allow={SALES}>
+            <TeamRoute screen="combined">
               <CombinedOrdersPage />
-            </RoleRoute>
+            </TeamRoute>
           }
         />
 
@@ -198,18 +228,32 @@ export function AppRoutes() {
         <Route
           path="locations"
           element={
-            <RoleRoute allow={SALES}>
+            <TeamRoute screen="locations">
               <LocationVerificationPage />
-            </RoleRoute>
+            </TeamRoute>
+          }
+        />
+
+        {/*
+          A rep's attendance correction is their MANAGER's to decide, not HR's
+          — `arQueueFor` encodes that split. HR keeps its own screen, for
+          managers' own corrections.
+        */}
+        <Route
+          path="team/regularizations"
+          element={
+            <TeamRoute screen="regularizations">
+              <TeamRegularizationsPage />
+            </TeamRoute>
           }
         />
 
         <Route
           path="approvals"
           element={
-            <RoleRoute allow={SALES}>
+            <TeamRoute screen="approvals">
               <ApprovalsInboxPage />
-            </RoleRoute>
+            </TeamRoute>
           }
         />
 
@@ -255,9 +299,9 @@ export function AppRoutes() {
         <Route
           path="stock"
           element={
-            <RoleRoute allow={['sales_manager', 'general_manager']}>
+            <TeamRoute screen="stock">
               <SalesStockPage />
-            </RoleRoute>
+            </TeamRoute>
           }
         />
         <Route

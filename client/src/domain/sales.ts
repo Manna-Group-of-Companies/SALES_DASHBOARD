@@ -146,6 +146,27 @@ export function teamOf(people: SalesPerson[], personId?: string): string[] {
   return teamByToken(people, teamTokenOf(me)).map((p) => p.id);
 }
 
+/**
+ * The reps a manager's screens may read — or `null` meaning **show nothing**.
+ *
+ * `teamOf` returning `[]` used to be passed to the API as "no filter", which
+ * an API reasonably reads as *every rep in the company*. So a manager whose
+ * team could not be resolved — a missing `Sales Person` link, a name that
+ * stopped matching its team token — silently saw the whole company's
+ * customers, leads and location captures instead of none.
+ *
+ * A permission boundary has to fail closed. `null` is that: callers must
+ * refuse to load rather than fetch unfiltered.
+ */
+export const NO_TEAM_MESSAGE =
+  'This login does not manage a sales team, so there is nothing scoped to show. ' +
+  'A manager needs a Sales Person record linked to their user, whose team matches their own name.';
+
+export function scopeFor(people: SalesPerson[], personId?: string): string[] | null {
+  const reps = teamOf(people, personId);
+  return reps.length ? reps : null;
+}
+
 /** The reps under a manager, excluding the manager themselves. */
 export function reportsOf(people: SalesPerson[], personId?: string): SalesPerson[] {
   const me = findPerson(people, personId);
@@ -169,6 +190,73 @@ export function customerBelongsTo(assignedRep: string | undefined, reps: string[
 }
 
 /** Over limit when what they already owe plus this order exceeds the limit. */
+// ------------------------------------------------- what each manager sees ---
+
+/**
+ * The screens a sales manager's dashboard offers.
+ *
+ * Not every team runs the same way. Pareeth's team raises the orders, so that
+ * team's manager needs the whole order pipeline. Saneesh and Renjith are
+ * asked, for now, to work the party records and their own people — customers,
+ * leads, location checks and attendance corrections — and nothing else.
+ *
+ * Held as data rather than scattered through the navigation because "who can
+ * see the order queue" is a business decision that will change, and it should
+ * change in one place rather than in six `roles:` arrays.
+ */
+export type ManagerScreen =
+  | 'customers'
+  | 'leads'
+  | 'locations'
+  | 'regularizations'
+  | 'orders'
+  | 'approvals'
+  | 'combined'
+  | 'stock';
+
+/** Everything. */
+const FULL: ManagerScreen[] = [
+  'customers',
+  'leads',
+  'locations',
+  'regularizations',
+  'orders',
+  'approvals',
+  'combined',
+  'stock',
+];
+
+/** Party records and their own people. */
+const PARTY_ONLY: ManagerScreen[] = ['customers', 'leads', 'locations', 'regularizations'];
+
+/**
+ * Keyed by the team token on `Sales Person.custom_team_manager`, which is what
+ * both the mobile app and this dashboard group people by.
+ */
+const BY_TEAM: Record<string, ManagerScreen[]> = {
+  Pareeth: FULL,
+  Saneesh: PARTY_ONLY,
+  Renjith: PARTY_ONLY,
+};
+
+/**
+ * What this manager may open.
+ *
+ * An unrecognised team gets the reduced set, not the full one. A new manager
+ * appearing on the site should not silently inherit the order pipeline because
+ * nobody remembered to add them here — the failure that costs least is the one
+ * where somebody has to ask for access.
+ */
+export function screensFor(managedTeam: string | undefined): ManagerScreen[] {
+  const token = (managedTeam ?? '').trim();
+  if (!token) return [];
+  return BY_TEAM[token] ?? PARTY_ONLY;
+}
+
+export function canOpen(managedTeam: string | undefined, screen: ManagerScreen): boolean {
+  return screensFor(managedTeam).includes(screen);
+}
+
 /**
  * §7.7 — an order cannot be *started* for a party with no sales route.
  *
