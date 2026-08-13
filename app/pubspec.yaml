@@ -1,0 +1,54 @@
+name: manna_field_sales
+description: "Manna Group field sales application."
+publish_to: 'none'
+
+# Must stay in step with kAppVersion in lib/core/app_version.dart — the backend
+# compares that value against Manna App Settings > Minimum App Version.
+version: 1.1.0+2
+
+environment:
+  sdk: ^3.12.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.9
+  dio: ^5.10.0
+  flutter_map: ^8.3.1
+  geolocator: ^14.0.3
+  image_picker: ^1.2.3
+  latlong2: ^0.10.1
+  open_filex: ^4.7.0
+  path_provider: ^2.1.6
+  pdf: ^3.13.0
+  printing: ^5.15.0
+  shared_preferences: ^2.5.5
+  url_launcher: ^6.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.1
+  image: ^4.2.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/manna_logo.png
+
+# Launcher icon. The square sources are built by tool/make_icon.dart from
+# assets/manna_logo.png -- see that file for why the logo cannot be handed to
+# the generator directly.
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icon/app_icon.png"
+  # Android 8+ crops the foreground to whatever shape the launcher uses, so the
+  # logo is drawn smaller and a white plate sits behind it. Orange behind a
+  # grey-and-orange wordmark would lose half of it.
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"
+  remove_alpha_ios: true
