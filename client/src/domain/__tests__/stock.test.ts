@@ -50,6 +50,8 @@ const line = (rolls: number, belts = 0, over: Partial<OrderLine> = {}): OrderLin
   id: 'L1',
   discountPercent: 0,
   priceListRate: 0,
+  amountBeforeDiscount: 0,
+  amountAfterDiscount: 0,
   itemCode: 'X',
   itemName: 'X',
   qty: rolls,

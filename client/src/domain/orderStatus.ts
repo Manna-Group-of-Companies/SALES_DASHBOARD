@@ -295,3 +295,29 @@ export function rateEditable(role: string | undefined, rateApproved: boolean): b
   if (!rateApproved) return true;
   return isGeneralManager(role);
 }
+
+/**
+ * Whether an order has been signed off, asking the right field for its type.
+ *
+ * A lead order has no `custom_po_status` — approving one sets `status` to
+ * `Approved` and converts the lead — so `isApproved` alone reads every lead
+ * order as still open. Anything that must not happen after sign-off has to
+ * use this instead, or it silently permits on leads what it forbids on
+ * customer orders.
+ *
+ * **No GM exemption, deliberately.** This is not `rateEditable`. The phone
+ * refuses a discount change on a signed-off order to everybody, the GM
+ * included (`orderSignedOff` in `app/lib/core/order_rules.dart`), and a rule
+ * that lets a signed price move from a desk but not from a counter is worse
+ * than either rule on its own. Settled 13 Aug 2026 in favour of the phone; the
+ * cases are in `shared/fixtures/discount.json`.
+ */
+export function orderSignedOff(
+  order: { poStatus?: string; status?: string; ratesApproved?: boolean },
+  isLead = false,
+): boolean {
+  if (order.ratesApproved) return true;
+  if (!isLead) return isApproved(order.poStatus);
+  const s = (order.status ?? '').trim();
+  return s === LEAD_ORDER_STATUS.approved || s === PO_STATUS.approved;
+}

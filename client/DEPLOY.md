@@ -75,7 +75,34 @@ database — and nothing on screen says so.
    This is read by the proxy at runtime, not baked into the bundle, so pointing
    at a staging site later needs no rebuild.
 
-6. Deploy. The site is at `https://<project>.pages.dev`, or add your own domain
+6. **Settings → Builds & deployments → Build watch paths.** Set:
+
+   | Setting | Value |
+   |---|---|
+   | Include paths | `client/*` |
+   | Exclude paths | *(leave empty)* |
+
+   Do this one. Since the Flutter app moved into this repository at `app/`, a
+   Pages project left on its default (`Include: *`) rebuilds and redeploys the
+   dashboard on **every** push to the production branch — including pushes that
+   only touch Dart. Cloudflare does not compare paths unless told to.
+
+   Those builds are not merely slow, they are pure waste: the root directory is
+   `client`, so `app/` is never installed, never built and never served, and
+   the deployed bundle after a Flutter-only commit is byte-for-byte the one
+   already live. On the free plan they also come out of a quota of 500 builds a
+   month.
+
+   `shared/` is deliberately **not** in the include list. Its fixtures are read
+   by the two test suites, and the Pages build command is `tsc -b && vite build`
+   — it does not run tests, so a fixture change cannot alter what is served.
+   Add `shared/*` only if the build command is ever changed to run the tests,
+   and expect a rebuild per fixture edit if you do.
+
+   This applies to **Git-integrated builds only**. A `wrangler` deploy pushes
+   whatever it is pointed at and ignores watch paths entirely.
+
+7. Deploy. The site is at `https://<project>.pages.dev`, or add your own domain
    under **Custom domains**.
 
 ## Testing it locally before you push

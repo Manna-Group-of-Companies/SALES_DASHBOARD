@@ -604,3 +604,17 @@
 .order__total--was span:last-child { text-decoration: line-through; color: var(--text-3); }
 .order__total--off span { color: #1b7f3b; }
 .order__total--was, .order__total--off { font-size: 12.5px; font-weight: 400; }
+
+/* --- The discount dialog: one line at a time, the way the phone does it --- */
+.disc__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 18, 22, 0.45);
+}
+.disc__scrim > .card { width: min(420px, 100%); }
+/* Green, and stated rather than offered: the decision has been made. */
+.disc__final { color: #1b5e20; font-weight: 600; }

@@ -93,12 +93,20 @@ import { availableQty, isBelowThreshold } from '@/domain/aging';
 import { noteServerDate, serverNow } from '@/domain/serverClock';
 import { rollUp } from '@/domain/production';
 import { heldBy, holdPlan, trueReserved } from '@/domain/minimumStock';
-import { discountLine, normaliseDiscount } from '@/domain/discount';
+import {
+  discountFields,
+  discountPercentOf,
+  rateBeforeDiscount,
+  discountRefusal,
+  lineAfterDiscount,
+  lineBeforeDiscount,
+} from '@/domain/discount';
 import {
   PRODUCTION_STATUS,
   PO_STATUS,
   LEAD_ORDER_STATUS,
   isSet as isLinkSet,
+  orderSignedOff,
   rateEditable,
 } from '@/domain/orderStatus';
 
@@ -3025,14 +3033,16 @@ function toOrderLine(r: Record<string, unknown>): OrderLine {
     looseBelts: n(SALES_ORDER_ITEM_FIELD.looseBelts),
     packingNote: str(r[SALES_ORDER_ITEM_FIELD.packingNote]),
     rateApproved: Number(r[SALES_ORDER_ITEM_FIELD.rateApproved]) === 1,
-    discountPercent: normaliseDiscount(n(SALES_ORDER_ITEM_FIELD.discountPercent)),
     /*
-     * `price_list_rate` is 0 on every line raised before discounts existed,
-     * and on those the rate IS the undiscounted rate. Falling back to it
-     * keeps "before" and "after" equal on an untouched line rather than
-     * showing a hundred-per-cent discount off zero.
+     * Read through the shared helpers, which try the standard field, then the
+     * lead-order spelling, then fall back to `rate`. An order raised before
+     * discounts existed has no `price_list_rate` at all and must read as full
+     * price rather than as free.
      */
-    priceListRate: n(SALES_ORDER_ITEM_FIELD.priceListRate) || n('rate'),
+    discountPercent: discountPercentOf(r),
+    priceListRate: rateBeforeDiscount(r),
+    amountBeforeDiscount: lineBeforeDiscount(r),
+    amountAfterDiscount: lineAfterDiscount(r),
     fulfilmentMode: str(r[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
     productionStage: str(r[SALES_ORDER_ITEM_FIELD.productionStage]),
     stockStage: str(r[SALES_ORDER_ITEM_FIELD.stockStage]),
@@ -3064,8 +3074,6 @@ async function decideSalesOrder(input: {
   decision: OrderDecision;
   /** Per-line rate edits, keyed by the child row name. */
   rateEdits?: Record<string, number>;
-  /** Per-line discount percentages, keyed by the child row name. */
-  discountEdits?: Record<string, number>;
   /** Whose decision this is. Only the GM may move an already-approved price. */
   role?: string;
 }): Promise<OrderDetail> {
@@ -3114,24 +3122,27 @@ async function decideSalesOrder(input: {
         ? (perKg * weight) / qty
         : Number(l[SALES_ORDER_ITEM_FIELD.priceListRate]) || Number(l.rate) || 0;
 
-    const askedPercent = input.discountEdits?.[String(l.name)];
-    const percent = normaliseDiscount(
-      mayPrice && askedPercent != null
-        ? askedPercent
-        : Number(l[SALES_ORDER_ITEM_FIELD.discountPercent]) || 0,
-    );
-
-    const money = discountLine({ perUnit: perUnitBefore, qty, percent });
+    /*
+     * The discount is NOT touched here. It is written line by line as the
+     * manager sets it, the way the phone does — `setLineDiscount`. Approval
+     * fixes what is already on the line; it does not apply anything new.
+     *
+     * The percentage stored on the line is re-applied to the (possibly new)
+     * rate so the two never contradict each other. Reading it through
+     * `discountPercentOf` picks up the lead-order spelling as well.
+     */
+    const percent = discountPercentOf(l);
+    const money = discountFields({
+      item: { ...l, price_list_rate: perUnitBefore, custom_price_list_rate: 0, rate: 0 },
+      percent,
+      isLead: false,
+    });
 
     // Written on every line, not only the edited ones. A line whose discount
     // was never touched still needs `price_list_rate` filled in, or the
     // before/after comparison has nothing to compare against next time.
     if (perKg > 0) next[SALES_ORDER_ITEM_FIELD.ratePerKg] = perKg;
-    next[SALES_ORDER_ITEM_FIELD.priceListRate] = money.perUnitBefore;
-    next[SALES_ORDER_ITEM_FIELD.discountPercent] = money.percent;
-    next[SALES_ORDER_ITEM_FIELD.discountAmount] = money.perUnitOff;
-    next.rate = money.perUnitAfter;
-    next.amount = money.after;
+    Object.assign(next, money);
 
     // Only approval locks a rate. A rejection leaves the prices editable so
     // the rep can fix what was wrong with them.
@@ -3570,6 +3581,67 @@ export interface OrderLineWrite {
  * survive; a new row is sent without one and Frappe names it.
  */
 /**
+ * Put a discount on one line, or take it off.
+ *
+ * A port of `Api.setLineDiscount` in `app/lib/services/api.dart`, down to the
+ * order of the checks and the wording of the refusals. The manager sets a
+ * discount and it is written **there and then**, not held until the approval —
+ * on the phone the figure is applied as soon as it is entered, and a dashboard
+ * that queued it would leave a manager who set a discount and walked away
+ * believing they had given one.
+ *
+ * The order is re-read first. Not for freshness: for the two things that can
+ * only be answered against the stored document — whether it has been signed
+ * off since the page loaded, and whether the line is still on it.
+ */
+async function setLineDiscount(input: {
+  orderId: string;
+  lineId: string;
+  percent: number;
+  isLead?: boolean;
+}): Promise<OrderDetail> {
+  const isLead = input.isLead ?? false;
+  const refusal = discountRefusal(input.percent);
+  if (refusal) throw new Error(refusal);
+
+  const doctype = isLead ? DOCTYPE.leadOrder : DOCTYPE.salesOrder;
+  const order = await getDoc<Record<string, unknown>>(doctype, input.orderId);
+
+  if (
+    orderSignedOff(
+      {
+        poStatus: str(order[SALES_ORDER_FIELD.poStatus]),
+        status: str(order.status),
+        ratesApproved: Number(order[SALES_ORDER_FIELD.ratesApproved]) === 1,
+      },
+      isLead,
+    )
+  ) {
+    throw new Error('This order is approved — its discounts and rates are final.');
+  }
+
+  const rows = Array.isArray(order.items) ? (order.items as Record<string, unknown>[]) : [];
+  let found = false;
+  const items = rows.map((row) => {
+    if (String(row.name) !== input.lineId) return row;
+    found = true;
+    return { ...row, ...discountFields({ item: row, percent: input.percent, isLead }) };
+  });
+
+  /*
+   * A row that is no longer there means the order moved under the manager — a
+   * rep editing it at the same moment. Writing the array back anyway would
+   * save a discount onto nothing while reporting success.
+   */
+  if (!found) {
+    throw new Error('That line is no longer on the order. Reopen it and try again.');
+  }
+
+  const saved = await updateDoc<Record<string, unknown>>(doctype, input.orderId, { items });
+  return toOrderDetail(saved);
+}
+
+/**
  * Bring this order's hold on one item up (or down) to what the line now asks.
  *
  * **Why this exists.** A reservation is written by whoever books the line, and
@@ -3743,18 +3815,22 @@ async function saveOrderLines(input: {
      * `l.rate`/`l.amount` arrive from the editor as the UNDISCOUNTED figures,
      * because that is what the packing rules compute.
      */
-    const percent = normaliseDiscount(Number(base[SALES_ORDER_ITEM_FIELD.discountPercent]) || 0);
-    const money = discountLine({ perUnit: l.rate, qty: l.qty, percent });
+    const percent = discountPercentOf(base);
+    const money = discountFields({
+      // `l.rate` arrives from the editor as the UNDISCOUNTED per-unit figure,
+      // because that is what the packing rules compute. Handing it in as the
+      // price-list rate is what makes the percentage come off the rep's rate
+      // rather than off an already-discounted one.
+      item: { qty: l.qty, price_list_rate: l.rate },
+      percent,
+      isLead: false,
+    });
 
     return {
       ...base,
       item_code: l.itemCode,
       qty: l.qty,
-      rate: money.perUnitAfter,
-      amount: money.after,
-      [SALES_ORDER_ITEM_FIELD.priceListRate]: money.perUnitBefore,
-      [SALES_ORDER_ITEM_FIELD.discountPercent]: money.percent,
-      [SALES_ORDER_ITEM_FIELD.discountAmount]: money.perUnitOff,
+      ...money,
       uom: l.uom,
       conversion_factor: 1,
       delivery_date: str(doc.delivery_date),
@@ -4043,7 +4119,6 @@ function toLeadOrder(r: Record<string, unknown>, items: Record<string, unknown>[
     lines: items.map((l) => {
       const qty = Number(l[LEAD_ORDER_ITEM_FIELD.qty]) || 0;
       const rate = Number(l[LEAD_ORDER_ITEM_FIELD.rate]) || 0;
-      const stored = Number(l[LEAD_ORDER_ITEM_FIELD.amount]) || 0;
       return {
         id: String(l.name),
         itemCode: str(l[LEAD_ORDER_ITEM_FIELD.itemCode]) ?? '',
@@ -4051,13 +4126,17 @@ function toLeadOrder(r: Record<string, unknown>, items: Record<string, unknown>[
         qty,
         rate,
         /*
-         * `amount` is a read-only Currency on a custom child table with no
-         * server script behind it, so rows written before the app started
-         * sending it hold zero. Falling back to qty x rate is the difference
-         * between a manager seeing the real order and seeing a nil one against
-         * rates the rep entered correctly.
+         * Through the shared helpers, so a lead order is read by exactly the
+         * rules a customer order is. `amount` is a read-only Currency on a
+         * custom child table with nothing behind it, so rows written before
+         * the app started sending it hold zero — `lineAfterDiscount` falls
+         * back to qty x rate rather than showing a manager a nil order
+         * against rates the rep entered correctly.
          */
-        amount: stored > 0 ? stored : Math.round(qty * rate * 100) / 100,
+        amount: lineAfterDiscount(l),
+        discountPercent: discountPercentOf(l),
+        priceListRate: rateBeforeDiscount(l),
+        amountBeforeDiscount: lineBeforeDiscount(l),
       };
     }),
   };
@@ -5209,6 +5288,7 @@ export const Api = {
     listOrders: listTeamOrders,
     getOrder: getSalesOrder,
     decideOrder: decideSalesOrder,
+    setLineDiscount,
     listMinimumStock,
     recordProductionRun,
     claimFromRun,

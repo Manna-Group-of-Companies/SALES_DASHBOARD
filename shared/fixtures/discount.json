@@ -1,11 +1,15 @@
 {
-  "about": "Per-line discounts, granted by the sales manager at approval. Every case here is a rule BOTH apps already implement the same way. Open questions live in ../DIVERGENCES.md and must not be added until decided.",
+  "about": "Per-line discounts, granted by the sales manager at approval. Every case here is a rule BOTH apps implement the same way. Open questions live in ../DIVERGENCES.md and must not be added until decided. Changing a case here is changing the rule, and needs both apps updated in the same pull request.",
   "money_precision": 2,
-
   "apply": [
     {
       "why": "ten per cent comes off the quoted rate and the amount is rebuilt from it",
-      "line": { "qty": 8, "rate": 7344, "price_list_rate": 0, "discount_percentage": 0 },
+      "line": {
+        "qty": 8,
+        "rate": 7344,
+        "price_list_rate": 0,
+        "discount_percentage": 0
+      },
       "percent": 10,
       "expect": {
         "price_list_rate": 7344,
@@ -17,7 +21,12 @@
     },
     {
       "why": "a second discount comes off the ORIGINAL rate, never the already discounted one - otherwise ten per cent given twice quietly becomes nineteen, and the quoted rate is gone for good after the first save",
-      "line": { "qty": 8, "rate": 6609.6, "price_list_rate": 7344, "discount_percentage": 10 },
+      "line": {
+        "qty": 8,
+        "rate": 6609.6,
+        "price_list_rate": 7344,
+        "discount_percentage": 10
+      },
       "percent": 10,
       "expect": {
         "price_list_rate": 7344,
@@ -28,36 +37,82 @@
     },
     {
       "why": "raising a discount reprices off the original rate, not the discounted one",
-      "line": { "qty": 8, "rate": 6609.6, "price_list_rate": 7344, "discount_percentage": 10 },
+      "line": {
+        "qty": 8,
+        "rate": 6609.6,
+        "price_list_rate": 7344,
+        "discount_percentage": 10
+      },
       "percent": 20,
-      "expect": { "price_list_rate": 7344, "rate": 5875.2, "amount": 47001.6 }
+      "expect": {
+        "price_list_rate": 7344,
+        "rate": 5875.2,
+        "amount": 47001.6
+      }
     },
     {
       "why": "removing a discount puts the original rate back",
-      "line": { "qty": 8, "rate": 6609.6, "price_list_rate": 7344, "discount_percentage": 10 },
+      "line": {
+        "qty": 8,
+        "rate": 6609.6,
+        "price_list_rate": 7344,
+        "discount_percentage": 10
+      },
       "percent": 0,
-      "expect": { "rate": 7344, "discount_percentage": 0, "amount": 58752 }
+      "expect": {
+        "rate": 7344,
+        "discount_percentage": 0,
+        "amount": 58752
+      }
     },
     {
       "why": "an order taken before discounts existed has price_list_rate 0 and must read as full price, never as free",
-      "line": { "qty": 8, "rate": 7344, "price_list_rate": 0, "discount_percentage": 0 },
+      "line": {
+        "qty": 8,
+        "rate": 7344,
+        "price_list_rate": 0,
+        "discount_percentage": 0
+      },
       "percent": 5,
-      "expect": { "price_list_rate": 7344, "rate": 6976.8, "amount": 55814.4 }
+      "expect": {
+        "price_list_rate": 7344,
+        "rate": 6976.8,
+        "amount": 55814.4
+      }
     },
     {
       "why": "a rate that will not divide evenly is still held to paise, so the lines add up to the total shown beneath them",
-      "line": { "qty": 10, "rate": 1000, "price_list_rate": 0, "discount_percentage": 0 },
+      "line": {
+        "qty": 10,
+        "rate": 1000,
+        "price_list_rate": 0,
+        "discount_percentage": 0
+      },
       "percent": 33.33,
-      "expect": { "rate": 666.7, "amount": 6667 }
+      "expect": {
+        "rate": 666.7,
+        "amount": 6667
+      }
     }
   ],
-
   "totals": [
     {
       "why": "the two totals and the discount between them must reconcile by eye: before minus given equals after",
       "lines": [
-        { "qty": 8, "rate": 6609.6, "price_list_rate": 7344, "discount_percentage": 10, "amount": 52876.8 },
-        { "qty": 2, "rate": 1000, "price_list_rate": 0, "discount_percentage": 0, "amount": 2000 }
+        {
+          "qty": 8,
+          "rate": 6609.6,
+          "price_list_rate": 7344,
+          "discount_percentage": 10,
+          "amount": 52876.8
+        },
+        {
+          "qty": 2,
+          "rate": 1000,
+          "price_list_rate": 0,
+          "discount_percentage": 0,
+          "amount": 2000
+        }
       ],
       "expect": {
         "before": 60752,
@@ -69,47 +124,218 @@
     {
       "why": "the order-level percentage is given/before, NOT the mean of the line percentages - ten per cent off a small line and nothing off a large one is not a five per cent order",
       "lines": [
-        { "qty": 1, "rate": 450, "price_list_rate": 500, "discount_percentage": 10, "amount": 450 },
-        { "qty": 1, "rate": 50000, "price_list_rate": 0, "discount_percentage": 0, "amount": 50000 }
+        {
+          "qty": 1,
+          "rate": 450,
+          "price_list_rate": 500,
+          "discount_percentage": 10,
+          "amount": 450
+        },
+        {
+          "qty": 1,
+          "rate": 50000,
+          "price_list_rate": 0,
+          "discount_percentage": 0,
+          "amount": 50000
+        }
       ],
-      "expect": { "before": 50500, "after": 50450, "given": 50, "percent": 0.1 }
+      "expect": {
+        "before": 50500,
+        "after": 50450,
+        "given": 50,
+        "percent": 0.1
+      }
     },
     {
       "why": "an order with nothing off reports no discount rather than a zero one",
-      "lines": [ { "qty": 8, "rate": 7344, "price_list_rate": 0, "discount_percentage": 0, "amount": 58752 } ],
-      "expect": { "before": 58752, "after": 58752, "given": 0, "has_discount": false }
+      "lines": [
+        {
+          "qty": 8,
+          "rate": 7344,
+          "price_list_rate": 0,
+          "discount_percentage": 0,
+          "amount": 58752
+        }
+      ],
+      "expect": {
+        "before": 58752,
+        "after": 58752,
+        "given": 0,
+        "has_discount": false
+      }
     },
     {
       "why": "an empty order is zero, not an error",
       "lines": [],
-      "expect": { "before": 0, "after": 0, "given": 0, "has_discount": false }
+      "expect": {
+        "before": 0,
+        "after": 0,
+        "given": 0,
+        "has_discount": false
+      }
     }
   ],
-
   "locked": [
     {
       "why": "an approved customer order is final",
-      "order": { "custom_po_status": "PO Approved - Ready for SAP" },
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP"
+      },
       "is_lead": false,
-      "expect": { "signed_off": true }
+      "expect": {
+        "signed_off": true
+      }
     },
     {
       "why": "an approved LEAD order is final too - it has no custom_po_status, so asking only that field reads every lead order as still open, on exactly the orders that go on to become real ones",
-      "order": { "status": "Approved" },
+      "order": {
+        "status": "Approved"
+      },
       "is_lead": true,
-      "expect": { "signed_off": true }
+      "expect": {
+        "signed_off": true
+      }
     },
     {
       "why": "a locked rate counts as signed off whatever the status says",
-      "order": { "custom_rate_approved": 1 },
+      "order": {
+        "custom_rate_approved": 1
+      },
       "is_lead": false,
-      "expect": { "signed_off": true }
+      "expect": {
+        "signed_off": true
+      }
     },
     {
       "why": "a pending order is still open",
-      "order": { "custom_po_status": "Pending Approval" },
+      "order": {
+        "custom_po_status": "Pending Approval"
+      },
       "is_lead": false,
-      "expect": { "signed_off": false }
+      "expect": {
+        "signed_off": false
+      }
+    },
+    {
+      "why": "nobody moves a signed price, the general manager included - the GM override that exists for RATES does not extend to discounts. A rule that lets a signed price move from a desk but not from a counter is worse than either rule on its own. Settled 13 Aug 2026 in favour of the phone.",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP"
+      },
+      "is_lead": false,
+      "role": "general_manager",
+      "expect": {
+        "signed_off": true
+      }
     }
-  ]
+  ],
+  "ceiling": {
+    "about": "Settled 13 Aug 2026: the phone's answer was taken whole. The dashboard used to clamp an out-of-range figure to the ceiling on the grounds that 150 meant 'as much as possible'. The likelier cause of 150 in a percentage box is a slip, and clamping turns that slip into a giveaway silently - which is the outcome a limit exists to prevent.",
+    "max_percent": 50,
+    "cases": [
+      {
+        "why": "nothing off is not a refusal",
+        "percent": 0,
+        "expect": {
+          "refused": false
+        }
+      },
+      {
+        "why": "a fraction of a per cent is a real concession and must be accepted",
+        "percent": 7.5,
+        "expect": {
+          "refused": false
+        }
+      },
+      {
+        "why": "the ceiling itself is allowed",
+        "percent": 50,
+        "expect": {
+          "refused": false
+        }
+      },
+      {
+        "why": "a hair over the ceiling is refused, not rounded down to it",
+        "percent": 50.01,
+        "expect": {
+          "refused": true,
+          "mentions": "general manager"
+        }
+      },
+      {
+        "why": "more than everything is refused on its own terms, before the ceiling is even reached for",
+        "percent": 150,
+        "expect": {
+          "refused": true,
+          "message": "A discount cannot be more than 100%."
+        }
+      },
+      {
+        "why": "a negative discount is a price rise wearing the wrong name",
+        "percent": -1,
+        "expect": {
+          "refused": true,
+          "message": "Enter a discount between 0 and 100."
+        }
+      }
+    ]
+  },
+  "lead_fields": {
+    "about": "Lead Order Item is a custom child table with no standard pricing fields, so the same two numbers are spelled differently. One module on each side knows this and nothing else does.",
+    "cases": [
+      {
+        "why": "a lead order is written with the custom spelling and never the standard one",
+        "line": {
+          "qty": 2,
+          "rate": 500
+        },
+        "percent": 10,
+        "is_lead": true,
+        "expect_fields": {
+          "custom_price_list_rate": 500,
+          "custom_discount_percentage": 10,
+          "rate": 450,
+          "amount": 900
+        },
+        "expect_absent": [
+          "price_list_rate",
+          "discount_percentage",
+          "discount_amount"
+        ]
+      },
+      {
+        "why": "a customer order is written with the standard spelling, and carries discount_amount so ERPNext's own recalculation lands on the same net rate",
+        "line": {
+          "qty": 2,
+          "rate": 500
+        },
+        "percent": 10,
+        "is_lead": false,
+        "expect_fields": {
+          "price_list_rate": 500,
+          "discount_percentage": 10,
+          "discount_amount": 50,
+          "rate": 450,
+          "amount": 900
+        },
+        "expect_absent": [
+          "custom_price_list_rate",
+          "custom_discount_percentage"
+        ]
+      },
+      {
+        "why": "reading is symmetrical: either spelling is understood wherever it is found",
+        "read": {
+          "custom_price_list_rate": 500,
+          "custom_discount_percentage": 10,
+          "rate": 450,
+          "qty": 2
+        },
+        "expect_read": {
+          "before_rate": 500,
+          "percent": 10,
+          "after_rate": 450
+        }
+      }
+    ]
+  }
 }

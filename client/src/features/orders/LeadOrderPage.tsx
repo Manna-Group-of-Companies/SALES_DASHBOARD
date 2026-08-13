@@ -21,11 +21,17 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { LeadOrder } from '@/domain/types';
+import type { LeadOrder, LeadOrderLine } from '@/domain/types';
 import { canEscalateLeadOrder, leadOrderApproved } from '@/domain/orderStatus';
+import {
+  MAX_DISCOUNT_PERCENT,
+  discountRefusal,
+  discountTotals,
+  discountedRate,
+} from '@/domain/discount';
 import { formatDate } from '@/domain/orderRules';
 import { Api, type LeadGaps } from '@/api/client';
-import { Alert, Badge, Button, Card, Empty } from '@/components/ui';
+import { Alert, Badge, Button, Card, Empty, Input } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import '@/components/layout/layout.css';
@@ -37,6 +43,10 @@ export function LeadOrderPage() {
   const { leadOrderId = '' } = useParams();
 
   const [order, setOrder] = useState<LeadOrder | null>(null);
+  /** The line whose discount is being set, and the figure typed so far. */
+  const [discounting, setDiscounting] = useState<{ line: LeadOrderLine; typed: string } | null>(
+    null,
+  );
   const [gaps, setGaps] = useState<LeadGaps | null>(null);
   const [tick, setTick] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -71,6 +81,50 @@ export function LeadOrderPage() {
 
   const blocked = gaps ? gaps.gstin || gaps.address || gaps.route : false;
   const decided = order ? leadOrderApproved(order.status) : false;
+
+  const totals = discountTotals(
+    (order?.lines ?? []).map((l) => ({
+      qty: l.qty,
+      rate: l.rate,
+      amount: l.amount,
+      custom_price_list_rate: l.priceListRate,
+      custom_discount_percentage: l.discountPercent,
+    })),
+  );
+
+  /**
+   * Give, change or remove a discount on one lead-order line.
+   *
+   * Written the moment it is confirmed, exactly as on a customer order and
+   * exactly as the phone does it. `isLead` is what picks the two field names;
+   * every rule around it is the same.
+   */
+  const applyDiscount = async () => {
+    if (!order || !discounting) return;
+    const percent = Number(discounting.typed);
+    const refusal = discountRefusal(percent);
+    if (refusal) {
+      setError(refusal);
+      return;
+    }
+    setBusy('discount');
+    setError(null);
+    try {
+      await Api.sales.setLineDiscount({
+        orderId: order.id,
+        lineId: discounting.line.id,
+        percent,
+        isLead: true,
+      });
+      setDone(percent > 0 ? `Discount of ${percent}% applied.` : 'Discount removed.');
+      setDiscounting(null);
+      reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save the discount.');
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const approve = async () => {
     if (!order) return;
@@ -191,6 +245,7 @@ export function LeadOrderPage() {
                       <th>Item</th>
                       <th className="right">Qty</th>
                       <th className="right">Rate</th>
+                      <th className="right">Disc %</th>
                       <th className="right">Amount</th>
                     </tr>
                   </thead>
@@ -202,13 +257,61 @@ export function LeadOrderPage() {
                           <div className="mono tiny dim">{l.itemCode}</div>
                         </td>
                         <td className="right num">{l.qty}</td>
-                        <td className="right num">{money(l.rate, 2)}</td>
+                        <td className="right num">
+                          {l.discountPercent > 0 ? (
+                            <>
+                              <div className="line__was">{money(l.priceListRate, 2)}</div>
+                              <b>{money(l.rate, 2)}</b>
+                            </>
+                          ) : (
+                            money(l.rate, 2)
+                          )}
+                        </td>
+                        <td className="right">
+                          {/*
+                            Same control and the same rules as a customer order,
+                            only the two field names differ — `domain/discount.ts`
+                            is the only place that knows which. Once the lead
+                            order is decided this states what was given and
+                            offers no way in, to everybody including the GM.
+                          */}
+                          {decided ? (
+                            l.discountPercent > 0 ? (
+                              <span className="tiny disc__final">{l.discountPercent}% off. Final.</span>
+                            ) : (
+                              <span className="dim">—</span>
+                            )
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn btn--ghost btn--sm"
+                              disabled={!!busy}
+                              onClick={() =>
+                                setDiscounting({
+                                  line: l,
+                                  typed: l.discountPercent > 0 ? String(l.discountPercent) : '',
+                                })
+                              }
+                            >
+                              {l.discountPercent > 0 ? `${l.discountPercent}% off · Change` : 'Discount'}
+                            </button>
+                          )}
+                        </td>
                         {/* Falls back to qty x rate: `amount` is a read-only
                             field on a custom child table with no server script
                             behind it, so older rows hold zero. A nil line
                             against rates the rep entered correctly would be a
                             lie. */}
-                        <td className="right num">{money(l.amount, 0)}</td>
+                        <td className="right num">
+                          {l.discountPercent > 0 ? (
+                            <>
+                              <div className="line__was">{money(l.amountBeforeDiscount, 0)}</div>
+                              <b className="exp__corrected">{money(l.amount, 0)}</b>
+                            </>
+                          ) : (
+                            money(l.amount, 0)
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -216,6 +319,71 @@ export function LeadOrderPage() {
               </div>
             )}
           </Card>
+
+          {totals.hasDiscount && (
+            <div className="order__totals mt-16">
+              <div className="order__total order__total--was">
+                <span>Order before discount</span>
+                <span>{money(totals.beforeDiscount, 0)}</span>
+              </div>
+              <div className="order__total order__total--off">
+                <span>Discount ({totals.discountPercent}%)</span>
+                <span>−{money(totals.discount, 0)}</span>
+              </div>
+              <div className="order__total">
+                <span>Order after discount</span>
+                <b>{money(totals.afterDiscount, 0)}</b>
+              </div>
+            </div>
+          )}
+
+          {discounting && (
+            (() => {
+              const base = discounting.line.priceListRate;
+              const typed = Number(discounting.typed);
+              const blank = discounting.typed.trim() === '';
+              const refusal = blank ? null : discountRefusal(typed);
+              return (
+                <div className="disc__scrim" role="dialog" aria-modal="true" aria-label="Discount">
+                  <Card title="Discount">
+                    <p className="note">{discounting.line.itemName}</p>
+                    <Input
+                      autoFocus
+                      numeric
+                      type="number"
+                      min={0}
+                      max={MAX_DISCOUNT_PERCENT}
+                      step="0.5"
+                      aria-label="Discount percent"
+                      placeholder="Discount %"
+                      value={discounting.typed}
+                      onChange={(e) =>
+                        setDiscounting((cur) => (cur ? { ...cur, typed: e.target.value } : cur))
+                      }
+                      onKeyDown={(e) => e.key === 'Escape' && setDiscounting(null)}
+                    />
+                    <p className="note">
+                      {money(base, 2)} → <b>{money(discountedRate(base, blank ? 0 : typed), 2)}</b>{' '}
+                      per unit
+                    </p>
+                    {refusal && <Alert tone="warn">{refusal}</Alert>}
+                    <div className="line__edit-bar">
+                      <Button variant="ghost" onClick={() => setDiscounting(null)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={applyDiscount}
+                        disabled={!!refusal || busy === 'discount'}
+                        loading={busy === 'discount'}
+                      >
+                        {blank || typed === 0 ? 'Remove discount' : 'Apply'}
+                      </Button>
+                    </div>
+                  </Card>
+                </div>
+              );
+            })()
+          )}
 
           <p className="note" style={{ marginTop: 10 }}>
             A lead order carries no roll or belt breakdown and no stock bookings, so the Sales Order

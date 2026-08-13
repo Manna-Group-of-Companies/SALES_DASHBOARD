@@ -7,6 +7,12 @@ afternoon, independently — were compared.
 **This file is the queue.** A row leaves it by being decided and turned into a
 fixture in `fixtures/`, not by being forgotten.
 
+**Decided 13 August 2026: where the two disagreed, the phone wins.** The reps'
+app is the older implementation, it is what is installed in the field, and it is
+what the trade has been using — so it is the reference and the dashboard was
+brought to it, not the other way round. Items 1, 2 and 3 below are closed on
+that basis and now live in `fixtures/discount.json`.
+
 ---
 
 ## What already agrees
@@ -28,73 +34,66 @@ both sides without coordination:
 
 ---
 
-## 1. How much may be taken off — **open**
+## 1. How much may be taken off — **closed, 13 Aug 2026**
 
 | | `app/` (Flutter) | `client/` (React) |
 |---|---|---|
-| Ceiling | **50%** | **100%** |
-| Out of range | **refused**, with a message | **clamped** — 150 becomes 100 |
+| Ceiling | **50%** | ~~100%~~ → **50%** |
+| Out of range | **refused**, with a message | ~~clamped~~ → **refused** |
 
-Both positions have something right in them.
+**Resolved to the phone, whole.** The dashboard now stops at 50% and refuses
+anything outside 0–100 rather than clamping it, with the same three messages
+word for word.
 
-The dashboard is right that **100% has to be reachable**: a free replacement
-roll is a real thing in this trade, and it is the one case where a line
-legitimately reaches zero. The Flutter cap of 50% would refuse it. That cap was
-invented without knowing the trade and is the weaker half of this argument.
+The argument that 100% has to be reachable — a free replacement roll is a real
+thing in this trade — was not accepted here, and is worth recording rather than
+losing: **it is still reachable, through the general manager**, which is what
+the refusal message says. If the trade turns out to need it at the counter, that
+is a change to `kMaxDiscountPercent` and `MAX_DISCOUNT_PERCENT` together, in one
+pull request, with `fixtures/discount.json` updated in the same commit.
 
-The Flutter app is right that **an out-of-range number should be refused, not
-clamped**. Clamping reads "150 means as much as possible", but the likelier
-cause of 150 in a percentage box is a slip — and clamping turns that slip into
-a free order, silently, which is the exact outcome a limit is there to prevent.
+Clamping is simply gone. There is no longer any function on either side that
+takes a percentage and hands back a different one.
 
-**Suggested resolution:** ceiling of 100%, and refuse anything outside 0–100
-rather than clamping. Takes the trade knowledge from the dashboard and the
-caution from the app.
-
-*Needs a decision before it becomes a fixture.*
+*Pinned in `fixtures/discount.json` → `ceiling`.*
 
 ---
 
-## 2. Can the GM change a discount after approval — **open**
+## 2. Can the GM change a discount after approval — **closed, 13 Aug 2026**
 
 | | `app/` (Flutter) | `client/` (React) |
 |---|---|---|
-| After approval | **nobody**, GM included | **GM may still override** |
+| After approval | **nobody**, GM included | ~~GM may still override~~ → **nobody** |
 
-This one is a genuine ambiguity in what was asked for, not a mistake by either
-side.
+**Resolved to the phone.** The dashboard gates discounts on `orderSignedOff`,
+which has no GM exemption, rather than on `rateEditable`, which has one.
 
-- "For changing the rate, only the general manager can change the rate" — which
-  is where the dashboard's GM override comes from, and it already existed for
-  rates before discounts did.
-- "Once the order is approved, there can be no change of the discount" — which
-  is what the Flutter app implements literally.
+The two statements that pointed opposite ways are both still true, and they are
+reconciled by *which* thing is being changed:
 
-A discount **is** a rate, so the two statements point opposite ways once the
-order is approved. Whichever is chosen, both apps must do the same thing:
-right now a GM can move a signed price from the web and not from a phone.
+- the **rate** lock keeps its GM override, on both sides, unchanged;
+- the **discount** does not have one, on either side.
 
-*Needs a decision. This is a question about who is allowed to do what, not a
-technical one.*
+A GM who needs to move a signed price still can — by moving the rate. What has
+gone is the state where a signed price could be moved from a desk and not from a
+counter.
+
+*Pinned in `fixtures/discount.json` → `locked`.*
 
 ---
 
-## 3. Discounts on lead orders — **gap, not a conflict**
+## 3. Discounts on lead orders — **closed, 13 Aug 2026**
 
 | | `app/` (Flutter) | `client/` (React) |
 |---|---|---|
-| Lead orders | supported | not implemented |
+| Lead orders | supported | ~~not implemented~~ → **supported** |
 
-`Lead Order Item` is a custom child table with no standard pricing fields, so
-the Flutter app added `custom_price_list_rate` and `custom_discount_percentage`
-to carry the same two numbers, and the lead→customer conversion translates them
-into the standard pair.
+The dashboard's lead-order screen now carries the same control, the same
+ceiling, the same refusals and the same before/after totals as a customer order.
+`domain/discount.ts` is the only module that knows the two doctypes spell the
+fields differently, exactly as `core/discount.dart` is on the phone.
 
-Nothing is wrong on the dashboard side — the feature simply is not there. It
-matters only if managers review lead orders on the web. If they do, the fields
-are already on the site and the conversion already handles them.
-
-*Decide whether the dashboard needs it. No conflict either way.*
+*Pinned in `fixtures/discount.json` → `lead_fields`.*
 
 ---
 
@@ -108,3 +107,24 @@ about what the REST API accepts or stores. Worth knowing for one practical
 reason: **opening a discounted order in Desk will not show the discount**, so
 Desk is not the place to verify one. Read it back over the API, or from either
 app.
+
+---
+
+## 5. Where the discount is set — **closed, 13 Aug 2026**
+
+Not in the original list, and found while closing the others.
+
+| | `app/` (Flutter) | `client/` (React) |
+|---|---|---|
+| When it is written | **immediately**, per line | ~~queued until approval~~ → **immediately** |
+
+The dashboard used to collect discounts into the approve action. A manager who
+set one and walked away without approving had given nothing, while believing
+otherwise — and the two apps disagreed about what a saved order contained.
+
+Both now write per line, through one function that re-reads the order first and
+refuses on two conditions only answerable against the stored document: that it
+has not been signed off since the screen loaded, and that the line is still on
+it. A row that has vanished means a rep edited the order at the same moment, and
+writing the array back anyway would save a discount onto nothing while reporting
+success.
