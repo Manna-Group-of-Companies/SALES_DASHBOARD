@@ -52,7 +52,7 @@ import {
   splitOf,
   type Qty,
 } from '@/domain/minimumStock';
-import { orderLineValues, uomFor } from '@/domain/productRules';
+import { orderLineValues } from '@/domain/productRules';
 import { pastCutoff, shortDate } from '@/domain/weeks';
 import { serverNow } from '@/domain/serverClock';
 import { formatDate } from '@/domain/orderRules';
@@ -274,7 +274,19 @@ export function OrderDetailPage() {
           rolls: d.rolls,
           looseBelts: d.looseBelts,
           ratePerKg: d.ratePerKg,
-          uom: uomFor(d.item.category),
+          /*
+           * The item's OWN stock UOM, never one derived from its category.
+           *
+           * `uomFor('VS')` returns "L", which is a fine label for a person but
+           * is not a UOM record on this site — the vulcanising solution items
+           * carry `stock_uom: "Litre"`. Writing "L" made ERPNext reject the
+           * entire save with "Could not find Row #2: UOM: L", so a manager
+           * could not change a quantity on any order containing solution.
+           *
+           * An item's own stock UOM is always valid by construction, so this
+           * cannot drift again when a new family is added.
+           */
+          uom: d.item.uom,
           fulfilmentMode: d.fulfilmentMode,
           ...v,
         };
@@ -770,6 +782,7 @@ export function OrderDetailPage() {
               {picking && (
                 <ItemPicker
                   items={items}
+                  pool={pool}
                   loading={itemsLoading}
                   onPick={addItem}
                   onClose={() => setPicking(false)}

@@ -574,3 +574,17 @@
   color: #7a4b1e;
   margin-bottom: 8px;
 }
+
+/* Picker filters: category and where the stock would come from. */
+.pick__filters {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.pick__more { width: 100%; margin-top: 8px; }
+.pick__list { max-height: 380px; }
+
+/* The stock position under an item's name in the picker. */
+.pick__stock { display: block; margin-top: 2px; }
