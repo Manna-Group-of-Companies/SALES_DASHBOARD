@@ -1,0 +1,117 @@
+{
+  "about": "How a customer's outstanding balance is read now that SAP sends it in four aging buckets. Every case here is a rule BOTH apps implement the same way; the phone (app/lib/core/credit.dart) and the dashboard (client/src/domain/credit.ts) read this file in their tests. Open questions belong in ../DIVERGENCES.md, not here.",
+  "money_precision": 2,
+
+  "fields": {
+    "total": "custom_outstanding_balance",
+    "credit_limit": "custom_credit_limit",
+    "buckets": [
+      "custom_outstanding_0_30",
+      "custom_outstanding_30_60",
+      "custom_outstanding_60_90",
+      "custom_outstanding_90_plus"
+    ],
+    "note": "Created on the live site 13 Aug 2026. The credit limit stays a SINGLE figure because SAP sends one; only the outstanding is split."
+  },
+
+  "total": [
+    {
+      "why": "the stored total is what the credit limit is checked against - SAP sends it and it is not recomputed from the buckets, so a rounding difference in SAP cannot move the figure a manager was shown",
+      "customer": {
+        "custom_outstanding_balance": 169900,
+        "custom_outstanding_0_30": 40000,
+        "custom_outstanding_30_60": 55000,
+        "custom_outstanding_60_90": 34900,
+        "custom_outstanding_90_plus": 40000
+      },
+      "expect": { "total": 169900, "buckets_known": true, "mismatch": false }
+    },
+    {
+      "why": "every customer on the site today: a real total and no buckets yet, because the SAP job has not been changed. The total must still be the total, and the boxes must say they are unknown rather than showing four zeros that read as nothing owed",
+      "customer": { "custom_outstanding_balance": 19000 },
+      "expect": { "total": 19000, "buckets_known": false, "mismatch": false }
+    },
+    {
+      "why": "buckets arrived but the total did not - show the money rather than zero, because a customer who owes 169,900 must never read as clear",
+      "customer": {
+        "custom_outstanding_balance": 0,
+        "custom_outstanding_0_30": 40000,
+        "custom_outstanding_30_60": 55000,
+        "custom_outstanding_60_90": 34900,
+        "custom_outstanding_90_plus": 40000
+      },
+      "expect": { "total": 169900, "buckets_known": true, "mismatch": false }
+    },
+    {
+      "why": "the two disagree by more than rounding: this is a broken sync and both apps say so out loud. The STORED total still wins, because that is the figure the credit decision has always been made on",
+      "customer": {
+        "custom_outstanding_balance": 100000,
+        "custom_outstanding_0_30": 40000,
+        "custom_outstanding_30_60": 55000,
+        "custom_outstanding_60_90": 34900,
+        "custom_outstanding_90_plus": 40000
+      },
+      "expect": { "total": 100000, "buckets_known": true, "mismatch": true }
+    },
+    {
+      "why": "a rupee of rounding between SAP and the sum is not a fault worth shouting about",
+      "customer": {
+        "custom_outstanding_balance": 169900.4,
+        "custom_outstanding_0_30": 40000,
+        "custom_outstanding_30_60": 55000,
+        "custom_outstanding_60_90": 34900,
+        "custom_outstanding_90_plus": 40000
+      },
+      "expect": { "total": 169900.4, "mismatch": false }
+    },
+    {
+      "why": "nothing owed and nothing synced is zero, not an error",
+      "customer": {},
+      "expect": { "total": 0, "buckets_known": false, "mismatch": false }
+    },
+    {
+      "why": "a credit note can put a bucket into negative, and it must be carried rather than clamped away - clamping would overstate what the customer owes",
+      "customer": {
+        "custom_outstanding_balance": 15000,
+        "custom_outstanding_0_30": 20000,
+        "custom_outstanding_30_60": -5000
+      },
+      "expect": { "total": 15000, "buckets_known": true, "mismatch": false }
+    }
+  ],
+
+  "overdue": [
+    {
+      "why": "anything in the 90+ bucket is overdue and is shown as a warning - it does NOT block or escalate an order on its own. Settled 13 Aug 2026: information only for now",
+      "customer": { "custom_outstanding_90_plus": 40000 },
+      "expect": { "overdue": 40000, "has_overdue": true, "blocks_order": false }
+    },
+    {
+      "why": "old debt alone is not a reason to escalate - the credit rule is still total against limit, and adding a second rule silently would start stopping orders the day it shipped",
+      "customer": {
+        "custom_outstanding_balance": 10000,
+        "custom_outstanding_90_plus": 10000,
+        "custom_credit_limit": 100000
+      },
+      "order_total": 5000,
+      "expect": { "has_overdue": true, "escalates": false }
+    },
+    {
+      "why": "the credit rule is unchanged: the projected total against the limit",
+      "customer": { "custom_outstanding_balance": 169900, "custom_credit_limit": 70000 },
+      "order_total": 5000,
+      "expect": { "escalates": true }
+    },
+    {
+      "why": "no limit set is not an unlimited limit, but it is not an escalation either - 258 customers have no route and many have no limit, and escalating all of them would bury the general manager",
+      "customer": { "custom_outstanding_balance": 169900, "custom_credit_limit": 0 },
+      "order_total": 5000,
+      "expect": { "escalates": false }
+    },
+    {
+      "why": "nothing older than 90 days is not a warning",
+      "customer": { "custom_outstanding_90_plus": 0 },
+      "expect": { "overdue": 0, "has_overdue": false }
+    }
+  ]
+}

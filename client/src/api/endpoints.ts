@@ -361,8 +361,15 @@ export const SALES_CUSTOMER_FIELD = {
   assignedRep: 'custom_assigned_reps',
   route: 'custom_sales_route',
   gstin: 'custom_gstin',
+  /** One figure, because SAP sends one. Deliberately not aged. */
   creditLimit: 'custom_credit_limit',
+  /** The TOTAL. What the credit limit is checked against. */
   outstanding: 'custom_outstanding_balance',
+  /** SAP's four aging buckets. Read via `domain/credit.ts`, never directly. */
+  outstanding0_30: 'custom_outstanding_0_30',
+  outstanding30_60: 'custom_outstanding_30_60',
+  outstanding60_90: 'custom_outstanding_60_90',
+  outstanding90Plus: 'custom_outstanding_90_plus',
   locationStatus: 'custom_location_status',
   latitude: 'custom_latitude',
   longitude: 'custom_longitude',
@@ -702,6 +709,20 @@ export const CUSTOMER_FIELD = {
   gstin: 'gstin',
   outstanding: 'custom_outstanding_balance',
   creditLimit: 'custom_credit_limit',
+  /*
+   * SAP ages its receivables into four buckets and sends all four. Created on
+   * the live site 13 Aug 2026. `custom_outstanding_balance` stays the TOTAL —
+   * it is what the credit limit has always been checked against, and it is
+   * zero on no customer while the buckets are zero on all of them until the
+   * SAP job is changed. The credit LIMIT is not split: SAP gives one figure.
+   *
+   * The rules live in `domain/credit.ts`, paired with `app/lib/core/credit.dart`
+   * and pinned by `shared/fixtures/credit.json`.
+   */
+  outstanding0_30: 'custom_outstanding_0_30',
+  outstanding30_60: 'custom_outstanding_30_60',
+  outstanding60_90: 'custom_outstanding_60_90',
+  outstanding90Plus: 'custom_outstanding_90_plus',
   assignedReps: 'custom_assigned_reps',
   phone: 'custom_phone',
 } as const;

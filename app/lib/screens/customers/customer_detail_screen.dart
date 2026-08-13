@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart' show XFile;
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/collections/collection_screen.dart';
@@ -211,13 +212,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   }
 
   Widget _creditSection() {
-    final out = (c['custom_outstanding_balance'] is num)
-        ? (c['custom_outstanding_balance'] as num).toDouble()
-        : 0.0;
-    final lim = (c['custom_credit_limit'] is num)
-        ? (c['custom_credit_limit'] as num).toDouble()
-        : 0.0;
-    final over = lim > 0 && out > lim;
+    // Read through core/credit.dart, which is the only place that knows the
+    // stored total beats the sum of the buckets and that four zeros mean
+    // "not synced" rather than "nothing due". Paired with the dashboard's
+    // client/src/domain/credit.ts and pinned by shared/fixtures/credit.json.
+    final a = agingOf(c);
+    final over = a.creditLimit > 0 && a.total > a.creditLimit;
+
     Widget box(String label, String value, Color? bg) => Expanded(
       child: Card(
         color: bg,
@@ -234,13 +235,60 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         ),
       ),
     );
+
+    // One age bucket. Narrower than the two headline boxes because four of
+    // them share a row, and only the oldest is coloured — if every box
+    // shouted, none would.
+    Widget bucket(AgingBucket b) => Expanded(
+      child: Card(
+        margin: const EdgeInsets.symmetric(horizontal: 2),
+        color: b.overdue ? const Color(0xFFFFEBEE) : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(b.label,
+                style: const TextStyle(fontSize: 10, color: Colors.black54)),
+            const SizedBox(height: 3),
+            Text('₹${b.amount.toStringAsFixed(0)}',
+                style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.bold,
+                    color: b.overdue ? Colors.red.shade700 : null)),
+          ]),
+        ),
+      ),
+    );
+
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
-        box('Outstanding', '₹${out.toStringAsFixed(0)}',
-            out > 0 ? const Color(0xFFFFF3E0) : null),
-        box('Credit Limit', lim > 0 ? '₹${lim.toStringAsFixed(0)}' : '—',
+        box('Outstanding', '₹${a.total.toStringAsFixed(0)}',
+            a.total > 0 ? const Color(0xFFFFF3E0) : null),
+        // A single figure, because SAP sends a single figure. Only the
+        // outstanding is aged.
+        box('Credit Limit',
+            a.creditLimit > 0 ? '₹${a.creditLimit.toStringAsFixed(0)}' : '—',
             over ? const Color(0xFFFFEBEE) : null),
       ]),
+
+      // How old the debt is. Shown, never enforced: the credit rule is still
+      // the total against the limit, and nothing here blocks an order.
+      const SizedBox(height: 4),
+      if (a.bucketsKnown)
+        Row(children: a.buckets.map(bucket).toList())
+      else
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          child: Text(kAgingNotSynced,
+              style: const TextStyle(fontSize: 11, color: Colors.black45)),
+        ),
+
+      if (a.mismatch)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          child: Text(kAgingMismatch,
+              style: TextStyle(fontSize: 11, color: Colors.orange.shade900)),
+        ),
+
       if (over)
         Container(
           margin: const EdgeInsets.only(top: 4),

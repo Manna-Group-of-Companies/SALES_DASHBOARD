@@ -18,6 +18,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { SalesCustomer, SalesPerson, SalesRoute } from '@/domain/types';
 import { activeSalesPeople } from '@/domain/attendance';
 import { creditBreached, hasRoute, scopeFor, teamOf, NO_TEAM_MESSAGE } from '@/domain/sales';
+import { agingOf, bucketsOf } from '@/domain/credit';
 import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
@@ -26,6 +27,23 @@ import { RouteCell } from './RouteCell';
 import { money } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
+import '@/components/common/aging.css';
+
+/**
+ * A customer in the shape the credit helpers take — raw ERPNext field names,
+ * the same shape the phone reads and the fixtures are written in. One
+ * translation point rather than one per screen.
+ */
+function rowOf(c: SalesCustomer) {
+  return {
+    custom_outstanding_balance: c.outstanding,
+    custom_credit_limit: c.creditLimit,
+    custom_outstanding_0_30: c.outstanding0_30,
+    custom_outstanding_30_60: c.outstanding30_60,
+    custom_outstanding_60_90: c.outstanding60_90,
+    custom_outstanding_90_plus: c.outstanding90Plus,
+  };
+}
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 
@@ -206,6 +224,10 @@ export function CustomersPage() {
                     <th>Route</th>
                     <th>GSTIN</th>
                     <th className="right">Credit limit</th>
+                    <th className="right">0–30</th>
+                    <th className="right">30–60</th>
+                    <th className="right">60–90</th>
+                    <th className="right">90+</th>
                     <th className="right">Outstanding</th>
                     <th>Location</th>
                   </tr>
@@ -235,9 +257,29 @@ export function CustomersPage() {
                           />
                         </td>
                         <td className="mono small">{c.gstin || <span className="dim">—</span>}</td>
+                        {/* One figure, because SAP sends one. */}
                         <td className="right num">
                           {c.creditLimit ? money(c.creditLimit, 0) : <span className="dim">—</span>}
                         </td>
+                        {/*
+                          SAP's four age buckets. A dash, never a zero, when
+                          nothing has been synced for this customer: four
+                          zeros beside a real balance reads as "nothing is
+                          overdue", which is a claim nobody has the data for.
+                        */}
+                        {bucketsOf(agingOf(rowOf(c))).map((b) => (
+                          <td
+                            key={b.key}
+                            className={`right num${b.overdue ? ' cell--overdue' : ''}`}
+                            title={b.label}
+                          >
+                            {agingOf(rowOf(c)).bucketsKnown ? (
+                              money(b.amount, 0)
+                            ) : (
+                              <span className="dim">—</span>
+                            )}
+                          </td>
+                        ))}
                         <td className="right num">
                           {over ? (
                             <b style={{ color: 'var(--danger)' }}>{money(c.outstanding, 0)}</b>

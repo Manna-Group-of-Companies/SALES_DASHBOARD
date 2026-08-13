@@ -277,8 +277,19 @@ export interface SalesCustomer {
   assignedRep?: string;
   route?: string;
   gstin?: string;
+  /** SAP sends one figure, so this stays one figure. */
   creditLimit: number;
+  /** The total, and what the credit limit is checked against. */
   outstanding: number;
+  /**
+   * SAP's four aging buckets, as stored. Read them through `domain/credit.ts`
+   * rather than directly — it is the only place that knows the total wins over
+   * the sum, and that four zeros mean "not synced" rather than "nothing due".
+   */
+  outstanding0_30: number;
+  outstanding30_60: number;
+  outstanding60_90: number;
+  outstanding90Plus: number;
   locationStatus?: LocationStatus;
   latitude: number;
   longitude: number;

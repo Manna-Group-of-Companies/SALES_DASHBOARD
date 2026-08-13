@@ -128,3 +128,42 @@ has not been signed off since the screen loaded, and that the line is still on
 it. A row that has vanished means a rep edited the order at the same moment, and
 writing the array back anyway would save a discount onto nothing while reporting
 success.
+
+---
+
+## 6. Outstanding, in SAP's four age buckets — **built together, 13 Aug 2026**
+
+Not a divergence: recorded because it is the first rule written on both sides
+*at the same time*, against a fixture, instead of twice and compared afterwards.
+
+`Customer` gained four `Currency` fields on the live site:
+
+    custom_outstanding_0_30       custom_outstanding_60_90
+    custom_outstanding_30_60      custom_outstanding_90_plus
+
+`custom_outstanding_balance` stays the **total** and stays what the credit
+limit is checked against. `custom_credit_limit` stays a single figure, because
+SAP sends one — only the outstanding is aged.
+
+Two states neither app may blur, and the reason each exists:
+
+- **Not synced.** Every one of the 620 customers has zero in all four buckets
+  until the SAP job is changed to send them. Four zeros beside a real balance
+  would read as "nothing is overdue", which is a claim nobody has the data to
+  make, so both apps say the breakdown has not arrived instead.
+- **Doesn't add up.** If the buckets and the balance disagree by more than a
+  rupee, both say so. The stored balance still wins — it is the figure the
+  credit decision has always been made on — but a sync that wrote one and not
+  the other must not stay hidden for months.
+
+The 90+ bucket is **shown, not enforced**: it is styled as a warning and
+changes nothing about who may order. Making it escalate would have started
+stopping orders the day it shipped, on customers nobody had warned. That is a
+decision to take deliberately, not a side effect of displaying a number.
+
+*Pinned in `fixtures/credit.json`. `client/src/domain/credit.ts` and
+`app/lib/core/credit.dart` are the only two modules that know any of this.*
+
+**Still outstanding, and not something either app can do:** the SAP → ERPNext
+sync must be changed to populate the four new fields. Until it is, both apps
+correctly show "not synced" and every credit check behaves exactly as before.

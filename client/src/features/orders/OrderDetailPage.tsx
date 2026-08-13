@@ -77,6 +77,7 @@ import { selectUser } from '@/store/selectors';
 import { Alert, Button, Card, Empty, Input } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { RefreshButton } from '@/components/common/RefreshButton';
+import { AgingBoxes } from '@/components/common/AgingBoxes';
 import { StatusPill } from '@/components/common/StatusPill';
 import { ItemPicker, asProduct } from './ItemPicker';
 import '@/components/layout/layout.css';
@@ -173,6 +174,24 @@ export function OrderDetailPage() {
       setItemsLoading(false);
     }
   };
+
+  /*
+   * The customer as the credit helpers want it — raw ERPNext field names, the
+   * same shape the phone reads and the shape `shared/fixtures/credit.json` is
+   * written in. Built here rather than widening `SalesCustomer`, so there is
+   * one translation point instead of one per screen.
+   */
+  const customerRow = useMemo(
+    () => ({
+      custom_outstanding_balance: customer?.outstanding ?? 0,
+      custom_credit_limit: customer?.creditLimit ?? 0,
+      custom_outstanding_0_30: customer?.outstanding0_30 ?? 0,
+      custom_outstanding_30_60: customer?.outstanding30_60 ?? 0,
+      custom_outstanding_60_90: customer?.outstanding60_90 ?? 0,
+      custom_outstanding_90_plus: customer?.outstanding90Plus ?? 0,
+    }),
+    [customer],
+  );
 
   const stock = useMemo(() => poolByItem(pool), [pool]);
   // The server's clock, not the browser's: this decides whether a change is
@@ -529,6 +548,15 @@ export function OrderDetailPage() {
                    that was never run. */
                 <>No trading history or credit limit to check against.</>
               )}
+
+              {/*
+                How old the debt is, under the figure it is part of.
+                Displayed, not enforced: the credit rule above is still the
+                total against the limit, and nothing here blocks or escalates.
+                Adding that silently would start stopping orders the day it
+                shipped, on customers nobody had warned.
+              */}
+              {customer && <AgingBoxes customer={customerRow} />}
             </Alert>
           </div>
 

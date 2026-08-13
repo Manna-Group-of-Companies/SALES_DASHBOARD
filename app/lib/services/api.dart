@@ -8,6 +8,7 @@ import 'package:manna_field_sales/core/app_version.dart';
 import 'package:manna_field_sales/core/attendance_rules.dart';
 import 'package:manna_field_sales/core/auth_store.dart';
 import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/discount.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
@@ -334,8 +335,24 @@ class Api {
     return OfflineCache.read<List<Map<String, dynamic>>>(
       'customers:${rep ?? 'all'}',
       () => _list('Customer',
-          fields:
-              '["name","customer_name","customer_group","territory","custom_sales_route","custom_latitude","custom_longitude","custom_location_status","custom_verified_latitude","custom_verified_longitude","custom_outstanding_balance","custom_credit_limit","custom_phone"]',
+          // The outstanding fields come from `kOutstandingFields` rather than
+          // being spelled out here, so a screen cannot end up fetching three
+          // of SAP's four aging buckets and quietly showing the fourth as
+          // zero — which would read as "nothing is that old".
+          fields: jsonEncode([
+            'name',
+            'customer_name',
+            'customer_group',
+            'territory',
+            'custom_sales_route',
+            'custom_latitude',
+            'custom_longitude',
+            'custom_location_status',
+            'custom_verified_latitude',
+            'custom_verified_longitude',
+            'custom_phone',
+            ...kOutstandingFields,
+          ]),
           filters: filters,
           orderBy: 'customer_name asc'),
       decode: decodeRows,
