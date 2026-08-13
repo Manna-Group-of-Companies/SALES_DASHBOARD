@@ -618,3 +618,27 @@
 .disc__scrim > .card { width: min(420px, 100%); }
 /* Green, and stated rather than offered: the decision has been made. */
 .disc__final { color: #1b5e20; font-weight: 600; }
+
+/* Two groups in the stock column: what is on the shelf, then what this order
+   needs. The heading is what stops "on the shelf" being read as "available". */
+.stockpos__head td {
+  padding-top: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+.stockpos tbody tr:first-child .stockpos__head td,
+.stockpos__head:first-child td { padding-top: 0; }
+.stockpos tr.info td { color: #1c5fa8; font-weight: 600; }
+
+/* The plain sentence under the columns, for the reading that looks like a bug
+   and is not one. */
+.stockpos__why {
+  margin-top: 5px;
+  max-width: 260px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #8a6100;
+}

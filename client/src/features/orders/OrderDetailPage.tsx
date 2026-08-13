@@ -609,6 +609,9 @@ export function OrderDetailPage() {
                       // a roll another order is already holding.
                       const cover = coverFor(split, pos.freeForOthers);
                       const mode = servedFrom(l, reservations, order.id);
+                      const heldElsewhere = pos.heldByOthers.rolls > 0 || pos.heldByOthers.belts > 0;
+                      const freeOnShelf = pos.freeForOthers.rolls > 0 || pos.freeForOthers.belts > 0;
+                      const heldHere = cover.reserved.rolls > 0 || cover.reserved.belts > 0;
                       return (
                         <tr key={l.id}>
                           <td>
@@ -712,37 +715,63 @@ export function OrderDetailPage() {
                                */
                               <table className="stockpos">
                                 <tbody>
+                                  {/*
+                                    Two questions, asked in order and kept
+                                    apart: what is on the shelf and who has it,
+                                    then what this order needs.
+
+                                    "Booked by other orders" is the row that
+                                    was missing. Without it a shelf of 2 sat
+                                    above "must be made: 4" with two dashes in
+                                    between, and the only way to work out that
+                                    somebody else held both rolls was to notice
+                                    that nothing was free. A manager should not
+                                    have to do arithmetic to find out why an
+                                    order is going to production.
+                                  */}
+                                  <tr className="stockpos__head">
+                                    <td colSpan={2}>The shelf</td>
+                                  </tr>
                                   <tr>
-                                    {/* The shelf, not the target. These are two
-                                        different numbers that happen to match on
-                                        some items, and calling the shelf
-                                        "minimum stock held" made the coincidence
-                                        look like the rule. */}
-                                    <td>On the shelf</td>
-                                    <td className="num">{pos.shelf}</td>
+                                    <td>On the shelf now</td>
+                                    <td className="num">{qty({ rolls: pos.shelf, belts: 0 })}</td>
+                                  </tr>
+                                  <tr className={heldElsewhere ? 'warn' : 'dim'}>
+                                    <td>Booked by other orders</td>
+                                    <td className="num">{qty(pos.heldByOthers)}</td>
+                                  </tr>
+                                  <tr className={freeOnShelf ? 'ok' : 'dim'}>
+                                    <td>Free — nobody has booked it</td>
+                                    <td className="num">{qty(pos.freeForOthers)}</td>
                                   </tr>
                                   <tr className="dim">
+                                    {/* The target, not the stock. Two different
+                                        numbers that happen to match on some
+                                        items, which made the coincidence look
+                                        like the rule. */}
                                     <td>Minimum to hold</td>
                                     <td className="num">{pos.minimum}</td>
+                                  </tr>
+
+                                  <tr className="stockpos__head">
+                                    <td colSpan={2}>This order</td>
                                   </tr>
                                   <tr>
                                     <td>Ordered</td>
                                     <td className="num">{qty(split.ordered)}</td>
                                   </tr>
-                                  <tr className="ok">
+                                  <tr className={heldHere ? 'ok' : 'dim'}>
                                     <td>Held for this order</td>
                                     <td className="num">{qty(cover.reserved)}</td>
                                   </tr>
                                   {(cover.availableNow.rolls > 0 || cover.availableNow.belts > 0) && (
                                     /*
-                                      Uncovered, but the shelf has it. Raising
-                                      the quantity here does not extend the hold
-                                      the rep's phone took, so this is the part
-                                      nobody has claimed yet — free stock, not a
-                                      production job.
+                                      Uncovered, but the shelf has it free.
+                                      Saving the order takes it; until then it
+                                      is nobody's.
                                     */
                                     <tr className="info">
-                                      <td>Not yet reserved — free on the shelf</td>
+                                      <td>Not yet booked — free to take</td>
                                       <td className="num">{qty(cover.availableNow)}</td>
                                     </tr>
                                   )}
@@ -750,12 +779,25 @@ export function OrderDetailPage() {
                                     <td>Must be made</td>
                                     <td className="num">{qty(cover.toMake)}</td>
                                   </tr>
-                                  <tr className="dim">
-                                    <td>Unbooked, anyone can take</td>
-                                    <td className="num">{qty(pos.freeForOthers)}</td>
-                                  </tr>
                                 </tbody>
                               </table>
+                            )}
+
+                            {/*
+                              The sentence, for the case the columns make a
+                              manager work out. Only shown when something has
+                              to be made even though stock exists — which is
+                              exactly the reading that looks like a bug and is
+                              not one.
+                            */}
+                            {pos.pooled && cover.needsProduction && pos.shelf > 0 && (
+                              <div className="stockpos__why">
+                                {heldElsewhere && !freeOnShelf
+                                  ? `All ${qty(pos.heldByOthers)} on the shelf ${
+                                      pos.heldByOthers.rolls === 1 ? 'is' : 'are'
+                                    } booked by other orders, so nothing here can come off it.`
+                                  : `The shelf has ${qty(pos.freeForOthers)} free, which is less than this line needs.`}
+                              </div>
                             )}
                             {pos.pooled && pos.inProduction.rolls > 0 && (
                               /* Its own line, never folded in beside a
