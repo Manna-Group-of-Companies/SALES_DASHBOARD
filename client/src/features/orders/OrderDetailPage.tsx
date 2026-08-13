@@ -292,12 +292,15 @@ export function OrderDetailPage() {
           ...v,
         };
       });
-      const saved = await Api.sales.saveOrderLines({ orderId: order.id, lines });
-      setOrder(saved);
+      await Api.sales.saveOrderLines({ orderId: order.id, lines });
       setDrafts(null);
       setDone(
-        'Lines saved. The order went back for approval and every rate reopened, because the money changed.',
+        'Lines saved, and the stock re-held to match. Anything on the shelf has been booked to this order; only what the shelf has not got is left for production. The order went back for approval and every rate reopened, because the money changed.',
       );
+      // A full reload, not the saved document. Saving also moves the holds, and
+      // the returned order carries none of that — the stock column would keep
+      // showing the position from before the edit.
+      reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save the lines.');
     } finally {

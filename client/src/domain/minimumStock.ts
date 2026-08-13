@@ -263,6 +263,73 @@ export function coverFor(split: Split, free: Qty): Cover {
   };
 }
 
+/**
+ * How much of an item an order should be holding, given what the shelf has.
+ *
+ * The rule the sales manager stated, in one line: **if it is on the shelf, it
+ * comes off the shelf.** Production is only for the part the shelf has not
+ * got. Anything less means an order that could have shipped tomorrow is queued
+ * behind a run, and the rolls it should have taken sit unbooked for another
+ * rep to take.
+ *
+ * `reservedTotal` is the sum of the live reservation rows for the item —
+ * everybody's, including this order's — never the pool's stored counter, which
+ * drifts. `held` is this order's share of that sum, so subtracting it gives
+ * what *other* orders hold, and the shelf less that is what this order may
+ * take.
+ *
+ * Rolls and belts are planned on separate axes throughout. A roll is not a
+ * belt until somebody cuts it, and netting them together would hold belts that
+ * do not exist.
+ */
+export interface HoldPlan {
+  /** What the order should hold once this is applied. */
+  target: Qty;
+  /** The change against what it holds now. Negative gives stock back. */
+  delta: Qty;
+  /** What the shelf cannot cover. This, and only this, is production. */
+  short: Qty;
+  /** What the pool's reserved counter should read afterwards. */
+  counter: Qty;
+  /** Whether anything needs writing at all. */
+  changed: boolean;
+}
+
+export function holdPlan(input: {
+  ordered: Qty;
+  held: Qty;
+  shelf: Qty;
+  reservedTotal: Qty;
+}): HoldPlan {
+  const heldRolls = clamp(input.held.rolls);
+  const heldBelts = clamp(input.held.belts);
+
+  // The shelf, less every OTHER order's hold.
+  const freeRolls = clamp(input.shelf.rolls - (input.reservedTotal.rolls - heldRolls));
+  const freeBelts = clamp(input.shelf.belts - (input.reservedTotal.belts - heldBelts));
+
+  const target: Qty = {
+    rolls: Math.min(clamp(input.ordered.rolls), freeRolls),
+    belts: Math.min(clamp(input.ordered.belts), freeBelts),
+  };
+
+  return {
+    target,
+    delta: { rolls: target.rolls - heldRolls, belts: target.belts - heldBelts },
+    short: {
+      rolls: clamp(input.ordered.rolls) - target.rolls,
+      belts: clamp(input.ordered.belts) - target.belts,
+    },
+    // Rebuilt from the row sum rather than nudged, so a counter that has
+    // drifted away from the rows is repaired by the same write.
+    counter: {
+      rolls: input.reservedTotal.rolls - heldRolls + target.rolls,
+      belts: input.reservedTotal.belts - heldBelts + target.belts,
+    },
+    changed: target.rolls !== heldRolls || target.belts !== heldBelts,
+  };
+}
+
 /** What this order holds of an item, from the Active reservation rows only. */
 export function heldBy(
   reservations: StockReservationRow[],

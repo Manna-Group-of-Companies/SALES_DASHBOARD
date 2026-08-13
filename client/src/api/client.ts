@@ -92,7 +92,7 @@ import { allItemsReady, firstStage, isTerminalStage, stageLabel } from '@/domain
 import { availableQty, isBelowThreshold } from '@/domain/aging';
 import { noteServerDate, serverNow } from '@/domain/serverClock';
 import { rollUp } from '@/domain/production';
-import { heldBy } from '@/domain/minimumStock';
+import { heldBy, holdPlan, trueReserved } from '@/domain/minimumStock';
 import {
   PRODUCTION_STATUS,
   PO_STATUS,
@@ -3522,6 +3522,157 @@ export interface OrderLineWrite {
  * Existing rows keep their `name` so their history and any per-line approval
  * survive; a new row is sent without one and Frappe names it.
  */
+/**
+ * Bring this order's hold on one item up (or down) to what the line now asks.
+ *
+ * **Why this exists.** A reservation is written by whoever books the line, and
+ * until 13 Aug 2026 that was only ever the rep's phone. Editing the quantity
+ * here rewrote the Sales Order and nothing else, so raising `155 MSR 87` from
+ * one roll to two left the hold at one — while three rolls sat free on the
+ * shelf. The order then read as needing a roll manufactured, and any other rep
+ * could have taken the stock in the meantime. Stock that is on the shelf must
+ * come off the shelf; production is for what the shelf has not got.
+ *
+ * **The shelf is the batch, never the pool's `qty`.** `qty` is the minimum to
+ * hold. Reading it as stock is the mistake that makes every figure here wrong.
+ *
+ * **Free is measured against the reservation rows, not the stored counter.**
+ * The counter is a hand-maintained cache with no Server Script behind it and
+ * it has already been proven wrong on this site — `120 AJAX 69` claimed three
+ * rolls booked with nothing behind them after a Sales Order was deleted in the
+ * Desk. Summing the rows both frees stock that genuinely is free and repairs
+ * the counter on the way past.
+ *
+ * **Order of writes.** Taking stock raises the counter first and writes the row
+ * second, so a crash in between over-books rather than hands the same roll to
+ * two orders. Releasing does the reverse. The counter is read back after every
+ * write: if another claim interleaved it will not hold our figure, and we start
+ * again instead of assuming we won.
+ */
+async function holdFromShelf(input: {
+  itemCode: string;
+  orderId: string;
+  wantRolls: number;
+  wantBelts: number;
+  salesPerson?: string;
+  attempts?: number;
+}): Promise<{ rolls: number; belts: number; short: number } | null> {
+  const maxAttempts = input.attempts ?? 3;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const pool = await getDoc<Record<string, unknown>>(DOCTYPE.minStock, input.itemCode).catch(
+      () => null,
+    );
+    // Not a stocked item. Nothing to hold, and nothing has gone wrong: the
+    // line is made to order by definition.
+    if (!pool) return null;
+
+    const batches = await listDocs<Record<string, unknown>>(DOCTYPE.stockBatch, {
+      fields: ['name', ...Object.values(MIN_STOCK_BATCH_FIELD)],
+      filters: [[MIN_STOCK_BATCH_FIELD.itemCode, '=', input.itemCode]],
+      limit: 0,
+    }).catch(() => [] as Record<string, unknown>[]);
+
+    let shelfRolls = 0;
+    let shelfBelts = 0;
+    for (const b of batches) {
+      shelfRolls += Number(b[MIN_STOCK_BATCH_FIELD.rolls]) || 0;
+      shelfBelts += Number(b[MIN_STOCK_BATCH_FIELD.looseBelts]) || 0;
+    }
+
+    const all = await listStockReservations();
+    const mine = all.filter(
+      (r) =>
+        r.status === 'Active' &&
+        r.itemCode === input.itemCode &&
+        r.source !== RESERVATION_SOURCE.productionRun &&
+        (r.salesOrder === input.orderId || r.leadOrder === input.orderId),
+    );
+    const heldRolls = mine.reduce((n, r) => n + r.rolls, 0);
+    const heldBelts = mine.reduce((n, r) => n + r.looseBelts, 0);
+    const plan = holdPlan({
+      ordered: { rolls: input.wantRolls, belts: input.wantBelts },
+      held: { rolls: heldRolls, belts: heldBelts },
+      shelf: { rolls: shelfRolls, belts: shelfBelts },
+      reservedTotal: trueReserved(all, input.itemCode),
+    });
+
+    const targetRolls = plan.target.rolls;
+    const targetBelts = plan.target.belts;
+    const short = plan.short.rolls;
+
+    if (!plan.changed) return { rolls: heldRolls, belts: heldBelts, short };
+
+    const nextCounterRolls = plan.counter.rolls;
+    const nextCounterBelts = plan.counter.belts;
+    const taking = plan.delta.rolls > 0 || plan.delta.belts > 0;
+
+    const writeRows = async () => {
+      // One row per order and item. Extra rows from earlier edits are zeroed
+      // and released so the sum can never read higher than the hold.
+      const [keep, ...spare] = mine;
+      if (targetRolls === 0 && targetBelts === 0) {
+        for (const r of mine) {
+          await updateDoc(DOCTYPE.stockReservation, r.id, {
+            [STOCK_RESERVATION_FIELD.rolls]: 0,
+            [STOCK_RESERVATION_FIELD.looseBelts]: 0,
+            [STOCK_RESERVATION_FIELD.status]: 'Released',
+          });
+        }
+        return;
+      }
+      for (const r of spare) {
+        await updateDoc(DOCTYPE.stockReservation, r.id, {
+          [STOCK_RESERVATION_FIELD.rolls]: 0,
+          [STOCK_RESERVATION_FIELD.looseBelts]: 0,
+          [STOCK_RESERVATION_FIELD.status]: 'Released',
+        });
+      }
+      if (keep) {
+        await updateDoc(DOCTYPE.stockReservation, keep.id, {
+          [STOCK_RESERVATION_FIELD.rolls]: targetRolls,
+          [STOCK_RESERVATION_FIELD.looseBelts]: targetBelts,
+          [STOCK_RESERVATION_FIELD.status]: 'Active',
+        });
+      } else {
+        await createDoc(DOCTYPE.stockReservation, {
+          [STOCK_RESERVATION_FIELD.itemCode]: input.itemCode,
+          [STOCK_RESERVATION_FIELD.rolls]: targetRolls,
+          [STOCK_RESERVATION_FIELD.looseBelts]: targetBelts,
+          [STOCK_RESERVATION_FIELD.salesOrder]: input.orderId,
+          [STOCK_RESERVATION_FIELD.salesPerson]: input.salesPerson,
+          [STOCK_RESERVATION_FIELD.status]: 'Active',
+          [STOCK_RESERVATION_FIELD.source]: RESERVATION_SOURCE.shelf,
+          [STOCK_RESERVATION_FIELD.reservedOn]: serverNow()
+            .toISOString()
+            .slice(0, 19)
+            .replace('T', ' '),
+        });
+      }
+    };
+
+    const writeCounter = () =>
+      updateDoc(DOCTYPE.minStock, input.itemCode, {
+        [MIN_STOCK_FIELD.reservedRolls]: nextCounterRolls,
+        [MIN_STOCK_FIELD.reservedLooseBelts]: nextCounterBelts,
+      });
+
+    if (taking) {
+      await writeCounter();
+      const after = await getDoc<Record<string, unknown>>(DOCTYPE.minStock, input.itemCode);
+      if ((Number(after[MIN_STOCK_FIELD.reservedRolls]) || 0) !== nextCounterRolls) continue;
+      await writeRows();
+    } else {
+      await writeRows();
+      await writeCounter();
+    }
+
+    return { rolls: targetRolls, belts: targetBelts, short };
+  }
+
+  return null;
+}
+
 async function saveOrderLines(input: {
   orderId: string;
   lines: OrderLineWrite[];
@@ -3568,6 +3719,44 @@ async function saveOrderLines(input: {
     [SALES_ORDER_FIELD.poStatus]: 'Pending Approval',
     [SALES_ORDER_FIELD.ratesApproved]: 0,
   });
+
+  /*
+   * Now make the stock match the order.
+   *
+   * The order document is written first and the holds second, deliberately.
+   * A hold without a line behind it is stock nobody can sell and nobody can
+   * see; a line without its hold is visible on this screen and fixed by
+   * saving again. The failure that costs least is the recoverable one.
+   *
+   * Every line is topped up, not just the ones that changed — a line the rep
+   * booked before the shelf was refilled has been sitting under-held, and
+   * there is no reason to leave it that way once somebody opens the order.
+   */
+  const want = new Map<string, { rolls: number; belts: number }>();
+  for (const l of input.lines) {
+    const cur = want.get(l.itemCode) ?? { rolls: 0, belts: 0 };
+    want.set(l.itemCode, { rolls: cur.rolls + l.rolls, belts: cur.belts + l.looseBelts });
+  }
+  // A line that has been taken off the order must give its stock back, so the
+  // items that were on the document before are asked for zero.
+  for (const l of existing) {
+    const code = str(l.item_code);
+    if (code && !want.has(code)) want.set(code, { rolls: 0, belts: 0 });
+  }
+
+  const rep = str(doc[SALES_ORDER_FIELD.rep]);
+  for (const [itemCode, q] of want) {
+    // One item failing to hold must not lose the rest. The order is already
+    // saved; the stock position is shown on the line and can be retried.
+    await holdFromShelf({
+      itemCode,
+      orderId: input.orderId,
+      wantRolls: q.rolls,
+      wantBelts: q.belts,
+      salesPerson: rep,
+    }).catch(() => null);
+  }
+
   return toOrderDetail(saved);
 }
 
