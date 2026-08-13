@@ -167,3 +167,57 @@ decision to take deliberately, not a side effect of displaying a number.
 **Still outstanding, and not something either app can do:** the SAP → ERPNext
 sync must be changed to populate the four new fields. Until it is, both apps
 correctly show "not synced" and every credit check behaves exactly as before.
+
+---
+
+## 7. Telling a rep that production moved an item — **partly built, 13 Aug 2026**
+
+The ask: a rep sees each item's status in My Orders and is **notified** when the
+production manager changes one; the sales manager sees the same for their reps,
+on both the phone and the dashboard.
+
+Two thirds of that is built and identical on both sides. The notification is
+not, and cannot be, without one of the decisions below.
+
+### What was missing, and is now there
+
+- **The dashboard showed the sales manager no per-item stage at all.** It now
+  has a Stage column carrying both halves of a split line.
+- **The phone's order detail showed no line items at all** — it counted them
+  and summed the amount. It now lists every item with the stage each half is on.
+- Both mark the lines production moved and lead with a summary of what changed.
+
+### Why the "notification" is a stored diff, not a push
+
+Two hard constraints, both verified on the live site:
+
+- **No Server Scripts on this plan.** Nothing can fire when production saves.
+- **`Notification Log`** — Frappe's own per-user store, otherwise exactly right
+  (`for_user`, `subject`, `document_type`, `document_name`, `read`) — grants
+  role `All` **read but not create**. A rep's or production manager's login
+  cannot write one over the REST API.
+
+Worth recording plainly: **`Sales Notification`, the doctype the dashboard has
+been writing notifications to since it was built, does not exist on this site.**
+The write is fire-and-forget with a swallowed error, so every notification the
+dashboard has ever raised has silently gone nowhere.
+
+So each device remembers the stages it last displayed for an order and reports
+the difference on the next open. It is honest — it can only report a real change
+between two things the same reader saw — and needs no schema, no permission
+change and no server support. `changesSince` is pinned by
+`fixtures/stage_watch.json` and both suites read it.
+
+What it cannot do is reach a phone that never opens the order.
+
+### To get a real notification — **needs a decision**
+
+| Option | What it takes | Cost |
+|---|---|---|
+| `Custom DocPerm` on `Notification Log` granting `create` | one permission change | Frappe **replaces** rather than merges permissions — every standard row must be copied across in the same transaction, or the doctype's existing access changes underneath everybody |
+| A `Sales Notification` custom doctype | one doctype + fields | the dashboard already assumes it exists, so its notification code starts working the moment it does |
+| Push to the phone | the above, plus a delivery mechanism | nothing on this site does push today |
+
+Whichever is chosen, the write still has to be made by whoever moves the stage —
+there is no server to do it — so it belongs in `setProductionStage` on the
+dashboard and `Api.setStage` on the phone, in the same commit.

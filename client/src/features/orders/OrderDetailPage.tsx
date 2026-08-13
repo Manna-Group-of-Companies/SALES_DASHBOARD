@@ -57,6 +57,15 @@ import {
 } from '@/domain/minimumStock';
 import { orderLineValues } from '@/domain/productRules';
 import {
+  changedLineIds,
+  changesSince,
+  describeChange,
+  loadSeen,
+  saveSeen,
+  snapshotOf,
+  stageText,
+} from '@/domain/stageWatch';
+import {
   MAX_DISCOUNT_PERCENT,
   discountRefusal,
   discountTotals,
@@ -125,6 +134,15 @@ export function OrderDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
+  /**
+   * What production moved since this browser last opened the order.
+   *
+   * Computed once per load and held, so it does not vanish the moment the
+   * snapshot is written back. The first look reports nothing — it establishes
+   * the baseline rather than dumping every stage as news.
+   */
+  const [stageNews, setStageNews] = useState<ReturnType<typeof changesSince>>([]);
+
   const reload = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
@@ -139,6 +157,17 @@ export function OrderDetailPage() {
       .then(async (o) => {
         if (!live) return;
         setOrder(o);
+
+        // Diff before the snapshot is overwritten, then record what is now on
+        // screen. Keyed on the child row name, which survives an edit.
+        const rows = o.lines.map((l) => ({
+          name: l.id,
+          item_name: l.itemName,
+          custom_production_stage: l.productionStage,
+          custom_stock_stage: l.stockStage,
+        }));
+        setStageNews(changesSince(loadSeen(o.id), rows));
+        saveSeen(o.id, snapshotOf(rows));
         const [parties, stock, res] = await Promise.all([
           Api.sales.listCustomers().catch(() => []),
           Api.sales.listMinimumStock().catch(() => [] as MinStockLine[]),
@@ -192,6 +221,8 @@ export function OrderDetailPage() {
     }),
     [customer],
   );
+
+  const movedLines = useMemo(() => changedLineIds(stageNews), [stageNews]);
 
   const stock = useMemo(() => poolByItem(pool), [pool]);
   // The server's clock, not the browser's: this decides whether a change is
@@ -560,6 +591,28 @@ export function OrderDetailPage() {
             </Alert>
           </div>
 
+          {/*
+            What production moved since this browser last had the order open.
+            Above the lines, because it is the thing the reader did not know —
+            and the rep is the one who has to ring the customer about it.
+          */}
+          {stageNews.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <Alert
+                tone="info"
+                title={`Production moved ${stageNews.length} item ${
+                  stageNews.length === 1 ? 'stage' : 'stages'
+                } since you last looked`}
+              >
+                <ul className="stagenews">
+                  {stageNews.map((c) => (
+                    <li key={`${c.lineId}-${c.part}`}>{describeChange(c)}</li>
+                  ))}
+                </ul>
+              </Alert>
+            </div>
+          )}
+
           {/* --------------------------------------------- Block 4 — lines --- */}
           <p className="note lines__lead">
             Where each line is served from is reported, not chosen — the first booking takes the
@@ -578,6 +631,7 @@ export function OrderDetailPage() {
                       <th className="right">Rate / kg</th>
                       <th className="right">Disc %</th>
                       <th className="right">Amount</th>
+                      <th>Stage</th>
                       <th>Minimum stock</th>
                       <th>Served from</th>
                     </tr>
@@ -612,6 +666,7 @@ export function OrderDetailPage() {
                       const heldElsewhere = pos.heldByOthers.rolls > 0 || pos.heldByOthers.belts > 0;
                       const freeOnShelf = pos.freeForOthers.rolls > 0 || pos.freeForOthers.belts > 0;
                       const heldHere = cover.reserved.rolls > 0 || cover.reserved.belts > 0;
+                      const movedHere = movedLines.has(l.id);
                       return (
                         <tr key={l.id}>
                           <td>
@@ -699,6 +754,33 @@ export function OrderDetailPage() {
                             ) : (
                               money(lineAfterDiscount(row), 0)
                             )}
+                          </td>
+                          <td className="small">
+                            {/*
+                              Both halves, each on its own line. A split line's
+                              made and shelf portions finish separately, and one
+                              combined stage would be a fiction on every order
+                              that is part stock and part production.
+                            */}
+                            <div className={movedHere ? 'stagecell is-moved' : 'stagecell'}>
+                              {(cover.needsProduction || l.productionStage) && (
+                                <div>
+                                  <span className="stagecell__part">Being made</span>
+                                  <b>{stageText(l.productionStage ?? '')}</b>
+                                </div>
+                              )}
+                              {(heldHere || l.stockStage) && (
+                                <div>
+                                  <span className="stagecell__part">From stock</span>
+                                  <b>{stageText(l.stockStage ?? '')}</b>
+                                </div>
+                              )}
+                              {!cover.needsProduction &&
+                                !l.productionStage &&
+                                !heldHere &&
+                                !l.stockStage && <span className="dim">—</span>}
+                              {movedHere && <div className="stagecell__flag">moved</div>}
+                            </div>
                           </td>
                           <td className="small">
                             {!pos.pooled ? (

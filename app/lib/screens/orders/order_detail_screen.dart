@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/stage_watch.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/pdf/proforma_pdf.dart';
@@ -20,6 +21,10 @@ class OrderDetailScreen extends StatefulWidget {
 class _OrderDetailScreenState extends State<OrderDetailScreen> {
   late Future<void> _init;
   Map<String, dynamic> _order = {};
+
+  /// What production moved since this phone last opened the order. Computed
+  /// once per load, before the snapshot is written back.
+  List<StageChange> _stageNews = const [];
   Map<String, dynamic> _customer = {};
   bool _busy = false;
 
@@ -31,6 +36,14 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
 
   Future<void> _load() async {
     _order = await Api.getOrder(widget.orderName);
+
+    // Diff against what this phone last showed, then record what it is showing
+    // now. Keyed on the child row name, which survives an edit to the order.
+    final rows = ((_order['items'] as List?) ?? const [])
+        .map((e) => (e as Map).cast<String, dynamic>())
+        .toList();
+    _stageNews = changesSince(await StageSeen.load(widget.orderName), rows);
+    await StageSeen.save(widget.orderName, snapshotOf(rows));
     final cust = _order['customer'];
     if (cust != null) {
       try {
@@ -156,6 +169,122 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         : 'The changes window closed at 1 pm on $when.';
   }
 
+  /// What production moved since this phone last had the order open.
+  ///
+  /// Above the items, because it is the part the rep did not know — and the
+  /// rep is the one who has to ring the customer about it. Nothing is shown on
+  /// a first look: that establishes the baseline rather than replaying every
+  /// stage as news.
+  Widget _stageNewsCard() {
+    if (_stageNews.isEmpty) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+          color: const Color(0xFFE3EDF9),
+          borderRadius: BorderRadius.circular(8)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.factory_outlined, size: 18, color: Colors.blue.shade800),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+                'Production moved ${_stageNews.length} '
+                '${_stageNews.length == 1 ? 'item stage' : 'item stages'} '
+                'since you last looked',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold, color: Colors.blue.shade900)),
+          ),
+        ]),
+        const SizedBox(height: 6),
+        ..._stageNews.map((c) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Text('• ${describeChange(c)}',
+                  style: const TextStyle(fontSize: 12.5)),
+            )),
+      ]),
+    );
+  }
+
+  /// Every item on the order, with the stage each half is on.
+  ///
+  /// A split line's made and shelf portions finish separately, so both stages
+  /// are shown. One combined stage would be a fiction on any order that is
+  /// part stock and part production.
+  Widget _itemsCard(List items) {
+    final moved = changedLineIds(_stageNews);
+
+    Widget stageLine(String label, String value) => Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(children: [
+        Text('$label  ',
+            style: const TextStyle(fontSize: 10.5, color: Colors.black54)),
+        Text(stageText(value),
+            style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w600)),
+      ]),
+    );
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Column(children: [
+        for (final raw in items) ...() {
+          final it = (raw as Map).cast<String, dynamic>();
+          final id = '${it['name'] ?? ''}';
+          final made = '${it[kStageFieldMade] ?? ''}';
+          final shelf = '${it[kStageFieldShelf] ?? ''}';
+          final didMove = moved.contains(id);
+          return [
+            Container(
+              color: didMove ? const Color(0xFFE3EDF9) : null,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('${it['item_name'] ?? it['item_code'] ?? ''}',
+                              style: const TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w600)),
+                          Text('${it['custom_packing_note'] ?? ''}',
+                              style: const TextStyle(
+                                  fontSize: 11, color: Colors.black54)),
+                          if (made.isNotEmpty || shelf.isEmpty)
+                            stageLine('Being made', made),
+                          if (shelf.isNotEmpty) stageLine('From stock', shelf),
+                        ]),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    Text('Rs ${((it['amount'] ?? 0) as num).toStringAsFixed(0)}',
+                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                    if (didMove)
+                      Container(
+                        margin: const EdgeInsets.only(top: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                            color: Colors.blue.shade100,
+                            borderRadius: BorderRadius.circular(4)),
+                        child: Text('MOVED',
+                            style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.blue.shade900)),
+                      ),
+                  ]),
+                ],
+              ),
+            ),
+            if (raw != items.last) const Divider(height: 1),
+          ];
+        }(),
+      ]),
+    );
+  }
+
   Widget _statusRow(String label, String value) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 4),
     child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -206,6 +335,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                             'Over credit limit (Out: Rs ${_outstanding.toStringAsFixed(0)} / Limit: Rs ${_limit.toStringAsFixed(0)}). Proforma blocked until manager release.',
                             style: const TextStyle(color: Colors.red))),
                   ])),
+            _stageNewsCard(),
+            _itemsCard(items),
             _statusRow('Order placed', _placedAt),
             _statusRow('Proforma', pf),
             _statusRow('Approval', approvalLabel(po)),

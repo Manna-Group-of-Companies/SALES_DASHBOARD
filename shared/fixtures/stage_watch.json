@@ -1,0 +1,103 @@
+{
+  "about": "What a rep or a sales manager is told when production moves an item. Both apps read this file in their tests. The rule is 'what changed since you last looked at this order', computed from a snapshot each device keeps for itself - there is no Server Script to push anything, and Notification Log is read-only to a normal login, so a stored diff is the only mechanism both platforms can actually implement today. See ../DIVERGENCES.md item 7.",
+
+  "fields": {
+    "line_id": "name",
+    "item": "item_name",
+    "category": "custom_product_category",
+    "made_part": "custom_production_stage",
+    "shelf_part": "custom_stock_stage",
+    "note": "A split line carries BOTH stages and they finish separately, so each is watched on its own axis. custom_production_stage is the portion being MADE; custom_stock_stage is the portion coming off the SHELF."
+  },
+
+  "changes": [
+    {
+      "why": "the plain case: production moved the made half, and the rep is told what it was and what it now is",
+      "seen": { "row1": "Cutting|" },
+      "lines": [ { "name": "row1", "item_name": "160 SR 99", "custom_production_stage": "Curing" } ],
+      "expect": [ { "line_id": "row1", "part": "made", "from": "Cutting", "to": "Curing" } ]
+    },
+    {
+      "why": "the two halves of a split line move separately and are reported separately - one message saying 'this line moved' would hide that the other half has not",
+      "seen": { "row1": "Cutting|Packed" },
+      "lines": [ { "name": "row1", "item_name": "160 SR 99", "custom_production_stage": "Curing", "custom_stock_stage": "Dispatched" } ],
+      "expect": [
+        { "line_id": "row1", "part": "made", "from": "Cutting", "to": "Curing" },
+        { "line_id": "row1", "part": "shelf", "from": "Packed", "to": "Dispatched" }
+      ]
+    },
+    {
+      "why": "nothing moved means nothing to say - an empty list, never a message saying nothing happened",
+      "seen": { "row1": "Curing|" },
+      "lines": [ { "name": "row1", "item_name": "160 SR 99", "custom_production_stage": "Curing" } ],
+      "expect": []
+    },
+    {
+      "why": "a stage set for the first time is a change, from nothing to something - production starting work is exactly what a rep wants to hear about",
+      "seen": { "row1": "|" },
+      "lines": [ { "name": "row1", "item_name": "160 SR 99", "custom_production_stage": "Cutting" } ],
+      "expect": [ { "line_id": "row1", "part": "made", "from": "", "to": "Cutting" } ]
+    },
+    {
+      "why": "an order never looked at before reports NOTHING, not every line as new - a rep opening an old order must not be shown fifty changes they already knew about",
+      "seen": null,
+      "lines": [
+        { "name": "row1", "item_name": "160 SR 99", "custom_production_stage": "Curing" },
+        { "name": "row2", "item_name": "120 IR 66", "custom_production_stage": "Packed" }
+      ],
+      "expect": []
+    },
+    {
+      "why": "a line added since the last look is not a stage change and is not reported as one",
+      "seen": { "row1": "Curing|" },
+      "lines": [
+        { "name": "row1", "item_name": "160 SR 99", "custom_production_stage": "Curing" },
+        { "name": "row2", "item_name": "120 IR 66", "custom_production_stage": "Cutting" }
+      ],
+      "expect": []
+    },
+    {
+      "why": "a line removed since the last look is not reported either - there is nothing to open and nothing to tell a customer",
+      "seen": { "row1": "Curing|", "row2": "Cutting|" },
+      "lines": [ { "name": "row1", "item_name": "160 SR 99", "custom_production_stage": "Curing" } ],
+      "expect": []
+    },
+    {
+      "why": "a stage going BACKWARDS is still reported - production correcting a mistake is the change a rep most needs to know about, because they may already have promised the customer a date",
+      "seen": { "row1": "Packed|" },
+      "lines": [ { "name": "row1", "item_name": "160 SR 99", "custom_production_stage": "Curing" } ],
+      "expect": [ { "line_id": "row1", "part": "made", "from": "Packed", "to": "Curing" } ]
+    },
+    {
+      "why": "several lines moving at once are reported as several changes, in line order, so the list reads like the order does",
+      "seen": { "row1": "Cutting|", "row2": "Cutting|" },
+      "lines": [
+        { "name": "row1", "item_name": "160 SR 99", "custom_production_stage": "Curing" },
+        { "name": "row2", "item_name": "120 IR 66", "custom_production_stage": "Packed" }
+      ],
+      "expect": [
+        { "line_id": "row1", "part": "made", "from": "Cutting", "to": "Curing" },
+        { "line_id": "row2", "part": "made", "from": "Cutting", "to": "Packed" }
+      ]
+    },
+    {
+      "why": "a null and an empty stage are the same thing - Frappe returns an unset Data field three different ways and none of them is a change",
+      "seen": { "row1": "|" },
+      "lines": [ { "name": "row1", "item_name": "160 SR 99", "custom_production_stage": null, "custom_stock_stage": "" } ],
+      "expect": []
+    }
+  ],
+
+  "snapshot": [
+    {
+      "why": "the snapshot keys on the child row name, which is stable across edits, and holds both stages so one cannot be lost",
+      "lines": [ { "name": "row1", "custom_production_stage": "Curing", "custom_stock_stage": "Packed" } ],
+      "expect": { "row1": "Curing|Packed" }
+    },
+    {
+      "why": "unset stages round-trip as empty, so taking a snapshot twice with nothing happening in between reports no change",
+      "lines": [ { "name": "row1" } ],
+      "expect": { "row1": "|" }
+    }
+  ]
+}
