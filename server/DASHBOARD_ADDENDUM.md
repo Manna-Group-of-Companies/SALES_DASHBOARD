@@ -46,6 +46,18 @@ Everything below already exists on the live site.
 `custom_production_stage` now has `allow_on_submit = 1`. It did not, which meant
 the floor could not move a stage on any submitted order.
 
+### `Lead Order Item` — new fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `custom_price_list_rate` | Currency | The rate the rep quoted, before discount |
+| `custom_discount_percentage` | Percent | Discount the sales manager gave |
+
+These mirror the **standard** `price_list_rate` and `discount_percentage` on
+`Sales Order Item`, which is what a customer order uses. `Lead Order Item` is
+our own child table and has no standard pricing fields, so it needed its own
+pair. See §11.
+
 ### `custom_fulfilment_mode` — a third value
 
 On **both** `Sales Order` and `Sales Order Item`:
@@ -470,6 +482,72 @@ Checked before the order screen opens and again at creation. Treat `''`, `'   '`
 
 ---
 
+## 11. Per-line discounts at approval
+
+The sales manager can take a percentage off **any line** of an order they are
+reviewing. This must behave identically in the web dashboard — a discount is a
+price decision, and the two must not disagree about what a customer is charged.
+
+### Where the numbers live
+
+| | Customer order | Lead order |
+|---|---|---|
+| Rate before discount | `price_list_rate` | `custom_price_list_rate` |
+| Discount | `discount_percentage` | `custom_discount_percentage` |
+| Net rate charged | `rate` | `rate` |
+| Line value | `amount` | `amount` |
+
+`rate` is **always** the net rate the customer pays, and `amount` is
+`qty × rate`. On a customer order also write `discount_amount`
+(`price_list_rate − rate`) so ERPNext's own recalculation lands on the same net
+rate rather than a rounding step away from it.
+
+### The rules
+
+1. **The discount always comes off the rep's original rate**, never off an
+   already-discounted one. Read `price_list_rate` first and fall back to `rate`
+   only when it is absent. Discounting the discounted rate turns 10% given
+   twice into 19%, and once saved the rep's quoted rate is gone for good.
+2. **Write all four fields together.** There are no Server Scripts on this
+   site and `Lead Order Item` is a custom table nothing calculates, so nothing
+   will reconcile them for you.
+3. **Round to paise at every step**, not once at the end, or the lines will not
+   add up to the total shown beneath them.
+4. **Cap: 50%.** Not a costing limit — a guard against a typo, since `100` in a
+   percentage box is an order given away. Above that is a GM conversation.
+5. **Once the order is approved, no discount can change** — not by the sales
+   manager, not by the GM. `custom_rate_approved = 1`, or
+   `custom_po_status = "PO Approved - Ready for SAP"` (customer orders), or
+   `status ∈ {Approved, PO Approved - Ready for SAP}` (lead orders). Note a
+   lead order has **no** `custom_po_status`: checking only that field reads
+   every lead order as still open and would let a discount move after approval
+   on exactly the orders that then become real ones.
+6. **A rep re-editing a pending order must not silently lose the discount.**
+   The child table is replaced, not merged, and the rep's editor rebuilds each
+   line from the rate per kg they typed. Re-apply the stored *percentage* to
+   the incoming line — not the old net rate, which would be a number nobody
+   chose if the rep has changed what they quoted.
+7. **Converting an approved lead order carries the discount across**, changing
+   fields on the way (custom pair → standard pair). Dropped, the customer is
+   invoiced the full rate at the exact moment the discount starts to mean
+   money.
+
+### What to show
+
+Both totals, never one: **before discount**, **discount**, **after discount**.
+The manager is deciding two things at once — whether the customer can carry
+this, and what the business is giving away to win it — and a single figure
+answers only the first. Keep the full price visible beside the discounted one
+on each line too.
+
+**The credit limit is checked against the discounted total**, since that is
+what the customer will actually owe. Escalating on the full price would send
+orders to the GM over a figure nobody is going to be billed.
+
+Arithmetic and its tests: `lib/core/discount.dart`, `test/discount_test.dart`.
+
+---
+
 ## 8. Completion, unchanged
 
 `complete ⟺ custom_production_status == "Dispatched"`. Derived, never stored.
@@ -505,11 +583,13 @@ Name the state rather than only ticking it — "Ready" and "In Production" are b
 | Booking, claiming, receiving a run | `lib/services/stock_service.dart` |
 | Stage sequences and roll-up | `lib/core/production_stages.dart`, `Api.rollUpStage` |
 | Quality/pattern parsing | `lib/core/item_naming.dart` |
-| GM exemptions | `lib/core/order_rules.dart` |
+| GM exemptions, sign-off checks | `lib/core/order_rules.dart` |
+| Per-line discounts | `lib/core/discount.dart`, `Api.setLineDiscount` |
 | Production stock screen | `lib/screens/production/production_stock_screen.dart` |
 | Two-track stages | `lib/screens/production/production_order_detail_screen.dart` |
 
 The tests state the rules more plainly than the code:
 `test/production_run_claim_test.dart`, `test/production_stock_test.dart`,
 `test/item_naming_test.dart`, `test/gm_rules_test.dart`,
-`test/production_stages_test.dart`, `test/widget_test.dart`.
+`test/production_stages_test.dart`, `test/widget_test.dart`,
+`test/discount_test.dart`.

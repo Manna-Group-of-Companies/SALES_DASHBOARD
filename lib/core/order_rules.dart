@@ -149,6 +149,20 @@ List<String> missingLeadDetails(Map<String, dynamic> lead) {
 bool orderApproved(Map<String, dynamic> order) =>
     '${order['custom_po_status'] ?? ''}' == 'PO Approved - Ready for SAP';
 
+/// Whether an order has been signed off, asking the right field for its type.
+///
+/// A lead order has no `custom_po_status` — approving one sets `status` to
+/// `Approved` and converts the lead — so [orderApproved] alone reads every
+/// lead order as still open. Anything that must not happen after sign-off has
+/// to use this instead, or it silently permits on leads what it forbids on
+/// customer orders.
+bool orderSignedOff(Map<String, dynamic> order, {required bool isLead}) {
+  if ((order['custom_rate_approved'] ?? 0) == 1) return true;
+  if (!isLead) return orderApproved(order);
+  const done = {'Approved', 'PO Approved - Ready for SAP'};
+  return done.contains('${order['status'] ?? ''}');
+}
+
 /// True once the sales manager has approved the order's rates, which is what
 /// locks manual pricing. Adding a line afterwards is still allowed — it just
 /// puts the order back in the manager's queue, because a line nobody priced is
