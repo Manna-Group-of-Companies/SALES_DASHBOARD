@@ -123,6 +123,8 @@ describe('the app does not write custom_fulfilment_mode', () => {
     rolls: 8,
     looseBelts: 2,
     rateApproved: true,
+    discountPercent: 0,
+    priceListRate: 630,
     fulfilmentMode: LIVE_00106.custom_fulfilment_mode, // ''
     productionStage: 'Not Started',
   };

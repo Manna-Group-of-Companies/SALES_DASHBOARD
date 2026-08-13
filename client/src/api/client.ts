@@ -93,11 +93,13 @@ import { availableQty, isBelowThreshold } from '@/domain/aging';
 import { noteServerDate, serverNow } from '@/domain/serverClock';
 import { rollUp } from '@/domain/production';
 import { heldBy, holdPlan, trueReserved } from '@/domain/minimumStock';
+import { discountLine, normaliseDiscount } from '@/domain/discount';
 import {
   PRODUCTION_STATUS,
   PO_STATUS,
   LEAD_ORDER_STATUS,
   isSet as isLinkSet,
+  rateEditable,
 } from '@/domain/orderStatus';
 
 import { USE_MOCK } from './config';
@@ -3023,6 +3025,14 @@ function toOrderLine(r: Record<string, unknown>): OrderLine {
     looseBelts: n(SALES_ORDER_ITEM_FIELD.looseBelts),
     packingNote: str(r[SALES_ORDER_ITEM_FIELD.packingNote]),
     rateApproved: Number(r[SALES_ORDER_ITEM_FIELD.rateApproved]) === 1,
+    discountPercent: normaliseDiscount(n(SALES_ORDER_ITEM_FIELD.discountPercent)),
+    /*
+     * `price_list_rate` is 0 on every line raised before discounts existed,
+     * and on those the rate IS the undiscounted rate. Falling back to it
+     * keeps "before" and "after" equal on an untouched line rather than
+     * showing a hundred-per-cent discount off zero.
+     */
+    priceListRate: n(SALES_ORDER_ITEM_FIELD.priceListRate) || n('rate'),
     fulfilmentMode: str(r[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
     productionStage: str(r[SALES_ORDER_ITEM_FIELD.productionStage]),
     stockStage: str(r[SALES_ORDER_ITEM_FIELD.stockStage]),
@@ -3054,6 +3064,10 @@ async function decideSalesOrder(input: {
   decision: OrderDecision;
   /** Per-line rate edits, keyed by the child row name. */
   rateEdits?: Record<string, number>;
+  /** Per-line discount percentages, keyed by the child row name. */
+  discountEdits?: Record<string, number>;
+  /** Whose decision this is. Only the GM may move an already-approved price. */
+  role?: string;
 }): Promise<OrderDetail> {
   const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.id);
   const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
@@ -3070,21 +3084,54 @@ async function decideSalesOrder(input: {
     const edited = input.rateEdits?.[String(l.name)];
     const next: Record<string, unknown> = { ...l };
 
-    if (edited != null && edited > 0) {
-      /*
-       * ERPNext holds one qty and one rate, but tread rubber is counted in
-       * rolls and priced by the kilogram. Keeping
-       * `qty x rate == totalWeight x ratePerKg` is what makes the order total
-       * agree with the proforma; writing ratePerKg alone would leave the two
-       * describing different money.
-       */
-      const qty = Number(l.qty) || 0;
-      const weight = Number(l[SALES_ORDER_ITEM_FIELD.totalWeight]) || 0;
-      const perUnit = qty > 0 && weight > 0 ? (edited * weight) / qty : edited;
-      next[SALES_ORDER_ITEM_FIELD.ratePerKg] = edited;
-      next.rate = Math.round(perUnit * 100) / 100;
-      next.amount = Math.round(qty * perUnit * 100) / 100;
-    }
+    /*
+     * Both gates are re-checked against the line **as stored**, never against
+     * what the page had loaded. There are no Server Scripts on this site, so
+     * this is the only thing between a stale tab and a price that was signed
+     * off being quietly moved.
+     */
+    const lockedNow = Number(l[SALES_ORDER_ITEM_FIELD.rateApproved]) === 1;
+    const mayPrice = rateEditable(input.role, lockedNow);
+
+    const qty = Number(l.qty) || 0;
+    const weight = Number(l[SALES_ORDER_ITEM_FIELD.totalWeight]) || 0;
+
+    // Per kg, before any discount. An edit replaces it; otherwise it stands.
+    const perKg =
+      mayPrice && edited != null && edited > 0
+        ? edited
+        : Number(l[SALES_ORDER_ITEM_FIELD.ratePerKg]) || 0;
+
+    /*
+     * ERPNext holds one qty and one rate, but tread rubber is counted in
+     * rolls and priced by the kilogram. Keeping
+     * `qty x rate == totalWeight x ratePerKg` is what makes the order total
+     * agree with the proforma; writing ratePerKg alone would leave the two
+     * describing different money.
+     */
+    const perUnitBefore =
+      qty > 0 && weight > 0
+        ? (perKg * weight) / qty
+        : Number(l[SALES_ORDER_ITEM_FIELD.priceListRate]) || Number(l.rate) || 0;
+
+    const askedPercent = input.discountEdits?.[String(l.name)];
+    const percent = normaliseDiscount(
+      mayPrice && askedPercent != null
+        ? askedPercent
+        : Number(l[SALES_ORDER_ITEM_FIELD.discountPercent]) || 0,
+    );
+
+    const money = discountLine({ perUnit: perUnitBefore, qty, percent });
+
+    // Written on every line, not only the edited ones. A line whose discount
+    // was never touched still needs `price_list_rate` filled in, or the
+    // before/after comparison has nothing to compare against next time.
+    if (perKg > 0) next[SALES_ORDER_ITEM_FIELD.ratePerKg] = perKg;
+    next[SALES_ORDER_ITEM_FIELD.priceListRate] = money.perUnitBefore;
+    next[SALES_ORDER_ITEM_FIELD.discountPercent] = money.percent;
+    next[SALES_ORDER_ITEM_FIELD.discountAmount] = money.perUnitOff;
+    next.rate = money.perUnitAfter;
+    next.amount = money.after;
 
     // Only approval locks a rate. A rejection leaves the prices editable so
     // the rep can fix what was wrong with them.
@@ -3685,12 +3732,29 @@ async function saveOrderLines(input: {
     // Spread the stored row first so warehouse, HSN code, tax fields and the
     // rest survive an edit — rebuilding a line from scratch would drop them.
     const base = l.id ? (byName.get(l.id) ?? {}) : {};
+
+    /*
+     * A discount already granted survives a quantity or rate change. It was a
+     * decision about this customer and this product; changing how many rolls
+     * they are taking does not withdraw it. The percentage is re-applied to
+     * the new figure so the money stays consistent — dropping it would
+     * silently raise the price the customer was quoted.
+     *
+     * `l.rate`/`l.amount` arrive from the editor as the UNDISCOUNTED figures,
+     * because that is what the packing rules compute.
+     */
+    const percent = normaliseDiscount(Number(base[SALES_ORDER_ITEM_FIELD.discountPercent]) || 0);
+    const money = discountLine({ perUnit: l.rate, qty: l.qty, percent });
+
     return {
       ...base,
       item_code: l.itemCode,
       qty: l.qty,
-      rate: l.rate,
-      amount: l.amount,
+      rate: money.perUnitAfter,
+      amount: money.after,
+      [SALES_ORDER_ITEM_FIELD.priceListRate]: money.perUnitBefore,
+      [SALES_ORDER_ITEM_FIELD.discountPercent]: money.percent,
+      [SALES_ORDER_ITEM_FIELD.discountAmount]: money.perUnitOff,
       uom: l.uom,
       conversion_factor: 1,
       delivery_date: str(doc.delivery_date),

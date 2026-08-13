@@ -591,3 +591,16 @@
 
 /* The stock position under an item's name in the picker. */
 .pick__stock { display: block; margin-top: 2px; }
+
+/* --- Discount: the before figure stays beside the after, never replaced --- */
+.line__was {
+  text-decoration: line-through;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+.ok-text { color: #1b7f3b; }
+
+.order__totals { display: flex; flex-direction: column; gap: 2px; }
+.order__total--was span:last-child { text-decoration: line-through; color: var(--text-3); }
+.order__total--off span { color: #1b7f3b; }
+.order__total--was, .order__total--off { font-size: 12.5px; font-weight: 400; }

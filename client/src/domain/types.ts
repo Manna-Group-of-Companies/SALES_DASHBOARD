@@ -403,6 +403,16 @@ export interface OrderLine {
   packingNote?: string;
   /** Per-line: "this price is final". Survives an edit that reopens the order. */
   rateApproved: boolean;
+  /**
+   * The manager's concession on this line, 0–100. Locked by the same approval
+   * that locks the rate — a discount is a price.
+   */
+  discountPercent: number;
+  /**
+   * Per unit, before the discount. `rate` is always the figure AFTER it, so
+   * these are equal on a line nobody has discounted.
+   */
+  priceListRate: number;
   fulfilmentMode?: string;
   /** Free text (`Data`) — the stage of the portion being MADE. */
   productionStage?: string;

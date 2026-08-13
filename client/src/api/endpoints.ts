@@ -306,6 +306,24 @@ export const SALES_ORDER_ITEM_FIELD = {
   stockStage: 'custom_stock_stage',
   /** Link to `Manna Minimum Stock Batch` when filled from aged stock. */
   agedBatch: 'custom_aged_batch',
+
+  /*
+   * The discount the sales manager grants at approval.
+   *
+   * ERPNext's OWN pricing fields, not custom ones. They already exist on
+   * `Sales Order Item` — only the Desk `discount_and_margin` section is
+   * hidden, by a Property Setter — and `net_total`, `grand_total`, the
+   * proforma, GST and the eventual Sales Invoice are all built from `amount`.
+   * A custom field would show the discount here and lose it on the invoice.
+   *
+   * (`Lead Order Item` is the exception: it was given
+   * `custom_price_list_rate` / `custom_discount_percentage` by the app team
+   * because it is a custom doctype with no native pricing of its own. See
+   * LEAD_ORDER_ITEM_FIELD.)
+   */
+  priceListRate: 'price_list_rate',
+  discountPercent: 'discount_percentage',
+  discountAmount: 'discount_amount',
 } as const;
 
 /**
@@ -647,6 +665,15 @@ export const LEAD_ORDER_ITEM_FIELD = {
   qty: 'qty',
   rate: 'rate',
   amount: 'amount',
+  /*
+   * A custom doctype has no native pricing, so the app team added its own
+   * pair here — labelled "Rate Before Discount" and "Discount (%)". The
+   * Sales Order side uses ERPNext's native fields instead; see
+   * SALES_ORDER_ITEM_FIELD. Same meaning, different storage, because the two
+   * doctypes are not the same kind of record.
+   */
+  priceListRate: 'custom_price_list_rate',
+  discountPercent: 'custom_discount_percentage',
 } as const;
 
 /**
