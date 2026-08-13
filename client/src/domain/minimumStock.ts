@@ -215,6 +215,54 @@ export function splitOf(line: OrderLine, reservations: StockReservationRow[], or
   };
 }
 
+/**
+ * What actually covers a line, once the free shelf is taken into account.
+ *
+ * `splitOf` answers "how much of this line is *held*" and calls the remainder
+ * `toMake`. That is only the same thing when the shelf is empty. Live on
+ * 12 Aug 2026, `155 MSR 87` had a shelf of 4, one roll held by
+ * SAL-ORD-2026-00129, and the manager raised that line to 2 — so one roll was
+ * uncovered while **three sat free**, and the screen reported it as "to be
+ * made". A production run raised off that reading would have manufactured a
+ * roll that was already on the shelf.
+ *
+ * Uncovered and unavailable are different states and get different names:
+ *
+ *   - `reserved` — a reservation row holds it. Nobody can take it.
+ *   - `availableNow` — nothing holds it, but the shelf has it free. It is one
+ *     booking away, not one production run away.
+ *   - `toMake` — nothing holds it and the shelf does not have it. This, and
+ *     only this, is what has to be manufactured.
+ *
+ * `free` is the *unbooked* shelf — `positionFor(...).freeForOthers`, which is
+ * already net of every other order's hold. Passing the gross shelf here would
+ * offer stock that somebody else has booked.
+ */
+export interface Cover {
+  reserved: Qty;
+  availableNow: Qty;
+  toMake: Qty;
+  /** True when the uncovered part cannot be met from stock at all. */
+  needsProduction: boolean;
+}
+
+export function coverFor(split: Split, free: Qty): Cover {
+  const availableNow: Qty = {
+    rolls: Math.min(split.toMake.rolls, clamp(free.rolls)),
+    belts: Math.min(split.toMake.belts, clamp(free.belts)),
+  };
+  const toMake: Qty = {
+    rolls: clamp(split.toMake.rolls - availableNow.rolls),
+    belts: clamp(split.toMake.belts - availableNow.belts),
+  };
+  return {
+    reserved: split.reserved,
+    availableNow,
+    toMake,
+    needsProduction: toMake.rolls > 0 || toMake.belts > 0,
+  };
+}
+
 /** What this order holds of an item, from the Active reservation rows only. */
 export function heldBy(
   reservations: StockReservationRow[],

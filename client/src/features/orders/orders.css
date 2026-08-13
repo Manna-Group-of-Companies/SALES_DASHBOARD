@@ -509,6 +509,9 @@
 .stockpos tr.ok td { color: #1b7f3b; }
 .stockpos tr.warn td { color: #8a6100; font-weight: 600; }
 .stockpos tr.dim td { color: var(--text-3); }
+/* Uncovered but free on the shelf — a booking away, not a production run away.
+   Blue rather than amber on purpose: nothing is wrong, nobody has claimed it. */
+.stockpos tr.info td { color: #1c5fa8; font-weight: 600; }
 
 /* A run is coming but is not stock. Its own line, never beside a sellable figure. */
 .run__note {

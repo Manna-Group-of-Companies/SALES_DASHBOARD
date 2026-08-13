@@ -43,6 +43,7 @@ import {
   PO_STATUS,
 } from '@/domain/orderStatus';
 import {
+  coverFor,
   describeSplit,
   modeLabel,
   modeTone,
@@ -477,6 +478,9 @@ export function OrderDetailPage() {
                             : l.qty * l.rate;
                       const pos = positionFor(l.itemCode, stock, reservations, order.id);
                       const split = splitOf(l, reservations, order.id);
+                      // Measured against the UNBOOKED shelf, so it never offers
+                      // a roll another order is already holding.
+                      const cover = coverFor(split, pos.freeForOthers);
                       const mode = servedFrom(l, reservations, order.id);
                       return (
                         <tr key={l.id}>
@@ -533,23 +537,45 @@ export function OrderDetailPage() {
                               <table className="stockpos">
                                 <tbody>
                                   <tr>
-                                    <td>Minimum stock held</td>
+                                    {/* The shelf, not the target. These are two
+                                        different numbers that happen to match on
+                                        some items, and calling the shelf
+                                        "minimum stock held" made the coincidence
+                                        look like the rule. */}
+                                    <td>On the shelf</td>
                                     <td className="num">{pos.shelf}</td>
+                                  </tr>
+                                  <tr className="dim">
+                                    <td>Minimum to hold</td>
+                                    <td className="num">{pos.minimum}</td>
                                   </tr>
                                   <tr>
                                     <td>Ordered</td>
                                     <td className="num">{qty(split.ordered)}</td>
                                   </tr>
                                   <tr className="ok">
-                                    <td>Of that, from stock</td>
-                                    <td className="num">{qty(split.reserved)}</td>
+                                    <td>Held for this order</td>
+                                    <td className="num">{qty(cover.reserved)}</td>
                                   </tr>
-                                  <tr className={split.toMake.rolls || split.toMake.belts ? 'warn' : ''}>
-                                    <td>To be made</td>
-                                    <td className="num">{qty(split.toMake)}</td>
+                                  {(cover.availableNow.rolls > 0 || cover.availableNow.belts > 0) && (
+                                    /*
+                                      Uncovered, but the shelf has it. Raising
+                                      the quantity here does not extend the hold
+                                      the rep's phone took, so this is the part
+                                      nobody has claimed yet — free stock, not a
+                                      production job.
+                                    */
+                                    <tr className="info">
+                                      <td>Not yet reserved — free on the shelf</td>
+                                      <td className="num">{qty(cover.availableNow)}</td>
+                                    </tr>
+                                  )}
+                                  <tr className={cover.needsProduction ? 'warn' : 'dim'}>
+                                    <td>Must be made</td>
+                                    <td className="num">{qty(cover.toMake)}</td>
                                   </tr>
                                   <tr className="dim">
-                                    <td>Free for anyone else</td>
+                                    <td>Unbooked, anyone can take</td>
                                     <td className="num">{qty(pos.freeForOthers)}</td>
                                   </tr>
                                 </tbody>
