@@ -23,18 +23,24 @@ Two consequences you must hold in mind:
   conditionally; Frappe rejects a stale timestamp. Two reps racing for the last
   rolls resolve to one winner. See the long comment at the top of
   `lib/services/stock_service.dart` — read it before touching booking.
-- **Rules must be re-implemented anywhere else that writes.** The web dashboards
-  being built separately have their own copies. See §6.
+- **Rules must be re-implemented anywhere else that writes.** The dashboard
+  (`client/`, in this same repository since 13 August 2026) has its own copy of
+  every one of them, in TypeScript. See §6 — and `shared/README.md`, which is
+  the mechanism that keeps the two copies honest now that prose alone has
+  demonstrably failed to.
 
 ---
 
 ## 2. Getting anything done
 
-Flutter is not on PATH.
+Flutter is not on PATH, and since 13 August 2026 this project is **`app/`
+inside the `SALES_DASHBOARD` monorepo** — every command below runs from `app/`,
+not from the repository root. See the root `CLAUDE.md` for why.
 
 ```bash
+cd app
 "C:/src/flutter/bin/flutter.bat" analyze          # expect 0 errors
-"C:/src/flutter/bin/flutter.bat" test             # ~400 tests, all should pass
+"C:/src/flutter/bin/flutter.bat" test             # ~455 tests, all should pass
 "C:/src/flutter/bin/flutter.bat" build apk --release
 ```
 

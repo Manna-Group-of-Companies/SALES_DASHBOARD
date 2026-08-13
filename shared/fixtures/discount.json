@@ -1,0 +1,115 @@
+{
+  "about": "Per-line discounts, granted by the sales manager at approval. Every case here is a rule BOTH apps already implement the same way. Open questions live in ../DIVERGENCES.md and must not be added until decided.",
+  "money_precision": 2,
+
+  "apply": [
+    {
+      "why": "ten per cent comes off the quoted rate and the amount is rebuilt from it",
+      "line": { "qty": 8, "rate": 7344, "price_list_rate": 0, "discount_percentage": 0 },
+      "percent": 10,
+      "expect": {
+        "price_list_rate": 7344,
+        "discount_percentage": 10,
+        "discount_amount": 734.4,
+        "rate": 6609.6,
+        "amount": 52876.8
+      }
+    },
+    {
+      "why": "a second discount comes off the ORIGINAL rate, never the already discounted one - otherwise ten per cent given twice quietly becomes nineteen, and the quoted rate is gone for good after the first save",
+      "line": { "qty": 8, "rate": 6609.6, "price_list_rate": 7344, "discount_percentage": 10 },
+      "percent": 10,
+      "expect": {
+        "price_list_rate": 7344,
+        "discount_percentage": 10,
+        "rate": 6609.6,
+        "amount": 52876.8
+      }
+    },
+    {
+      "why": "raising a discount reprices off the original rate, not the discounted one",
+      "line": { "qty": 8, "rate": 6609.6, "price_list_rate": 7344, "discount_percentage": 10 },
+      "percent": 20,
+      "expect": { "price_list_rate": 7344, "rate": 5875.2, "amount": 47001.6 }
+    },
+    {
+      "why": "removing a discount puts the original rate back",
+      "line": { "qty": 8, "rate": 6609.6, "price_list_rate": 7344, "discount_percentage": 10 },
+      "percent": 0,
+      "expect": { "rate": 7344, "discount_percentage": 0, "amount": 58752 }
+    },
+    {
+      "why": "an order taken before discounts existed has price_list_rate 0 and must read as full price, never as free",
+      "line": { "qty": 8, "rate": 7344, "price_list_rate": 0, "discount_percentage": 0 },
+      "percent": 5,
+      "expect": { "price_list_rate": 7344, "rate": 6976.8, "amount": 55814.4 }
+    },
+    {
+      "why": "a rate that will not divide evenly is still held to paise, so the lines add up to the total shown beneath them",
+      "line": { "qty": 10, "rate": 1000, "price_list_rate": 0, "discount_percentage": 0 },
+      "percent": 33.33,
+      "expect": { "rate": 666.7, "amount": 6667 }
+    }
+  ],
+
+  "totals": [
+    {
+      "why": "the two totals and the discount between them must reconcile by eye: before minus given equals after",
+      "lines": [
+        { "qty": 8, "rate": 6609.6, "price_list_rate": 7344, "discount_percentage": 10, "amount": 52876.8 },
+        { "qty": 2, "rate": 1000, "price_list_rate": 0, "discount_percentage": 0, "amount": 2000 }
+      ],
+      "expect": {
+        "before": 60752,
+        "after": 54876.8,
+        "given": 5875.2,
+        "discounted_lines": 1
+      }
+    },
+    {
+      "why": "the order-level percentage is given/before, NOT the mean of the line percentages - ten per cent off a small line and nothing off a large one is not a five per cent order",
+      "lines": [
+        { "qty": 1, "rate": 450, "price_list_rate": 500, "discount_percentage": 10, "amount": 450 },
+        { "qty": 1, "rate": 50000, "price_list_rate": 0, "discount_percentage": 0, "amount": 50000 }
+      ],
+      "expect": { "before": 50500, "after": 50450, "given": 50, "percent": 0.1 }
+    },
+    {
+      "why": "an order with nothing off reports no discount rather than a zero one",
+      "lines": [ { "qty": 8, "rate": 7344, "price_list_rate": 0, "discount_percentage": 0, "amount": 58752 } ],
+      "expect": { "before": 58752, "after": 58752, "given": 0, "has_discount": false }
+    },
+    {
+      "why": "an empty order is zero, not an error",
+      "lines": [],
+      "expect": { "before": 0, "after": 0, "given": 0, "has_discount": false }
+    }
+  ],
+
+  "locked": [
+    {
+      "why": "an approved customer order is final",
+      "order": { "custom_po_status": "PO Approved - Ready for SAP" },
+      "is_lead": false,
+      "expect": { "signed_off": true }
+    },
+    {
+      "why": "an approved LEAD order is final too - it has no custom_po_status, so asking only that field reads every lead order as still open, on exactly the orders that go on to become real ones",
+      "order": { "status": "Approved" },
+      "is_lead": true,
+      "expect": { "signed_off": true }
+    },
+    {
+      "why": "a locked rate counts as signed off whatever the status says",
+      "order": { "custom_rate_approved": 1 },
+      "is_lead": false,
+      "expect": { "signed_off": true }
+    },
+    {
+      "why": "a pending order is still open",
+      "order": { "custom_po_status": "Pending Approval" },
+      "is_lead": false,
+      "expect": { "signed_off": false }
+    }
+  ]
+}
