@@ -1,0 +1,184 @@
+{
+  "about": "Which customers, leads and routes a rep may see. Both apps read this file in their tests. The rule exists because the UAE unit works differently from the Indian ones: four reps and a manager cover for each other's leave, so any of them must be able to serve any UAE customer. Everywhere else a rep sees only their own.",
+  "pooled_units": [
+    "Manna Tyres UAE"
+  ],
+  "fields": {
+    "unit": "custom_company",
+    "team": "custom_team_manager",
+    "customer_owner": "custom_assigned_reps",
+    "lead_owner": "custom_sales_person",
+    "route_owner": "sales_person",
+    "note": "Pooling widens VISIBILITY only. Every customer, lead and route still names one owner, because the business still needs to know whose it is - for the route plan, for accountability, and to show who is being covered for."
+  },
+  "people": [
+    {
+      "name": "Amjad Pr",
+      "custom_company": "Manna Treads",
+      "custom_team_manager": "Pareeth",
+      "enabled": 1,
+      "is_group": 0
+    },
+    {
+      "name": "Sirajudheen Kasim",
+      "custom_company": "Manna Treads",
+      "custom_team_manager": "Pareeth",
+      "enabled": 1,
+      "is_group": 0
+    },
+    {
+      "name": "Prasad V",
+      "custom_company": "Manna Tyre Retreads",
+      "custom_team_manager": "Saneesh",
+      "enabled": 1,
+      "is_group": 0
+    },
+    {
+      "name": "Kailas Babu",
+      "custom_company": "Manna Tyres UAE",
+      "custom_team_manager": "Renjith",
+      "enabled": 1,
+      "is_group": 0
+    },
+    {
+      "name": "Manikandan",
+      "custom_company": "Manna Tyres UAE",
+      "custom_team_manager": "Renjith",
+      "enabled": 1,
+      "is_group": 0
+    },
+    {
+      "name": "Rajeev S",
+      "custom_company": "Manna Tyres UAE",
+      "custom_team_manager": "Renjith",
+      "enabled": 1,
+      "is_group": 0
+    },
+    {
+      "name": "Renjith",
+      "custom_company": "Manna Tyres UAE",
+      "custom_team_manager": "Renjith",
+      "enabled": 1,
+      "is_group": 0
+    },
+    {
+      "name": "Shihab K",
+      "custom_company": "Manna Tyres UAE",
+      "custom_team_manager": "Renjith",
+      "enabled": 1,
+      "is_group": 0
+    },
+    {
+      "name": "Ex UAE Rep",
+      "custom_company": "Manna Tyres UAE",
+      "custom_team_manager": "Renjith",
+      "enabled": 0,
+      "is_group": 0
+    },
+    {
+      "name": "Test Rep",
+      "custom_company": "",
+      "custom_team_manager": "",
+      "enabled": 1,
+      "is_group": 0
+    },
+    {
+      "name": "Sales Team",
+      "custom_company": null,
+      "custom_team_manager": null,
+      "enabled": 1,
+      "is_group": 1
+    }
+  ],
+  "visible": [
+    {
+      "why": "a UAE rep sees every UAE rep's customers, because any of them may have to cover a colleague's leave at no notice - this is the whole reason the rule exists",
+      "person": "Kailas Babu",
+      "expect": [
+        "Kailas Babu",
+        "Manikandan",
+        "Rajeev S",
+        "Renjith",
+        "Shihab K"
+      ]
+    },
+    {
+      "why": "the UAE manager is in the pool like everyone else - he carries his own customers and covers too",
+      "person": "Renjith",
+      "expect": [
+        "Kailas Babu",
+        "Manikandan",
+        "Rajeev S",
+        "Renjith",
+        "Shihab K"
+      ]
+    },
+    {
+      "why": "an Indian rep sees ONLY their own, unchanged - pooling one unit must not quietly widen the others",
+      "person": "Amjad Pr",
+      "expect": [
+        "Amjad Pr"
+      ]
+    },
+    {
+      "why": "a rep on the other Indian team is likewise untouched",
+      "person": "Prasad V",
+      "expect": [
+        "Prasad V"
+      ]
+    },
+    {
+      "why": "a disabled rep is not in the pool - somebody who has left must not keep appearing as a person on cover",
+      "person": "Kailas Babu",
+      "expect_excludes": [
+        "Ex UAE Rep"
+      ]
+    },
+    {
+      "why": "a group node is not a person and never appears",
+      "person": "Kailas Babu",
+      "expect_excludes": [
+        "Sales Team"
+      ]
+    },
+    {
+      "why": "a login that matches no Sales Person sees NOTHING - failing closed, because the alternative is showing one unit's customers to another",
+      "person": "nobody@nowhere",
+      "expect": []
+    },
+    {
+      "why": "a rep with no unit recorded sees only their own, never the pool - missing data must not be read as membership",
+      "person": "Test Rep",
+      "expect": [
+        "Test Rep"
+      ]
+    }
+  ],
+  "pooled": [
+    {
+      "why": "UAE is pooled",
+      "unit": "Manna Tyres UAE",
+      "expect": true
+    },
+    {
+      "why": "Treads is not",
+      "unit": "Manna Treads",
+      "expect": false
+    },
+    {
+      "why": "Retreads is not",
+      "unit": "Manna Tyre Retreads",
+      "expect": false
+    },
+    {
+      "why": "an unknown unit is not pooled - a new unit must be opted in deliberately, never by default",
+      "unit": "Manna Something New",
+      "expect": false
+    },
+    {
+      "why": "no unit at all is not pooled",
+      "unit": "",
+      "expect": false
+    }
+  ]
+}

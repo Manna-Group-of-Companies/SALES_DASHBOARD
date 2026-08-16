@@ -22,6 +22,21 @@ class Session {
   String? salesPersonLabel;
   String? managedTeam;
   List<String> teamReps = [];
+
+  /// The reps whose customers, leads and routes this login may see.
+  ///
+  /// Normally just this rep. In a pooled unit — UAE — it is everyone in the
+  /// unit, because they cover each other's leave and cannot wait for records to
+  /// be reassigned. Resolved once at sign-in by `Api.resolveVisibility`, and
+  /// left as `[salesPerson]` if that fails: widening on an error is how one
+  /// unit ends up looking at another's customers.
+  ///
+  /// See `core/visibility.dart` and `shared/fixtures/visibility.json`.
+  List<String> unitPeers = [];
+
+  /// True when this rep's records are shared with colleagues, so lists have to
+  /// say who owns each row.
+  bool get sharesUnit => unitPeers.length > 1;
   bool isGM = false;
   bool isHR = false;
   String? company;

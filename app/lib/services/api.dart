@@ -16,6 +16,7 @@ import 'package:manna_field_sales/core/proximity.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
+import 'package:manna_field_sales/core/visibility.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
@@ -329,9 +330,12 @@ class Api {
     // name. It used to be free text wrapped in pipes — "|Subhash|" — matched
     // with a LIKE. That match cannot succeed against a Link value, so the
     // customer list came back empty for every rep.
-    final filters = (rep == null || rep.isEmpty)
+    // In a pooled unit this is every rep in the unit, not just this one — see
+    // core/visibility.dart. Ownership is untouched; only the filter widens.
+    final clause = _visibleFilter(kFieldCustomerOwner);
+    final filters = (rep == null || rep.isEmpty || clause == null)
         ? null
-        : '[["custom_assigned_reps","=","$rep"]]';
+        : '[$clause]';
     return OfflineCache.read<List<Map<String, dynamic>>>(
       'customers:${rep ?? 'all'}',
       () => _list('Customer',
@@ -390,6 +394,49 @@ class Api {
       Session.I.salesPersonLabel = null;
       Session.I.company = null;
     }
+    await resolveVisibility();
+  }
+
+  /// Works out whose records this rep may see.
+  ///
+  /// Only a pooled unit needs the roster, so an Indian rep pays for nothing:
+  /// they are their own pool and the call returns immediately. On any failure
+  /// the pool stays as just this rep — visibility must never widen because a
+  /// request did not come back.
+  static Future<void> resolveVisibility() async {
+    final me = Session.I.salesPerson;
+    if (me == null || me.isEmpty) {
+      Session.I.unitPeers = [];
+      return;
+    }
+    Session.I.unitPeers = [me];
+    if (!isPooledUnit(Session.I.company)) return;
+    try {
+      final rows = await _list('Sales Person',
+          fields: '["name","$kFieldUnit","enabled","is_group"]',
+          filters: '[["$kFieldUnit","=","${Session.I.company}"]]',
+          orderBy: 'name asc');
+      final peers = visibleReps(
+          rows.map(VisPerson.fromRow).toList(), me);
+      if (peers.isNotEmpty) Session.I.unitPeers = peers;
+    } catch (_) {
+      // Leave it at [me]. A pooled rep briefly seeing only their own is a
+      // smaller problem than a failure that widens the list.
+    }
+  }
+
+  /// The filter clause for "records this rep may SEE", or null when there is
+  /// nothing to scope by — in which case the caller must show nothing.
+  ///
+  /// Not to be confused with [_mineFilter], which is "records this rep OWNS"
+  /// and is still what visits and trips want. Outside a pooled unit the two
+  /// produce the same set; inside one they deliberately do not.
+  static String? _visibleFilter(String field) {
+    final peers = Session.I.unitPeers;
+    if (peers.isEmpty) return null;
+    return peers.length == 1
+        ? '["$field","=","${peers.first}"]'
+        : '["$field","in",${_inList(peers)}]';
   }
 
   // -------- Manager context --------
@@ -2105,9 +2152,10 @@ class Api {
   // -------- Leads --------
   static Future<List<Map<String, dynamic>>> getLeads() {
     final rep = Session.I.salesPerson;
-    final filters = (rep == null || rep.isEmpty)
+    final clause = _visibleFilter(kFieldLeadOwner);
+    final filters = (rep == null || rep.isEmpty || clause == null)
         ? null
-        : '[["custom_sales_person","=","$rep"]]';
+        : '[$clause]';
     return _cachedRows(
         CacheKeys.leads,
         () => _list('Lead',
@@ -4112,10 +4160,20 @@ class Api {
       'routes:${forRep ?? 'all'}',
       () async {
         if (forRep != null && forRep.isNotEmpty) {
-          final mine = await fetch(
-              '[["is_active","=",1],["sales_person","=","$forRep"]]');
-          if (mine.isNotEmpty) {
-            return mine.map((e) => '${e['name']}').toList();
+          /*
+           * A pooled unit shares its routes as well as its customers. Without
+           * this a rep covering a colleague's leave can see the customer and
+           * then cannot set the round it belongs to — half a cover is worse
+           * than none, because the order gets raised against the wrong route.
+           */
+          final clause = Session.I.unitPeers.contains(forRep)
+              ? _visibleFilter(kFieldRouteOwner)
+              : '["$kFieldRouteOwner","=","$forRep"]';
+          if (clause != null) {
+            final mine = await fetch('[["is_active","=",1],$clause]');
+            if (mine.isNotEmpty) {
+              return mine.map((e) => '${e['name']}').toList();
+            }
           }
         }
         final all = await fetch('[["is_active","=",1]]');

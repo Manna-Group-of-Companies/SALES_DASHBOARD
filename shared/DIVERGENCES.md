@@ -221,3 +221,38 @@ What it cannot do is reach a phone that never opens the order.
 Whichever is chosen, the write still has to be made by whoever moves the stage —
 there is no server to do it — so it belongs in `setProductionStage` on the
 dashboard and `Api.setStage` on the phone, in the same commit.
+
+---
+
+## 8. UAE shares its customers; everywhere else does not — **built, 16 Aug 2026**
+
+The UAE unit is four reps and a manager covering a whole country. When one
+takes leave another has to serve their customers that week, and reassigning
+records by hand — then putting them back — is not something that happens on the
+morning somebody calls in sick.
+
+So `Manna Tyres UAE` is a **pooled unit**: every rep in it sees every other's
+customers, leads and routes. `Manna Treads` and `Manna Tyre Retreads` are
+unchanged — a rep there sees only their own.
+
+Keyed on `Sales Person.custom_company`, not on the team token or a list of
+names, because the unit is what actually differs and a name list goes stale the
+first time somebody joins.
+
+**Pooling widens visibility only. Ownership is untouched.** Every record still
+names one rep, and a pooled list shows the owner on the row — a shared list with
+no owner on it is a list nobody is responsible for.
+
+**Routes are pooled too.** Without that a rep on cover can see the customer and
+then cannot set the round it belongs to, and the order goes out against the
+wrong route. Half a cover is worse than none.
+
+It fails closed: a login matching no Sales Person, or a rep with no unit
+recorded, sees nothing rather than everything.
+
+The dashboard needed no change — a manager's scope was already their whole
+team, which for Renjith is the whole UAE unit, and the customer list already
+carries a Representative column. The gap was the phone, where every query was
+`= me`.
+
+*Pinned in `fixtures/visibility.json`; both suites read the same 24 cases.*

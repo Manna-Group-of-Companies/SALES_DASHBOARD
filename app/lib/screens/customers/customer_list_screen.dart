@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/visibility.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/customers/customer_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -286,10 +288,32 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
         .where((x) => x != null && '$x'.isNotEmpty)
         .join(' · ');
 
+    /*
+     * Whose customer this is.
+     *
+     * Only shown in a pooled unit, where seeing a record and owning it are
+     * different things for the first time. A shared list with no owner on it
+     * is a list nobody is responsible for — and a rep needs to know they are
+     * covering before they ring somebody else's customer.
+     */
+    final owner = '${c[kFieldCustomerOwner] ?? ''}';
+    final covering =
+        Session.I.sharesUnit && owner.isNotEmpty && owner != Session.I.salesPerson;
+
     return ListTile(
       title: Text(c['customer_name'] ?? c['name']),
       subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (sub.isNotEmpty) Text(sub),
+        if (covering) ...[
+          const SizedBox(height: 2),
+          Row(children: [
+            Icon(Icons.people_alt_outlined,
+                size: 13, color: Colors.indigo.shade400),
+            const SizedBox(width: 4),
+            Text('$owner’s customer',
+                style: TextStyle(fontSize: 11.5, color: Colors.indigo.shade400)),
+          ]),
+        ],
         const SizedBox(height: 2),
         Row(children: [
           Icon(badge.icon, size: 14, color: badge.color),
