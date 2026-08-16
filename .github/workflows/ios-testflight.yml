@@ -1,0 +1,143 @@
+# Build the reps' iOS app on a hosted Mac and send it to TestFlight.
+#
+# Written because the only Mac in the business is not always to hand, and on
+# 16 Aug 2026 a change the UAE team needed could not ship for that reason
+# alone. GitHub's macOS runners remove the machine from the critical path:
+# nobody has to own a Mac to release the phone app any more.
+#
+# Signing is done through the App Store Connect API rather than certificates
+# exported from somebody's keychain. That is the part that makes this work
+# without a Mac at all — `fetch-signing-files --create` will CREATE the
+# distribution certificate and provisioning profile if they do not exist, so
+# there is nothing to export from a machine you do not have.
+#
+# The four secrets are listed in docs/IOS_RELEASE.md. Add them under
+# Settings -> Secrets and variables -> Actions. They are never exposed to pull
+# requests from forks, which matters because this repository is public.
+
+name: iOS → TestFlight
+
+on:
+  # Deliberately manual. An iOS build takes ~15 minutes of hosted-Mac time and
+  # a TestFlight upload is visible to every tester, so it happens when somebody
+  # means it — not on every push.
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: 'What testers should be told changed'
+        required: false
+        default: 'Internal build'
+
+# Two of these at once would race for the same TestFlight build number.
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    env:
+      # Must match the bundle identifier registered in App Store Connect.
+      # The repository still carries Flutter's placeholder — see
+      # docs/IOS_RELEASE.md before the first run.
+      BUNDLE_ID: com.mannagroup.fieldsales
+      XCODE_PROJECT: app/ios/Runner.xcodeproj
+      XCODE_SCHEME: Runner
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the Flutter version the app is pinned to
+        id: flutter
+        run: |
+          # .fvmrc or a pinned version would win here; absent both, take the
+          # channel the app was developed against rather than "latest", which
+          # would silently upgrade the toolchain on an unrelated day.
+          echo "channel=stable" >> "$GITHUB_OUTPUT"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ steps.flutter.outputs.channel }}
+          cache: true
+
+      - name: Install the App Store Connect tooling
+        run: pip3 install --break-system-packages codemagic-cli-tools
+
+      - name: flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      # ------------------------------------------------------------ signing --
+      #
+      # A throwaway keychain, created and destroyed inside this run. Nothing is
+      # left on the runner, and the runner is discarded anyway.
+      - name: Set up signing
+        env:
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          CERTIFICATE_PRIVATE_KEY: ${{ secrets.CERTIFICATE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          keychain initialize
+          # --create makes the distribution certificate and the profile when
+          # they do not already exist. This is what removes the Mac from the
+          # process: there is nothing to export from a keychain you cannot open.
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles --project "$XCODE_PROJECT"
+
+      # ------------------------------------------------------------- version --
+      #
+      # TestFlight refuses a build number it has seen before, and `pubspec.yaml`
+      # has said `1.1.0+2` since the app was first released. The run number is
+      # monotonic and never reused, so it is the build number; the marketing
+      # version still comes from pubspec.
+      - name: Work out the build number
+        id: version
+        run: |
+          set -euo pipefail
+          NAME=$(grep '^version:' app/pubspec.yaml | sed 's/version: *//' | cut -d+ -f1)
+          # Offset past the builds already uploaded by hand from the Mac.
+          NUMBER=$(( ${{ github.run_number }} + 100 ))
+          echo "name=$NAME"     >> "$GITHUB_OUTPUT"
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+          echo "Building $NAME ($NUMBER)"
+
+      - name: Build the IPA
+        working-directory: app
+        run: |
+          set -euo pipefail
+          flutter build ipa --release \
+            --build-name "${{ steps.version.outputs.name }}" \
+            --build-number "${{ steps.version.outputs.number }}" \
+            --export-options-plist "$HOME/export_options.plist"
+
+      - name: Upload to TestFlight
+        env:
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          app-store-connect publish \
+            --path "app/build/ios/ipa/*.ipa" \
+            --testflight \
+            --beta-build-localizations "[{\"locale\":\"en-GB\",\"whatsNew\":\"${{ inputs.notes }}\"}]"
+
+      # Kept whatever happens: a failed build's log is worth more than a
+      # successful one's, and the runner is wiped in minutes.
+      - name: Keep the build output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-${{ steps.version.outputs.number }}
+          path: |
+            app/build/ios/ipa/*.ipa
+            app/build/ios/logs/**
+          retention-days: 14
+          if-no-files-found: ignore
