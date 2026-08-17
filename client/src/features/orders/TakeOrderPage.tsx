@@ -483,14 +483,20 @@ export function TakeOrderPage() {
             proformaNo="PF-DRAFT"
             lines={selected.map(({ product, input, computed }) => ({
               itemName: product.name,
-              hsn: product.hsnCode,
-              detail: computed.breakdown,
               quantity: computed.quantity,
               uom: computed.uom,
               rate: input.rate ?? 0,
               amount: computed.amount,
               category: product.category,
+              // The packing counts are columns on the proforma now, so they
+              // have to reach it as numbers rather than inside `breakdown`.
+              rolls: input.rolls,
+              belts: input.looseBelts,
               tins: input.tins,
+              // `quantity` IS the billable amount in `uom` — kg for tread rubber
+              // and gum, litres for solution.
+              weight: computed.quantity,
+              ratePerKg: input.rate,
             }))}
           />
         </Modal>

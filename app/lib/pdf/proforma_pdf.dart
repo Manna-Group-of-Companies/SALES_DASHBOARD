@@ -9,6 +9,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/proforma_columns.dart';
 
 String _amountInWords(num amount) {
   final n = amount.round();
@@ -199,68 +200,70 @@ Future<Uint8List> _richProforma(Map<String, dynamic> order,
       pw.Table(
           border: pw.TableBorder.all(width: 0.5),
           columnWidths: {
-            0: const pw.FixedColumnWidth(18),
-            1: const pw.FixedColumnWidth(50),
-            2: const pw.FlexColumnWidth(3),
-            3: const pw.FixedColumnWidth(42),
-            4: const pw.FixedColumnWidth(26),
-            5: const pw.FixedColumnWidth(34),
-            6: const pw.FixedColumnWidth(42),
-            7: const pw.FixedColumnWidth(24),
-            8: const pw.FixedColumnWidth(50),
+            0: const pw.FixedColumnWidth(18),   // #
+            1: const pw.FlexColumnWidth(3),     // Description
+            2: const pw.FixedColumnWidth(30),   // Rolls
+            3: const pw.FixedColumnWidth(30),   // Belts
+            4: const pw.FixedColumnWidth(30),   // Cans
+            5: const pw.FixedColumnWidth(48),   // Qty
+            6: const pw.FixedColumnWidth(48),   // MRP
+            7: const pw.FixedColumnWidth(52),   // Amount
           },
           children: [
             pw.TableRow(
                 decoration: const pw.BoxDecoration(color: PdfColors.grey300),
                 children: [
                   cell('Sr', b: true),
-                  cell('ItemCode', b: true),
-                  cell('Item Description', b: true),
-                  cell('HSN', b: true),
-                  cell('GST%', b: true, a: pw.TextAlign.right),
+                  cell('Description', b: true),
+                  cell('Rolls', b: true, a: pw.TextAlign.right),
+                  cell('Belts', b: true, a: pw.TextAlign.right),
+                  cell('Cans', b: true, a: pw.TextAlign.right),
                   cell('Qty', b: true, a: pw.TextAlign.right),
-                  cell('Rate', b: true, a: pw.TextAlign.right),
-                  cell('Per', b: true),
+                  cell('MRP', b: true, a: pw.TextAlign.right),
                   cell('Amount', b: true, a: pw.TextAlign.right),
                 ]),
             for (var k = 0; k < items.length; k++)
-              pw.TableRow(children: [
-                cell('${k + 1}'),
-                cell(_pdfSafe(items[k]['item_code'])),
-                // The packing note is what the customer recognises — they
-                // ordered twelve rolls, not 270 kilograms, even though the
-                // kilograms are what they are billed for.
-                cell([
-                  _pdfSafe(items[k]['item_name'] ?? items[k]['item_code']),
-                  if ('${items[k]['custom_packing_note'] ?? ''}'.isNotEmpty &&
-                      '${items[k]['custom_packing_note']}' != 'null')
-                    _pdfSafe(items[k]['custom_packing_note']),
-                ].join('\n')),
-                cell((items[k]['gst_hsn_code']?.toString().isNotEmpty ?? false)
-                    ? _pdfSafe(items[k]['gst_hsn_code'])
-                    : kDefaultHSN),
-                cell('', a: pw.TextAlign.right),
-                // Tread rubber is ordered in rolls but agreed by the kilogram,
-                // so the invoice is billed the way the customer was quoted:
-                // weight at the per-kg rate. The roll count is in the
-                // description above. Anything without a per-kg rate — solution,
-                // or an order raised before this existed — prints as stored.
-                cell(
-                    _pdfNum(items[k]['custom_rate_per_kg']) > 0
-                        ? '${_pdfNum(items[k]['custom_total_weight'])}'
-                        : '${_pdfNum(items[k]['qty'])}',
-                    a: pw.TextAlign.right),
-                cell(
-                    _pdfNum(items[k]['custom_rate_per_kg']) > 0
-                        ? '${_pdfNum(items[k]['custom_rate_per_kg'])}'
-                        : '${_pdfNum(items[k]['rate'])}',
-                    a: pw.TextAlign.right),
-                cell(_pdfNum(items[k]['custom_rate_per_kg']) > 0
-                    ? 'Kg'
-                    : _pdfSafe(items[k]['uom'] ?? items[k]['stock_uom'])),
-                cell('${_pdfNum(items[k]['amount']).toStringAsFixed(2)}',
-                    a: pw.TextAlign.right),
-              ]),
+              () {
+                // Every figure comes out of core/proforma_columns.dart, which
+                // the dashboard's renderer also uses. A column that differed
+                // between the two would be a customer sent two versions of the
+                // same quote.
+                final c = proformaCells(items[k].cast<String, dynamic>());
+                return pw.TableRow(children: [
+                  cell('${k + 1}'),
+                  // The item name alone. Rolls, belts and cans used to be
+                  // appended here as a sentence; they are quantities, and they
+                  // now have columns of their own.
+                  cell(_pdfSafe(items[k]['item_name'] ?? items[k]['item_code'])),
+                  cell(c.rolls, a: pw.TextAlign.right),
+                  cell(c.belts, a: pw.TextAlign.right),
+                  cell(c.cans, a: pw.TextAlign.right),
+                  cell(c.qty, a: pw.TextAlign.right),
+                  // The unit sits under the figure so the row can be checked:
+                  // tread rubber and gum multiply out on Qty, solution on Cans.
+                  cell(
+                      c.mrpUnit.isEmpty
+                          ? c.mrp.toStringAsFixed(2)
+                          : '${c.mrp.toStringAsFixed(2)}\n${c.mrpUnit}',
+                      a: pw.TextAlign.right),
+                  cell(c.amount.toStringAsFixed(2), a: pw.TextAlign.right),
+                ]);
+              }(),
+            // The total belongs to the table it totals. A customer reading
+            // down the Amount column should find the sum at the bottom of it,
+            // not in a separate box further down the page.
+            pw.TableRow(
+                decoration: const pw.BoxDecoration(color: PdfColors.grey300),
+                children: [
+                  cell(''),
+                  cell('Total', b: true),
+                  cell(''),
+                  cell(''),
+                  cell(''),
+                  cell(''),
+                  cell(''),
+                  cell(total.toStringAsFixed(2), b: true, a: pw.TextAlign.right),
+                ]),
           ]),
       pw.SizedBox(height: 6),
       // ----- words + totals -----
@@ -274,54 +277,9 @@ Future<Uint8List> _richProforma(Map<String, dynamic> order,
                   pw.Text('INR ${_amountInWords(total)} Only', style: st(7.5)),
                 ])),
         pw.SizedBox(width: 10),
-        pw.Expanded(
-          flex: 5,
-          child: pw.Container(
-            decoration: pw.BoxDecoration(border: pw.Border.all(width: 0.5)),
-            padding: const pw.EdgeInsets.all(4),
-            child: pw.Column(children: [
-              kvTable([
-                ['Net Amount (INR)', total.toStringAsFixed(2)],
-                ['CGST', ''],
-                ['SGST', ''],
-                ['IGST', ''],
-                ['Tax Amount : GST', ''],
-                ['Discount', ''],
-                ['Other Expense', ''],
-                ['Round Off', ''],
-              ], rightValue: true, labelW: 90),
-              pw.Divider(height: 4, thickness: 0.5),
-              pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text('Gross Total (INR)', style: st(8, b: true)),
-                    pw.Text(total.toStringAsFixed(2), style: st(8, b: true)),
-                  ]),
-            ]),
-          ),
-        ),
-      ]),
-      pw.SizedBox(height: 6),
-      // ----- HSN summary -----
-      pw.Table(border: pw.TableBorder.all(width: 0.5), children: [
-        pw.TableRow(
-            decoration: const pw.BoxDecoration(color: PdfColors.grey300),
-            children: [
-              cell('HSN', b: true),
-              cell('Taxable Value', b: true, a: pw.TextAlign.right),
-              cell('CGST', b: true, a: pw.TextAlign.right),
-              cell('SGST', b: true, a: pw.TextAlign.right),
-              cell('IGST', b: true, a: pw.TextAlign.right),
-              cell('Total Tax', b: true, a: pw.TextAlign.right),
-            ]),
-        pw.TableRow(children: [
-          cell(kDefaultHSN),
-          cell(total.toStringAsFixed(2), a: pw.TextAlign.right),
-          cell('', a: pw.TextAlign.right),
-          cell('', a: pw.TextAlign.right),
-          cell('', a: pw.TextAlign.right),
-          cell('', a: pw.TextAlign.right),
-        ]),
+        // No tax box. The rate a rep quotes already includes GST, so a
+        // breakup here would either restate the same money or invite somebody
+        // to add it twice. Tax is settled on the invoice, not on a quote.
       ]),
       pw.SizedBox(height: 8),
       // ----- bank + signatory -----

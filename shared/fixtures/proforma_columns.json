@@ -1,0 +1,178 @@
+{
+  "about": "What each proforma line shows in each column. The phone renders a PDF (app/lib/pdf/proforma_pdf.dart) and the dashboard renders HTML (client/src/features/orders/ProformaDocument.tsx); both are the same document to a customer, so both read this file in their tests.",
+  "columns": [
+    "#",
+    "Description",
+    "Rolls",
+    "Belts",
+    "Cans",
+    "Qty",
+    "MRP",
+    "Amount"
+  ],
+  "removed": {
+    "item_code": "an internal code the customer has no use for",
+    "hsn": "and the HSN summary table with it",
+    "gst": "the GST% column, the CGST/SGST/IGST breakup and the tax total - a proforma here quotes a price, and the tax is settled on the invoice",
+    "per": "replaced by the unit printed under MRP"
+  },
+  "packing_moved_out_of_description": "Rolls, belts and cans were printed as a second line under the item name. They are quantities, so they are columns.",
+  "reconciles": "Every row must multiply out against a column the customer can see. PCTR, CTR and BG are billed by weight, so Qty(kg) x MRP = Amount. VS is billed by the can, so Cans x MRP = Amount - which is why MRP carries its unit underneath.",
+  "lines": [
+    {
+      "why": "precured tread rubber shows rolls AND belts, and is billed by weight at a per-kilogram MRP",
+      "line": {
+        "custom_product_category": "PCTR",
+        "custom_rolls": 2,
+        "custom_loose_belts": 0,
+        "custom_total_weight": 56.4,
+        "custom_rate_per_kg": 302,
+        "qty": 2,
+        "rate": 8516.4,
+        "amount": 17032.8
+      },
+      "expect": {
+        "rolls": "2",
+        "belts": "",
+        "cans": "",
+        "qty": "56.4 kg",
+        "mrp": 302,
+        "mrp_unit": "per kg",
+        "amount": 17032.8
+      }
+    },
+    {
+      "why": "loose belts are shown when there are any - a customer who ordered 4 rolls and 2 belts must see both",
+      "line": {
+        "custom_product_category": "PCTR",
+        "custom_rolls": 4,
+        "custom_loose_belts": 2,
+        "custom_total_weight": 118.4,
+        "custom_rate_per_kg": 302,
+        "qty": 4,
+        "rate": 8516.4,
+        "amount": 35756.8
+      },
+      "expect": {
+        "rolls": "4",
+        "belts": "2",
+        "cans": ""
+      }
+    },
+    {
+      "why": "hot rubber has rolls but never loose belts - it is not cut into them, so the belts cell stays empty rather than printing a zero",
+      "line": {
+        "custom_product_category": "CTR",
+        "custom_rolls": 1,
+        "custom_loose_belts": 0,
+        "custom_total_weight": 30,
+        "custom_rate_per_kg": 290,
+        "qty": 1,
+        "rate": 8700,
+        "amount": 8700
+      },
+      "expect": {
+        "rolls": "1",
+        "belts": "",
+        "cans": "",
+        "qty": "30 kg",
+        "mrp": 290,
+        "mrp_unit": "per kg"
+      }
+    },
+    {
+      "why": "vulcanising solution is counted in cans and billed by the can - the tin size is already in the item name, so the can COUNT is what the column carries",
+      "line": {
+        "custom_product_category": "VS",
+        "custom_rolls": 0,
+        "custom_loose_belts": 0,
+        "custom_total_weight": 90,
+        "custom_rate_per_kg": 195,
+        "qty": 3,
+        "rate": 195,
+        "amount": 585
+      },
+      "expect": {
+        "rolls": "",
+        "belts": "",
+        "cans": "3",
+        "qty": "90 L",
+        "mrp": 195,
+        "mrp_unit": "per can",
+        "amount": 585
+      }
+    },
+    {
+      "why": "the solution row must MULTIPLY OUT: the PDF used to print qty 90 against rate 195 and an amount of 585, which is three different numbers that do not reconcile. Cans x MRP is what agrees with the amount",
+      "line": {
+        "custom_product_category": "VS",
+        "custom_total_weight": 90,
+        "custom_rate_per_kg": 195,
+        "qty": 3,
+        "rate": 195,
+        "amount": 585
+      },
+      "expect": {
+        "reconciles_on": "cans",
+        "check": 585
+      }
+    },
+    {
+      "why": "bonding gum is sold by the kilogram and needs no packing column at all",
+      "line": {
+        "custom_product_category": "BG",
+        "custom_rolls": 0,
+        "custom_loose_belts": 0,
+        "custom_boxes": 2,
+        "custom_total_weight": 40,
+        "custom_rate_per_kg": 345,
+        "qty": 40,
+        "rate": 345,
+        "amount": 13800
+      },
+      "expect": {
+        "rolls": "",
+        "belts": "",
+        "cans": "",
+        "qty": "40 kg",
+        "mrp": 345,
+        "mrp_unit": "per kg",
+        "amount": 13800
+      }
+    },
+    {
+      "why": "a zero never prints - an empty cell reads as 'not applicable', a 0 reads as 'none supplied', and on a packing column those are different claims",
+      "line": {
+        "custom_product_category": "PCTR",
+        "custom_rolls": 0,
+        "custom_loose_belts": 0,
+        "custom_total_weight": 0,
+        "qty": 0,
+        "rate": 0,
+        "amount": 0
+      },
+      "expect": {
+        "rolls": "",
+        "belts": "",
+        "cans": ""
+      }
+    },
+    {
+      "why": "an order raised before the per-kilogram rate existed falls back to the stored qty and rate, so an old proforma still reprints correctly",
+      "line": {
+        "custom_product_category": "CTR",
+        "custom_rolls": 1,
+        "custom_total_weight": 0,
+        "custom_rate_per_kg": 0,
+        "qty": 1,
+        "rate": 8700,
+        "amount": 8700
+      },
+      "expect": {
+        "qty": "1",
+        "mrp": 8700,
+        "reconciles_on": "qty"
+      }
+    }
+  ]
+}

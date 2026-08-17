@@ -1,8 +1,12 @@
 
 
 
-// ===== Proforma letterhead - Hi-Tech Pretreads (other companies' formats later) =====
-const String kCoName = 'HI-TECH PRETREADS';
+// ===== Proforma letterhead =====
+//
+// The name only. The address, GST number, PAN and bank details still belong to
+// the same registered entity and are deliberately unchanged — this is what the
+// document is headed, not who it is issued by.
+const String kCoName = 'MANNA TREADS';
 const String kCoAddress =
     'VIII/67-C, PVIP Canal Road Keezhillam\nErnakulam-683541\nKerala, India';
 const String kCoGST = '32AEJPM5698B1ZF';

@@ -7,15 +7,15 @@
  * why the importer refuses rows missing either.
  */
 
+import { proformaCells } from '@/domain/proforma';
 import type { ProductCategory } from '@/domain/types';
 import type { Customer } from '@/domain/types';
 import { formatDate } from '@/domain/orderRules';
-import { rateUnitFor } from '@/domain/productRules';
 import { money } from '@/components/common/format';
 
 // --- Hi-Tech Pretreads letterhead. Other units get their own block later. ---
 const CO = {
-  name: 'HI-TECH PRETREADS',
+  name: 'MANNA TREADS',
   address: 'VIII/67-C, PVIP Canal Road Keezhillam\nErnakulam-683541\nKerala, India',
   gst: '32AEJPM5698B1ZF',
   pan: 'AEJPM5698B',
@@ -26,18 +26,27 @@ const CO = {
   jurisdiction: 'SUBJECT TO PERUMBAVOOR JURISDICTION',
 };
 
-const GST_RATE = 0.18;
+/*
+ * No GST constant any more. The rate a rep quotes already includes tax, so a
+ * breakup on a proforma would either restate the same money or invite somebody
+ * to add it a second time. Tax is settled on the invoice, not on a quote.
+ */
 
 export interface ProformaLine {
   itemName: string;
-  hsn?: string;
-  detail: string;
   quantity: number;
   uom: string;
   rate: number;
   amount: number;
   category: ProductCategory;
+  /** Packing counts. Columns now, not a sentence under the name. */
+  rolls?: number;
+  belts?: number;
   tins?: number;
+  /** Total weight in kg, or litres for solution. */
+  weight?: number;
+  /** Per-kilogram rate, when the line was quoted that way. */
+  ratePerKg?: number;
 }
 
 export function ProformaDocument({
@@ -54,10 +63,6 @@ export function ProformaDocument({
   orderNo?: string;
 }) {
   const subtotal = lines.reduce((s, l) => s + l.amount, 0);
-  // Intra-state supply splits into CGST + SGST; inter-state is a single IGST.
-  const interState = customer.state.trim().toLowerCase() !== 'kerala';
-  const tax = subtotal * GST_RATE;
-  const grand = subtotal + tax;
 
   return (
     <div className="proforma">
@@ -114,75 +119,89 @@ export function ProformaDocument({
           <tr>
             <th style={{ width: 28 }}>#</th>
             <th>Description</th>
-            <th style={{ width: 78 }}>HSN</th>
-            <th className="right" style={{ width: 90 }}>Qty</th>
-            <th className="right" style={{ width: 90 }}>Rate</th>
+            <th className="right" style={{ width: 52 }}>Rolls</th>
+            <th className="right" style={{ width: 52 }}>Belts</th>
+            <th className="right" style={{ width: 52 }}>Cans</th>
+            <th className="right" style={{ width: 86 }}>Qty</th>
+            <th className="right" style={{ width: 86 }}>MRP</th>
             <th className="right" style={{ width: 100 }}>Amount</th>
           </tr>
         </thead>
         <tbody>
-          {lines.map((l, i) => (
-            <tr key={`${l.itemName}-${i}`}>
-              <td>{i + 1}</td>
-              <td>
-                <div style={{ fontWeight: 600 }}>{l.itemName}</div>
-                <div style={{ fontSize: 10, color: '#666' }}>{l.detail}</div>
-              </td>
-              <td>{l.hsn ?? '—'}</td>
-              <td className="right">
-                {/* VS is billed per tin, so show tins with litres as context. */}
-                {l.category === 'VS'
-                  ? `${l.tins ?? 0} tin${(l.tins ?? 0) === 1 ? '' : 's'} (${l.quantity} L)`
-                  : `${l.quantity.toLocaleString('en-IN', { maximumFractionDigits: 3 })} ${l.uom}`}
-              </td>
-              <td className="right">
-                {money(l.rate, 2)}
-                <div style={{ fontSize: 9, color: '#666' }}>{rateUnitFor(l.category)}</div>
-              </td>
-              <td className="right">{money(l.amount, 2)}</td>
-            </tr>
-          ))}
+          {lines.map((l, i) => {
+            /*
+              Every figure comes out of `domain/proforma.ts`, which the phone's
+              PDF renderer also uses. A column that differed between the two
+              would be a customer sent two versions of the same quote.
+            */
+            const c = proformaCells({
+              custom_product_category: l.category,
+              custom_rolls: l.rolls,
+              custom_loose_belts: l.belts,
+              custom_total_weight: l.weight,
+              custom_rate_per_kg: l.ratePerKg,
+              qty: l.category === 'VS' ? (l.tins ?? l.quantity) : l.quantity,
+              /*
+                Solution is billed by the can, and callers disagree about what
+                `rate` means on it — per litre in one place, per tin in another.
+                Deriving it from the amount is the only way the printed row is
+                guaranteed to multiply out, which is the property a customer
+                checks it by.
+              */
+              rate:
+                l.category === 'VS' && l.tins
+                  ? Math.round((l.amount / l.tins) * 100) / 100
+                  : l.rate,
+              amount: l.amount,
+            });
+            return (
+              <tr key={`${l.itemName}-${i}`}>
+                <td>{i + 1}</td>
+                {/* The item name alone. The packing breakdown used to be a
+                    second line here; it is a set of quantities, and now has
+                    columns of its own. */}
+                <td style={{ fontWeight: 600 }}>{l.itemName}</td>
+                <td className="right">{c.rolls}</td>
+                <td className="right">{c.belts}</td>
+                <td className="right">{c.cans}</td>
+                <td className="right">{c.qty}</td>
+                <td className="right">
+                  {money(c.mrp, 2)}
+                  {/* The unit sits under the figure so the row can be checked:
+                      tread rubber and gum multiply out on Qty, solution on
+                      Cans. */}
+                  {c.mrpUnit && (
+                    <div style={{ fontSize: 9, color: '#666' }}>{c.mrpUnit}</div>
+                  )}
+                </td>
+                <td className="right">{money(c.amount, 2)}</td>
+              </tr>
+            );
+          })}
           {lines.length === 0 && (
             <tr>
-              <td colSpan={6} style={{ textAlign: 'center', color: '#999' }}>
+              <td colSpan={8} style={{ textAlign: 'center', color: '#999' }}>
                 No items
               </td>
             </tr>
           )}
-        </tbody>
-      </table>
+          {/* The total belongs to the table it totals. A customer reading down
+              the Amount column should find the sum at the bottom of it, not in
+              a separate box further down the page.
 
-      <div className="proforma__totals">
-        <table>
-          <tbody>
-            <tr>
-              <td>Subtotal</td>
+              No tax rows: the rate a rep quotes already includes GST, so a
+              breakup here would either restate the same money or invite
+              somebody to add it twice. Tax is settled on the invoice. */}
+          {lines.length > 0 && (
+            <tr style={{ fontWeight: 700, background: '#f1f1f1' }}>
+              <td />
+              <td>Total</td>
+              <td colSpan={5} />
               <td className="right">{money(subtotal, 2)}</td>
             </tr>
-            {interState ? (
-              <tr>
-                <td>IGST @ 18%</td>
-                <td className="right">{money(tax, 2)}</td>
-              </tr>
-            ) : (
-              <>
-                <tr>
-                  <td>CGST @ 9%</td>
-                  <td className="right">{money(tax / 2, 2)}</td>
-                </tr>
-                <tr>
-                  <td>SGST @ 9%</td>
-                  <td className="right">{money(tax / 2, 2)}</td>
-                </tr>
-              </>
-            )}
-            <tr style={{ fontWeight: 700, background: '#f1f1f1' }}>
-              <td>Grand Total</td>
-              <td className="right">{money(grand, 2)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+          )}
+        </tbody>
+      </table>
 
       <div className="proforma__foot">
         <div>
