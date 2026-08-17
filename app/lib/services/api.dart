@@ -10,6 +10,7 @@ import 'package:manna_field_sales/core/auth_store.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/discount.dart';
+import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/proximity.dart';
@@ -4273,6 +4274,67 @@ class Api {
   static Future<void> deleteVisit(String name) async {
     final r = await Session.I.dio
         .delete('${_res('Sales Visit')}/${Uri.encodeComponent(name)}');
+    if (r.statusCode != 200 && r.statusCode != 202) {
+      throw Exception(_frappeError(r));
+    }
+    await OfflineCache.clear();
+  }
+
+  /// What stands in the way of deleting this lead.
+  ///
+  /// Asked BEFORE the delete, not inferred from the failure afterwards. Frappe
+  /// answers a blocked delete with a LinkExistsError naming an internal
+  /// doctype — true, and useless to a rep standing in a shop. Reading the
+  /// links first is what lets the app say "2 visits are logged against this
+  /// lead" instead.
+  ///
+  /// A failure to read them is reported as a blocker of its own rather than as
+  /// "nothing in the way": not knowing what points at a record is not the same
+  /// as nothing pointing at it, and only one of those is safe to act on.
+  static Future<LeadDeleteBlockers> getLeadDeleteBlockers(
+      Map<String, dynamic> lead) async {
+    final name = '${lead['name'] ?? ''}';
+    final owner = '${lead[kFieldLeadOwner] ?? ''}';
+    final me = Session.I.salesPerson ?? '';
+
+    // Ownership first: it decides whether the rest is even worth asking.
+    if (owner.isNotEmpty && owner != me) {
+      return LeadDeleteBlockers(ownedBy: owner);
+    }
+
+    final converted = '${lead['customer'] ?? ''}';
+
+    final visits = await _list('Sales Visit',
+        fields: '["name"]', filters: '[["custom_lead","=","$name"]]', limit: 50);
+    final orders = await _list('Lead Order',
+        fields: '["name"]', filters: '[["lead","=","$name"]]', limit: 50);
+
+    return LeadDeleteBlockers(
+      visits: visits.length,
+      leadOrders: orders.map((e) => '${e['name']}').toList(),
+      customer: converted.isEmpty || converted == 'null' ? null : converted,
+    );
+  }
+
+  /// Removes a lead the rep captured by mistake.
+  ///
+  /// Deleted rather than closed: a shop keyed twice, or captured at the wrong
+  /// door, is not a lead that went cold — it is a row that should never have
+  /// existed, and leaving it as "Do Not Contact" would keep it in every count
+  /// of what the territory holds.
+  ///
+  /// The caller is expected to have checked [getLeadDeleteBlockers] first. This
+  /// re-reads the lead and checks again anyway, because there are no Server
+  /// Scripts here and the gap between asking and acting is where a colleague's
+  /// visit lands.
+  static Future<void> deleteLead(String name) async {
+    final fresh = await getLeadDoc(name);
+    final blockers = await getLeadDeleteBlockers(fresh);
+    final refusal = leadDeleteRefusal(blockers);
+    if (refusal != null) throw Exception(refusal);
+
+    final r = await Session.I.dio
+        .delete('${_res('Lead')}/${Uri.encodeComponent(name)}');
     if (r.statusCode != 200 && r.statusCode != 202) {
       throw Exception(_frappeError(r));
     }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/leads/add_lead_screen.dart';
 import 'package:manna_field_sales/screens/leads/lead_detail_screen.dart';
@@ -26,6 +27,10 @@ class _LeadsScreenState extends State<LeadsScreen> {
   /// than from a route fetch — so the dropdown never offers one that would
   /// come back empty. Same rule as the customer list.
   List<String> _routes = [];
+
+  /// Set while a delete is being checked or carried out, so the menu cannot be
+  /// tapped twice into two deletes of the same row.
+  bool _busy = false;
 
   @override
   void initState() {
@@ -179,6 +184,80 @@ class _LeadsScreenState extends State<LeadsScreen> {
     );
   }
 
+  /// Delete a lead the rep captured by mistake.
+  ///
+  /// What is in the way is read BEFORE anything is confirmed, so the rep is
+  /// either asked a question they can answer or told exactly what to go and
+  /// fix — never shown a confirmation that then fails.
+  Future<void> _confirmDelete(Map<String, dynamic> lead) async {
+    final name = '${lead['name'] ?? ''}';
+    final label = '${lead['lead_name'] ?? name}';
+    if (name.isEmpty) return;
+
+    setState(() => _busy = true);
+    LeadDeleteBlockers blockers;
+    try {
+      blockers = await Api.getLeadDeleteBlockers(lead);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _busy = false);
+        _say(humanError(e));
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+
+    final refusal = leadDeleteRefusal(blockers);
+    if (refusal != null) {
+      await showDialog<void>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: Text('Cannot delete $label'),
+          content: Text(refusal),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(c), child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Delete lead'),
+        content: Text(leadDeleteConfirmation(label)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: const Text('Keep')),
+          TextButton(
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await Api.deleteLead(name);
+      if (!mounted) return;
+      _say('$label deleted.');
+      _reload();
+    } catch (e) {
+      if (mounted) _say(humanError(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _say(String msg) => ScaffoldMessenger.of(context)
+      .showSnackBar(SnackBar(content: Text(msg)));
+
   Widget _leadList(List<Map<String, dynamic>> rows) => ListView.separated(
         itemCount: rows.length,
         separatorBuilder: (_, __) => const Divider(height: 1),
@@ -197,7 +276,31 @@ class _LeadsScreenState extends State<LeadsScreen> {
                 .where((x) =>
                     x != null && '$x'.isNotEmpty && '$x' != 'null')
                 .join(' · ')),
-            trailing: const Icon(Icons.chevron_right),
+            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+              // Deliberately behind a menu rather than a swipe. A swipe-to-
+              // delete on a list a rep scrolls one-handed in a shop doorway is
+              // how the wrong lead goes.
+              PopupMenuButton<String>(
+                tooltip: 'Lead options',
+                // Two taps while the first check is still in flight would run
+                // two deletes of the same row; the second answers 404.
+                enabled: !_busy,
+                onSelected: (v) {
+                  if (v == 'delete') _confirmDelete(r);
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Row(children: [
+                      Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text('Delete lead', style: TextStyle(color: Colors.red)),
+                    ]),
+                  ),
+                ],
+              ),
+              const Icon(Icons.chevron_right),
+            ]),
             onTap: () => Navigator.push(ctx,
                     MaterialPageRoute(builder: (_) => LeadDetailScreen(lead: r)))
                 .then((_) => _reload()),
