@@ -80,13 +80,48 @@ Fields the two flows need, whatever the doctype ends up being called:
 never editable**, because changing it after the goods exist moves them between
 two owners — the shelf and a customer — with nothing to reconcile against.
 
-## Open, and worth settling before the code
+## Settled, and built — 18 August 2026
 
-- **Who is the stock person?** Taken as `stock_manager`, which already exists as
-  a role flag. Confirm nobody separate is meant.
-- **Does receiving create one batch per production order, or add to an open
-  one?** One per order is simpler and keeps the trail; it also means the aging
-  bands see the real arrival date. Assumed unless told otherwise.
-- **Dispatch is still not built** for flow B, and is the larger gap. Until it
-  exists, a delivered order's stock is never released and the shelf figure
-  never falls — see the note in `app/CLAUDE.md` §7.
+- **`Production Order Request` did not exist**, confirmed by
+  `ERPNEXT_LIST_DOCTYPES` — same as `Sales Notification`. `Manna Production
+  Order` was created instead, following the site's `Manna <Thing>` naming
+  convention, with exactly the fields listed above. `purpose`/`sales_order`/
+  `status` etc. are the real fieldnames now; `raised_by`/`received_by` are
+  `Data` (a display name), matching `custom_approved_by` and
+  `custom_in_production_updated_by` rather than `Link → User`.
+- **`raiseReplenishment`'s camelCase bug is fixed.** `client/src/api/client.ts`
+  now writes through `PRODUCTION_ORDER_FIELD` (endpoints.ts), and
+  `listProductionOrders` fetches explicit fields instead of sorting by a
+  nonexistent `raisedAt` column.
+- **Who is the stock person: a new user**, gated by a new `custom_is_stock_manager`
+  Check field on `User` (did not exist — the other three role flags did).
+  **Receiving happens on the stock manager's tablet, in `app/`** — new screen
+  `ReplenishmentReceivingScreen` — not on the dashboard. The dashboard's own
+  `ReplenishmentPage` ("Book in") was already built for the same role and has
+  been fixed to work against the real schema too, so either surface works;
+  the phone is the one the stock manager is meant to actually use.
+- **One batch per production order — confirmed.** Both `recordReplenishment`
+  (client) and `Api.receiveProductionOrder` (app) always `createDoc` a new
+  `Manna Minimum Stock Batch`, dated today, never top up an existing one.
+- **The cancel-after-production exception (flow B's join to flow A) is only
+  partly wired.** `needsStockDiversion` / `alreadyDiverted`
+  (`client/src/domain/productionOrders.ts`, `app/lib/core/production_order.dart`,
+  pinned by `shared/fixtures/production_order.json`) and the `divertToStock`
+  API primitive (`client/src/api/client.ts`) are built and tested. **No screen
+  calls `divertToStock` yet** — neither app has a "cancel this order" action at
+  all today (Sales Order cancellation is Frappe's own submit-cancel, docstatus
+  2, done in Desk), and `client`'s own `Order`/`listOrders` plumbing was not
+  audited far enough this round to trust wiring a button to it. Whoever adds a
+  cancel action, or a screen that reads `docstatus`, should call
+  `needsStockDiversion` on each line and `divertToStock` for the ones that
+  qualify — the logic is there, only the trigger is missing.
+- **Dispatch has a working screen** for flow B — `ProductionBoard.tsx` →
+  `dispatchOrder`, gated on every line reaching Ready — so the `app/CLAUDE.md`
+  §7 note that dispatch "is not built" is at least partly stale. Not confirmed
+  working end-to-end against the live site, though: `listOrders`/`getOrder`
+  in `client/src/api/client.ts` call `listDocs<Order>(DOCTYPE.salesOrder,
+  {filters, orderBy, limit: 0})` with **no `fields` param and no mapper** —
+  the same shape of bug `raiseReplenishment` had (camelCase `Order`/`OrderItem`
+  asserted onto whatever ERPNext actually returns for an unfielded list call).
+  Not touched this round; it is wider than production orders and needs its
+  own look before anyone trusts the production board's live data.

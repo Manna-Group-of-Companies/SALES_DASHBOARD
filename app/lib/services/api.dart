@@ -22,6 +22,7 @@ import 'package:manna_field_sales/core/visibility.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
+import 'package:manna_field_sales/models/production_order.dart' as prod_order;
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/services/offline_cache.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
@@ -449,13 +450,14 @@ class Api {
     Session.I.isGM = false;
     Session.I.isHR = false;
     Session.I.isProductionManager = false;
+    Session.I.isStockManager = false;
     Session.I.productionCompany = null;
     final user = await _loggedUser();
     if (user == null) return;
     try {
       final r = await Session.I.dio.get(_res('User') + '/$user',
           queryParameters: {
-            'fields': '["custom_managed_team","custom_is_general_manager","custom_is_hr_manager","custom_is_production_manager","custom_production_company"]'
+            'fields': '["custom_managed_team","custom_is_general_manager","custom_is_hr_manager","custom_is_production_manager","custom_is_stock_manager","custom_production_company"]'
           });
       final data = (r.data is Map && r.data['data'] is Map)
           ? r.data['data'] as Map
@@ -465,6 +467,7 @@ class Api {
       Session.I.isHR = (data['custom_is_hr_manager'] ?? 0) == 1;
       Session.I.isProductionManager =
           (data['custom_is_production_manager'] ?? 0) == 1;
+      Session.I.isStockManager = (data['custom_is_stock_manager'] ?? 0) == 1;
       final pc = data['custom_production_company'];
       if (pc is String && pc.isNotEmpty) Session.I.productionCompany = pc;
       if (team is String && team.isNotEmpty) {
@@ -1484,6 +1487,75 @@ class Api {
       return ob.compareTo(oa);
     });
     return out;
+  }
+
+  // -------- Production orders (shared/PRODUCTION_FLOWS.md) --------
+  //
+  // Flow A only: replenishment orders (purpose Stock) the stock manager has
+  // not yet received onto the shelf. Flow B's production is tracked directly
+  // on the Sales Order line (`custom_production_stage`) and never reaches
+  // `Manna Production Order` except through the cancel-after-production
+  // exception, which this screen does not handle.
+
+  /// Open replenishment orders, joined with the item they name so the screen
+  /// can show a name and a unit rather than a bare code.
+  static Future<List<prod_order.ProductionOrderDetail>>
+      getOpenReplenishmentOrders() async {
+    final results = await Future.wait([
+      _list('Manna Production Order',
+          fields:
+              '["name","item_code","qty","loose_belts","status","raised_on","raised_by"]',
+          filters: '[["purpose","=","Stock"],'
+              '["status","not in",["Received","Cancelled"]]]',
+          orderBy: 'raised_on asc'),
+      getItems(),
+    ]);
+    final rows = results[0] as List<Map<String, dynamic>>;
+    final items = results[1] as List<Map<String, dynamic>>;
+    final byCode = {for (final d in items) '${d['name']}': d};
+
+    final out = <prod_order.ProductionOrderDetail>[];
+    for (final r in rows) {
+      final order = prod_order.ProductionOrder.fromJson(r);
+      final doc = byCode[order.itemCode];
+      if (doc == null) continue;
+      out.add(prod_order.ProductionOrderDetail(
+          order: order, product: Product(doc)));
+    }
+    return out;
+  }
+
+  /// Closes a replenishment order: one new dated batch, and the order marked
+  /// Received. **One batch per production order, never added to an existing
+  /// one** — see shared/PRODUCTION_FLOWS.md — which is what keeps the aging
+  /// bands seeing a real arrival date rather than one blended with older
+  /// stock.
+  static Future<void> receiveProductionOrder({
+    required String name,
+    required String itemCode,
+    required double qty,
+    int looseBelts = 0,
+  }) async {
+    final today = nowStamp().substring(0, 10);
+    final r = await Session.I.dio.post(_res('Manna Minimum Stock Batch'), data: {
+      'item_code': itemCode,
+      'qty': qty,
+      'loose_belts': looseBelts,
+      'original_qty': qty,
+      'original_loose_belts': looseBelts,
+      'batch_date': today,
+    });
+    if (r.statusCode != 200 && r.statusCode != 201) {
+      throw Exception(_frappeError(r));
+    }
+    final batchName = '${r.data['data']['name']}';
+
+    await _put('Manna Production Order', name, {
+      'status': 'Received',
+      'received_on': nowStamp(),
+      'received_by': Session.I.salesPersonLabel ?? Session.I.email,
+      'batch': batchName,
+    });
   }
 
   static Future<List<String>> getCustomerGroups() async {

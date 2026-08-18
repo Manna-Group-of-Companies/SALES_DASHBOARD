@@ -41,7 +41,15 @@ export const DOCTYPE = {
   combinedOrder: 'Combined Order',
   customerSite: 'Customer Site',
   weeklyGroup: 'Weekly Order Group',
-  productionOrder: 'Production Order Request',
+  /**
+   * `Production Order Request` never existed — guessed here, never verified,
+   * and proven absent on 18 Aug 2026 the same way `Sales Notification` was
+   * proven absent on 13 Aug: `client/docs/ERPNEXT_DOCTYPES.md` is a
+   * what-to-create spec, not a record of the site. `Manna Production Order`
+   * was created on 18 Aug 2026 to carry both replenishment (Flow A) and
+   * order-attached (Flow B) production — see `shared/PRODUCTION_FLOWS.md`.
+   */
+  productionOrder: 'Manna Production Order',
   notification: 'Sales Notification',
   orderTimeline: 'Sales Order Timeline',
 
@@ -626,6 +634,50 @@ export const MIN_STOCK_BATCH_FIELD = {
   originalRolls: 'original_qty',
   originalBelts: 'original_loose_belts',
   batchDate: 'batch_date',
+} as const;
+
+/**
+ * `Manna Production Order` — created 18 Aug 2026. Carries both flows in
+ * `shared/PRODUCTION_FLOWS.md`: `purpose` is the field everything hangs off,
+ * set once at creation and never edited afterwards.
+ *
+ * `raisedBy`/`receivedBy` are `Data`, not `Link → User` — matching the site's
+ * own convention for attribution fields (`custom_approved_by`,
+ * `custom_in_production_updated_by`), both of which store a display name
+ * rather than a login.
+ */
+export const PRODUCTION_ORDER_FIELD = {
+  itemCode: 'item_code',
+  qty: 'qty',
+  looseBelts: 'loose_belts',
+  purpose: 'purpose',
+  salesOrder: 'sales_order',
+  status: 'status',
+  raisedOn: 'raised_on',
+  raisedBy: 'raised_by',
+  receivedOn: 'received_on',
+  receivedBy: 'received_by',
+  batch: 'batch',
+} as const;
+
+/** `Manna Production Order.purpose` — set at creation, never editable. */
+export const PRODUCTION_ORDER_PURPOSE = {
+  /** Flow A — raised against the minimum-stock pool. Ends up in company stock. */
+  stock: 'Stock',
+  /** Flow B — raised against one customer's order. Ends up dispatched. */
+  order: 'Order',
+} as const;
+
+/** The six values `Manna Production Order.status` accepts. */
+export const PRODUCTION_ORDER_STATUS = {
+  open: 'Open',
+  inProduction: 'In Production',
+  made: 'Made',
+  /** Flow A's close: goods reach company stock. */
+  received: 'Received',
+  /** Flow B's close: goods reach the customer. */
+  dispatched: 'Dispatched',
+  cancelled: 'Cancelled',
 } as const;
 
 /** `Manna Stock Reservation` — one claim on the pool. Verified live. */

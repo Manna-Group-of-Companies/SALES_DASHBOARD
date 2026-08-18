@@ -30,6 +30,15 @@ import { relativeTime } from '@/components/common/format';
 
 type View = 'open' | 'completed';
 
+const STATUS_LABEL: Record<ProductionOrder['status'], string> = {
+  open: 'Open',
+  in_production: 'In production',
+  made: 'Made',
+  received: 'Received',
+  dispatched: 'Dispatched',
+  cancelled: 'Cancelled',
+};
+
 export function ReplenishmentPage() {
   const dispatch = useAppDispatch();
   const user = useAppSelector(selectUser);
@@ -40,8 +49,12 @@ export function ReplenishmentPage() {
   const [booking, setBooking] = useState<ProductionOrder | null>(null);
   const [qty, setQty] = useState(0);
 
-  const open = orders.filter((o) => o.status === 'open');
-  const completed = orders.filter((o) => o.status === 'completed');
+  // Every non-final state still awaits book-in; only Received (flow A's
+  // close) or Cancelled leave the open list.
+  const open = orders.filter(
+    (o) => o.purpose === 'stock' && o.status !== 'received' && o.status !== 'cancelled',
+  );
+  const completed = orders.filter((o) => o.purpose === 'stock' && o.status === 'received');
   const rows = view === 'open' ? open : completed;
 
   const tabs: TabDef<View>[] = [
@@ -114,9 +127,9 @@ export function ReplenishmentPage() {
                   <th className="right">Qty to produce</th>
                   <th className="right">Current on hand</th>
                   <th>Raised</th>
-                  <th>Reason</th>
+                  <th>Status</th>
                   {view === 'open' && isStockManager && <th />}
-                  {view === 'completed' && <th>Completed</th>}
+                  {view === 'completed' && <th>Received</th>}
                 </tr>
               </thead>
               <tbody>
@@ -150,8 +163,8 @@ export function ReplenishmentPage() {
                         <div className="tiny dim">{relativeTime(o.raisedAt)}</div>
                       </td>
                       <td>
-                        <Badge tone={o.reason === 'replenishment' ? 'warn' : 'neutral'}>
-                          {o.reason === 'replenishment' ? 'Below minimum' : 'Order-driven'}
+                        <Badge tone={o.status === 'open' ? 'warn' : 'neutral'}>
+                          {STATUS_LABEL[o.status]}
                         </Badge>
                       </td>
                       {view === 'open' && isStockManager && (
@@ -170,7 +183,7 @@ export function ReplenishmentPage() {
                       )}
                       {view === 'completed' && (
                         <td className="small">
-                          {o.completedAt ? formatDateTime(o.completedAt) : '—'}
+                          {o.receivedAt ? formatDateTime(o.receivedAt) : '—'}
                         </td>
                       )}
                     </tr>

@@ -49,6 +49,11 @@ class Session {
 
   bool isProductionManager = false;
   String? productionCompany;
+
+  /// The stock person who receives production orders onto the shelf — the
+  /// close of flow A (and of a cancelled order diverted to stock in flow B).
+  /// See `shared/PRODUCTION_FLOWS.md`.
+  bool isStockManager = false;
   bool get isManager => managedTeam != null && managedTeam!.isNotEmpty;
 
   /// True when this login is on the Manna Treads side of the business, either

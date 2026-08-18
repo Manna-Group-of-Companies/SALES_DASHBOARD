@@ -1,0 +1,90 @@
+{
+  "about": "The one join between the two production flows (shared/PRODUCTION_FLOWS.md): whether a Sales Order line's production diverts to company stock when the order is cancelled after the goods were made. Both apps read this file in their tests.",
+
+  "fields": {
+    "docstatus": "docstatus",
+    "mode": "custom_fulfilment_mode",
+    "stage": "custom_production_stage",
+    "note": "docstatus 2 is Frappe's own submit-cancel, separate from custom_sales_status. A line only needs diverting when it was being made for THIS order (mode = 'New Production'), not served from the shelf or claimed off a replenishment run - those belong to a pool already and cancelling the order just releases the claim."
+  },
+
+  "needs_diversion": [
+    {
+      "why": "the plain case: the order was cancelled after the line had genuinely started production",
+      "line": { "docstatus": 2, "custom_fulfilment_mode": "New Production", "custom_production_stage": "Curing" },
+      "expect": true
+    },
+    {
+      "why": "an order that is merely rejected before approval, or otherwise still live, is not diverted - only an actual cancel (docstatus 2) triggers this",
+      "line": { "docstatus": 1, "custom_fulfilment_mode": "New Production", "custom_production_stage": "Curing" },
+      "expect": false
+    },
+    {
+      "why": "a draft order was never approved, so nothing was ever produced against it",
+      "line": { "docstatus": 0, "custom_fulfilment_mode": "New Production", "custom_production_stage": "Curing" },
+      "expect": false
+    },
+    {
+      "why": "a line served from the shelf belongs to the minimum-stock pool already - cancelling the order releases the reservation, it does not create a second batch",
+      "line": { "docstatus": 2, "custom_fulfilment_mode": "From Minimum Stock", "custom_production_stage": "" },
+      "expect": false
+    },
+    {
+      "why": "a line claimed off a replenishment run in progress is the run's stock, not this order's - it stays claimable by the next order rather than being diverted twice",
+      "line": { "docstatus": 2, "custom_fulfilment_mode": "From Production Run", "custom_production_stage": "" },
+      "expect": false
+    },
+    {
+      "why": "a to-order line cancelled before production ever touched it was never made - diverting it would put a batch of goods nobody produced onto the shelf",
+      "line": { "docstatus": 2, "custom_fulfilment_mode": "New Production", "custom_production_stage": null },
+      "expect": false
+    },
+    {
+      "why": "Frappe's three spellings of an unset Data field are all the same 'never started', matching the rule stage_watch.json already pins",
+      "line": { "docstatus": 2, "custom_fulfilment_mode": "New Production", "custom_production_stage": "null" },
+      "expect": false
+    },
+    {
+      "why": "any non-empty stage means work began, whatever it currently reads - this is not asking how far production got, only whether it started",
+      "line": { "docstatus": 2, "custom_fulfilment_mode": "New Production", "custom_production_stage": "Cutting" },
+      "expect": true
+    }
+  ],
+
+  "already_diverted": [
+    {
+      "why": "diverting is a one-time act - a production order already raised for this order/item pair must not be raised twice",
+      "sales_order": "SAL-ORD-2026-0099",
+      "item_code": "PCTR-220-13",
+      "orders": [
+        { "sales_order_id": "SAL-ORD-2026-0099", "item_code": "PCTR-220-13", "purpose": "order" }
+      ],
+      "expect": true
+    },
+    {
+      "why": "a replenishment order (purpose stock) for the same item is a different pool and does not count as this order having been diverted",
+      "sales_order": "SAL-ORD-2026-0099",
+      "item_code": "PCTR-220-13",
+      "orders": [
+        { "sales_order_id": null, "item_code": "PCTR-220-13", "purpose": "stock" }
+      ],
+      "expect": false
+    },
+    {
+      "why": "a diversion recorded against a different order does not cover this one, even for the same item",
+      "sales_order": "SAL-ORD-2026-0099",
+      "item_code": "PCTR-220-13",
+      "orders": [
+        { "sales_order_id": "SAL-ORD-2026-0042", "item_code": "PCTR-220-13", "purpose": "order" }
+      ],
+      "expect": false
+    },
+    {
+      "why": "no orders at all is simply not diverted yet",
+      "sales_order": "SAL-ORD-2026-0099",
+      "item_code": "PCTR-220-13",
+      "orders": [],
+      "expect": false
+    }
+  ]
+}

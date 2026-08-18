@@ -122,6 +122,9 @@ import {
   LINE_CATEGORY_TO_ITEM,
   MIN_STOCK_FIELD,
   MIN_STOCK_BATCH_FIELD,
+  PRODUCTION_ORDER_FIELD,
+  PRODUCTION_ORDER_PURPOSE,
+  PRODUCTION_ORDER_STATUS,
   FULFILMENT_MODE,
   RESERVATION_SOURCE,
   STOCK_RESERVATION_FIELD,
@@ -1238,21 +1241,60 @@ function raiseLowStockAlertIfNeeded(itemCode: string): void {
   });
 }
 
+/** `Manna Production Order.status`, as Frappe spells it → the domain shape. */
+const PRODUCTION_ORDER_STATUS_FROM_FRAPPE: Record<string, ProductionOrder['status']> = {
+  [PRODUCTION_ORDER_STATUS.open]: 'open',
+  [PRODUCTION_ORDER_STATUS.inProduction]: 'in_production',
+  [PRODUCTION_ORDER_STATUS.made]: 'made',
+  [PRODUCTION_ORDER_STATUS.received]: 'received',
+  [PRODUCTION_ORDER_STATUS.dispatched]: 'dispatched',
+  [PRODUCTION_ORDER_STATUS.cancelled]: 'cancelled',
+};
+
+/** Raw Frappe `Manna Production Order` doc → the domain shape. */
+function toProductionOrder(r: Record<string, unknown>): ProductionOrder {
+  const rawStatus = str(r[PRODUCTION_ORDER_FIELD.status]) ?? PRODUCTION_ORDER_STATUS.open;
+  const status = PRODUCTION_ORDER_STATUS_FROM_FRAPPE[rawStatus] ?? 'open';
+  const rawPurpose = str(r[PRODUCTION_ORDER_FIELD.purpose]) ?? PRODUCTION_ORDER_PURPOSE.stock;
+  const purpose: ProductionOrder['purpose'] =
+    rawPurpose === PRODUCTION_ORDER_PURPOSE.order ? 'order' : 'stock';
+  const itemCode = str(r[PRODUCTION_ORDER_FIELD.itemCode]) ?? '';
+
+  return {
+    id: str(r.name) ?? '',
+    itemCode,
+    // Not stored on the doctype — filled in from the min-stock ledger once
+    // both are loaded; see `refreshMinStock` in `minStockSlice`.
+    itemName: itemCode,
+    qty: Number(r[PRODUCTION_ORDER_FIELD.qty]) || 0,
+    looseBelts: Number(r[PRODUCTION_ORDER_FIELD.looseBelts]) || 0,
+    raisedAt: str(r[PRODUCTION_ORDER_FIELD.raisedOn]) ?? '',
+    raisedBy: str(r[PRODUCTION_ORDER_FIELD.raisedBy]) ?? '',
+    status,
+    purpose,
+    salesOrderId: str(r[PRODUCTION_ORDER_FIELD.salesOrder]),
+    receivedAt: str(r[PRODUCTION_ORDER_FIELD.receivedOn]),
+    receivedBy: str(r[PRODUCTION_ORDER_FIELD.receivedBy]),
+    batchId: str(r[PRODUCTION_ORDER_FIELD.batch]),
+  };
+}
+
 /** Production Manager raises a priority run for a depleted item (3.5). */
 async function raiseReplenishment(
   item: MinStockItem,
   qty: number,
   user: User,
 ): Promise<ProductionOrder> {
+  const raisedAt = nowIso();
   const order: ProductionOrder = {
     id: uid('PROD'),
     itemCode: item.itemCode,
     itemName: item.itemName,
     qty,
-    raisedAt: nowIso(),
+    raisedAt,
     raisedBy: user.name,
     status: 'open',
-    reason: 'replenishment',
+    purpose: 'stock',
   };
 
   if (USE_MOCK) {
@@ -1262,7 +1304,16 @@ async function raiseReplenishment(
       if (target) target.replenishmentRaised = true;
     });
   } else {
-    await createDoc(DOCTYPE.productionOrder, order as unknown as Record<string, unknown>);
+    const created = await createDoc<Record<string, unknown>>(DOCTYPE.productionOrder, {
+      [PRODUCTION_ORDER_FIELD.itemCode]: item.itemCode,
+      [PRODUCTION_ORDER_FIELD.qty]: qty,
+      // Set once, at creation, and never written again — see PRODUCTION_FLOWS.md.
+      [PRODUCTION_ORDER_FIELD.purpose]: PRODUCTION_ORDER_PURPOSE.stock,
+      [PRODUCTION_ORDER_FIELD.status]: PRODUCTION_ORDER_STATUS.open,
+      [PRODUCTION_ORDER_FIELD.raisedOn]: raisedAt,
+      [PRODUCTION_ORDER_FIELD.raisedBy]: user.name,
+    });
+    order.id = str(created.name) ?? order.id;
   }
 
   emit({
@@ -1279,60 +1330,183 @@ async function raiseReplenishment(
 
 async function listProductionOrders(): Promise<ProductionOrder[]> {
   if (USE_MOCK) return delay(getDb().productionOrders, 60);
-  return listDocs<ProductionOrder>(DOCTYPE.productionOrder, {
-    orderBy: 'raisedAt desc',
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.productionOrder, {
+    fields: ['name', ...Object.values(PRODUCTION_ORDER_FIELD)],
+    orderBy: 'creation desc',
     limit: 0,
-  }).catch(ifMissing([], DOCTYPE.productionOrder));
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.productionOrder));
+  return rows.map(toProductionOrder);
 }
 
 /**
- * Stock Manager books in a completed run (3.5). The quantity lands as a *new
- * dated batch* rather than being added to an existing one, which is what keeps
- * the "8 old / 2 new" split in 1.6 meaningful.
+ * The stock person books a finished run onto the shelf — flow A's close, and
+ * also how an order cancelled after production diverts to company stock
+ * (the one join between the two flows; see PRODUCTION_FLOWS.md). The
+ * quantity lands as a *new dated batch*, one per production order, which is
+ * what keeps the "8 old / 2 new" aging split in 1.6 meaningful and gives the
+ * batch a real arrival date rather than one blended with older stock.
  */
 async function recordReplenishment(
   itemCode: string,
   qty: number,
   user: User,
   productionOrderId?: string,
+  looseBelts = 0,
 ): Promise<MinStockItem | undefined> {
   const today = nowIso().slice(0, 10);
 
-  const updated = USE_MOCK
-    ? mutate((d) => {
-        const item = d.minStock.find((i) => i.itemCode === itemCode);
-        if (!item) return undefined;
+  if (USE_MOCK) {
+    return mutate((d) => {
+      const item = d.minStock.find((i) => i.itemCode === itemCode);
+      if (!item) return undefined;
+      item.batches.push({ id: uid('B'), stockedOn: today, remaining: qty, original: qty });
+      item.onHand = round3(item.onHand + qty);
+      item.lastRestockedOn = today;
+      item.replenishmentRaised = false;
+
+      if (productionOrderId) {
+        const po = d.productionOrders.find((p) => p.id === productionOrderId);
+        if (po) {
+          po.status = 'received';
+          po.receivedAt = nowIso();
+          po.receivedBy = user.name;
+        }
+      }
+      const updated = clone(item);
+      emit({
+        kind: 'min_stock_replenished',
+        severity: 'info',
+        title: `${updated.itemName} restocked`,
+        body: `${user.name} booked in ${qty} ${updated.uom}. Now ${updated.onHand} ${updated.uom} on hand.`,
+        audience: ['sales_manager', 'production_manager'],
+        itemCode,
+      });
+      return updated;
+    });
+  }
+
+  const batch = await createDoc<Record<string, unknown>>(DOCTYPE.stockBatch, {
+    [MIN_STOCK_BATCH_FIELD.itemCode]: itemCode,
+    [MIN_STOCK_BATCH_FIELD.rolls]: qty,
+    [MIN_STOCK_BATCH_FIELD.looseBelts]: looseBelts,
+    [MIN_STOCK_BATCH_FIELD.originalRolls]: qty,
+    [MIN_STOCK_BATCH_FIELD.originalBelts]: looseBelts,
+    [MIN_STOCK_BATCH_FIELD.batchDate]: today,
+  });
+  const batchName = str(batch.name);
+
+  if (productionOrderId) {
+    await updateDoc(DOCTYPE.productionOrder, productionOrderId, {
+      [PRODUCTION_ORDER_FIELD.status]: PRODUCTION_ORDER_STATUS.received,
+      [PRODUCTION_ORDER_FIELD.receivedOn]: nowIso(),
+      [PRODUCTION_ORDER_FIELD.receivedBy]: user.name,
+      [PRODUCTION_ORDER_FIELD.batch]: batchName,
+    });
+  }
+
+  // `onHand` is not a stored field — it is the sum of this item's batches,
+  // recomputed on the next `listMinStock` read. There is nothing else on
+  // `Manna Minimum Stock Item` for this write to touch.
+  emit({
+    kind: 'min_stock_replenished',
+    severity: 'info',
+    title: `${itemCode} restocked`,
+    body: `${user.name} booked in ${qty}${looseBelts ? ` + ${looseBelts} belts` : ''}.`,
+    audience: ['sales_manager', 'production_manager'],
+    itemCode,
+  });
+
+  return undefined;
+}
+
+/**
+ * The join between the two flows (PRODUCTION_FLOWS.md): an order cancelled
+ * after its goods were produced diverts them to company stock. Unlike flow
+ * A, no `Manna Production Order` exists yet for this line — flow B's normal
+ * path never raises one, since it tracks stage directly on the order line —
+ * so this raises one (`purpose: 'order'`, linked to the order) and closes it
+ * in the same call, exactly the way `recordReplenishment` closes a flow-A
+ * order: one new batch, dated today.
+ *
+ * Callers must check `needsStockDiversion` (domain/productionOrders.ts) and
+ * `alreadyDiverted` first — this function does not re-check either, so it
+ * trusts the caller not to divert a line still on a live order or divert the
+ * same line twice.
+ */
+async function divertToStock(input: {
+  salesOrderId: string;
+  itemCode: string;
+  qty: number;
+  looseBelts?: number;
+  raisedAt: string;
+  raisedBy: string;
+  user: User;
+}): Promise<ProductionOrder> {
+  const { salesOrderId, itemCode, qty, user } = input;
+  const looseBelts = input.looseBelts ?? 0;
+  const receivedAt = nowIso();
+  const today = receivedAt.slice(0, 10);
+
+  if (USE_MOCK) {
+    return mutate((d) => {
+      const item = d.minStock.find((i) => i.itemCode === itemCode);
+      if (item) {
         item.batches.push({ id: uid('B'), stockedOn: today, remaining: qty, original: qty });
         item.onHand = round3(item.onHand + qty);
         item.lastRestockedOn = today;
-        item.replenishmentRaised = false;
-
-        if (productionOrderId) {
-          const po = d.productionOrders.find((p) => p.id === productionOrderId);
-          if (po) {
-            po.status = 'completed';
-            po.completedAt = nowIso();
-          }
-        }
-        return clone(item);
-      })
-    : await updateDoc<MinStockItem>(DOCTYPE.minStock, itemCode, {
-        onHand: qty,
-        lastRestockedOn: today,
-      });
-
-  if (updated) {
-    // Everyone selling this item needs the new number, not just the floor.
-    emit({
-      kind: 'min_stock_replenished',
-      severity: 'info',
-      title: `${updated.itemName} restocked`,
-      body: `${user.name} booked in ${qty} ${updated.uom}. Now ${updated.onHand} ${updated.uom} on hand.`,
-      audience: ['sales_manager', 'production_manager'],
-      itemCode,
+      }
+      const order: ProductionOrder = {
+        id: uid('PROD'),
+        itemCode,
+        itemName: item?.itemName ?? itemCode,
+        qty,
+        looseBelts,
+        raisedAt: input.raisedAt,
+        raisedBy: input.raisedBy,
+        status: 'received',
+        purpose: 'order',
+        salesOrderId,
+        receivedAt,
+        receivedBy: user.name,
+      };
+      d.productionOrders.unshift(order);
+      return clone(order);
     });
   }
-  return updated;
+
+  const batch = await createDoc<Record<string, unknown>>(DOCTYPE.stockBatch, {
+    [MIN_STOCK_BATCH_FIELD.itemCode]: itemCode,
+    [MIN_STOCK_BATCH_FIELD.rolls]: qty,
+    [MIN_STOCK_BATCH_FIELD.looseBelts]: looseBelts,
+    [MIN_STOCK_BATCH_FIELD.originalRolls]: qty,
+    [MIN_STOCK_BATCH_FIELD.originalBelts]: looseBelts,
+    [MIN_STOCK_BATCH_FIELD.batchDate]: today,
+  });
+
+  const created = await createDoc<Record<string, unknown>>(DOCTYPE.productionOrder, {
+    [PRODUCTION_ORDER_FIELD.itemCode]: itemCode,
+    [PRODUCTION_ORDER_FIELD.qty]: qty,
+    [PRODUCTION_ORDER_FIELD.looseBelts]: looseBelts,
+    [PRODUCTION_ORDER_FIELD.purpose]: PRODUCTION_ORDER_PURPOSE.order,
+    [PRODUCTION_ORDER_FIELD.salesOrder]: salesOrderId,
+    [PRODUCTION_ORDER_FIELD.status]: PRODUCTION_ORDER_STATUS.received,
+    [PRODUCTION_ORDER_FIELD.raisedOn]: input.raisedAt,
+    [PRODUCTION_ORDER_FIELD.raisedBy]: input.raisedBy,
+    [PRODUCTION_ORDER_FIELD.receivedOn]: receivedAt,
+    [PRODUCTION_ORDER_FIELD.receivedBy]: user.name,
+    [PRODUCTION_ORDER_FIELD.batch]: str(batch.name),
+  });
+
+  emit({
+    kind: 'min_stock_replenished',
+    severity: 'info',
+    title: `${itemCode} diverted to company stock`,
+    body: `${salesOrderId} was cancelled after production. ${qty}${looseBelts ? ` + ${looseBelts} belts` : ''} moved to the shelf.`,
+    audience: ['sales_manager', 'production_manager', 'stock_manager'],
+    itemCode,
+  });
+
+  return toProductionOrder(created);
 }
 
 /** Items currently under their threshold — the Production Manager's watchlist. */
@@ -5238,6 +5412,7 @@ export const Api = {
     raiseReplenishment,
     listProductionOrders,
     recordReplenishment,
+    divertToStock,
     belowThreshold,
     availableFor,
   },

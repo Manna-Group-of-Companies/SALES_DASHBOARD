@@ -5,7 +5,7 @@
  * lot to clear first: "8 of 10 from 12 Mar (older) · 2 newly restocked 20 Jul".
  */
 
-import type { MinStockItem, StockBatch } from './types';
+import type { MinStockItem, ProductionOrder, StockBatch } from './types';
 
 /** Days past which a batch counts as aged and gets prioritised for sale. */
 export const AGED_THRESHOLD_DAYS = 60;
@@ -140,6 +140,34 @@ export function agingPriorityList(
     })
     .filter((r) => r.agedQty > 0)
     .sort((a, b) => b.oldestDays - a.oldestDays);
+}
+
+/**
+ * Cross-reference production orders against the ledger they came from.
+ *
+ * `Manna Production Order` stores no item name and `Manna Minimum Stock Item`
+ * stores no "replenishment raised" flag (there is nowhere on either live
+ * doctype to put one) — both are derived here, once, so every screen reading
+ * either list sees the same joined truth instead of re-deriving it, or one
+ * screen showing "Replenish" while another still thinks nothing is open.
+ */
+export function joinProductionOrders(
+  items: MinStockItem[],
+  orders: ProductionOrder[],
+): { items: MinStockItem[]; orders: ProductionOrder[] } {
+  const nameByCode = new Map(items.map((i) => [i.itemCode, i.itemName]));
+  const openStockItemCodes = new Set(
+    orders
+      .filter((o) => o.purpose === 'stock' && o.status !== 'received' && o.status !== 'cancelled')
+      .map((o) => o.itemCode),
+  );
+
+  return {
+    items: items.map((i) =>
+      openStockItemCodes.has(i.itemCode) ? { ...i, replenishmentRaised: true } : i,
+    ),
+    orders: orders.map((o) => ({ ...o, itemName: nameByCode.get(o.itemCode) ?? o.itemName })),
+  };
 }
 
 function formatShort(iso: string): string {

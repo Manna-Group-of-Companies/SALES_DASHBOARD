@@ -47,7 +47,8 @@ class _LoginScreenState extends State<LoginScreen> {
       Session.I.isManager ||
       Session.I.isGM ||
       Session.I.isHR ||
-      Session.I.isProductionManager;
+      Session.I.isProductionManager ||
+      Session.I.isStockManager;
 
   /// The one door into the app, for both the resume path and a fresh login.
   ///

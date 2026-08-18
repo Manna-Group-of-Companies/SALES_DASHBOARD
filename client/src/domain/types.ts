@@ -942,18 +942,31 @@ export interface Customer {
 
 // -------------------------------------------------- production orders ---
 
+/**
+ * `Manna Production Order` — the two flows in `shared/PRODUCTION_FLOWS.md`.
+ *
+ * `itemName` is not stored on the doctype — joined from the product catalogue
+ * or the minimum-stock ledger by `itemCode` at display time, the same way a
+ * `StockBatch` has no item name of its own.
+ */
 export interface ProductionOrder {
   id: string;
   itemCode: string;
   itemName: string;
   qty: number;
+  looseBelts?: number;
   raisedAt: string;
   raisedBy: string;
-  status: 'open' | 'completed';
-  completedAt?: string;
-  /** Priority replenishment for a below-threshold min-stock item (3.5). */
-  reason: 'replenishment' | 'order';
-  sourceOrderId?: string;
+  /** `Open` → `In Production` → `Made` → `Received` (flow A) or `Dispatched` (flow B). */
+  status: 'open' | 'in_production' | 'made' | 'received' | 'dispatched' | 'cancelled';
+  /** Set once at creation, never edited afterwards — see PRODUCTION_FLOWS.md. */
+  purpose: 'stock' | 'order';
+  /** Required when `purpose` is `'order'`, empty when `'stock'`. */
+  salesOrderId?: string;
+  receivedAt?: string;
+  receivedBy?: string;
+  /** The batch receiving created, so the trail is followable. */
+  batchId?: string;
 }
 
 // ------------------------------------------------------------------- hr ---

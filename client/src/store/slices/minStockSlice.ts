@@ -1,5 +1,6 @@
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
 import type { MinStockItem, ProductionOrder, StockReservation, User } from '@/domain/types';
+import { joinProductionOrders } from '@/domain/aging';
 import { Api, toApiError } from '@/api/client';
 
 interface MinStockState {
@@ -87,7 +88,13 @@ export const raiseReplenishment = createAsyncThunk(
 export const recordReplenishment = createAsyncThunk(
   'minStock/record',
   async (
-    input: { itemCode: string; qty: number; user: User; productionOrderId?: string },
+    input: {
+      itemCode: string;
+      qty: number;
+      user: User;
+      productionOrderId?: string;
+      looseBelts?: number;
+    },
     { dispatch, rejectWithValue },
   ) => {
     try {
@@ -96,6 +103,7 @@ export const recordReplenishment = createAsyncThunk(
         input.qty,
         input.user,
         input.productionOrderId,
+        input.looseBelts,
       );
       void dispatch(refreshMinStock());
       return item;
@@ -120,10 +128,11 @@ const minStockSlice = createSlice({
         if (state.status === 'idle') state.status = 'loading';
       })
       .addCase(refreshMinStock.fulfilled, (state, action) => {
+        const joined = joinProductionOrders(action.payload.items, action.payload.productionOrders);
         state.status = 'ready';
-        state.items = action.payload.items;
+        state.items = joined.items;
         state.reservations = action.payload.reservations;
-        state.productionOrders = action.payload.productionOrders;
+        state.productionOrders = joined.orders;
         state.lastSyncedAt = new Date().toISOString();
       })
       .addCase(refreshMinStock.rejected, (state, action) => {

@@ -286,7 +286,7 @@ export const PRODUCTION_ORDERS: ProductionOrder[] = [
     raisedAt: hoursAgoIso(30),
     raisedBy: 'Anil Kumar',
     status: 'open',
-    reason: 'replenishment',
+    purpose: 'stock',
   },
 ];
 

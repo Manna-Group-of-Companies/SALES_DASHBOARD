@@ -28,6 +28,7 @@ import 'package:manna_field_sales/screens/map/map_screen.dart';
 import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart';
 import 'package:manna_field_sales/screens/production/production_stock_screen.dart';
 import 'package:manna_field_sales/screens/production/production_dashboard_screen.dart';
+import 'package:manna_field_sales/screens/production/replenishment_receiving_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_orders_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_proforma_list_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_ready_tyres_screen.dart';
@@ -641,6 +642,23 @@ class _HomeDashboardState extends State<HomeDashboard>
                 ),
               ),
             if (Session.I.isProductionManager) const SizedBox(height: 16),
+            if (Session.I.isStockManager)
+              Card(
+                color: const Color(0xFF166534),
+                child: ListTile(
+                  leading: const Icon(Icons.inventory, color: Colors.white),
+                  title: const Text('Stock Manager',
+                      style: TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
+                  subtitle: const Text(
+                      'Receive replenishment runs onto the shelf',
+                      style: TextStyle(color: Colors.white70)),
+                  trailing:
+                      const Icon(Icons.chevron_right, color: Colors.white),
+                  onTap: () => _go(const ReplenishmentReceivingScreen()),
+                ),
+              ),
+            if (Session.I.isStockManager) const SizedBox(height: 16),
             if (Session.I.isHR)
               Card(
                 color: const Color(0xFF0F766E),
