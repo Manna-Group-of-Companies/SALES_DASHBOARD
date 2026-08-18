@@ -261,10 +261,22 @@ export interface PersonMonth {
  * punch. Those days are reported separately in `open` and contribute nothing to
  * `hours`, which is what makes `payrollReady` meaningful.
  */
-export function monthFor(
+/**
+ * One person's attendance across an arbitrary date range.
+ *
+ * `monthFor` is this with the range set to a calendar month. HR asked to be
+ * able to pull a custom period — a pay cycle that runs mid-month to mid-month,
+ * or the fortnight somebody queried — and a month was the only shape available.
+ *
+ * The rules are unchanged and deliberately live in one place: a day counts as
+ * worked only with BOTH punches, an open shift yields no hours, approved leave
+ * explains a day, and anything else is unaccounted. Two copies of that would
+ * eventually pay two different figures for the same fortnight.
+ */
+export function periodFor(
   person: SalesPerson,
-  year: number,
-  month: number, // 0-based
+  fromIso: string,
+  toIso: string,
   logs: AttendanceLog[],
   leave: FieldLeaveRequest[],
   today: string,
@@ -274,7 +286,6 @@ export function monthFor(
     leave.filter((l) => l.person === person.id && l.status === 'Approved').map((l) => [l.date, l]),
   );
 
-  const total = new Date(year, month + 1, 0).getDate();
   const days: Day[] = [];
   let worked = 0;
   let hours = 0;
@@ -282,8 +293,8 @@ export function monthFor(
   let open = 0;
   let unaccounted = 0;
 
-  for (let d = 1; d <= total; d++) {
-    const iso = isoOf(year, month, d);
+  // A reversed range yields nothing rather than looping forever.
+  for (let iso = fromIso; iso <= toIso; iso = shiftIso(iso, 1)) {
     const log = logByDate.get(iso);
     const lv = leaveByDate.get(iso);
 
@@ -313,15 +324,20 @@ export function monthFor(
     days.push({ iso, state: 'none', hours: 0 });
   }
 
-  return {
-    person,
-    days,
-    worked,
-    hours: round1(hours),
-    leaveDays,
-    open,
-    unaccounted,
-  };
+  return { person, days, worked, hours: round1(hours), leaveDays, open, unaccounted };
+}
+
+/** A calendar month, which is `periodFor` over the month's own bounds. */
+export function monthFor(
+  person: SalesPerson,
+  year: number,
+  month: number, // 0-based
+  logs: AttendanceLog[],
+  leave: FieldLeaveRequest[],
+  today: string,
+): PersonMonth {
+  const last = new Date(year, month + 1, 0).getDate();
+  return periodFor(person, isoOf(year, month, 1), isoOf(year, month, last), logs, leave, today);
 }
 
 export function buildMonth(

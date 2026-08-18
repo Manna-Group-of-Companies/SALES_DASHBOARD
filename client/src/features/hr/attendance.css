@@ -256,3 +256,7 @@ button.month__cell:focus-visible { outline: 2px solid var(--accent); outline-off
 
 /* The day's roster: counts sit beside the card title. */
 .roster__legend { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* The from/to pair when the calendar is showing a custom period. */
+.cal__range { display: flex; gap: 8px; align-items: flex-end; }
+.cal__range .field { margin: 0; }

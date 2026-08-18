@@ -166,8 +166,8 @@ describe('everybody in one sheet', () => {
   it('sorts by person, so a reader can scan one name at a time', () => {
     const rows = attendanceReport({
       people,
-      year: Y,
-      month: M,
+      from: '2026-08-01',
+      to: '2026-08-31',
       logs,
       leave: [] as FieldLeaveRequest[],
       regularizations: [],
@@ -181,8 +181,8 @@ describe('everybody in one sheet', () => {
   it('does not leak one person’s punches onto another', () => {
     const rows = attendanceReport({
       people,
-      year: Y,
-      month: M,
+      from: '2026-08-01',
+      to: '2026-08-31',
       logs,
       leave: [],
       regularizations: [],
@@ -197,8 +197,8 @@ describe('the summary shown when everybody is selected', () => {
   it('counts each state once, and the regularised days', () => {
     const s = summarise(
       [AMJAD],
-      Y,
-      M,
+      '2026-08-01',
+      '2026-08-31',
       [log('Amjad Pr', '2026-08-03', '09:00', '17:00'), log('Amjad Pr', '2026-08-04', '09:00')],
       [],
       [reg('Amjad Pr', '2026-08-04', 'Approved')],
@@ -213,7 +213,13 @@ describe('the summary shown when everybody is selected', () => {
 
 describe('the file name', () => {
   it('says the month and who it is for', () => {
-    expect(reportFilename(2026, 7, 'Amjad Pr')).toBe('attendance-2026-08-Amjad-Pr.xlsx');
-    expect(reportFilename(2026, 7)).toBe('attendance-2026-08-all-representatives.xlsx');
+    expect(reportFilename('2026-08-01', '2026-08-31', 'Amjad Pr')).toBe(
+      'attendance-2026-08-01-to-2026-08-31-Amjad-Pr.xlsx',
+    );
+    // A custom pay cycle must not be mistaken for the calendar month it
+    // overlaps, which is why both dates are in the name.
+    expect(reportFilename('2026-07-16', '2026-08-15')).toBe(
+      'attendance-2026-07-16-to-2026-08-15-all-representatives.xlsx',
+    );
   });
 });

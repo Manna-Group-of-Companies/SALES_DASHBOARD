@@ -31,7 +31,7 @@ import {
 import type { AttendanceRegularization } from '@/domain/types';
 import { Api, stampFor } from '@/api/client';
 import { ExportButton } from '@/features/reports/ExportButton';
-import { Alert, Button, Card, Empty, Field, Input, Select } from '@/components/ui';
+import { Alert, Button, Card, Empty, Field, Input, Segmented, Select } from '@/components/ui';
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import '@/components/layout/layout.css';
@@ -61,6 +61,17 @@ export function CalendarPage() {
    * which is the reason HR asked for it.
    */
   const ALL = '__all__';
+
+  /**
+   * A calendar month, or an arbitrary period.
+   *
+   * HR runs pay cycles that do not line up with a calendar month — mid-month
+   * to mid-month, or the fortnight somebody has queried — and a month was the
+   * only shape the screen could produce.
+   */
+  const [mode, setMode] = useState<'month' | 'range'>('month');
+  const [from, setFrom] = useState(() => shiftIso(todayLocalIso(), -30));
+  const [to, setTo] = useState(() => todayLocalIso());
 
   const [personId, setPersonId] = useState<string>('');
   const [people, setPeople] = useState<SalesPerson[]>([]);
@@ -110,15 +121,50 @@ export function CalendarPage() {
 
   const staff = useMemo(() => activeSalesPeople(people), [people]);
   const showingAll = personId === ALL;
+
+  /**
+   * The period on screen, whichever way it was chosen. One pair of bounds, so
+   * the grid, the summary and the download cannot describe different spans.
+   */
+  const bounds = useMemo(() => {
+    if (mode === 'range') {
+      // A reversed range would silently export nothing; swap instead of
+      // refusing, because the two boxes are easy to fill in the wrong order.
+      return from <= to ? { from, to } : { from: to, to: from };
+    }
+    const last = new Date(cursor.y, cursor.m + 1, 0).getDate();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return {
+      from: `${cursor.y}-${pad(cursor.m + 1)}-01`,
+      to: `${cursor.y}-${pad(cursor.m + 1)}-${pad(last)}`,
+    };
+  }, [mode, from, to, cursor]);
   const person = useMemo(() => staff.find((p) => p.id === personId), [staff, personId]);
 
   /** Everybody's month, for the summary table shown instead of the grid. */
   const summary = useMemo(
     () =>
       showingAll
-        ? summarise(staff, cursor.y, cursor.m, logs, leave, regularizations, today)
+        ? summarise(staff, bounds.from, bounds.to, logs, leave, regularizations, today)
         : [],
-    [showingAll, staff, cursor, logs, leave, regularizations, today],
+    [showingAll, staff, bounds, logs, leave, regularizations, today],
+  );
+
+  /** The same rows the download would contain, for the range day list. */
+  const rangeRows = useMemo(
+    () =>
+      mode === 'range' && person && !showingAll
+        ? attendanceReport({
+            people: [person],
+            from: bounds.from,
+            to: bounds.to,
+            logs,
+            leave,
+            regularizations,
+            today,
+          })
+        : [],
+    [mode, person, showingAll, bounds, logs, leave, regularizations, today],
   );
 
   /*
@@ -131,8 +177,8 @@ export function CalendarPage() {
   const exportRows = () =>
     attendanceReport({
       people: showingAll ? staff : person ? [person] : [],
-      year: cursor.y,
-      month: cursor.m,
+      from: bounds.from,
+      to: bounds.to,
       logs,
       leave,
       regularizations,
@@ -187,24 +233,73 @@ export function CalendarPage() {
           <option value={ALL}>All representatives ({staff.length})</option>
         </Select>
 
+        <Segmented
+          ariaLabel="Period"
+          value={mode}
+          onChange={(v: 'month' | 'range') => setMode(v)}
+          options={[
+            { value: 'month', label: 'Month' },
+            { value: 'range', label: 'Custom period' },
+          ]}
+        />
+
+        {mode === 'range' && (
+          <div className="cal__range">
+            <Field label="From">
+              <Input
+                type="date"
+                compact
+                value={from}
+                max={to}
+                onChange={(e) => setFrom(e.target.value)}
+                aria-label="From date"
+              />
+            </Field>
+            <Field label="To">
+              <Input
+                type="date"
+                compact
+                value={to}
+                min={from}
+                onChange={(e) => setTo(e.target.value)}
+                aria-label="To date"
+              />
+            </Field>
+          </div>
+        )}
+
         <div className="cal__nav">
           <ExportButton
-            filename={reportFilename(cursor.y, cursor.m, showingAll ? undefined : person?.name)}
-            sheet={`${MONTHS[cursor.m]} ${cursor.y}`}
+            filename={reportFilename(
+              bounds.from,
+              bounds.to,
+              showingAll ? undefined : person?.name,
+            )}
+            sheet={mode === 'month' ? `${MONTHS[cursor.m]} ${cursor.y}` : 'Attendance'}
             disabled={loading || (!person && !showingAll)}
             rows={exportRows}
             label={showingAll ? 'Excel — everyone' : 'Excel'}
           />
           <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
-          <Button size="sm" variant="ghost" onClick={() => shift(-1)} aria-label="Previous month">
-            ‹
-          </Button>
-          <div className="cal__title">
-            {MONTHS[cursor.m]} {cursor.y}
-          </div>
-          <Button size="sm" variant="ghost" onClick={() => shift(1)} aria-label="Next month">
-            ›
-          </Button>
+          {mode === 'month' ? (
+            <>
+              <Button size="sm" variant="ghost" onClick={() => shift(-1)} aria-label="Previous month">
+                ‹
+              </Button>
+              <div className="cal__title">
+                {MONTHS[cursor.m]} {cursor.y}
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => shift(1)} aria-label="Next month">
+                ›
+              </Button>
+            </>
+          ) : (
+            /* No arrows: they move a month cursor that nothing on screen is
+               reading once a custom period is in force. */
+            <div className="cal__title">
+              {bounds.from} → {bounds.to}
+            </div>
+          )}
         </div>
       </div>
 
@@ -267,7 +362,59 @@ export function CalendarPage() {
         </Card>
       )}
 
-      {!loading && !error && !showingAll && person && month && (
+      {/* A month grid cannot draw an arbitrary span, so a custom period for one
+          person is a day list. Same states, same colours, same rules. */}
+      {!loading && !error && !showingAll && person && mode === 'range' && (
+        <Card title={`${person.name} — ${bounds.from} to ${bounds.to}`} flush>
+          <div className="scroll-x">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Day</th>
+                  <th>Status</th>
+                  <th className="right">Punch in</th>
+                  <th className="right">Punch out</th>
+                  <th className="right">Hours</th>
+                  <th>Regularised</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rangeRows.map((r) => (
+                  <tr key={r.Date}>
+                    <td className="mono small">{r.Date}</td>
+                    <td className="dim small">{r.Weekday}</td>
+                    <td
+                      className={
+                        String(r.Status).startsWith('Unaccounted') ||
+                        String(r.Status).startsWith('Open')
+                          ? 'cell--overdue'
+                          : ''
+                      }
+                    >
+                      {r.Status || <span className="dim">—</span>}
+                    </td>
+                    <td className="right num">{r['Punch in']}</td>
+                    <td className="right num">{r['Punch out']}</td>
+                    <td className="right num">{r.Hours}</td>
+                    <td className="small">
+                      {r.Regularised === 'Yes' ? (
+                        <span title={String(r['Regularisation status'])}>
+                          Yes · {r['Regularisation status']}
+                        </span>
+                      ) : (
+                        <span className="dim">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {!loading && !error && !showingAll && person && mode === 'month' && month && (
         <>
           <div className="tiles" style={{ marginBottom: 14 }}>
             <Tile label="Days worked" value={String(month.worked)} tone="ok" foot="Both punches present" />

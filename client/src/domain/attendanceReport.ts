@@ -23,7 +23,7 @@ import type {
   FieldLeaveRequest,
   SalesPerson,
 } from './types';
-import { clockOf, monthFor, type Day, type PersonMonth } from './attendance';
+import { clockOf, periodFor, type Day, type PersonMonth } from './attendance';
 
 /**
  * One row of the sheet. Keys are the column headers, in the order they appear.
@@ -149,9 +149,9 @@ export function personRows(
  */
 export function attendanceReport(input: {
   people: SalesPerson[];
-  year: number;
-  /** 0-based, matching `monthFor`. */
-  month: number;
+  /** Inclusive ISO bounds. A month is just the month's own bounds. */
+  from: string;
+  to: string;
   logs: AttendanceLog[];
   leave: FieldLeaveRequest[];
   regularizations: AttendanceRegularization[];
@@ -160,18 +160,24 @@ export function attendanceReport(input: {
   const ordered = [...input.people].sort((a, b) => a.name.localeCompare(b.name));
   return ordered.flatMap((p) =>
     personRows(
-      monthFor(p, input.year, input.month, input.logs, input.leave, input.today),
+      periodFor(p, input.from, input.to, input.logs, input.leave, input.today),
       p,
       input.regularizations,
     ),
   );
 }
 
-/** `attendance-2026-08-Amjad-Pr.xlsx`, or `-all-representatives`. */
-export function reportFilename(year: number, month: number, personName?: string): string {
-  const mm = String(month + 1).padStart(2, '0');
+/**
+ * `attendance-2026-08-01-to-2026-08-31-Amjad-Pr.xlsx`.
+ *
+ * The dates are in the name because these files are mailed around and end up
+ * in somebody's downloads folder next to four others. A name that only said
+ * the month would not distinguish a pay cycle from the calendar month it
+ * overlaps.
+ */
+export function reportFilename(from: string, to: string, personName?: string): string {
   const who = personName ? personName.replace(/[^\w]+/g, '-') : 'all-representatives';
-  return `attendance-${year}-${mm}-${who}.xlsx`;
+  return `attendance-${from}-to-${to}-${who}.xlsx`;
 }
 
 /** Shown on screen when everybody is selected, since a grid cannot be. */
@@ -187,8 +193,8 @@ export interface PersonSummary {
 
 export function summarise(
   people: SalesPerson[],
-  year: number,
-  month: number,
+  from: string,
+  to: string,
   logs: AttendanceLog[],
   leave: FieldLeaveRequest[],
   regs: AttendanceRegularization[],
@@ -197,7 +203,7 @@ export function summarise(
   return [...people]
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((person) => {
-      const m = monthFor(person, year, month, logs, leave, today);
+      const m = periodFor(person, from, to, logs, leave, today);
       const count = (s: Day['state']) => m.days.filter((d) => d.state === s).length;
       return {
         person,
