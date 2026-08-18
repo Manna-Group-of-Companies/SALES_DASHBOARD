@@ -219,14 +219,12 @@ class _ProductRowState extends State<ProductRow> {
   double get _headroom {
     final s = widget.stock;
     if (s == null) return 0;
-    if (line.fromRun) return s.availableInProductionQty;
     return s.availableQty + s.myReservedQty;
   }
 
   int get _beltHeadroom {
     final s = widget.stock;
     if (s == null) return 0;
-    if (line.fromRun) return s.availableInProductionBelts;
     return s.availableLooseBelts + s.myReservedLooseBelts;
   }
 
@@ -251,7 +249,8 @@ class _ProductRowState extends State<ProductRow> {
     final beltsFromPool = _wouldBookBelts.clamp(0, _beltHeadroom).toInt();
     final beltsMade = _wouldBookBelts - beltsFromPool;
 
-    final source = line.fromRun ? 'the production run' : 'minimum stock';
+    // Always the shelf now. A rep cannot draw on a replenishment run.
+    const source = 'minimum stock';
     // Nothing from the pool is not a split, and calling it one would have the
     // rep telling a customer half of it is in stock.
     final nothingFromPool = fromPool <= 0 && beltsFromPool <= 0;
@@ -314,22 +313,24 @@ class _ProductRowState extends State<ProductRow> {
           const SizedBox(height: 6),
           _stockLine(),
         ],
-        // What the factory has on a run for this item.
-        //
-        // It also appears on the minimum-stock list, but this is the screen a
-        // rep is actually on when a customer asks — and "there are none left"
-        // and "there are none left, twenty are being made" are different
-        // answers to give somebody standing at the counter. Putting it only
-        // one screen away meant the rep had to already suspect it was there.
-        if (widget.showMinimumStock &&
-            widget.stock?.hasProductionRun == true) ...[
-          const SizedBox(height: 4),
-          _inProductionLine(widget.stock!),
-          // Claiming out of the run is offered only while there is something
-          // unclaimed on it. A switch that can be turned on and then refuses
-          // the order at the end is worse than no switch.
-          if (widget.stock!.canClaimFromRun) _claimSwitch(widget.stock!),
-        ],
+        /*
+         * Nothing about a replenishment run is shown to a rep any more.
+         *
+         * A run raised to refill the minimum-stock pool goes into COMPANY
+         * stock: production make it, the stock person receives it, and it
+         * appears on the shelf as a batch like any other intake. Until that
+         * happens it is not stock anybody can sell, and telling a rep about it
+         * only invited them to promise a customer goods that were still in the
+         * press with no date attached.
+         *
+         * Production against a specific order is a different flow and is still
+         * shown — on that order's own lines, where it belongs, with its stage.
+         *
+         * The claim-out-of-a-run switch went with it, 18 Aug 2026. A rep never
+         * touches a replenishment run now: either the goods are on the shelf,
+         * or production is raised against their order and dispatched to the
+         * customer.
+         */
         // A minimum-stock item is meant to be fast-moving. One that has stopped
         // selling is drifting towards a write-off, and the rep standing in
         // front of a customer is the only person who can turn that around.
@@ -416,64 +417,6 @@ class _ProductRowState extends State<ProductRow> {
   }
 
   // ------------------------------------------------------ minimum stock ---
-
-  /// "5 rolls being made" — what production has told everyone is on a run.
-  ///
-  /// Deliberately not folded into the availability line beside "3 available".
-  /// Two numbers in one sentence, one of which can be sold and one of which
-  /// cannot, is how a rep ends up promising stock that does not exist. It sits
-  /// on its own line, in its own colour, saying it is not on the shelf.
-  Widget _inProductionLine(MinStock s) {
-    final unit = p.category.stockUnit;
-    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Icon(Icons.precision_manufacturing_outlined,
-          size: 13, color: Color(0xFF1A56A8)),
-      const SizedBox(width: 4),
-      Expanded(
-        child: Text(
-            '${s.describe(s.inProductionQty, s.inProductionBelts, unit)} '
-            'being made — not on the shelf yet',
-            style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF1A56A8))),
-      ),
-    ]);
-  }
-
-  /// Lets the rep take this line out of the run instead of the shelf.
-  Widget _claimSwitch(MinStock s) {
-    final unit = p.category.stockUnit;
-    return Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: Row(children: [
-        SizedBox(
-          height: 30,
-          child: Switch(
-            value: line.fromRun,
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            onChanged: (v) {
-              setState(() => line.fromRun = v);
-              widget.onChanged();
-            },
-          ),
-        ),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-              line.fromRun
-                  ? 'Taking from the run — delivered when it is made'
-                  : 'Take from the run instead '
-                      '(${trimQty(s.availableInProductionQty)} $unit unclaimed)',
-              style: TextStyle(
-                  fontSize: 11,
-                  fontWeight:
-                      line.fromRun ? FontWeight.w700 : FontWeight.w500,
-                  color: const Color(0xFF1A56A8))),
-        ),
-      ]),
-    );
-  }
 
   Widget _stockLine() {
     final s = widget.stock;

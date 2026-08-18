@@ -365,45 +365,14 @@ Future<void> showMinStockDetail(
           _kv('Available to sell',
               s.describe(s.availableQty, s.availableLooseBelts, unit)),
           // What the production manager has put on a run. Shown to reps
-          // because "there are none left" and "there are none left and twenty
-          // are being made" are different answers to give a customer standing
-          // at the counter.
-          if (s.hasProductionRun) ...[
-            const SizedBox(height: 6),
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                  color: const Color(0xFFE8F0FE),
-                  borderRadius: BorderRadius.circular(6)),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Icon(Icons.precision_manufacturing_outlined,
-                    size: 16, color: Color(0xFF1A56A8)),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                            'Being made: '
-                            '${s.describe(s.inProductionQty, s.inProductionBelts, unit)}',
-                            style: const TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF1A56A8))),
-                        const SizedBox(height: 2),
-                        // Said plainly, because a rep who reads "20 coming" as
-                        // "20 I can sell" will promise stock that is not there.
-                        Text(
-                            'Not on the shelf yet — nothing can be booked '
-                            'against it until it arrives.'
-                            '${s.inProductionUpdatedOn.isEmpty ? '' : '\nTold to us ${s.inProductionUpdatedOn}.'}',
-                            style: const TextStyle(
-                                fontSize: 11, color: Color(0xFF1A56A8))),
-                      ]),
-                ),
-              ]),
-            ),
-          ],
+          /*
+           * A replenishment run is no longer shown to reps here either.
+           *
+           * It goes into COMPANY stock — production make it, the stock person
+           * receives it, and it lands on the shelf as a batch. Until then it
+           * is not sellable and carries no date, so showing it only invited a
+           * promise nobody could keep. Removed 18 Aug 2026.
+           */
           // What a rep does about a booking that is in their way. Only shown
           // when something is actually booked.
           if (s.reservedQty > 0 || s.reservedLooseBelts > 0)

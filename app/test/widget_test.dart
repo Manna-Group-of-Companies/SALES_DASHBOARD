@@ -238,29 +238,10 @@ void main() {
       expect(find.textContaining('left in minimum stock.'), findsNothing);
     });
 
-    testWidgets('a claim over the run splits against the run, not the shelf',
-        (tester) async {
-      // The second bug: toggling the run switch still measured the line
-      // against the shelf, so a claim on an empty shelf was refused.
-      final line = OrderLine(product: _pctr(), rate: 100)
-        ..rolls = 8
-        ..fromRun = true;
-      await tester.pumpWidget(_host(ProductRow(
-        line: line,
-        stock: MinStock(
-          itemCode: 'PCTR-100',
-          minimumQty: 10,
-          reservedQty: 10, // shelf empty
-          myReservedQty: 0,
-          inProductionQty: 5,
-        ),
-        onChanged: () {},
-      )));
-
-      expect(find.textContaining('5 rolls from the production run'),
-          findsOneWidget);
-      expect(find.textContaining('3 rolls made to order'), findsOneWidget);
-    });
+    // The claim-out-of-a-run test that stood here is gone with the feature it
+    // covered. A rep no longer draws on a replenishment run at all: goods are
+    // either on the shelf, or produced against their order and dispatched to
+    // the customer. Removed 18 Aug 2026 with the rep-side run display.
   });
 
   group('what is being made', () {
@@ -272,28 +253,32 @@ void main() {
           inProductionQty: inProduction,
         );
 
-    testWidgets('a run in progress is shown on the order row', (tester) async {
-      // The screen a rep is actually on when a customer asks. "None left" and
-      // "none left, twenty being made" are different answers to give somebody
-      // standing at the counter.
+    testWidgets('a rep is never told about a replenishment run', (tester) async {
+      /*
+       * Reversed on 18 Aug 2026. This used to assert the opposite — that a run
+       * WAS shown on the order row — on the reasoning that "none left" and
+       * "none left, twenty being made" are different answers to give somebody
+       * at a counter.
+       *
+       * That reasoning was overtaken. A replenishment run goes into COMPANY
+       * stock: production make it, the stock person receives it, and it
+       * reaches the shelf as a batch. Until then it is not stock anybody can
+       * sell and it has no date attached, so telling a rep only invited a
+       * promise nobody could keep.
+       *
+       * Production against a specific ORDER is a different flow and is still
+       * shown, on that order's own lines, with its stage.
+       */
       await tester.pumpWidget(_host(ProductRow(
         line: OrderLine(product: _pctr()),
         stock: pool(inProduction: 20),
         onChanged: () {},
       )));
 
-      expect(find.textContaining('20 rolls being made'), findsOneWidget);
-    });
-
-    testWidgets('it says plainly that it cannot be sold yet', (tester) async {
-      // Without this a rep reads "20 being made" as "20 I can promise".
-      await tester.pumpWidget(_host(ProductRow(
-        line: OrderLine(product: _pctr()),
-        stock: pool(inProduction: 20),
-        onChanged: () {},
-      )));
-
-      expect(find.textContaining('not on the shelf yet'), findsOneWidget);
+      expect(find.textContaining('being made'), findsNothing);
+      expect(find.textContaining('not on the shelf yet'), findsNothing);
+      // And no way to claim any of it.
+      expect(find.byType(Switch), findsNothing);
     });
 
     testWidgets('it never inflates what is available to sell', (tester) async {

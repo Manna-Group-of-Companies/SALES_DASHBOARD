@@ -202,7 +202,6 @@ class OrderLine {
   /// The two draw on separate counters and are never mixed on one line. A rep
   /// wanting some of each takes the shelf stock on one order and the run on
   /// another — which is honest, because the two will arrive on different days.
-  bool fromRun;
 
   OrderLine({
     required this.product,
@@ -211,7 +210,6 @@ class OrderLine {
     this.boxes = 0,
     this.cans = 0,
     this.rate = 0,
-    this.fromRun = false,
     this.agedBatch,
   });
 
@@ -350,6 +348,5 @@ class OrderLine {
         // of a run, and the booking already sits against that run's counter.
         // Leaving the line blank would show the manager a new-production line
         // holding a reservation, which is a contradiction.
-        if (fromRun) 'custom_fulfilment_mode': kFulfilProductionRun,
       };
 }

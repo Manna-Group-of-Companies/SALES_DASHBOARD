@@ -285,16 +285,6 @@ class _OrderScreenState extends State<OrderScreen> {
     final s = _stock[l.product.code];
     if (s == null) return (qty: 0, belts: 0);
 
-    // A claim draws on the run, which is a different pool with different
-    // headroom. Mixing the two would either refuse a claim on an empty shelf —
-    // the exact case the run exists for — or book shelf stock against a run.
-    if (l.fromRun) {
-      return (
-        qty: l.reserveQty.clamp(0, s.availableInProductionQty).toDouble(),
-        belts: l.reserveBelts.clamp(0, s.availableInProductionBelts).toInt(),
-      );
-    }
-
     // This rep's own booking is already inside the reserved figures, so it is
     // added back — otherwise editing an order would fail to re-book the
     // quantity it already holds.
@@ -394,7 +384,6 @@ class _OrderScreenState extends State<OrderScreen> {
               if (l.agedBatch != null) 'batch': l.agedBatch,
               // Which pool this line draws on. Read by Api._bookOrUnwind,
               // which sends it down a different booking path entirely.
-              if (l.fromRun) 'from_run': true,
             }
     ];
 
