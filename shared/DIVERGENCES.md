@@ -256,3 +256,50 @@ carries a Representative column. The gap was the phone, where every query was
 `= me`.
 
 *Pinned in `fixtures/visibility.json`; both suites read the same 24 cases.*
+
+---
+
+## 9. Shared trips: with the manager, and whose expense — **built, 18 Aug 2026**
+
+Two things about trips several people take together.
+
+### "Shop visit with manager" read zero because of a token
+
+The rule existed and was right. The caller passed `person.teamManager`, which
+is a short TOKEN — `Pareeth` — while a trip tags the Sales Person RECORD NAME,
+`Pareeth Kb`. Nothing ever matched.
+
+It looked exactly like missing data. It was not: on 18 Aug TRP-00258 (Jaimon D)
+and TRP-00301 (Test Rep) both carried `|Pareeth Kb|` and neither was ever
+counted. `travelledWithManager` now names its parameter `managerName` and says
+in its own doc comment that a token will silently count nothing;
+`managerNameFor` resolves it.
+
+Both directions count, as asked: the rep tagging the manager along, and the
+manager taking the rep out.
+
+### Whose expense is it
+
+`Trip Expense.custom_for_person` (Link to Sales Person) created on the live
+site. **Empty means COMMON** — the journey's own cost, a toll or a tank of
+fuel, belonging to everyone who travelled.
+
+Common is the default deliberately. Attributing a shared cost to whoever
+happened to key it in would quietly load their sheet with the team's spending,
+and nobody would notice until a claim was queried.
+
+**The common pot is reported, never divided.** Nobody asked for it to be split
+between travellers, and inventing a division would put money on somebody's
+sheet that was never agreed with them.
+
+An expense tagged to somebody who is not on the trip still counts, and still
+shows against them: the tag is a statement about whose money it was, and
+dropping it would lose the amount entirely.
+
+The phone offers the choice only when somebody else is on the trip, shows whose
+each expense is, and breaks the money down by traveller. The dashboard adds a
+"Whose" column to the trip's expenses and an "Own expenses on shared trips"
+figure to the range summary — a lunch a rep bought on a colleague's trip is
+their money and belongs on their row, not on the trip owner's.
+
+*Pinned in `fixtures/trip_sharing.json`; both suites read the same 20 cases.*

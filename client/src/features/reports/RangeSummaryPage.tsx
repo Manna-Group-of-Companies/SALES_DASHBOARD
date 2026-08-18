@@ -16,9 +16,11 @@
  * one journey and one cost, so summing the rows would bill it twice.
  */
 
+import { managerNameFor } from '@/domain/sales';
 import { useEffect, useMemo, useState } from 'react';
 import type { SalesPerson, SalesVisit, Trip, TripRates } from '@/domain/types';
 import {
+  personalExpense,
   distinctDays,
   participationOf,
   travelledWithManager,
@@ -50,6 +52,12 @@ interface Row {
   /** Trips on which their team head travelled too, owned by either party. */
   withManager: Trip[];
   withManagerVisits: number;
+  /**
+   * Expenses tagged to this person on ANY trip they were on, including ones
+   * somebody else owns. A lunch a rep bought on a colleague's trip is their
+   * money and belongs on their row, not on the trip owner's.
+   */
+  personalExpenses: number;
 }
 
 export function RangeSummaryPage() {
@@ -108,7 +116,9 @@ export function RangeSummaryPage() {
         const involved = tripsFor(trips, person.id);
         const owned = involved.filter((t) => participationOf(t, person.id) === 'owner');
         const withManager = involved.filter((t) =>
-          travelledWithManager(t, person.id, person.teamManager),
+          // The manager's record name, not the team token — see
+          // `travelledWithManager`. Passing the token matched nothing.
+          travelledWithManager(t, person.id, managerNameFor(people, person) ?? ''),
         );
         return {
           person,
@@ -118,9 +128,13 @@ export function RangeSummaryPage() {
           claimed: round2(owned.reduce((s, t) => s + tripClaim(t, rates), 0)),
           withManager,
           withManagerVisits: withManager.reduce((s, t) => s + (visitsByTrip.get(t.id) ?? 0), 0),
+          // Across every trip they were on, not just the ones they own.
+          personalExpenses: round2(
+            involved.reduce((s, t) => s + personalExpense(t.expenses ?? [], person.id), 0),
+          ),
         };
       })
-      .filter((r) => r.owned.length > 0 || r.withManager.length > 0)
+      .filter((r) => r.owned.length > 0 || r.withManager.length > 0 || r.personalExpenses > 0)
       .sort((a, b) => a.person.name.localeCompare(b.person.name));
   }, [people, trips, rates, visitsByTrip]);
 
@@ -177,6 +191,7 @@ export function RangeSummaryPage() {
                 Claimed: r.claimed,
                 'With manager: days': distinctDays(r.withManager),
                 'With manager: shops': r.withManagerVisits,
+                'Own expenses on shared trips': r.personalExpenses,
               }))
             }
           />

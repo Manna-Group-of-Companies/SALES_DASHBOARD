@@ -67,6 +67,8 @@ export function TripDetailPage() {
   const [roadKm, setRoadKm] = useState<number | undefined>(undefined);
   /** Bumped to re-run the load effect — the Refresh button's only job. */
   const [tick, setTick] = useState(0);
+  /** Somebody else travelled too, so an expense has more than one owner. */
+  const shared = trip ? isShared(trip) : false;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -277,6 +279,9 @@ export function TripDetailPage() {
                         <th>Category</th>
                         <th className="right">Amount</th>
                         <th className="right">Approved</th>
+                        {/* Only meaningful on a shared trip; on a solo one
+                            there is one possible answer. */}
+                        {shared && <th>Whose</th>}
                         <th>Bill</th>
                       </tr>
                     </thead>
@@ -288,6 +293,11 @@ export function TripDetailPage() {
                           <td className="right num">
                             {e.approvedAmount ? money(e.approvedAmount, 2) : <span className="dim">—</span>}
                           </td>
+                          {shared && (
+                            <td className={e.forPerson ? 'exp__owned' : 'dim'}>
+                              {e.forPerson ?? 'Common to the trip'}
+                            </td>
+                          )}
                           <td>
                             {e.billPhoto ? (
                               <a href={e.billPhoto} target="_blank" rel="noreferrer">

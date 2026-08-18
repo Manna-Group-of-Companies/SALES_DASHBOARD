@@ -316,12 +316,32 @@ export function tripsFor(trips: Trip[], person: string): Trip[] {
  * tagged. Both mean the same thing on the ground — they were in the vehicle
  * together — and the weekly report counts them the same way.
  */
-export function travelledWithManager(trip: Trip, personId: string, manager: string): boolean {
-  if (!manager) return false;
+export function travelledWithManager(
+  trip: Trip,
+  personId: string,
+  /**
+   * The manager's **Sales Person name**, not their team token.
+   *
+   * This is the whole bug this signature exists to prevent. A team is stored
+   * as a short token — `Pareeth` — while the manager's own record is named
+   * `Pareeth Kb`, and a trip tags the record name. Comparing the token against
+   * the tags matches nothing, so "Shop visit with manager" read zero on every
+   * row even with the trips sitting there: on 18 Aug 2026 TRP-00258 and
+   * TRP-00301 both carried `|Pareeth Kb|` and neither was ever counted.
+   *
+   * Resolve it with `managerNameFor` rather than passing `person.teamManager`.
+   */
+  managerName: string,
+): boolean {
+  if (!managerName) return false;
   const role = participationOf(trip, personId);
+  // They have to have been on it. A trip between two colleagues is not a trip
+  // with the manager for somebody who stayed behind.
   if (role === 'none') return false;
-  if (trip.person === manager) return true;
-  return trip.taggedReps.includes(manager);
+  // The manager took them out, or they took the manager along. Both count, and
+  // the ask named both.
+  if (trip.person === managerName) return true;
+  return trip.taggedReps.includes(managerName);
 }
 
 /** Distinct days on which any of these trips happened. */
@@ -354,4 +374,91 @@ function round1(n: number): number {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+// ---------------------------------------------------- shared-trip expenses ---
+
+/**
+ * Whose money an expense on a shared trip was.
+ *
+ * One rep raises the trip and tags the colleagues who travelled with them, so
+ * "whose expense is this" stops being obvious the moment there is more than one
+ * person in the car. A lunch is one person's; a toll is everybody's.
+ *
+ * Untagged means **common** — it belongs to the journey, not to whoever
+ * happened to key it in. That is the safer default: attributing a shared toll
+ * to the person who typed it would quietly load their sheet with the team's
+ * costs, and nobody would notice until somebody queried a claim.
+ *
+ * Paired with `app/lib/core/expenses.dart`; pinned by
+ * `shared/fixtures/trip_sharing.json`.
+ */
+export const EXPENSE_OWNER_FIELD = 'custom_for_person';
+
+/** Frappe returns an unset Link as null, '' or the string 'null'. */
+function linkValue(v: unknown): string | null {
+  const s = typeof v === 'string' ? v.trim() : v == null ? '' : String(v).trim();
+  return s === '' || s === 'null' || s === 'undefined' ? null : s;
+}
+
+/**
+ * An expense in either representation.
+ *
+ * The same row is read raw off ERPNext (`custom_for_person`) in one place and
+ * as a mapped `TripExpense` (`forPerson`) in another. One function that accepts
+ * both is better than two that can drift, or a cast that hides the difference.
+ */
+export interface ExpenseLike {
+  amount?: unknown;
+  custom_for_person?: unknown;
+  forPerson?: unknown;
+}
+
+export function expenseOwner(expense: ExpenseLike): string | null {
+  return linkValue(expense[EXPENSE_OWNER_FIELD] ?? expense.forPerson);
+}
+
+export function isCommonExpense(expense: ExpenseLike): boolean {
+  return expenseOwner(expense) === null;
+}
+
+export interface ExpenseSplit {
+  /** Person → the expenses tagged to them, summed. */
+  own: Map<string, number>;
+  /** Untagged: the journey's own costs. */
+  common: number;
+  /** Everything on the trip, however it is tagged. */
+  total: number;
+}
+
+/**
+ * Split a trip's expenses by who they belong to.
+ *
+ * The common pot is **reported, not divided**. Nobody asked for it to be split
+ * between the travellers, and inventing a division would put money on somebody's
+ * sheet that was never agreed with them.
+ */
+export function splitExpenses(expenses: ExpenseLike[]): ExpenseSplit {
+  const own = new Map<string, number>();
+  let common = 0;
+  let total = 0;
+
+  for (const e of expenses) {
+    const amount = Number(e.amount) || 0;
+    total += amount;
+    const owner = expenseOwner(e);
+    if (owner === null) common += amount;
+    // Counted even when the owner is not on the trip. The tag is a statement
+    // about whose money it was; dropping it would lose the amount entirely.
+    else own.set(owner, (own.get(owner) ?? 0) + amount);
+  }
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  for (const [k, v] of own) own.set(k, round2(v));
+  return { own, common: round2(common), total: round2(total) };
+}
+
+/** What one person personally spent on a trip. Excludes the common pot. */
+export function personalExpense(expenses: ExpenseLike[], person: string): number {
+  return splitExpenses(expenses).own.get(person) ?? 0;
 }

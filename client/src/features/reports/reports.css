@@ -44,3 +44,7 @@
 }
 .rangebar .input { max-width: 170px; }
 .rangebar__presets { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+
+/* An expense tagged to one person on a shared trip, as opposed to the common
+   pot. Blue rather than a warning colour: it is an attribution, not a problem. */
+.exp__owned { color: #1c5fa8; font-weight: 600; }

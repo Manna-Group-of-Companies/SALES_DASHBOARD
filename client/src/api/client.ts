@@ -87,7 +87,7 @@ import {
   weekStartOf,
 } from '@/domain/orderRules';
 import { normaliseWeights, orderTotal } from '@/domain/productRules';
-import { parseTagged, RATE_FALLBACK } from '@/domain/trips';
+import { expenseOwner, parseTagged, RATE_FALLBACK } from '@/domain/trips';
 import { allItemsReady, firstStage, isTerminalStage, stageLabel } from '@/domain/processStages';
 import { availableQty, isBelowThreshold } from '@/domain/aging';
 import { noteServerDate, serverNow } from '@/domain/serverClock';
@@ -4623,6 +4623,9 @@ function toTripExpense(r: Record<string, unknown>): TripExpense {
     category: str(r[TRIP_EXPENSE_FIELD.category]) ?? '',
     expenseName: str(r[TRIP_EXPENSE_FIELD.expenseName]),
     amount: Number(r[TRIP_EXPENSE_FIELD.amount]) || 0,
+    // Undefined when common. `expenseOwner` is what decides that, because an
+    // unset Link comes back as null, '' or the string 'null'.
+    forPerson: expenseOwner(r) ?? undefined,
     approvedAmount: Number(r[TRIP_EXPENSE_FIELD.approvedAmount]) || 0,
     hasBill: Number(r[TRIP_EXPENSE_FIELD.hasBill]) === 1,
     billPhoto: str(r[TRIP_EXPENSE_FIELD.billPhoto]),

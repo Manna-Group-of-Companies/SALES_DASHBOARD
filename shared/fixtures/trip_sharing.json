@@ -1,0 +1,107 @@
+{
+  "about": "Shared trips: when a trip counts as being with the manager, and whose money each expense is. Both apps read this file in their tests. A trip is often made by one rep with colleagues tagged on, so 'whose is it' has to be answered the same way on a phone and on the web or two sheets disagree about what somebody spent.",
+
+  "fields": {
+    "trip_owner": "sales_person",
+    "tagged": "tagged_csv",
+    "expense_owner": "custom_for_person",
+    "note": "tagged_csv is pipe-wrapped Sales Person NAMES, e.g. |Pareeth Kb|. Sales Person.custom_team_manager is a short TOKEN, e.g. Pareeth. Comparing the two matches nothing - which is exactly the bug that made 'Shop visit with manager' read zero on every row until 18 Aug 2026."
+  },
+
+  "with_manager": [
+    {
+      "why": "the rep made the trip and tagged the manager along - the live case, TRP-00258: Jaimon D's trip carrying |Pareeth Kb|",
+      "trip": { "sales_person": "Jaimon D", "tagged": ["Pareeth Kb"] },
+      "person": "Jaimon D", "manager_name": "Pareeth Kb",
+      "expect": true
+    },
+    {
+      "why": "the manager made the trip and tagged the rep - the same journey, recorded from the other side, and it must count identically",
+      "trip": { "sales_person": "Pareeth Kb", "tagged": ["Jaimon D"] },
+      "person": "Jaimon D", "manager_name": "Pareeth Kb",
+      "expect": true
+    },
+    {
+      "why": "the TOKEN must never be what is compared. 'Pareeth' is the team name; 'Pareeth Kb' is the record a trip tags, and passing the token silently counts nothing",
+      "trip": { "sales_person": "Jaimon D", "tagged": ["Pareeth Kb"] },
+      "person": "Jaimon D", "manager_name": "Pareeth",
+      "expect": false
+    },
+    {
+      "why": "somebody who was not on the trip did not travel with the manager, however many colleagues were",
+      "trip": { "sales_person": "Jaimon D", "tagged": ["Pareeth Kb"] },
+      "person": "Amjad Pr", "manager_name": "Pareeth Kb",
+      "expect": false
+    },
+    {
+      "why": "two reps travelling together without their manager is not a trip with the manager",
+      "trip": { "sales_person": "Jaimon D", "tagged": ["Amjad Pr"] },
+      "person": "Jaimon D", "manager_name": "Pareeth Kb",
+      "expect": false
+    },
+    {
+      "why": "a solo trip is not one either",
+      "trip": { "sales_person": "Jaimon D", "tagged": [] },
+      "person": "Jaimon D", "manager_name": "Pareeth Kb",
+      "expect": false
+    },
+    {
+      "why": "a team with no identifiable manager counts nothing rather than everything",
+      "trip": { "sales_person": "Jaimon D", "tagged": ["Pareeth Kb"] },
+      "person": "Jaimon D", "manager_name": "",
+      "expect": false
+    }
+  ],
+
+  "expenses": [
+    {
+      "why": "an expense tagged to somebody is theirs alone - the lunch one rep bought on a trip another rep is claiming",
+      "expense": { "custom_for_person": "Jaimon D", "amount": 250 },
+      "expect": { "owner": "Jaimon D", "common": false }
+    },
+    {
+      "why": "an untagged expense is COMMON to everyone who travelled - a toll or a tank of fuel belongs to the journey, not to whoever happened to key it in",
+      "expense": { "amount": 800 },
+      "expect": { "owner": null, "common": true }
+    },
+    {
+      "why": "an empty string is not a person - Frappe returns an unset Link three ways and none of them is an owner",
+      "expense": { "custom_for_person": "", "amount": 100 },
+      "expect": { "owner": null, "common": true }
+    },
+    {
+      "why": "the string 'null' from naive interpolation is not a person either",
+      "expense": { "custom_for_person": "null", "amount": 100 },
+      "expect": { "owner": null, "common": true }
+    }
+  ],
+
+  "totals": [
+    {
+      "why": "each person is charged what was tagged to them, and the common pot is reported separately rather than divided - nobody asked for it to be split, and inventing a split would put money on a sheet that was never agreed",
+      "trip": { "sales_person": "Jaimon D", "tagged": ["Amjad Pr", "Pareeth Kb"] },
+      "expenses": [
+        { "custom_for_person": "Jaimon D", "amount": 250 },
+        { "custom_for_person": "Amjad Pr", "amount": 300 },
+        { "amount": 800 }
+      ],
+      "expect": {
+        "own": { "Jaimon D": 250, "Amjad Pr": 300, "Pareeth Kb": 0 },
+        "common": 800,
+        "trip_total": 1350
+      }
+    },
+    {
+      "why": "an expense tagged to somebody who is not on the trip is still counted in the trip total, and still shown against them - the tag is a statement about whose money it was, and dropping it would lose the amount entirely",
+      "trip": { "sales_person": "Jaimon D", "tagged": [] },
+      "expenses": [ { "custom_for_person": "Amjad Pr", "amount": 400 } ],
+      "expect": { "own": { "Amjad Pr": 400 }, "common": 0, "trip_total": 400 }
+    },
+    {
+      "why": "a trip with nothing on it totals zero rather than failing",
+      "trip": { "sales_person": "Jaimon D", "tagged": [] },
+      "expenses": [],
+      "expect": { "common": 0, "trip_total": 0 }
+    }
+  ]
+}

@@ -655,6 +655,12 @@ export interface TripExpense {
   category: string;
   expenseName?: string;
   amount: number;
+  /**
+   * Whose expense this is on a shared trip, or undefined when it is common to
+   * everyone who travelled. Read it through `expenseOwner` in `domain/trips`,
+   * which is the only place that knows an unset Link comes back three ways.
+   */
+  forPerson?: string;
   approvedAmount: number;
   hasBill: boolean;
   billPhoto?: string;

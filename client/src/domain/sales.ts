@@ -114,6 +114,28 @@ export function isTeamManager(person: SalesPerson | undefined): boolean {
   return person.id.trim().toLowerCase().startsWith(token);
 }
 
+/**
+ * The Sales Person record name of a person's team manager.
+ *
+ * `teamManager` holds a short token (`Pareeth`); the manager's own record is
+ * named `Pareeth Kb`. Anything comparing against a stored link — a trip's
+ * tagged reps, an order's owner — needs the record name, and using the token
+ * matches nothing while looking perfectly reasonable.
+ *
+ * Returns undefined when the team has no identifiable manager, so callers fail
+ * closed rather than matching everybody.
+ */
+export function managerNameFor(
+  people: SalesPerson[],
+  person: SalesPerson | undefined,
+): string | undefined {
+  const token = teamTokenOf(person).toLowerCase();
+  if (!token) return undefined;
+  return people.find(
+    (p) => teamTokenOf(p).toLowerCase() === token && isTeamManager(p),
+  )?.id;
+}
+
 export function findPerson(people: SalesPerson[], id?: string): SalesPerson | undefined {
   if (!id) return undefined;
   return people.find((p) => p.id === id);

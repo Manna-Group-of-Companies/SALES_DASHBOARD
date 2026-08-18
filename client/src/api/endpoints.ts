@@ -182,6 +182,12 @@ export const TRIP_LEG_FIELD = {
 /** `Trip Expense` — child of `Trip`. Daily allowance, accommodation, tickets. */
 export const TRIP_EXPENSE_FIELD = {
   category: 'category',
+  /**
+   * Whose expense this is on a shared trip. Empty means COMMON — the
+   * journey's own cost, belonging to everyone who travelled. Created on the
+   * live site 18 Aug 2026.
+   */
+  forPerson: 'custom_for_person',
   expenseName: 'expense_name',
   amount: 'amount',
   approvedAmount: 'custom_approved_amount',

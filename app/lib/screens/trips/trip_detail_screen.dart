@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/expenses.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
@@ -840,6 +841,19 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
 
   Future<void> _addExpense() async {
     String category = 'Food';
+    /*
+     * Whose expense this is.
+     *
+     * Null means COMMON — the journey's own cost, a toll or a tank of fuel,
+     * belonging to everyone who travelled. That is the default because
+     * attributing a shared cost to whoever happened to key it in would quietly
+     * load their sheet with the team's spending.
+     *
+     * Only offered when somebody else is actually on the trip. On a solo trip
+     * there is nothing to choose between, and a dropdown with one name in it
+     * is a question nobody needs to answer.
+     */
+    String? forPerson;
     final expenseName = TextEditingController();
     final amount = TextEditingController();
     final remarks = TextEditingController();
@@ -880,6 +894,26 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                   keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
                   decoration: const InputDecoration(labelText: 'Amount ₹')),
+              if (_travellers.length > 1)
+                DropdownButtonFormField<String?>(
+                  value: forPerson,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Whose expense',
+                    helperText: 'Shared costs stay common to the trip',
+                  ),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Common — everyone on this trip'),
+                    ),
+                    ..._travellers.map((r) => DropdownMenuItem<String?>(
+                          value: r,
+                          child: Text(r == Session.I.salesPerson ? '$r (me)' : r),
+                        )),
+                  ],
+                  onChanged: (v) => setL(() => forPerson = v),
+                ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: () async {
@@ -931,6 +965,9 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       'bill_photo': billUrl,
       'status': 'Submitted',
       'remarks': remarks.text.trim(),
+      // Omitted entirely when common, so an untagged row stays untagged rather
+      // than carrying an empty link that reads differently in two places.
+      if (forPerson != null) kExpenseOwnerField: forPerson,
     };
     final list = List<Map<String, dynamic>>.from(_expenses)..add(exp);
     await _saveExpenses(list);
@@ -1178,6 +1215,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
           final apprText =
           appr > 0 ? '  ·  Approved ₹${appr.toStringAsFixed(0)}' : '';
           final erem = '${x['custom_approval_remarks'] ?? ''}'.trim();
+          final owner = expenseOwner(x);
           return Card(
             margin: const EdgeInsets.symmetric(vertical: 4),
             child: ListTile(
@@ -1185,10 +1223,31 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
               leading:
               const Icon(Icons.receipt_long, color: Color(0xFFF46A21)),
               title: Text('$label · ₹${amt.toStringAsFixed(0)}'),
-              subtitle: Text(
-                  '${hasBill ? 'Bill attached · ' : ''}$status$apprText'
-                      '${erem.isNotEmpty ? '\nNote: $erem' : ''}',
-                  style: TextStyle(fontSize: 12, color: stColor(status))),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                      '${hasBill ? 'Bill attached · ' : ''}$status$apprText'
+                          '${erem.isNotEmpty ? '\nNote: $erem' : ''}',
+                      style:
+                          TextStyle(fontSize: 12, color: stColor(status))),
+                  // Whose money it was. Only worth saying on a shared trip —
+                  // on a solo one there is only one possible answer.
+                  if (_travellers.length > 1)
+                    Text(
+                        owner == null
+                            ? 'Common — everyone on this trip'
+                            : owner == Session.I.salesPerson
+                                ? 'Yours'
+                                : '$owner’s',
+                        style: TextStyle(
+                            fontSize: 11.5,
+                            color: owner == null
+                                ? Colors.black54
+                                : Colors.indigo.shade400,
+                            fontWeight: FontWeight.w600)),
+                ],
+              ),
               trailing: Session.I.isHR
                   ? const Icon(Icons.rate_review_outlined,
                   color: Color(0xFF4338CA))
@@ -1210,6 +1269,9 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     final est = _num(_trip!['estimated_cost']);
     final exp = _expensesTotal();
     final grand = est + exp;
+    // On a shared trip the total alone hides who is claiming what. The common
+    // pot is shown whole rather than divided — nobody agreed to a split.
+    final split = splitExpenses(_expenses);
     Widget line(String k, String v, {bool bold = false}) => Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child:
@@ -1232,11 +1294,29 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
           const SizedBox(height: 8),
           line('Per-km estimate', '₹${est.toStringAsFixed(0)}'),
           line('Actual expenses', '₹${exp.toStringAsFixed(0)}'),
+          if (_travellers.length > 1) ...[
+            const Divider(),
+            const Text('Who spent what',
+                style: TextStyle(fontSize: 11.5, color: Colors.black54)),
+            for (final t in _travellers)
+              if ((split.own[t] ?? 0) > 0)
+                line(t == Session.I.salesPerson ? '$t (you)' : t,
+                    '₹${(split.own[t] ?? 0).toStringAsFixed(0)}'),
+            // Left whole. Dividing it would put money on somebody's sheet that
+            // was never agreed with them.
+            line('Common to the trip', '₹${split.common.toStringAsFixed(0)}'),
+          ],
           const Divider(),
           line('Grand total', '₹${grand.toStringAsFixed(0)}', bold: true),
         ]),
       ),
     );
+  }
+
+  /// Everyone the trip covered — the owner plus whoever travelled along.
+  List<String> get _travellers {
+    final owner = '${_trip?['sales_person'] ?? ''}';
+    return <String>{if (owner.isNotEmpty) owner, ..._taggedReps}.toList();
   }
 
   List<String> get _taggedReps => (((_trip?['tagged_reps'] as List?) ?? [])
