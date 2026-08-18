@@ -66,5 +66,62 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+
+	<!--
+		Permissions.
+
+		This file was Flutter's untouched template until 18 Aug 2026, so the
+		first iOS build refused every location call with "Permission definitions
+		not found in the app's Info.plist". Android had its permissions from the
+		start; iOS never had any.
+
+		Each string is what the reps see in the system prompt, and what App
+		Review reads. They say what the app does with the data and why, because
+		a vague purpose string is a rejection.
+	-->
+
+	<!-- Punching in checks the rep is at the shop, and capturing a customer or
+	     lead records where it is. -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Manna records where a shop is when you capture a customer or lead, and checks you are at the shop when you punch in.</string>
+
+	<!-- Trip recording has to survive a locked phone: a rep drives with the
+	     screen off, and a route that stops when the phone sleeps under-reports
+	     the distance their travel claim is paid on. -->
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Manna keeps logging your route while a trip is running, including when your phone is locked, so the distance on your travel claim is complete.</string>
+
+	<!--
+		Superseded by the key above on iOS 11 and later, but geolocator still
+		checks for it and names it in the error this app hit. Cheap to keep.
+	-->
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Manna keeps logging your route while a trip is running, including when your phone is locked, so the distance on your travel claim is complete.</string>
+
+	<!-- Shop fronts, odometer readings and expense bills. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Manna uses the camera to photograph shop fronts, odometer readings and expense bills against your visits and trips.</string>
+
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Manna lets you attach a photo you have already taken of a shop front, odometer reading or bill instead of taking a new one.</string>
+
+	<!--
+		Without this the operating system suspends location updates the moment
+		the app leaves the foreground, and the trip route simply stops. It is
+		paired with AppleSettings(allowBackgroundLocationUpdates: true) in
+		services/trip_tracker.dart — the plist entitles it, the settings ask
+		for it, and BOTH are needed.
+	-->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
+
+	<!-- `tel:` links on a customer's mobile number. Without this
+	     `canLaunchUrl` answers false and the number is not tappable. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tel</string>
+	</array>
 </dict>
 </plist>

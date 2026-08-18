@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -77,20 +78,46 @@ class TripTracker {
         needsAlwaysPermission = again != LocationPermission.always;
       } catch (_) {}
     }
-    final settings = AndroidSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 0,
-      intervalDuration: const Duration(minutes: 1),
-      foregroundNotificationConfig: const ForegroundNotificationConfig(
-        notificationTitle: 'Manna — recording trip route',
-        notificationText:
-        'Logging your route while the trip is active. Tap to open.',
-        enableWakeLock: true,
-        setOngoing: true,
-        notificationIcon:
-        AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
-      ),
-    );
+    /*
+     * The two platforms keep a phone recording in completely different ways,
+     * and passing AndroidSettings on an iPhone silently gets you neither.
+     *
+     * Android holds a foreground service with an ongoing notification. iOS has
+     * no such thing: it needs `allowBackgroundLocationUpdates`, the `location`
+     * background mode in Info.plist, and `pauseLocationUpdatesAutomatically`
+     * turned OFF — iOS otherwise decides for itself that a stationary phone
+     * has stopped travelling and quietly stops the stream, which on a rep sat
+     * in traffic loses the rest of the trip.
+     *
+     * Until 18 Aug 2026 only the Android half existed, so an iPhone fell back
+     * to plain foreground settings and the route stopped the moment the screen
+     * locked.
+     */
+    final LocationSettings settings = Platform.isIOS
+        ? AppleSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 0,
+            allowBackgroundLocationUpdates: true,
+            pauseLocationUpdatesAutomatically: false,
+            // The blue bar. Deliberate: a rep should be able to see that the
+            // app is tracking them, and be able to stop it.
+            showBackgroundLocationIndicator: true,
+            activityType: ActivityType.automotiveNavigation,
+          )
+        : AndroidSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 0,
+            intervalDuration: const Duration(minutes: 1),
+            foregroundNotificationConfig: const ForegroundNotificationConfig(
+              notificationTitle: 'Manna — recording trip route',
+              notificationText:
+                  'Logging your route while the trip is active. Tap to open.',
+              enableWakeLock: true,
+              setOngoing: true,
+              notificationIcon:
+                  AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
+            ),
+          );
     activeTrip.value = tripName;
     _lastSaved = null;
     // Log an immediate first point so the route starts right away.
