@@ -72,6 +72,52 @@ have to uninstall and reinstall.
 ERPNext gates old builds out. Bump both together when you ship something reps
 must have.
 
+### iOS / TestFlight
+
+There is no separate iOS codebase and there should never be one — `app/ios/`
+inside **this same repo** is the whole iOS project (Xcode workspace, Info.plist,
+signing config), built from the same `lib/` Dart code as Android. It is already
+committed. Building for TestFlight needs a Mac (Xcode does not run on Windows),
+but it does **not** need a new folder or a fresh `flutter create` — that only
+throws away whatever was fixed here.
+
+```bash
+cd app
+flutter pub get
+open ios/Runner.xcworkspace   # not the .xcodeproj — CocoaPods needs the workspace
+```
+
+In Xcode: **Signing & Capabilities** → pick your Apple Developer Team (the
+project has never had one committed — it's per-signer, set it there, don't
+hardcode it) → **Product → Archive** → **Distribute App** → App Store Connect.
+
+Two things already fixed here, so nobody has to rediscover them:
+
+- **The bundle ID was still Flutter's placeholder**, `com.example.mannaFieldSales`
+  — not owned by anyone, and App Store Connect will not let you register an App
+  ID under it. Fixed 18 Aug 2026 to `com.mannagroup.fieldsales`, matching
+  `android/app/build.gradle`'s `applicationId` exactly so the two platforms
+  agree on what app this is.
+- **Location permissions were entirely missing from `Info.plist`** until 18 Aug
+  2026 — Android had them from the start, iOS never did, and every location
+  call (punch-in proximity, trip recording, capturing a shop) refused with
+  *"Permission definitions not found in the app's Info.plist."* If you see that
+  error, you are running a build older than this fix, not hitting a new bug —
+  rebuild from current `main`.
+
+Also added: `ITSAppUsesNonExemptEncryption = false` in `Info.plist`, so App
+Store Connect stops asking the export-compliance question by hand on every
+single upload. The app only speaks HTTPS to ERPNext.
+
+**Not committed, and correctly so — set once per signer, in Xcode:**
+`DEVELOPMENT_TEAM` (Signing & Capabilities). It is empty in `project.pbxproj`
+on purpose; whoever archives needs their own Apple Developer Team selected
+there, and it will write itself into the project file at that point.
+
+**No `Podfile` exists yet.** That's normal for this checkout, not broken —
+`flutter pub get` followed by opening the workspace (or `flutter build ios`)
+generates it from the plugins in `pubspec.yaml`. Don't hand-write one.
+
 ---
 
 ## 3. ERPNext

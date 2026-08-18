@@ -123,5 +123,11 @@
 	<array>
 		<string>tel</string>
 	</array>
+
+	<!-- Answers App Store Connect's export-compliance question up front —
+	     the app only talks HTTPS to ERPNext, nothing proprietary. Without
+	     this, every single TestFlight upload stops and asks by hand. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>
