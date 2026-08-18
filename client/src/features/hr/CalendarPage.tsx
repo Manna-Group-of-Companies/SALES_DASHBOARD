@@ -23,7 +23,14 @@ import {
   todayLocalIso,
   type Day,
 } from '@/domain/attendance';
+import {
+  attendanceReport,
+  reportFilename,
+  summarise,
+} from '@/domain/attendanceReport';
+import type { AttendanceRegularization } from '@/domain/types';
 import { Api, stampFor } from '@/api/client';
+import { ExportButton } from '@/features/reports/ExportButton';
 import { Alert, Button, Card, Empty, Field, Input, Select } from '@/components/ui';
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
@@ -46,9 +53,19 @@ export function CalendarPage() {
   const now = new Date();
 
   const [cursor, setCursor] = useState({ y: now.getFullYear(), m: now.getMonth() });
+  /**
+   * The dropdown's "everybody" option.
+   *
+   * A calendar grid can only draw one person, so choosing this swaps the grid
+   * for a per-person summary — and makes the export cover the whole team,
+   * which is the reason HR asked for it.
+   */
+  const ALL = '__all__';
+
   const [personId, setPersonId] = useState<string>('');
   const [people, setPeople] = useState<SalesPerson[]>([]);
   const [logs, setLogs] = useState<AttendanceLog[]>([]);
+  const [regularizations, setRegularizations] = useState<AttendanceRegularization[]>([]);
   const [leave, setLeave] = useState<FieldLeaveRequest[]>([]);
   /** Bumped to re-run the load effect — the Refresh button's only job. */
   const [tick, setTick] = useState(0);
@@ -65,12 +82,17 @@ export function CalendarPage() {
       Api.attendance.listSalesPeople(),
       Api.attendance.listAttendanceLogs(shiftIso(today, -HISTORY_DAYS)),
       Api.attendance.listLeaveRequests(),
+      // Needed to say whether a day was corrected after the fact. Failing to
+      // read them must not take the calendar down: an unmarked day is a
+      // smaller problem than no calendar at all.
+      Api.attendance.listRegularizations().catch(() => [] as AttendanceRegularization[]),
     ])
-      .then(([p, l, lv]) => {
+      .then(([p, l, lv, regs]) => {
         if (!live) return;
         setPeople(p);
         setLogs(l);
         setLeave(lv);
+        setRegularizations(regs);
         // Land on somebody rather than an empty grid.
         const first = activeSalesPeople(p)[0];
         if (first) setPersonId((cur) => cur || first.id);
@@ -87,7 +109,35 @@ export function CalendarPage() {
   }, [today, tick]);
 
   const staff = useMemo(() => activeSalesPeople(people), [people]);
+  const showingAll = personId === ALL;
   const person = useMemo(() => staff.find((p) => p.id === personId), [staff, personId]);
+
+  /** Everybody's month, for the summary table shown instead of the grid. */
+  const summary = useMemo(
+    () =>
+      showingAll
+        ? summarise(staff, cursor.y, cursor.m, logs, leave, regularizations, today)
+        : [],
+    [showingAll, staff, cursor, logs, leave, regularizations, today],
+  );
+
+  /*
+   * The sheet, built only when the button is pressed.
+   *
+   * Exactly the people on screen and the month on screen — a report that ran
+   * its own query could quietly disagree with the calendar it was downloaded
+   * from, and HR would have no way to tell which was right.
+   */
+  const exportRows = () =>
+    attendanceReport({
+      people: showingAll ? staff : person ? [person] : [],
+      year: cursor.y,
+      month: cursor.m,
+      logs,
+      leave,
+      regularizations,
+      today,
+    });
 
   const month = useMemo(
     () => (person ? monthFor(person, cursor.y, cursor.m, logs, leave, today) : null),
@@ -134,9 +184,17 @@ export function CalendarPage() {
               {p.teamManager ? ` — ${p.teamManager}` : ''}
             </option>
           ))}
+          <option value={ALL}>All representatives ({staff.length})</option>
         </Select>
 
         <div className="cal__nav">
+          <ExportButton
+            filename={reportFilename(cursor.y, cursor.m, showingAll ? undefined : person?.name)}
+            sheet={`${MONTHS[cursor.m]} ${cursor.y}`}
+            disabled={loading || (!person && !showingAll)}
+            rows={exportRows}
+            label={showingAll ? 'Excel — everyone' : 'Excel'}
+          />
           <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
           <Button size="sm" variant="ghost" onClick={() => shift(-1)} aria-label="Previous month">
             ‹
@@ -158,9 +216,58 @@ export function CalendarPage() {
 
       {loading && !error && <Empty icon="◔" title="Reading attendance…" />}
 
-      {!loading && !error && !person && <Empty icon="—" title="No active sales people" />}
+      {!loading && !error && !person && !showingAll && (
+        <Empty icon="—" title="No active sales people" />
+      )}
 
-      {!loading && !error && person && month && (
+      {/* A grid draws one person. Everybody at once is a summary, with the
+          detail living in the download beside it. */}
+      {!loading && !error && showingAll && (
+        <Card title={`Everyone — ${MONTHS[cursor.m]} ${cursor.y}`} flush>
+          <div className="scroll-x">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Representative</th>
+                  <th>Team</th>
+                  <th className="right">Days worked</th>
+                  <th className="right">Hours</th>
+                  <th className="right">On leave</th>
+                  <th className="right">Open shifts</th>
+                  <th className="right">Unaccounted</th>
+                  <th className="right">Regularised</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.map((r) => (
+                  <tr key={r.person.id}>
+                    <td>{r.person.name}</td>
+                    <td className="dim">{r.person.teamManager || '—'}</td>
+                    <td className="right num">{r.worked}</td>
+                    <td className="right num">{r.hours}</td>
+                    <td className="right num">{r.leave || ''}</td>
+                    {/* Open shifts block payroll: punched in, never out, so no
+                        hours can be trusted for that day. */}
+                    <td className={`right num${r.open ? ' cell--overdue' : ''}`}>
+                      {r.open || ''}
+                    </td>
+                    <td className={`right num${r.unaccounted ? ' cell--overdue' : ''}`}>
+                      {r.unaccounted || ''}
+                    </td>
+                    <td className="right num">{r.regularised || ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="note" style={{ padding: '8px 14px 12px' }}>
+            Day-by-day punch times, hours and regularisations for all{' '}
+            {staff.length} representatives are in the Excel download above.
+          </p>
+        </Card>
+      )}
+
+      {!loading && !error && !showingAll && person && month && (
         <>
           <div className="tiles" style={{ marginBottom: 14 }}>
             <Tile label="Days worked" value={String(month.worked)} tone="ok" foot="Both punches present" />
