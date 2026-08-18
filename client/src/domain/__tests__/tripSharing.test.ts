@@ -13,6 +13,10 @@ import { describe, expect, it } from 'vitest';
 import cases from '../../../../shared/fixtures/trip_sharing.json';
 import type { Trip } from '../types';
 import {
+  claimFor,
+  claimants,
+  travelClaim,
+  tripClaim,
   EXPENSE_OWNER_FIELD,
   expenseOwner,
   isCommonExpense,
@@ -117,5 +121,67 @@ describe('money never appears from nowhere', () => {
     const s = splitExpenses([{ custom_for_person: 'A' }, { amount: 'x' }]);
     expect(s.total).toBe(0);
     expect(Number.isNaN(s.common)).toBe(false);
+  });
+});
+
+describe('what each person claims off a shared trip', () => {
+  const rates = { ownCar: 10, ownBike: 5, companyCar: 0, companyBike: 0, mixed: 0 } as never;
+
+  /** One 10 km own-bike leg = 50, plus the expenses given. */
+  const trip = (expenses: { forPerson?: string; amount: number }[]) =>
+    ({
+      id: 'TRP-1',
+      person: 'Test Rep',
+      date: '2026-08-18',
+      taggedReps: ['Pareeth Kb'],
+      legs: [{ mode: 'Own Vehicle (Bike)', distanceKm: 10 }],
+      expenses,
+    }) as never;
+
+  it('gives a tagged expense to the person it is tagged to, not the trip owner', () => {
+    // The report showed a Pareeth-tagged expense under Test Rep, because the
+    // owner was charged the whole trip and the colleague was shown their own
+    // expenses separately — the same money on two sheets.
+    const t = trip([{ forPerson: 'Pareeth Kb', amount: 300 }]);
+    expect(claimFor(t, 'Pareeth Kb', rates)).toBe(300);
+    expect(claimFor(t, 'Test Rep', rates)).toBe(travelClaim(t, rates));
+  });
+
+  it('leaves the common pot and the travel with the owner', () => {
+    // The person who drove paid for the fuel and the toll.
+    const t = trip([{ amount: 200 }]);
+    expect(claimFor(t, 'Test Rep', rates)).toBeCloseTo(travelClaim(t, rates) + 200, 2);
+    expect(claimFor(t, 'Pareeth Kb', rates)).toBe(0);
+  });
+
+  it('always sums back to the trip’s own total', () => {
+    /*
+     * The property that says nothing was lost or invented. Whatever the mix of
+     * tagged and common, the people on a trip between them claim exactly what
+     * the trip cost.
+     */
+    for (const expenses of [
+      [],
+      [{ amount: 200 }],
+      [{ forPerson: 'Pareeth Kb', amount: 300 }],
+      [{ forPerson: 'Pareeth Kb', amount: 300 }, { amount: 200 }],
+      [
+        { forPerson: 'Test Rep', amount: 120 },
+        { forPerson: 'Pareeth Kb', amount: 300 },
+        { amount: 200 },
+      ],
+    ]) {
+      const t = trip(expenses);
+      const total = claimants(t).reduce((s, p) => s + claimFor(t, p, rates), 0);
+      expect(total, JSON.stringify(expenses)).toBeCloseTo(tripClaim(t, rates), 2);
+    }
+  });
+
+  it('counts somebody who only has a tagged expense as a claimant', () => {
+    // Otherwise their money would be dropped from the reconciliation above
+    // rather than showing up as missing.
+    const t = trip([{ forPerson: 'Amjad Pr', amount: 90 }]);
+    expect(claimants(t)).toContain('Amjad Pr');
+    expect(claimFor(t, 'Amjad Pr', rates)).toBe(90);
   });
 });

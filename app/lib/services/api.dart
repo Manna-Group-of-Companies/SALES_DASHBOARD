@@ -10,6 +10,7 @@ import 'package:manna_field_sales/core/auth_store.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/discount.dart';
+import 'package:manna_field_sales/core/expenses.dart';
 import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
@@ -2983,20 +2984,12 @@ class Api {
   static Future<void> saveTripExpenses(
       String tripName, List<Map<String, dynamic>> expenses) async {
     double total = 0;
+    // Built by `tripExpenseRow`, which is the single place that knows which
+    // fields a row carries. A whitelist inline here is what silently dropped
+    // `custom_for_person` on every save.
     final clean = expenses.map((e) {
       if (e['amount'] is num) total += (e['amount'] as num).toDouble();
-      return {
-        if (e['name'] != null) 'name': e['name'],
-        'category': e['category'],
-        'expense_name': e['expense_name'],
-        'amount': e['amount'] ?? 0,
-        'has_bill': e['has_bill'] ?? 0,
-        'bill_photo': e['bill_photo'],
-        'status': e['status'] ?? 'Pending',
-        'custom_approved_amount': e['custom_approved_amount'] ?? 0,
-        'custom_approval_remarks': e['custom_approval_remarks'],
-        'remarks': e['remarks'],
-      };
+      return tripExpenseRow(e);
     }).toList();
     await _put(
         'Trip', tripName, {'expenses': clean, 'total_expenses': total});

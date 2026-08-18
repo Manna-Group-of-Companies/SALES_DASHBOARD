@@ -462,3 +462,39 @@ export function splitExpenses(expenses: ExpenseLike[]): ExpenseSplit {
 export function personalExpense(expenses: ExpenseLike[], person: string): number {
   return splitExpenses(expenses).own.get(person) ?? 0;
 }
+
+/**
+ * What one person claims off a trip.
+ *
+ * `tripClaim` is the trip's whole cost and belongs to nobody in particular.
+ * Once several people travel together that is not the same as what any one of
+ * them is owed, and using it per person double-counts: the owner was being
+ * charged every expense on the trip *and* the colleague was shown their own
+ * tagged expenses separately, so the same lunch appeared on two sheets.
+ *
+ * The split:
+ *
+ *   - **the owner** claims the travel money, the common pot, and anything
+ *     tagged to them. Travel is claimed once, in full, by whoever raised the
+ *     trip — that rule predates this and is unchanged. The common pot goes with
+ *     it: the toll and the fuel were paid by the person driving;
+ *   - **anyone else** claims only what is tagged to them. They did not pay for
+ *     the vehicle and are not claiming for it.
+ *
+ * Summed across everybody this is exactly `tripClaim`, which is the property
+ * that says nothing has been lost or invented. There is a test for it.
+ */
+export function claimFor(trip: Trip, person: string, rates: TripRates): number {
+  const split = splitExpenses(trip.expenses);
+  const mine = split.own.get(person) ?? 0;
+  if (trip.person === person) {
+    return round2(travelClaim(trip, rates) + split.common + mine);
+  }
+  return round2(mine);
+}
+
+/** Everyone with money on this trip — the owner, plus anyone tagged. */
+export function claimants(trip: Trip): string[] {
+  const split = splitExpenses(trip.expenses);
+  return [...new Set([trip.person, ...split.own.keys()])].filter(Boolean);
+}

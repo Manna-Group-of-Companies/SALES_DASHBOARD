@@ -20,12 +20,12 @@ import { managerNameFor } from '@/domain/sales';
 import { useEffect, useMemo, useState } from 'react';
 import type { SalesPerson, SalesVisit, Trip, TripRates } from '@/domain/types';
 import {
+  claimFor,
   personalExpense,
   distinctDays,
   participationOf,
   travelledWithManager,
   teamClaim,
-  tripClaim,
   tripDistance,
   tripsFor,
 } from '@/domain/trips';
@@ -53,9 +53,9 @@ interface Row {
   withManager: Trip[];
   withManagerVisits: number;
   /**
-   * Expenses tagged to this person on ANY trip they were on, including ones
-   * somebody else owns. A lunch a rep bought on a colleague's trip is their
-   * money and belongs on their row, not on the trip owner's.
+   * Of `claimed`, the part that is expenses tagged personally to them —
+   * including on trips somebody else owns. Shown as a breakdown of the claim,
+   * never added to it: it is already inside `claimed`.
    */
   personalExpenses: number;
 }
@@ -125,7 +125,13 @@ export function RangeSummaryPage() {
           owned,
           km: round1(owned.reduce((s, t) => s + tripDistance(t), 0)),
           visits: owned.reduce((s, t) => s + (visitsByTrip.get(t.id) ?? 0), 0),
-          claimed: round2(owned.reduce((s, t) => s + tripClaim(t, rates), 0)),
+          /*
+           * What this person is owed, over every trip they were on — not the
+           * whole cost of the ones they own. An expense tagged to a colleague
+           * is the colleague's money and belongs on the colleague's row; the
+           * owner still carries the travel and the common pot.
+           */
+          claimed: round2(involved.reduce((s, t) => s + claimFor(t, person.id, rates), 0)),
           withManager,
           withManagerVisits: withManager.reduce((s, t) => s + (visitsByTrip.get(t.id) ?? 0), 0),
           // Across every trip they were on, not just the ones they own.

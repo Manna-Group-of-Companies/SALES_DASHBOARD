@@ -133,12 +133,76 @@ void main() {
     });
   });
 
+  _writeBack();
+
   group('parseTagged', () {
     test('reads the pipe-wrapped form the app writes', () {
       expect(parseTagged('|A|B|'), ['A', 'B']);
       expect(parseTagged('|Pareeth Kb|'), ['Pareeth Kb']);
       expect(parseTagged(''), isEmpty);
       expect(parseTagged(null), isEmpty);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+
+void _writeBack() {
+  group('writing a trip expense back', () {
+    test('keeps the person it is tagged to', () {
+      // The bug this exists for: the writer rebuilt each row from a fixed list
+      // of keys, `custom_for_person` was not on it, and every tag was stripped
+      // on the way to the server. The expense saved fine and read back common.
+      final row = tripExpenseRow({
+        'category': 'Food',
+        'amount': 250,
+        kExpenseOwnerField: 'Pareeth Kb',
+      });
+      expect(row[kExpenseOwnerField], 'Pareeth Kb');
+    });
+
+    test('sends the field even when common, so a tag can be cleared', () {
+      // Omitting the key leaves the previous owner in place. Null is what
+      // takes an expense back to common.
+      final row = tripExpenseRow({'category': 'Toll', 'amount': 80});
+      expect(row.containsKey(kExpenseOwnerField), isTrue);
+      expect(row[kExpenseOwnerField], isNull);
+    });
+
+    test('does not lose a tag on a row the user never touched', () {
+      /*
+       * Frappe replaces a child table wholesale, so adding ONE expense
+       * rewrites all of them. A field missing from the writer is deleted from
+       * every existing row too - which is why this was worse than it looked.
+       */
+      final existing = [
+        {'name': 'row1', 'category': 'Food', 'amount': 250, kExpenseOwnerField: 'Jaimon D'},
+        {'name': 'row2', 'category': 'Toll', 'amount': 80},
+      ];
+      final written = existing.map(tripExpenseRow).toList();
+      expect(written[0][kExpenseOwnerField], 'Jaimon D');
+      expect(written[0]['name'], 'row1');
+      expect(written[1][kExpenseOwnerField], isNull);
+    });
+
+    test('carries every field the row is read back by', () {
+      // If a field is added to Trip Expense and not to the writer, it is lost
+      // on the next save. This lists what the app relies on.
+      final row = tripExpenseRow({'category': 'Fuel', 'amount': 100});
+      for (final k in [
+        'category',
+        'expense_name',
+        'amount',
+        kExpenseOwnerField,
+        'has_bill',
+        'bill_photo',
+        'status',
+        'custom_approved_amount',
+        'custom_approval_remarks',
+        'remarks',
+      ]) {
+        expect(row.containsKey(k), isTrue, reason: 'missing $k');
+      }
     });
   });
 }

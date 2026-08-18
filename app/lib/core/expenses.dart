@@ -235,3 +235,32 @@ bool travelledWithManager(
   // The manager took them out, or they took the manager along. Both count.
   return owner == managerName || tagged.contains(managerName);
 }
+
+/// One expense row, as it is written back to `Trip.expenses`.
+///
+/// Frappe replaces a child table wholesale on every save, so what is NOT in
+/// this map is deleted from the row — including on rows the user never
+/// touched, because adding one expense rewrites all of them.
+///
+/// That is how `custom_for_person` was lost the day it was added: the writer
+/// rebuilt each row from a fixed list of keys and the new field was not on it,
+/// so every tag was stripped on the way to the server and every expense read
+/// back as common.
+///
+/// **Add a field here whenever one is added to `Trip Expense`.** The test that
+/// covers this exists to make that failure loud rather than silent.
+Map<String, dynamic> tripExpenseRow(Map<String, dynamic> e) => {
+      if (e['name'] != null) 'name': e['name'],
+      'category': e['category'],
+      'expense_name': e['expense_name'],
+      'amount': e['amount'] ?? 0,
+      // Sent even when null: null is what CLEARS a tag back to common, and
+      // omitting the key would leave the old owner in place instead.
+      kExpenseOwnerField: e[kExpenseOwnerField],
+      'has_bill': e['has_bill'] ?? 0,
+      'bill_photo': e['bill_photo'],
+      'status': e['status'] ?? 'Pending',
+      'custom_approved_amount': e['custom_approved_amount'] ?? 0,
+      'custom_approval_remarks': e['custom_approval_remarks'],
+      'remarks': e['remarks'],
+    };
