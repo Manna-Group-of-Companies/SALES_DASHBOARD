@@ -435,6 +435,16 @@ export interface OrderLine {
   stockStage?: string;
   /** Link to `Manna Minimum Stock Batch` when the line was filled from aged stock. */
   agedBatch?: string;
+  /**
+   * Cumulative across every `Manna Dispatch` that has touched this line —
+   * never one dispatch's own amount. Read through `domain/dispatch.ts`'s
+   * `remainingToDispatch`/`isFullyDispatched`, never compared to
+   * `rolls`/`looseBelts` directly.
+   */
+  dispatchedRolls?: number;
+  dispatchedLooseBelts?: number;
+  /** The *current outstanding* shortfall reason — blank once fully caught up. */
+  dispatchShortReason?: string;
 }
 
 /**
@@ -522,6 +532,50 @@ export interface ProductionOrderRow {
   productionFinishDate?: string;
   changedAfterApproval: boolean;
   combinedOrder?: string;
+}
+
+/**
+ * One order line still owed some quantity, offered up for a manager to add
+ * to a `Manna Dispatch`. Route, never customer — same rule as
+ * `ProductionOrderRow`.
+ */
+export interface DispatchableLine {
+  salesOrder: string;
+  /** The child row's own name on that order. */
+  salesOrderItem: string;
+  itemCode: string;
+  itemName: string;
+  route: string;
+  remainingRolls: number;
+  remainingLooseBelts: number;
+}
+
+/** One line staged in a `Manna Dispatch`, at whichever stage it currently sits. */
+export interface DispatchLine {
+  salesOrder: string;
+  salesOrderItem: string;
+  itemCode: string;
+  itemName: string;
+  route: string;
+  plannedRolls: number;
+  plannedLooseBelts: number;
+  /** Only meaningful once the header is `Dispatched`. */
+  dispatchedRolls: number;
+  dispatchedLooseBelts: number;
+  shortfallReason?: string;
+}
+
+/**
+ * `Manna Dispatch` — one vehicle, one date, any number of order lines.
+ * Freely editable while `status = Draft`; `Dispatched` is a final click.
+ */
+export interface Dispatch {
+  id: string;
+  vehicle: string;
+  dispatchDate?: string;
+  unit?: string;
+  status: string;
+  lines: DispatchLine[];
 }
 
 /** A weekly grouping of one customer's completed orders. */

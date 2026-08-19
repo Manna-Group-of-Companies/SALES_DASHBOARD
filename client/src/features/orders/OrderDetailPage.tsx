@@ -101,6 +101,16 @@ function qty(q: Qty): string {
   return parts.join(' + ') || '—';
 }
 
+/** "9 of 10 rolls dispatched", named against what was ordered, not what remains. */
+function dispatchedLabel(l: OrderLine): string {
+  const parts: string[] = [];
+  if (l.rolls) parts.push(`${l.dispatchedRolls ?? 0} of ${l.rolls} roll${l.rolls === 1 ? '' : 's'}`);
+  if (l.looseBelts) {
+    parts.push(`${l.dispatchedLooseBelts ?? 0} of ${l.looseBelts} belt${l.looseBelts === 1 ? '' : 's'}`);
+  }
+  return parts.join(', ') || '—';
+}
+
 interface Draft {
   id?: string;
   item: ItemOption;
@@ -780,6 +790,21 @@ export function OrderDetailPage() {
                                 !heldHere &&
                                 !l.stockStage && <span className="dim">—</span>}
                               {movedHere && <div className="stagecell__flag">moved</div>}
+                              {/*
+                                Dispatch is separate from stage: a line can sit
+                                at Packed while part of it has already gone
+                                out. Shown only once something has actually
+                                left, so an untouched line stays silent here.
+                              */}
+                              {(l.dispatchedRolls || l.dispatchedLooseBelts || l.dispatchShortReason) && (
+                                <div className="stagecell__dispatch">
+                                  <span className="stagecell__part">Dispatched</span>
+                                  <b>{dispatchedLabel(l)}</b>
+                                  {l.dispatchShortReason && (
+                                    <div className="tiny dim">{l.dispatchShortReason}</div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </td>
                           <td className="small">

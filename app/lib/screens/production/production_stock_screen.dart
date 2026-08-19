@@ -387,8 +387,15 @@ class _ProductionStockScreenState extends State<ProductionStockScreen> {
 
   /// Moves the run along its cycle. Every order line claimed out of it moves
   /// too — it is one batch, not one job per order.
+  ///
+  /// Stops short of [kStageDispatched]: a replenishment run refills company
+  /// stock, never a customer, so it has nowhere to be dispatched to. Its cycle
+  /// ends at Packed, and "Run received" — a separate action — is what moves it
+  /// onto the shelf.
   Future<void> _setRunStage(MinStockDetail d) async {
-    final stages = stagesForLabel(d.product.category.shortLabel);
+    final stages = stagesForLabel(d.product.category.shortLabel)
+        .where((s) => s != kStageDispatched)
+        .toList();
     final chosen = await showDialog<String>(
       context: context,
       builder: (ctx) => SimpleDialog(

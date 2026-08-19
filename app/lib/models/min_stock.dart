@@ -251,33 +251,6 @@ class MinStock {
   /// True when a production run has been recorded against this pool.
   bool get hasProductionRun => inProductionQty > 0 || inProductionBelts > 0;
 
-  // ------------------------------------------------- claiming out of a run ---
-  //
-  // Deliberately its own arithmetic, never merged with the shelf. A run is a
-  // promise about goods that do not exist; the shelf is goods that do. The one
-  // mistake that must be impossible here is a rep seeing the two added
-  // together and promising a customer stock nobody has made.
-
-  /// What is left of the run for a rep to claim.
-  double get availableInProductionQty {
-    final left = inProductionQty - reservedInProductionQty;
-    return left < 0 ? 0 : left;
-  }
-
-  int get availableInProductionBelts {
-    final left = inProductionBelts - reservedInProductionBelts;
-    return left < 0 ? 0 : left;
-  }
-
-  /// True when there is a run with something still unclaimed on it.
-  bool get canClaimFromRun =>
-      hasProductionRun &&
-      (availableInProductionQty > 0 || availableInProductionBelts > 0);
-
-  /// True when the whole run is spoken for. The goods are still coming, but
-  /// not to anybody new.
-  bool get runFullyClaimed => hasProductionRun && !canClaimFromRun;
-
   /// What still needs ordering after the run already under way.
   ///
   /// The gap on its own says nothing about whether anybody has acted on it. A

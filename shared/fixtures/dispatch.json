@@ -1,0 +1,87 @@
+{
+  "about": "Dispatch Planning (shared/PRODUCTION_FLOWS.md has no entry for this yet - it postdates that doc). How much of an order line's rolls/belts remains to be dispatched, and whether a line counts as fully dispatched. Both apps read this file in their tests. The write only happens dashboard-side (client/); the app side only ever reads this to show a rep or manager 'X of Y dispatched'.",
+
+  "fields": {
+    "rolls": "custom_rolls",
+    "looseBelts": "custom_loose_belts",
+    "dispatchedRolls": "custom_dispatched_rolls",
+    "dispatchedLooseBelts": "custom_dispatched_loose_belts",
+    "note": "custom_rolls/custom_loose_belts are what was ordered. custom_dispatched_rolls/custom_dispatched_loose_belts are cumulative across every Manna Dispatch that has ever touched this line - never a single dispatch's own amount."
+  },
+
+  "remaining": [
+    {
+      "why": "never dispatched at all: the full ordered quantity remains",
+      "line": { "custom_rolls": 10, "custom_loose_belts": 0, "custom_dispatched_rolls": 0, "custom_dispatched_loose_belts": 0 },
+      "expect": { "rolls": 10, "loose_belts": 0 }
+    },
+    {
+      "why": "the case the feature exists for: 9 of 10 went out, 1 remains - visible as a shortfall, not silently dropped",
+      "line": { "custom_rolls": 10, "custom_loose_belts": 0, "custom_dispatched_rolls": 9, "custom_dispatched_loose_belts": 0 },
+      "expect": { "rolls": 1, "loose_belts": 0 }
+    },
+    {
+      "why": "fully dispatched: nothing remains",
+      "line": { "custom_rolls": 10, "custom_loose_belts": 0, "custom_dispatched_rolls": 10, "custom_dispatched_loose_belts": 0 },
+      "expect": { "rolls": 0, "loose_belts": 0 }
+    },
+    {
+      "why": "a belts-only line (PCTR sold in loose belts, not whole rolls) tracks its own remainder independently of rolls",
+      "line": { "custom_rolls": 0, "custom_loose_belts": 12, "custom_dispatched_rolls": 0, "custom_dispatched_loose_belts": 5 },
+      "expect": { "rolls": 0, "loose_belts": 7 }
+    },
+    {
+      "why": "a rolls-only line (CTR, bonding gum, solution - belts never apply) reads belts as flatly zero on both sides",
+      "line": { "custom_rolls": 6, "custom_loose_belts": 0, "custom_dispatched_rolls": 2, "custom_dispatched_loose_belts": 0 },
+      "expect": { "rolls": 4, "loose_belts": 0 }
+    },
+    {
+      "why": "Frappe's three spellings of an unset Int read as the same zero, matching the rule production_order.json already pins for Data fields - a line that has genuinely never had a dispatch written to it must not look over-dispatched",
+      "line": { "custom_rolls": 10, "custom_loose_belts": 0, "custom_dispatched_rolls": null, "custom_dispatched_loose_belts": "" },
+      "expect": { "rolls": 10, "loose_belts": 0 }
+    },
+    {
+      "why": "the string 'null' from naive interpolation reads as unset too, not as a literal value",
+      "line": { "custom_rolls": 8, "custom_loose_belts": 0, "custom_dispatched_rolls": "null", "custom_dispatched_loose_belts": 0 },
+      "expect": { "rolls": 8, "loose_belts": 0 }
+    },
+    {
+      "why": "over-dispatch is a data mistake, not a valid state - cumulative recorded greater than ordered clamps to zero remaining rather than going negative, the opposite rounding direction from production.ts's 'errors round down': under-reporting what already left the building is the more dangerous failure here, so this rounds the other way on purpose",
+      "line": { "custom_rolls": 10, "custom_loose_belts": 0, "custom_dispatched_rolls": 13, "custom_dispatched_loose_belts": 0 },
+      "expect": { "rolls": 0, "loose_belts": 0 }
+    }
+  ],
+
+  "fully_dispatched": [
+    {
+      "why": "nothing dispatched yet is not fully dispatched",
+      "line": { "custom_rolls": 10, "custom_loose_belts": 0, "custom_dispatched_rolls": 0, "custom_dispatched_loose_belts": 0 },
+      "expect": false
+    },
+    {
+      "why": "partially dispatched is not fully dispatched - this is the flag that keeps a line reappearing in Dispatch Planning across rounds",
+      "line": { "custom_rolls": 10, "custom_loose_belts": 0, "custom_dispatched_rolls": 9, "custom_dispatched_loose_belts": 0 },
+      "expect": false
+    },
+    {
+      "why": "rolls and belts both fully out means the line is done",
+      "line": { "custom_rolls": 10, "custom_loose_belts": 4, "custom_dispatched_rolls": 10, "custom_dispatched_loose_belts": 4 },
+      "expect": true
+    },
+    {
+      "why": "rolls done but belts still owed is not fully dispatched - the two counters do not average out",
+      "line": { "custom_rolls": 10, "custom_loose_belts": 4, "custom_dispatched_rolls": 10, "custom_dispatched_loose_belts": 1 },
+      "expect": false
+    },
+    {
+      "why": "an over-dispatched line (data mistake) reads as fully dispatched rather than blocking forever on a number that can never be reached exactly - once dispatched-so-far meets or exceeds ordered, the line is gone, full stop",
+      "line": { "custom_rolls": 10, "custom_loose_belts": 0, "custom_dispatched_rolls": 11, "custom_dispatched_loose_belts": 0 },
+      "expect": true
+    },
+    {
+      "why": "a line with nothing ordered at all (both zero) has nothing outstanding and is vacuously fully dispatched",
+      "line": { "custom_rolls": 0, "custom_loose_belts": 0, "custom_dispatched_rolls": 0, "custom_dispatched_loose_belts": 0 },
+      "expect": true
+    }
+  ]
+}

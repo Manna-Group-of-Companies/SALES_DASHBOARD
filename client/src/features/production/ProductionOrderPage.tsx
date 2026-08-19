@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { OrderLine, ProductionOrderRow } from '@/domain/types';
-import { tracksFor, rollUp, type StagedLine } from '@/domain/production';
+import { DISPATCHED, tracksFor, rollUp, type StagedLine } from '@/domain/production';
 import { modeLabel, modeTone, servedFrom, splitOf } from '@/domain/minimumStock';
 import type { StockReservationRow } from '@/domain/types';
 import { formatDate } from '@/domain/orderRules';
@@ -343,18 +343,29 @@ export function ProductionOrderPage() {
                           </>
                         )}
                         <div className="prod__actions">
+                          {/*
+                            Dispatched is never hand-picked here — Dispatch
+                            Planning is the only thing that writes it now, and
+                            only once a line's full ordered quantity has
+                            actually gone out. Once a track reaches it, the
+                            picker is retired: moving it "back" from Dispatched
+                            would corrupt the cumulative-quantity invariant
+                            Dispatch Planning depends on.
+                          */}
                           <Select
                             value={unknown ? '' : t.stage}
-                            disabled={busy === key}
+                            disabled={busy === key || t.stage === DISPATCHED}
                             onChange={(e) => e.target.value && setStage(l, e.target.value, t.field)}
                             aria-label={`${t.title} stage for ${l.itemName}`}
                           >
                             {unknown && <option value="">Set a stage from this cycle…</option>}
-                            {t.sequence.map((s) => (
-                              <option key={s} value={s}>
-                                {s}
-                              </option>
-                            ))}
+                            {t.sequence
+                              .filter((s) => s !== DISPATCHED)
+                              .map((s) => (
+                                <option key={s} value={s}>
+                                  {s}
+                                </option>
+                              ))}
                           </Select>
                         </div>
                       </div>

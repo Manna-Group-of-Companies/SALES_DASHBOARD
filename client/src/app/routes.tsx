@@ -33,6 +33,7 @@ import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
 import { ProductionOrderPage } from '@/features/production/ProductionOrderPage';
 import { CloseWeekPage } from '@/features/production/CloseWeekPage';
 import { ProductionStockPage } from '@/features/production/ProductionStockPage';
+import { DispatchPlanningPage } from '@/features/production/DispatchPlanningPage';
 import { MinStockPage } from '@/features/stock/MinStockPage';
 import { AgingListPage } from '@/features/stock/AgingListPage';
 import { SalesStockPage } from '@/features/stock/SalesStockPage';
@@ -278,6 +279,14 @@ export function AppRoutes() {
           element={
             <RoleRoute allow={['production_manager']}>
               <CloseWeekPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="production/dispatch"
+          element={
+            <RoleRoute allow={['production_manager']}>
+              <DispatchPlanningPage />
             </RoleRoute>
           }
         />

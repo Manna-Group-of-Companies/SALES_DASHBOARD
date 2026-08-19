@@ -225,6 +225,20 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       ]),
     );
 
+    // "9 of 10 rolls dispatched" — separate from stage, because a line can
+    // sit at Packed while part of it has already gone out on an earlier
+    // dispatch. Named against what was ordered, not what remains.
+    String dispatchedLabel(Map<String, dynamic> it) {
+      final rolls = (it['custom_rolls'] as num?)?.toInt() ?? 0;
+      final belts = (it['custom_loose_belts'] as num?)?.toInt() ?? 0;
+      final dRolls = (it['custom_dispatched_rolls'] as num?)?.toInt() ?? 0;
+      final dBelts = (it['custom_dispatched_loose_belts'] as num?)?.toInt() ?? 0;
+      final parts = <String>[];
+      if (rolls > 0) parts.add('$dRolls of $rolls roll${rolls == 1 ? '' : 's'}');
+      if (belts > 0) parts.add('$dBelts of $belts belt${belts == 1 ? '' : 's'}');
+      return parts.isEmpty ? '—' : parts.join(', ');
+    }
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Column(children: [
@@ -234,6 +248,11 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           final made = '${it[kStageFieldMade] ?? ''}';
           final shelf = '${it[kStageFieldShelf] ?? ''}';
           final didMove = moved.contains(id);
+          final dispatchedRolls = (it['custom_dispatched_rolls'] as num?) ?? 0;
+          final dispatchedBelts = (it['custom_dispatched_loose_belts'] as num?) ?? 0;
+          final shortReason = '${it['custom_dispatch_short_reason'] ?? ''}'.trim();
+          final showDispatched =
+              dispatchedRolls > 0 || dispatchedBelts > 0 || shortReason.isNotEmpty;
           return [
             Container(
               color: didMove ? const Color(0xFFE3EDF9) : null,
@@ -254,6 +273,15 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                           if (made.isNotEmpty || shelf.isEmpty)
                             stageLine('Being made', made),
                           if (shelf.isNotEmpty) stageLine('From stock', shelf),
+                          if (showDispatched)
+                            stageLine('Dispatched', dispatchedLabel(it)),
+                          if (shortReason.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(shortReason,
+                                  style: const TextStyle(
+                                      fontSize: 10.5, color: Colors.black54)),
+                            ),
                         ]),
                   ),
                   const SizedBox(width: 8),

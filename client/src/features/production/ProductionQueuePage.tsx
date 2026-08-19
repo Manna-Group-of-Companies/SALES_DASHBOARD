@@ -98,6 +98,9 @@ export function ProductionQueuePage() {
           </div>
         </div>
         <div className="cal__nav">
+          <Link to="/production/dispatch" className="btn btn--ghost btn--sm">
+            Dispatch planning
+          </Link>
           <Link to="/production/close-week" className="btn btn--ghost btn--sm">
             Close the week
           </Link>

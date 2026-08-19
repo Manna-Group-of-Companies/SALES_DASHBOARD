@@ -439,17 +439,29 @@ class _ProductionOrderDetailScreenState
           ),
         ),
         const SizedBox(height: 8),
+        // Dispatched is never hand-picked here — Dispatch Planning is the
+        // only thing that writes it now, and only once a line's full ordered
+        // quantity has actually gone out. `stages` itself stays unfiltered
+        // above (index/progress/caption still need to recognise it); only
+        // the picker's own option list drops it. Once a track is already
+        // done, the picker is retired outright — moving it "back" would
+        // corrupt the cumulative-quantity invariant Dispatch Planning
+        // depends on, and `initialValue` must never be given a value absent
+        // from `items` or DropdownButtonFormField throws.
         DropdownButtonFormField<String>(
-          initialValue: stages.contains(current) ? current : null,
+          initialValue:
+              (!done && stages.contains(current)) ? current : null,
           isExpanded: true,
           decoration: const InputDecoration(
               labelText: 'Move to stage',
               border: OutlineInputBorder(),
               isDense: true),
           items: [
-            for (final s in stages) DropdownMenuItem(value: s, child: Text(s))
+            for (final s in stages)
+              if (s != kStageDispatched)
+                DropdownMenuItem(value: s, child: Text(s))
           ],
-          onChanged: _busy
+          onChanged: (_busy || done)
               ? null
               : (v) =>
                   v == null ? null : _setStage(it, v, stockPart: stockPart),

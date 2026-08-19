@@ -335,13 +335,10 @@ class Api {
     // customer list came back empty for every rep.
     // In a pooled unit this is every rep in the unit, not just this one — see
     // core/visibility.dart. Ownership is untouched; only the filter widens.
-    final clause = _visibleFilter(kFieldCustomerOwner);
-    final filters = (rep == null || rep.isEmpty || clause == null)
-        ? null
-        : '[$clause]';
     return OfflineCache.read<List<Map<String, dynamic>>>(
       'customers:${rep ?? 'all'}',
-      () => _list('Customer',
+      () => _visibleRows(
+          'Customer', kFieldCustomerOwner,
           // The outstanding fields come from `kOutstandingFields` rather than
           // being spelled out here, so a screen cannot end up fetching three
           // of SAP's four aging buckets and quietly showing the fourth as
@@ -360,10 +357,19 @@ class Api {
             'custom_phone',
             ...kOutstandingFields,
           ]),
-          filters: filters,
           orderBy: 'customer_name asc'),
       decode: decodeRows,
     );
+  }
+
+  /// Sets who a customer belongs to. UAE only (see `core/visibility.dart`) —
+  /// callers must check `canAssignOwner` first; this does not re-check it.
+  /// Any pool member may assign any pool member, including themselves, which
+  /// is what lets a freshly imported, unowned customer be claimed by
+  /// whoever gets to it first.
+  static Future<void> assignCustomerOwner(String customerName, String rep) async {
+    await _put('Customer', customerName, {kFieldCustomerOwner: rep});
+    await OfflineCache.clear();
   }
 
   static Future<String?> _loggedUser() async {
@@ -428,18 +434,57 @@ class Api {
     }
   }
 
-  /// The filter clause for "records this rep may SEE", or null when there is
-  /// nothing to scope by — in which case the caller must show nothing.
-  ///
-  /// Not to be confused with [_mineFilter], which is "records this rep OWNS"
-  /// and is still what visits and trips want. Outside a pooled unit the two
-  /// produce the same set; inside one they deliberately do not.
+  /// The filter clause for "records this rep may see", by owner field, or
+  /// null when there is nothing to scope by. Peers only — no widening for an
+  /// unassigned record, because a route is never unassigned in the first
+  /// place (it is named `<Rep> - <Place>`, one owner by construction), unlike
+  /// a customer or lead. See [_visibleRows] for that case.
   static String? _visibleFilter(String field) {
     final peers = Session.I.unitPeers;
     if (peers.isEmpty) return null;
     return peers.length == 1
         ? '["$field","=","${peers.first}"]'
         : '["$field","in",${_inList(peers)}]';
+  }
+
+  /// Records this rep may SEE, by owner field — the pool's own rows plus, in
+  /// a pool, whatever nobody has claimed yet. Empty when nothing can be
+  /// scoped by, which callers must treat as "show nothing", never everyone.
+  ///
+  /// Two queries, not one: Frappe stores an omitted Link/Data field as SQL
+  /// `NULL`, not `''` — verified live on 18 Aug 2026 by inserting a Customer
+  /// with the field untouched and reading it back. `field IN (...)` can never
+  /// match `NULL`, in any SQL, whatever is in the list — there is no way to
+  /// fold "unassigned" into a single `in` filter. `is not set` is what
+  /// actually catches it, and empty string too, which Frappe treats the same
+  /// way there. So a pooled unit gets both queries, merged; everywhere else
+  /// the second query is skipped and an unowned record stays invisible,
+  /// exactly as it always has.
+  static Future<List<Map<String, dynamic>>> _visibleRows(
+    String doctype,
+    String field, {
+    required String fields,
+    String orderBy = 'creation desc',
+  }) async {
+    final peers = Session.I.unitPeers;
+    if (peers.isEmpty) return const [];
+
+    final owned = await _list(doctype,
+        fields: fields,
+        filters: peers.length == 1
+            ? '[["$field","=","${peers.first}"]]'
+            : '[["$field","in",${_inList(peers)}]]',
+        orderBy: orderBy);
+
+    if (!isPooledUnit(Session.I.company)) return owned;
+
+    final unclaimed = await _list(doctype,
+        fields: fields,
+        filters: '[["$field","is","not set"]]',
+        orderBy: orderBy);
+
+    final seen = owned.map((r) => '${r['name']}').toSet();
+    return [...owned, ...unclaimed.where((r) => !seen.contains('${r['name']}'))];
   }
 
   // -------- Manager context --------
@@ -2225,23 +2270,24 @@ class Api {
 
   // -------- Leads --------
   static Future<List<Map<String, dynamic>>> getLeads() {
-    final rep = Session.I.salesPerson;
-    final clause = _visibleFilter(kFieldLeadOwner);
-    final filters = (rep == null || rep.isEmpty || clause == null)
-        ? null
-        : '[$clause]';
     return _cachedRows(
         CacheKeys.leads,
-        () => _list('Lead',
+        () => _visibleRows(
+            'Lead', kFieldLeadOwner,
             // The location fields belong here even though the list does not
             // draw them. The detail screen is built from this row, so leaving
             // them out made a captured location vanish the moment a rep left
             // the screen and came back — it read the absent status as "Not
             // Captured" and asked them to do it again.
             fields:
-                '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status","custom_location_status","custom_latitude","custom_longitude","custom_verified_latitude","custom_verified_longitude"]',
-            filters: filters,
-            orderBy: 'creation desc'));
+                '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status","custom_location_status","custom_latitude","custom_longitude","custom_verified_latitude","custom_verified_longitude"]'));
+  }
+
+  /// Sets who a lead belongs to. UAE only (see `core/visibility.dart`) —
+  /// callers must check `canAssignOwner` first; this does not re-check it.
+  static Future<void> assignLeadOwner(String leadName, String rep) async {
+    await _put('Lead', leadName, {kFieldLeadOwner: rep});
+    await OfflineCache.clear();
   }
 
   static Future<String> createLead({
@@ -2747,18 +2793,6 @@ class Api {
 
     try {
       for (final r in reservations) {
-        // A line marked as claimed from the run draws on the run's counter
-        // instead of the shelf. Two separate pools, two separate paths — see
-        // StockService.claimFromRun.
-        if (r['from_run'] == true) {
-          await StockService.claimFromRun(
-            itemCode: '${r['item_code']}',
-            qty: (r['qty'] as num?)?.toDouble() ?? 0,
-            belts: (r['loose_belts'] as num?)?.toInt() ?? 0,
-            order: ref,
-          );
-          continue;
-        }
         await StockService.book(
           itemCode: '${r['item_code']}',
           qty: (r['qty'] as num?)?.toDouble() ?? 0,

@@ -58,6 +58,9 @@ import type {
   MinStockItem,
   MinStockLine,
   ProductionOrderRow,
+  Dispatch,
+  DispatchableLine,
+  DispatchLine,
   StockReservationRow,
   TripTrack,
   NotificationKind,
@@ -91,7 +94,8 @@ import { expenseOwner, parseTagged, RATE_FALLBACK } from '@/domain/trips';
 import { allItemsReady, firstStage, isTerminalStage, stageLabel } from '@/domain/processStages';
 import { availableQty, isBelowThreshold } from '@/domain/aging';
 import { noteServerDate, serverNow } from '@/domain/serverClock';
-import { rollUp } from '@/domain/production';
+import { DISPATCHED, rollUp } from '@/domain/production';
+import { isFullyDispatched, remainingToDispatch } from '@/domain/dispatch';
 import { heldBy, holdPlan, trueReserved } from '@/domain/minimumStock';
 import {
   discountFields,
@@ -125,6 +129,9 @@ import {
   PRODUCTION_ORDER_FIELD,
   PRODUCTION_ORDER_PURPOSE,
   PRODUCTION_ORDER_STATUS,
+  DISPATCH_FIELD,
+  DISPATCH_ITEM_FIELD,
+  DISPATCH_STATUS,
   FULFILMENT_MODE,
   RESERVATION_SOURCE,
   STOCK_RESERVATION_FIELD,
@@ -2866,16 +2873,51 @@ function toRegularization(r: Record<string, unknown>): AttendanceRegularization 
  * the filter is an `in` on exact names. It was once pipe-wrapped free text
  * matched with LIKE; that changed, and a LIKE here silently returns nothing.
  */
-async function listSalesCustomers(reps?: string[]): Promise<SalesCustomer[]> {
-  const filters: Filter[] = [];
-  if (reps && reps.length) filters.push([SALES_CUSTOMER_FIELD.assignedRep, 'in', reps]);
+/**
+ * Rows a manager may see, merged from the named owners' rows plus, when
+ * `reps` carries the `''` sentinel (from `visibleOwnerValues`, a pooled
+ * unit), whatever nobody has claimed yet.
+ *
+ * Two queries, not one: Frappe stores an omitted Link/Data field as SQL
+ * `NULL`, not `''` — verified live on 18 Aug 2026 by inserting a Customer
+ * with the field untouched and reading it back. `field IN (...)` can never
+ * match `NULL`, in any SQL, whatever is in the list — there is no way to
+ * fold "unassigned" into a single `in` filter. `is not set` is what
+ * actually catches it, and empty string too, which Frappe treats the same
+ * way there. The `''` sentinel itself is never sent to Frappe.
+ */
+async function visibleDocs(
+  doctype: string,
+  field: string,
+  reps: string[] | undefined,
+  fields: string[],
+  orderBy: string,
+): Promise<Record<string, unknown>[]> {
+  const fetch = (filters: Filter[]) =>
+    listDocs<Record<string, unknown>>(doctype, { fields, filters, orderBy, limit: 0 }).catch(
+      ifMissing<Record<string, unknown>[]>([], doctype),
+    );
 
-  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.customer, {
-    fields: ['name', ...Object.values(SALES_CUSTOMER_FIELD)],
-    filters,
-    orderBy: `${SALES_CUSTOMER_FIELD.customerName} asc`,
-    limit: 0,
-  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.customer));
+  if (!reps || !reps.length) return fetch([]);
+
+  const includeUnassigned = reps.includes('');
+  const named = reps.filter((r) => r !== '');
+  const owned = named.length ? await fetch([[field, 'in', named]]) : [];
+  if (!includeUnassigned) return owned;
+
+  const unclaimed = await fetch([[field, 'is', 'not set']]);
+  const seen = new Set(owned.map((r) => String(r.name)));
+  return [...owned, ...unclaimed.filter((r) => !seen.has(String(r.name)))];
+}
+
+async function listSalesCustomers(reps?: string[]): Promise<SalesCustomer[]> {
+  const rows = await visibleDocs(
+    DOCTYPE.customer,
+    SALES_CUSTOMER_FIELD.assignedRep,
+    reps,
+    ['name', ...Object.values(SALES_CUSTOMER_FIELD)],
+    `${SALES_CUSTOMER_FIELD.customerName} asc`,
+  );
 
   return rows.map((r) => ({
     id: String(r.name),
@@ -2899,15 +2941,13 @@ async function listSalesCustomers(reps?: string[]): Promise<SalesCustomer[]> {
 
 /** Leads, optionally narrowed to a set of reps. */
 async function listLeads(reps?: string[]): Promise<SalesLead[]> {
-  const filters: Filter[] = [];
-  if (reps && reps.length) filters.push([LEAD_FIELD.rep, 'in', reps]);
-
-  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.lead, {
-    fields: ['name', ...Object.values(LEAD_FIELD)],
-    filters,
-    orderBy: 'modified desc',
-    limit: 0,
-  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.lead));
+  const rows = await visibleDocs(
+    DOCTYPE.lead,
+    LEAD_FIELD.rep,
+    reps,
+    ['name', ...Object.values(LEAD_FIELD)],
+    'modified desc',
+  );
 
   return rows.map((r) => ({
     id: String(r.name),
@@ -2965,6 +3005,23 @@ async function assignRoute(input: {
   const doctype = input.kind === 'customer' ? DOCTYPE.customer : DOCTYPE.lead;
   const field = input.kind === 'customer' ? SALES_CUSTOMER_FIELD.route : LEAD_FIELD.route;
   await updateDoc(doctype, input.id, { [field]: input.route });
+}
+
+/**
+ * Sets who a customer or lead belongs to. UAE only (see `domain/visibility.ts`,
+ * `canAssignOwner`) — callers must check that first; this does not re-check
+ * it. Any pool member may assign any pool member, including themselves,
+ * which is what lets a freshly imported, unowned record be claimed by
+ * whoever gets to it first.
+ */
+async function assignOwner(input: {
+  kind: 'customer' | 'lead';
+  id: string;
+  rep: string;
+}): Promise<void> {
+  const doctype = input.kind === 'customer' ? DOCTYPE.customer : DOCTYPE.lead;
+  const field = input.kind === 'customer' ? SALES_CUSTOMER_FIELD.assignedRep : LEAD_FIELD.rep;
+  await updateDoc(doctype, input.id, { [field]: input.rep });
 }
 
 /**
@@ -3225,6 +3282,9 @@ function toOrderLine(r: Record<string, unknown>): OrderLine {
     productionStage: str(r[SALES_ORDER_ITEM_FIELD.productionStage]),
     stockStage: str(r[SALES_ORDER_ITEM_FIELD.stockStage]),
     agedBatch: str(r[SALES_ORDER_ITEM_FIELD.agedBatch]),
+    dispatchedRolls: n(SALES_ORDER_ITEM_FIELD.dispatchedRolls),
+    dispatchedLooseBelts: n(SALES_ORDER_ITEM_FIELD.dispatchedLooseBelts),
+    dispatchShortReason: str(r[SALES_ORDER_ITEM_FIELD.dispatchShortReason]),
   };
 }
 
@@ -4748,6 +4808,367 @@ async function acknowledgeProductionChange(orderId: string): Promise<void> {
   });
 }
 
+// --------------------------------------------------------- dispatch planning ---
+//
+// Replaces the old, single-click "pick Dispatched off the stage dropdown."
+// A line only reaches the Dispatched *stage* — and only then affects the
+// order's Ready/Dispatched rollup — once its cumulative dispatched quantity
+// covers the full ordered amount, however many separate Manna Dispatch
+// documents it took to get there. Partial dispatch is purely additive and
+// informational until then.
+
+/** Adapts a live `OrderLine` into the raw-field shape `domain/dispatch.ts` reads. */
+function dispatchShapeOf(l: OrderLine): Record<string, unknown> {
+  return {
+    [SALES_ORDER_ITEM_FIELD.rolls]: l.rolls,
+    [SALES_ORDER_ITEM_FIELD.looseBelts]: l.looseBelts,
+    [SALES_ORDER_ITEM_FIELD.dispatchedRolls]: l.dispatchedRolls,
+    [SALES_ORDER_ITEM_FIELD.dispatchedLooseBelts]: l.dispatchedLooseBelts,
+  };
+}
+
+/**
+ * Order lines still owed some quantity, across every Ready order in a unit —
+ * what the manager picks from to build a dispatch. Route-grouped, customer
+ * never present, same rule `listProductionQueue` already enforces: a line
+ * still needs to reach Ready before there is anything to plan around it.
+ */
+async function listDispatchableLines(unit?: string): Promise<DispatchableLine[]> {
+  const queue = await listProductionQueue(unit);
+  const ready = queue.filter((o) => o.productionStatus === PRODUCTION_STATUS.ready);
+
+  const out: DispatchableLine[] = [];
+  for (const row of ready) {
+    const order = await getOrderForProduction(row.id);
+    for (const l of order.lines) {
+      const left = remainingToDispatch(dispatchShapeOf(l));
+      if (left.rolls <= 0 && left.looseBelts <= 0) continue;
+      out.push({
+        salesOrder: order.id,
+        salesOrderItem: l.id,
+        itemCode: l.itemCode,
+        itemName: l.itemName,
+        route: order.route,
+        remainingRolls: left.rolls,
+        remainingLooseBelts: left.looseBelts,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Turn a raw `Manna Dispatch` doc into what the planning screen needs.
+ * Route and item name are resolved by re-reading the orders it references,
+ * never trusted from anything stored on the dispatch item itself — the same
+ * "production must never see the customer" boundary `getOrderForProduction`
+ * already enforces stays enforced here too, since only the route crosses it.
+ */
+async function toDispatch(doc: Record<string, unknown>): Promise<Dispatch> {
+  const items = Array.isArray(doc[DISPATCH_FIELD.items])
+    ? (doc[DISPATCH_FIELD.items] as Record<string, unknown>[])
+    : [];
+
+  const orderIds = [...new Set(items.map((it) => str(it[DISPATCH_ITEM_FIELD.salesOrder]) ?? ''))].filter(
+    Boolean,
+  );
+  const orders = new Map<string, Awaited<ReturnType<typeof getOrderForProduction>>>();
+  for (const id of orderIds) {
+    orders.set(id, await getOrderForProduction(id));
+  }
+
+  const lines: DispatchLine[] = items.map((it) => {
+    const salesOrder = str(it[DISPATCH_ITEM_FIELD.salesOrder]) ?? '';
+    const salesOrderItem = str(it[DISPATCH_ITEM_FIELD.salesOrderItem]) ?? '';
+    const order = orders.get(salesOrder);
+    const line = order?.lines.find((l) => l.id === salesOrderItem);
+    const itemCode = str(it[DISPATCH_ITEM_FIELD.itemCode]) ?? line?.itemCode ?? '';
+    return {
+      salesOrder,
+      salesOrderItem,
+      itemCode,
+      itemName: line?.itemName ?? itemCode,
+      route: order?.route ?? 'No route set',
+      plannedRolls: Number(it[DISPATCH_ITEM_FIELD.plannedRolls]) || 0,
+      plannedLooseBelts: Number(it[DISPATCH_ITEM_FIELD.plannedLooseBelts]) || 0,
+      dispatchedRolls: Number(it[DISPATCH_ITEM_FIELD.dispatchedRolls]) || 0,
+      dispatchedLooseBelts: Number(it[DISPATCH_ITEM_FIELD.dispatchedLooseBelts]) || 0,
+      shortfallReason: str(it[DISPATCH_ITEM_FIELD.shortfallReason]),
+    };
+  });
+
+  return {
+    id: String(doc.name),
+    vehicle: str(doc[DISPATCH_FIELD.vehicle]) ?? '',
+    dispatchDate: str(doc[DISPATCH_FIELD.dispatchDate]),
+    unit: str(doc[DISPATCH_FIELD.unit]),
+    status: str(doc[DISPATCH_FIELD.status]) ?? DISPATCH_STATUS.draft,
+    lines,
+  };
+}
+
+/** Drafts a manager can resume — `status = Draft`, most recent first. */
+async function listDispatchDrafts(unit?: string): Promise<Dispatch[]> {
+  const filters: Filter[] = [[DISPATCH_FIELD.status, '=', DISPATCH_STATUS.draft]];
+  if (unit) filters.push([DISPATCH_FIELD.unit, '=', unit]);
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.dispatch, {
+    fields: ['name'],
+    filters,
+    orderBy: 'creation desc',
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.dispatch));
+
+  // The list endpoint never expands child tables, so each draft is re-read
+  // whole — the same reason `getOrderForProduction` exists alongside
+  // `listProductionQueue`.
+  const full = await Promise.all(
+    rows.map((r) => getDoc<Record<string, unknown>>(DOCTYPE.dispatch, String(r.name))),
+  );
+  return Promise.all(full.map(toDispatch));
+}
+
+async function getDispatch(id: string): Promise<Dispatch> {
+  return toDispatch(await getDoc<Record<string, unknown>>(DOCTYPE.dispatch, id));
+}
+
+export interface SaveDispatchDraftInput {
+  /** Omit to create a new draft. */
+  id?: string;
+  vehicle: string;
+  dispatchDate?: string;
+  unit?: string;
+  lines: Array<{
+    salesOrder: string;
+    salesOrderItem: string;
+    itemCode: string;
+    plannedRolls: number;
+    plannedLooseBelts: number;
+  }>;
+  user: User;
+}
+
+/**
+ * Create or overwrite a Draft. Every add/remove/quantity/vehicle/date change
+ * on the planning screen calls this — the whole line list is always written
+ * back, the same read-mutate-write convention `setProductionStage` uses for
+ * order items — so a draft is persisted to ERPNext on every edit rather than
+ * living only in the browser tab, and survives a refresh from the Draft tab.
+ */
+async function saveDispatchDraft(input: SaveDispatchDraftInput): Promise<Dispatch> {
+  const items = input.lines.map((l) => ({
+    [DISPATCH_ITEM_FIELD.salesOrder]: l.salesOrder,
+    [DISPATCH_ITEM_FIELD.salesOrderItem]: l.salesOrderItem,
+    [DISPATCH_ITEM_FIELD.itemCode]: l.itemCode,
+    [DISPATCH_ITEM_FIELD.plannedRolls]: l.plannedRolls,
+    [DISPATCH_ITEM_FIELD.plannedLooseBelts]: l.plannedLooseBelts,
+  }));
+
+  const body: Record<string, unknown> = {
+    [DISPATCH_FIELD.vehicle]: input.vehicle,
+    [DISPATCH_FIELD.dispatchDate]: input.dispatchDate,
+    [DISPATCH_FIELD.unit]: input.unit,
+    [DISPATCH_FIELD.items]: items,
+  };
+
+  let id = input.id;
+  if (id) {
+    await updateDoc(DOCTYPE.dispatch, id, body);
+  } else {
+    const created = await createDoc<Record<string, unknown>>(DOCTYPE.dispatch, {
+      ...body,
+      [DISPATCH_FIELD.status]: DISPATCH_STATUS.draft,
+      [DISPATCH_FIELD.createdBy]: input.user.name,
+      [DISPATCH_FIELD.createdOn]: nowIso(),
+    });
+    id = String(created.name);
+  }
+  return getDispatch(id);
+}
+
+export interface FinalizeDispatchLine {
+  salesOrder: string;
+  salesOrderItem: string;
+  itemCode: string;
+  dispatchedRolls: number;
+  dispatchedLooseBelts: number;
+  shortfallReason?: string;
+}
+
+export interface FinalizeDispatchInput {
+  id: string;
+  lines: FinalizeDispatchLine[];
+  user: User;
+}
+
+/**
+ * Lock a Draft. What actually left is captured per line here — defaulting to
+ * planned in the UI, editable down at this last moment — added to each Sales
+ * Order Item's running total, and the order's own status recomputed exactly
+ * as `setProductionStage` recomputes it.
+ *
+ * Refuses a line whose remaining quantity (re-derived from a **freshly**
+ * fetched order, never the draft's possibly-stale planned number) cannot
+ * cover what this dispatch claims — the only guard against two Drafts
+ * racing for the same remainder; see the plan's "known accepted tradeoff".
+ * Also refuses any line whose order was cancelled since the draft was built.
+ */
+async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch> {
+  const bySalesOrder = new Map<string, FinalizeDispatchLine[]>();
+  for (const l of input.lines) {
+    const bucket = bySalesOrder.get(l.salesOrder) ?? [];
+    bucket.push(l);
+    bySalesOrder.set(l.salesOrder, bucket);
+  }
+
+  // Item codes that became fully dispatched, per order — the best-effort
+  // Manna Production Order flip reads this after the Sales Order is saved.
+  const fullyDoneByOrder = new Map<string, string[]>();
+
+  for (const [orderId, lines] of bySalesOrder) {
+    const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, orderId);
+    if (Number(doc.docstatus) === 2) {
+      throw new Error(
+        `${orderId} was cancelled after this draft was built — nothing on it can be dispatched.`,
+      );
+    }
+    const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+    const reservations = await listStockReservations().catch(() => [] as StockReservationRow[]);
+    const fullyDone: string[] = [];
+
+    const nextItems = items.map((row) => {
+      const line = lines.find((l) => l.salesOrderItem === String(row.name));
+      if (!line) return row;
+
+      const left = remainingToDispatch(row);
+      if (line.dispatchedRolls > left.rolls || line.dispatchedLooseBelts > left.looseBelts) {
+        throw new Error(
+          `Only ${left.rolls} roll(s) / ${left.looseBelts} belt(s) remain on ${line.itemCode} — ` +
+            `someone else dispatched the rest since this draft was built.`,
+        );
+      }
+
+      const newDispatchedRolls =
+        (Number(row[SALES_ORDER_ITEM_FIELD.dispatchedRolls]) || 0) + line.dispatchedRolls;
+      const newDispatchedBelts =
+        (Number(row[SALES_ORDER_ITEM_FIELD.dispatchedLooseBelts]) || 0) + line.dispatchedLooseBelts;
+      const done = isFullyDispatched({
+        ...row,
+        [SALES_ORDER_ITEM_FIELD.dispatchedRolls]: newDispatchedRolls,
+        [SALES_ORDER_ITEM_FIELD.dispatchedLooseBelts]: newDispatchedBelts,
+      });
+      if (done) fullyDone.push(line.itemCode);
+
+      const next: Record<string, unknown> = {
+        ...row,
+        [SALES_ORDER_ITEM_FIELD.dispatchedRolls]: newDispatchedRolls,
+        [SALES_ORDER_ITEM_FIELD.dispatchedLooseBelts]: newDispatchedBelts,
+        [SALES_ORDER_ITEM_FIELD.dispatchShortReason]: done ? '' : line.shortfallReason ?? '',
+      };
+      if (done) {
+        // Whichever half(s) this line actually drew on reach the terminal
+        // stage. A line with neither half resolvable (should not happen on
+        // a Ready order) defaults to the made half, so it is never silently
+        // left off the order's rollup.
+        const code = str(row.item_code) ?? '';
+        const held = heldBy(reservations, code, orderId);
+        const rolls = Number(row[SALES_ORDER_ITEM_FIELD.rolls]) || 0;
+        const belts = Number(row[SALES_ORDER_ITEM_FIELD.looseBelts]) || 0;
+        const hasStockHalf = held.rolls > 0 || held.belts > 0;
+        const hasMakeHalf = Math.max(0, rolls - held.rolls) > 0 || Math.max(0, belts - held.belts) > 0;
+        if (!hasStockHalf && !hasMakeHalf) {
+          next[SALES_ORDER_ITEM_FIELD.productionStage] = DISPATCHED;
+        } else {
+          if (hasStockHalf) next[SALES_ORDER_ITEM_FIELD.stockStage] = DISPATCHED;
+          if (hasMakeHalf) next[SALES_ORDER_ITEM_FIELD.productionStage] = DISPATCHED;
+        }
+      }
+      return next;
+    });
+
+    const status = rollUp(
+      nextItems.map((l) => {
+        const code = str(l.item_code) ?? '';
+        const held = heldBy(reservations, code, orderId);
+        const rolls = Number(l[SALES_ORDER_ITEM_FIELD.rolls]) || 0;
+        const belts = Number(l[SALES_ORDER_ITEM_FIELD.looseBelts]) || 0;
+        return {
+          category: str(l[SALES_ORDER_ITEM_FIELD.category]),
+          fulfilmentMode: str(l[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
+          productionStage: str(l[SALES_ORDER_ITEM_FIELD.productionStage]),
+          stockStage: str(l[SALES_ORDER_ITEM_FIELD.stockStage]),
+          reservedRolls: held.rolls,
+          reservedBelts: held.belts,
+          toMakeRolls: Math.max(0, rolls - held.rolls),
+          toMakeBelts: Math.max(0, belts - held.belts),
+          splitKnown: true,
+        };
+      }),
+    );
+
+    await updateDoc(DOCTYPE.salesOrder, orderId, {
+      items: nextItems,
+      [SALES_ORDER_FIELD.productionStatus]: status,
+    });
+    if (fullyDone.length) fullyDoneByOrder.set(orderId, fullyDone);
+  }
+
+  // Best-effort: a Manna Production Order raised for a now-fully-dispatched
+  // line (Flow B) should not sit stale. Zero matches is expected and fine —
+  // a line served wholly from the shelf never had one.
+  for (const [orderId, itemCodes] of fullyDoneByOrder) {
+    for (const itemCode of itemCodes) {
+      try {
+        const rows = await listDocs<Record<string, unknown>>(DOCTYPE.productionOrder, {
+          fields: ['name', PRODUCTION_ORDER_FIELD.status],
+          filters: [
+            [PRODUCTION_ORDER_FIELD.purpose, '=', PRODUCTION_ORDER_PURPOSE.order],
+            [PRODUCTION_ORDER_FIELD.salesOrder, '=', orderId],
+            [PRODUCTION_ORDER_FIELD.itemCode, '=', itemCode],
+          ],
+          limit: 0,
+        });
+        for (const r of rows) {
+          const current = str(r[PRODUCTION_ORDER_FIELD.status]);
+          if (current === PRODUCTION_ORDER_STATUS.dispatched || current === PRODUCTION_ORDER_STATUS.cancelled) {
+            continue;
+          }
+          await updateDoc(DOCTYPE.productionOrder, String(r.name), {
+            [PRODUCTION_ORDER_FIELD.status]: PRODUCTION_ORDER_STATUS.dispatched,
+          });
+        }
+      } catch {
+        // Best-effort courtesy write — the Sales Order side is already saved
+        // and is the record that matters.
+      }
+    }
+  }
+
+  // Lock the Manna Dispatch itself: capture what actually went per line.
+  const dispatchDoc = await getDoc<Record<string, unknown>>(DOCTYPE.dispatch, input.id);
+  const items = Array.isArray(dispatchDoc[DISPATCH_FIELD.items])
+    ? (dispatchDoc[DISPATCH_FIELD.items] as Record<string, unknown>[])
+    : [];
+  const nextDispatchItems = items.map((it) => {
+    const line = input.lines.find((l) => l.salesOrderItem === str(it[DISPATCH_ITEM_FIELD.salesOrderItem]));
+    if (!line) return it;
+    return {
+      ...it,
+      [DISPATCH_ITEM_FIELD.dispatchedRolls]: line.dispatchedRolls,
+      [DISPATCH_ITEM_FIELD.dispatchedLooseBelts]: line.dispatchedLooseBelts,
+      [DISPATCH_ITEM_FIELD.shortfallReason]: line.shortfallReason ?? '',
+    };
+  });
+
+  await updateDoc(DOCTYPE.dispatch, input.id, {
+    [DISPATCH_FIELD.items]: nextDispatchItems,
+    [DISPATCH_FIELD.status]: DISPATCH_STATUS.dispatched,
+    [DISPATCH_FIELD.dispatchedBy]: input.user.name,
+    [DISPATCH_FIELD.dispatchedAt]: nowIso(),
+  });
+
+  return getDispatch(input.id);
+}
+
 // ===========================================================================
 // TRIPS, EXPENSES AND ODOMETER VERIFICATION
 // ===========================================================================
@@ -5494,6 +5915,7 @@ export const Api = {
     listLeads,
     listRoutesFor,
     assignRoute,
+    assignOwner,
     decideLocation,
     listLocationQueue,
   },
@@ -5504,6 +5926,11 @@ export const Api = {
     setStage: setProductionStage,
     moveDeliveryDate,
     acknowledgeChange: acknowledgeProductionChange,
+    listDispatchableLines,
+    listDispatchDrafts,
+    getDispatch,
+    saveDispatchDraft,
+    finalizeDispatch,
   },
 
   attendance: {

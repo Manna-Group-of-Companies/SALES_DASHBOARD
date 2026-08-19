@@ -52,6 +52,12 @@ export const DOCTYPE = {
   productionOrder: 'Manna Production Order',
   notification: 'Sales Notification',
   orderTimeline: 'Sales Order Timeline',
+  /**
+   * Created 19 Aug 2026, verified queryable before first use. `Manna Dispatch
+   * Item` is its child table (`items`), never queried directly — a dispatch
+   * is always read/written through the parent.
+   */
+  dispatch: 'Manna Dispatch',
 
   /*
    * --- HR ---------------------------------------------------------------
@@ -320,6 +326,18 @@ export const SALES_ORDER_ITEM_FIELD = {
   stockStage: 'custom_stock_stage',
   /** Link to `Manna Minimum Stock Batch` when filled from aged stock. */
   agedBatch: 'custom_aged_batch',
+
+  /**
+   * Cumulative across every `Manna Dispatch` that has ever touched this line
+   * — never one dispatch's own amount. Created 19 Aug 2026, `allow_on_submit`
+   * so the floor can write it after approval, matching `productionStage`.
+   * Read through `domain/dispatch.ts`'s `remainingToDispatch`/
+   * `isFullyDispatched`, never compared to `rolls`/`looseBelts` directly.
+   */
+  dispatchedRolls: 'custom_dispatched_rolls',
+  dispatchedLooseBelts: 'custom_dispatched_loose_belts',
+  /** The *current outstanding* shortfall reason — blanked once fully caught up. */
+  dispatchShortReason: 'custom_dispatch_short_reason',
 
   /*
    * The discount the sales manager grants at approval.
@@ -678,6 +696,50 @@ export const PRODUCTION_ORDER_STATUS = {
   /** Flow B's close: goods reach the customer. */
   dispatched: 'Dispatched',
   cancelled: 'Cancelled',
+} as const;
+
+/**
+ * `Manna Dispatch` — created 19 Aug 2026. One vehicle, one date, any number of
+ * order lines bundled onto it. Freely editable while `status = Draft`; the
+ * final "Dispatch" click locks it and is the only thing that writes
+ * `custom_dispatched_rolls`/`custom_dispatched_loose_belts` on the touched
+ * `Sales Order Item` rows.
+ *
+ * `createdBy`/`dispatchedBy` are `Data`, matching the same display-name
+ * convention as `PRODUCTION_ORDER_FIELD.raisedBy`.
+ */
+export const DISPATCH_FIELD = {
+  vehicle: 'vehicle',
+  dispatchDate: 'dispatch_date',
+  unit: 'unit',
+  status: 'status',
+  items: 'items',
+  createdBy: 'created_by',
+  createdOn: 'created_on',
+  dispatchedBy: 'dispatched_by',
+  dispatchedAt: 'dispatched_at',
+} as const;
+
+/** The two values `Manna Dispatch.status` accepts. */
+export const DISPATCH_STATUS = {
+  draft: 'Draft',
+  dispatched: 'Dispatched',
+} as const;
+
+/** `Manna Dispatch Item` — child table of `Manna Dispatch`. */
+export const DISPATCH_ITEM_FIELD = {
+  salesOrder: 'sales_order',
+  /** The exact child row `name` on that order's `items` table — an order can
+   * carry the same item twice, so item code alone cannot target one line. */
+  salesOrderItem: 'sales_order_item',
+  itemCode: 'item_code',
+  plannedRolls: 'planned_rolls',
+  plannedLooseBelts: 'planned_loose_belts',
+  /** Captured at the final Dispatch click. Defaults to planned, editable down. */
+  dispatchedRolls: 'dispatched_rolls',
+  dispatchedLooseBelts: 'dispatched_loose_belts',
+  /** Set only when dispatched is less than planned for this row. */
+  shortfallReason: 'shortfall_reason',
 } as const;
 
 /** `Manna Stock Reservation` — one claim on the pool. Verified live. */

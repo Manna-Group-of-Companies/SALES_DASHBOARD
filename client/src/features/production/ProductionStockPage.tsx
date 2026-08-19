@@ -66,7 +66,6 @@ const RUN_STAGES = [
   'Trimming',
   'Quality Check',
   'Packed',
-  'Dispatched',
 ];
 
 export function ProductionStockPage() {
