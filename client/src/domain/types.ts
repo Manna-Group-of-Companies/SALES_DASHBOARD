@@ -521,6 +521,16 @@ export interface ProductionOrderRow {
   id: string;
   /** The destination route, or the literal "No route set". Never a territory. */
   route: string;
+  /**
+   * Who the goods are for.
+   *
+   * Withheld from production until 19 Aug 2026, on the reasoning that the
+   * floor plans routes and vans rather than relationships. Dispatch changed
+   * that: somebody loading a vehicle has to know which customer each pallet
+   * belongs to, and a route alone does not say it when two customers sit on
+   * one round. Shown now, on the same screens that always showed the route.
+   */
+  customerName: string;
   rep: string;
   unit?: string;
   placedOn: string;
@@ -536,8 +546,8 @@ export interface ProductionOrderRow {
 
 /**
  * One order line still owed some quantity, offered up for a manager to add
- * to a `Manna Dispatch`. Route, never customer — same rule as
- * `ProductionOrderRow`.
+ * to a `Manna Dispatch`. Carries the customer as well as the route — see
+ * `ProductionOrderRow.customerName` for why that changed.
  */
 export interface DispatchableLine {
   salesOrder: string;
@@ -546,6 +556,7 @@ export interface DispatchableLine {
   itemCode: string;
   itemName: string;
   route: string;
+  customerName: string;
   remainingRolls: number;
   remainingLooseBelts: number;
 }
@@ -557,6 +568,7 @@ export interface DispatchLine {
   itemCode: string;
   itemName: string;
   route: string;
+  customerName: string;
   plannedRolls: number;
   plannedLooseBelts: number;
   /** Only meaningful once the header is `Dispatched`. */

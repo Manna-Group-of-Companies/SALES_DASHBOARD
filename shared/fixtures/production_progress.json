@@ -1,0 +1,72 @@
+{
+  "about": "How far through production a line is, as the floor sees it. Both apps read this file in their tests. The rule exists because Dispatch Planning took Dispatched away from the stage picker (see the commit 'Build Dispatch Planning, and retire hand-picked Dispatched'): the floor can no longer reach that stage, so measuring the floor's progress against it left a finished line reading 'Stage 2 of 3' and a half-empty bar forever.",
+
+  "fields": {
+    "stage": "custom_production_stage",
+    "stock_stage": "custom_stock_stage",
+    "note": "Dispatched stays IN the stored sequence - rollUp still ranks it above Packed to decide the order's Ready vs Dispatched status, and that is deliberately unchanged. What changes here is only what the floor is SHOWN about its own work."
+  },
+
+  "sequences": {
+    "minimum_stock": ["Not Started", "Packed", "Dispatched"],
+    "pctr": ["Not Started", "Compound Mixing", "Extrusion", "Curing", "Trimming", "Quality Check", "Packed", "Dispatched"],
+    "generic": ["Not Started", "In Production", "Packed", "Dispatched"]
+  },
+
+  "progress": [
+    {
+      "why": "Packed is the floor's last step, so a packed line reads as fully done - this is the whole point: production cannot set Dispatched any more, and a bar stuck at half on finished work told the floor it was behind when it was not",
+      "sequence": "minimum_stock",
+      "stage": "Packed",
+      "expect": { "position": 2, "total": 2, "progress": 1, "complete": true }
+    },
+    {
+      "why": "the same on a full making cycle - Packed is step 7 of the 7 the floor works, not step 7 of 8",
+      "sequence": "pctr",
+      "stage": "Packed",
+      "expect": { "position": 7, "total": 7, "complete": true }
+    },
+    {
+      "why": "an untouched line is at the start and reads as no progress at all",
+      "sequence": "pctr",
+      "stage": "Not Started",
+      "expect": { "position": 1, "total": 7, "progress": 0, "complete": false }
+    },
+    {
+      "why": "a blank stage is the same as Not Started - Frappe returns an unset Data field three ways and none of them means work has begun",
+      "sequence": "pctr",
+      "stage": "",
+      "expect": { "position": 1, "total": 7, "progress": 0, "complete": false }
+    },
+    {
+      "why": "mid-cycle counts against the stages the floor actually works, so the denominator never mentions a step they cannot reach",
+      "sequence": "pctr",
+      "stage": "Curing",
+      "expect": { "position": 4, "total": 7, "complete": false }
+    },
+    {
+      "why": "a line Dispatch Planning has since dispatched still reads as complete rather than falling off the end of the shortened sequence",
+      "sequence": "minimum_stock",
+      "stage": "Dispatched",
+      "expect": { "position": 2, "total": 2, "progress": 1, "complete": true }
+    },
+    {
+      "why": "dispatched on a full cycle is complete too, and is not reported as an eighth step the floor forgot to do",
+      "sequence": "pctr",
+      "stage": "Dispatched",
+      "expect": { "position": 7, "total": 7, "progress": 1, "complete": true }
+    },
+    {
+      "why": "the short generic cycle behaves the same way - nothing here is specific to one product family",
+      "sequence": "generic",
+      "stage": "Packed",
+      "expect": { "position": 3, "total": 3, "progress": 1, "complete": true }
+    },
+    {
+      "why": "an off-sequence stage reports no position and no progress rather than guessing - it happens when the stage lists are revised under a running order, and rounding it up would let a typo make an order look shipped",
+      "sequence": "pctr",
+      "stage": "Curring",
+      "expect": { "position": -1, "progress": 0, "complete": false }
+    }
+  ]
+}

@@ -1,8 +1,11 @@
 /**
  * B2 — Production order detail.
  *
- * The customer is absent by construction: the API resolved them to a route and
- * dropped the identity, so this screen has nothing to hide.
+ * The customer was absent by construction until 19 Aug 2026 — the API resolved
+ * them to a route and dropped the identity. Dispatch changed that: somebody
+ * loading a van has to know whose pallet is whose, and a route does not say it
+ * when two customers sit on one round. `getOrderForProduction` now resolves
+ * and keeps the name.
  *
  * The two writes here are the ones most likely to go wrong, and both are
  * shaped by ERPNext's field types rather than by preference:
@@ -19,7 +22,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { OrderLine, ProductionOrderRow } from '@/domain/types';
-import { DISPATCHED, tracksFor, rollUp, type StagedLine } from '@/domain/production';
+import {
+  DISPATCHED,
+  tracksFor,
+  rollUp,
+  workComplete,
+  workPosition,
+  workProgress,
+  workTotal,
+  type StagedLine,
+} from '@/domain/production';
 import { modeLabel, modeTone, servedFrom, splitOf } from '@/domain/minimumStock';
 import type { StockReservationRow } from '@/domain/types';
 import { formatDate } from '@/domain/orderRules';
@@ -153,8 +165,10 @@ export function ProductionOrderPage() {
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">{order ? order.route : 'Loading…'}</div>
-          <div className="page-head__sub">Destination route</div>
+          <div className="page-head__title">{order ? order.customerName : 'Loading…'}</div>
+          <div className="page-head__sub">
+            {order ? `${order.route} · destination route` : 'Destination route'}
+          </div>
         </div>
         <div className="cal__nav">
           <RefreshButton onClick={reload} loading={loading} />
@@ -233,9 +247,13 @@ export function ProductionOrderPage() {
 
             {!moving ? (
               <div className="prod__actions">
-                <Button size="sm" variant="ghost" onClick={() => setMoving(true)}>
-                  Move delivery date
-                </Button>
+                {/*
+                  A solid button, not a ghost. This was styled as faint
+                  borderless text and read as a caption — the one action on
+                  this card that changes what the rep is promised, and nobody
+                  could tell it was clickable.
+                */}
+                <Button onClick={() => setMoving(true)}>📅 Move delivery date</Button>
                 <span className="note">
                   Postpone or bring forward to a date the floor can actually meet. The rep sees the
                   new date on their order.
@@ -249,10 +267,10 @@ export function ProductionOrderPage() {
                   onChange={(e) => setNewDate(e.target.value)}
                   aria-label="New delivery date"
                 />
-                <Button size="sm" onClick={moveDate} loading={busy === 'date'} disabled={!newDate}>
+                <Button variant="primary" onClick={moveDate} loading={busy === 'date'} disabled={!newDate}>
                   Save date
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => setMoving(false)}>
+                <Button variant="ghost" onClick={() => setMoving(false)}>
                   Cancel
                 </Button>
                 {!order.originalDeliveryDate && (
@@ -318,9 +336,19 @@ export function ProductionOrderPage() {
                     against Curing described work nobody was doing.
                   */}
                   {tracks.map((t) => {
-                    const i = t.sequence.indexOf(t.stage);
-                    const unknown = i < 0;
-                    const pct = unknown ? 0 : Math.round((i / (t.sequence.length - 1)) * 100);
+                    /*
+                      Counted against the stages the FLOOR works, not the
+                      stored sequence: Dispatch Planning owns `Dispatched`
+                      now, so measuring against it left a packed line — which
+                      is finished, as far as this screen's reader is
+                      concerned — showing "Stage 2 of 3" behind a half-empty
+                      bar. See `workPosition` in domain/production.ts.
+                    */
+                    const pos = workPosition(t.sequence, t.stage);
+                    const unknown = pos < 0;
+                    const total = workTotal(t.sequence);
+                    const done = workComplete(t.sequence, t.stage);
+                    const pct = Math.round(workProgress(t.sequence, t.stage) * 100);
                     const key = l.id + t.field;
                     return (
                       <div key={t.key} className={`track track--${t.key}`}>
@@ -332,11 +360,11 @@ export function ProductionOrderPage() {
                         ) : (
                           <>
                             <div className="prod__stagecap">
-                              Stage {i + 1} of {t.sequence.length} · {t.stage}
+                              Stage {pos} of {total} · {t.stage}
                             </div>
                             <div className="prod__bar">
                               <div
-                                className={`prod__bar-fill ${t.stage === 'Dispatched' ? 'done' : ''}`}
+                                className={`prod__bar-fill ${done ? 'done' : ''}`}
                                 style={{ width: `${pct}%` }}
                               />
                             </div>

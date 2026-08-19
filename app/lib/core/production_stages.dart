@@ -158,3 +158,55 @@ double stageProgress(List<String> stages, dynamic current) {
 }
 
 bool isDispatched(dynamic current) => '${current ?? ''}' == kStageDispatched;
+
+// ---------------------------------------- what the floor is shown ---
+//
+// Paired with `client/src/domain/production.ts`. Both read
+// `shared/fixtures/production_progress.json` in their tests.
+//
+// Dispatch Planning took `Dispatched` off the stage picker: the floor cannot
+// reach that stage any more, it is written only once a line's full ordered
+// quantity has actually gone out. Measuring the floor's own progress against
+// it left a packed — i.e. finished — line reading "Stage 2 of 3" behind a
+// half-empty bar, which says "you are behind" about work that is done.
+//
+// So the floor is shown its own stages: the sequence up to and including
+// `Packed`. `Dispatched` stays in the stored sequence and the order-level
+// roll-up still ranks it above `Packed` to decide Ready vs Dispatched — that
+// is deliberately untouched. This changes only what is displayed.
+
+/// The stages the floor actually works — the sequence without `Dispatched`.
+List<String> workSequence(List<String> stages) =>
+    stages.where((s) => s != kStageDispatched).toList();
+
+/// Where a stage sits among the floor's own stages, 1-based, or -1 when it is
+/// off-sequence.
+///
+/// `Dispatched` maps onto the last worked stage rather than past the end: the
+/// goods are gone, so the floor's part is finished, and reporting it as a step
+/// beyond the list would read as work somebody skipped.
+int workPosition(List<String> stages, dynamic current) {
+  final work = workSequence(stages);
+  final c = '${current ?? ''}'.trim();
+  final stage = (c.isEmpty || c == 'null') ? kStageNotStarted : c;
+  if (stage == kStageDispatched) return work.length;
+  final i = work.indexOf(stage);
+  return i < 0 ? -1 : i + 1;
+}
+
+/// How many stages the floor works. The denominator in "step 7 of 7".
+int workTotal(List<String> stages) => workSequence(stages).length;
+
+/// 0..1 across the floor's own stages. Off-sequence shows none, never full.
+double workProgress(List<String> stages, dynamic current) {
+  final total = workTotal(stages);
+  final pos = workPosition(stages, current);
+  if (pos < 0 || total <= 1) return 0;
+  return (pos - 1) / (total - 1);
+}
+
+/// True once the floor has nothing left to do on this line.
+bool workComplete(List<String> stages, dynamic current) {
+  final pos = workPosition(stages, current);
+  return pos > 0 && pos == workTotal(stages);
+}

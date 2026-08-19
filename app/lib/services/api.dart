@@ -3868,13 +3868,14 @@ class Api {
   }
 
   // Approved POs (ready for SAP) for the logged-in production manager's unit.
-  /// Approved orders for the production floor, with the customer's identity
-  /// left out.
+  /// Approved orders for the production floor, with the destination route and
+  /// the customer's name.
   ///
-  /// `customer` and `customer_name` are deliberately not fetched. Production
-  /// plans and routes; who the order is for is billing's business. What they
-  /// get instead is the territory, which is enough to plan a van and cannot
-  /// name a shop.
+  /// The customer was deliberately withheld here until 19 Aug 2026 — the floor
+  /// plans vans, not relationships, and the route was held to be enough.
+  /// Dispatch is what changed it: somebody loading a vehicle has to know whose
+  /// pallet is whose, and a route does not say that when two customers sit on
+  /// one round. Both are resolved here in one lookup for the whole list.
   static Future<List<Map<String, dynamic>>> getApprovedPOsForProduction() async {
     final unit = Session.I.productionCompany;
     if (unit == null || unit.isEmpty) return [];
@@ -3888,25 +3889,27 @@ class Api {
         limit: 100);
     if (orders.isEmpty) return orders;
 
-    // Swap each customer for its route, then drop the name entirely. The link
-    // is resolved here and never handed to the screen, so a production widget
-    // cannot accidentally render an identity it was never given.
     final codes = orders
         .map((o) => '${o['customer'] ?? ''}')
         .where((c) => c.isNotEmpty)
         .toSet();
     final routes = <String, String>{};
+    final names = <String, String>{};
     if (codes.isNotEmpty) {
       final rows = await _list('Customer',
-          fields: '["name","custom_sales_route","territory"]',
+          fields: '["name","customer_name","custom_sales_route","territory"]',
           filters: '[["name","in",${_inList(codes.toList())}]]');
       for (final r in rows) {
         routes['${r['name']}'] = destinationOf(r);
+        names['${r['name']}'] = '${r['customer_name'] ?? r['name']}';
       }
     }
     for (final o in orders) {
-      o['destination'] = routes['${o['customer']}'] ?? 'No route set';
-      o.remove('customer');
+      final code = '${o['customer'] ?? ''}';
+      o['destination'] = routes[code] ?? 'No route set';
+      // Falls back to the customer CODE, never a blank: a van loaded against
+      // an unnamed row is worse than one against an ugly identifier.
+      o['customer_name'] = names[code] ?? code;
     }
     return orders;
   }
@@ -3967,20 +3970,28 @@ class Api {
 
     await _attachReservedSplit(name, (o['items'] as List?) ?? []);
 
+    // The customer's name is kept as of 19 Aug 2026 — see
+    // `getApprovedPOsForProduction` for why it stopped being withheld. The
+    // stored `customer_name` on the order is overwritten from the Customer
+    // record rather than trusted: it is copied at order time and goes stale
+    // the moment a customer is renamed.
     final code = '${o['customer'] ?? ''}';
     var destination = 'No route set';
+    var customerName = code;
     if (code.isNotEmpty) {
       try {
         final rows = await _list('Customer',
-            fields: '["name","custom_sales_route","territory"]',
+            fields: '["name","customer_name","custom_sales_route","territory"]',
             filters: '[["name","=","$code"]]',
             limit: 1);
-        if (rows.isNotEmpty) destination = destinationOf(rows.first);
+        if (rows.isNotEmpty) {
+          destination = destinationOf(rows.first);
+          customerName = '${rows.first['customer_name'] ?? code}';
+        }
       } catch (_) {}
     }
     o['destination'] = destination;
-    o.remove('customer');
-    o.remove('customer_name');
+    o['customer_name'] = customerName;
     o.remove('company_address_display');
     return o;
   }

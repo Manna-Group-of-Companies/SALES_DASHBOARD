@@ -209,6 +209,62 @@ export function stageCaption(line: StagedLine): string {
   return `Stage ${i + 1} of ${seq.length} · ${seq[i]}`;
 }
 
+// ------------------------------------------- what the floor is shown ---
+//
+// Paired with `app/lib/core/production_stages.dart`. Both read
+// `shared/fixtures/production_progress.json` in their tests.
+//
+// Dispatch Planning took `Dispatched` off the stage picker: the floor cannot
+// reach that stage any more, it is written only once a line's full ordered
+// quantity has actually gone out. Measuring the floor's own progress against
+// it left a packed — i.e. finished — line reading "Stage 2 of 3" behind a
+// half-empty bar, which says "you are behind" about work that is done.
+//
+// So the floor is shown its own stages: the sequence up to and including
+// `Packed`. `Dispatched` stays in the stored sequence and `rollUp` still
+// ranks it above `Packed` to decide the order's Ready/Dispatched status —
+// that is deliberately untouched. This changes only what is displayed.
+
+/** The stages the floor actually works — the sequence without `Dispatched`. */
+export function workSequence(sequence: string[]): string[] {
+  return sequence.filter((s) => s !== DISPATCHED);
+}
+
+/**
+ * Where a stage sits among the floor's own stages, 1-based, or -1 when it is
+ * off-sequence.
+ *
+ * `Dispatched` maps onto the last worked stage rather than past the end: the
+ * goods are gone, so the floor's part is finished, and reporting it as a step
+ * beyond the list would read as work somebody skipped.
+ */
+export function workPosition(sequence: string[], stage: string | undefined): number {
+  const work = workSequence(sequence);
+  const current = (stage ?? '').trim() || NOT_STARTED;
+  if (current === DISPATCHED) return work.length;
+  const i = work.indexOf(current);
+  return i < 0 ? -1 : i + 1;
+}
+
+/** How many stages the floor works. The denominator in "step 7 of 7". */
+export function workTotal(sequence: string[]): number {
+  return workSequence(sequence).length;
+}
+
+/** 0–1 across the floor's own stages. Off-sequence shows none, never full. */
+export function workProgress(sequence: string[], stage: string | undefined): number {
+  const total = workTotal(sequence);
+  const pos = workPosition(sequence, stage);
+  if (pos < 0 || total <= 1) return 0;
+  return (pos - 1) / (total - 1);
+}
+
+/** True once the floor has nothing left to do on this line. */
+export function workComplete(sequence: string[], stage: string | undefined): boolean {
+  const pos = workPosition(sequence, stage);
+  return pos > 0 && pos === workTotal(sequence);
+}
+
 // ----------------------------------------------------------- the roll-up ---
 
 /**

@@ -169,14 +169,22 @@ export function canAdvanceStage(order: Order, user: User): EditPermission {
 }
 
 /**
- * Production must never learn who the customer is — only where the goods go
- * (3.1). Screens call this instead of reading `customerName` directly.
+ * Who may see the customer's identity — now everyone.
+ *
+ * Production was excluded until 19 Aug 2026 (spec 3.1: the floor plans vans,
+ * not relationships). Dispatch reversed it: somebody loading a vehicle has to
+ * know whose pallet is whose, and a route does not say that when two
+ * customers sit on one round.
+ *
+ * Kept as a function rather than deleted so the reversal is visible to
+ * anybody who goes looking for the old rule. The live production screens read
+ * `customerName` directly now; only the fixture-era screens still call this.
  */
-export function canSeeCustomerIdentity(user: User): boolean {
-  return user.role !== 'production_manager';
+export function canSeeCustomerIdentity(_user: User): boolean {
+  return true;
 }
 
-/** What to show in place of the customer, per role. */
+/** What to show for the customer. Falls back to the destination if unnamed. */
 export function customerLabelFor(order: Order, user: User): string {
   return canSeeCustomerIdentity(user) ? order.customerName : order.destination;
 }

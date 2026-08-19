@@ -141,6 +141,7 @@ export function AppShell() {
 
     { to: '/production', label: 'Production Queue', icon: '⚙', roles: ['production_manager'], group: 'Production' },
     { to: '/production/stock', label: 'Minimum Stock', icon: '📦', roles: ['production_manager'], group: 'Production' },
+    { to: '/production/dispatch', label: 'Dispatch Planning', icon: '🚚', roles: ['production_manager'], group: 'Production' },
     { to: '/production/close-week', label: 'Close the Week', icon: '🗂', roles: ['production_manager'], group: 'Production' },
 
     { to: '/stock', label: 'Minimum Stock', icon: '📦', roles: ['sales_manager', 'general_manager'], screen: 'stock', group: 'Sales' },

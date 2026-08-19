@@ -4650,12 +4650,20 @@ async function listProductionQueue(unit?: string): Promise<ProductionOrderRow[]>
   // One lookup for the whole queue rather than one per order.
   const parties = await listSalesCustomers().catch(() => []);
   const routeOf = new Map(parties.map((c) => [c.id, c.route]));
+  const nameOf = new Map(parties.map((c) => [c.id, c.name]));
 
   return rows.map((r) => {
     const customer = str(r[SALES_ORDER_FIELD.customer]) ?? '';
     const route = routeOf.get(customer);
     return {
       id: String(r.name),
+      /*
+       * The customer, shown to production since 19 Aug 2026 — dispatch needs
+       * to know whose pallet is whose. Falls back to the customer CODE rather
+       * than to a blank: a van being loaded against an unnamed row is worse
+       * than one against an ugly identifier.
+       */
+      customerName: nameOf.get(customer) ?? customer,
       /*
        * "No route set" is correct and must not be improved on. This used to
        * fall back to `territory`, and since every customer sits in the single
@@ -4687,12 +4695,15 @@ async function getOrderForProduction(
   const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, id);
   const customer = str(doc[SALES_ORDER_FIELD.customer]) ?? '';
   const parties = await listSalesCustomers().catch(() => []);
-  const route = parties.find((c) => c.id === customer)?.route;
+  const party = parties.find((c) => c.id === customer);
+  const route = party?.route;
 
   const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
   return {
     id: String(doc.name),
     route: isLinkSet(route) ? (route as string) : 'No route set',
+    // Shown to production since 19 Aug 2026 — see ProductionOrderRow.
+    customerName: party?.name ?? customer,
     rep: str(doc[SALES_ORDER_FIELD.rep]) ?? '',
     unit: str(doc[SALES_ORDER_FIELD.unit]),
     placedOn: (str(doc[SALES_ORDER_FIELD.placedOn]) ?? '').slice(0, 10),
@@ -4849,6 +4860,7 @@ async function listDispatchableLines(unit?: string): Promise<DispatchableLine[]>
         itemCode: l.itemCode,
         itemName: l.itemName,
         route: order.route,
+        customerName: order.customerName,
         remainingRolls: left.rolls,
         remainingLooseBelts: left.looseBelts,
       });
@@ -4859,10 +4871,11 @@ async function listDispatchableLines(unit?: string): Promise<DispatchableLine[]>
 
 /**
  * Turn a raw `Manna Dispatch` doc into what the planning screen needs.
- * Route and item name are resolved by re-reading the orders it references,
- * never trusted from anything stored on the dispatch item itself — the same
- * "production must never see the customer" boundary `getOrderForProduction`
- * already enforces stays enforced here too, since only the route crosses it.
+ *
+ * Route, customer and item name are resolved by re-reading the orders it
+ * references, never trusted from anything stored on the dispatch item
+ * itself — a name copied onto a child row at planning time goes stale the
+ * moment the customer is renamed, and the van would be loaded against it.
  */
 async function toDispatch(doc: Record<string, unknown>): Promise<Dispatch> {
   const items = Array.isArray(doc[DISPATCH_FIELD.items])
@@ -4889,6 +4902,7 @@ async function toDispatch(doc: Record<string, unknown>): Promise<Dispatch> {
       itemCode,
       itemName: line?.itemName ?? itemCode,
       route: order?.route ?? 'No route set',
+      customerName: order?.customerName ?? '',
       plannedRolls: Number(it[DISPATCH_ITEM_FIELD.plannedRolls]) || 0,
       plannedLooseBelts: Number(it[DISPATCH_ITEM_FIELD.plannedLooseBelts]) || 0,
       dispatchedRolls: Number(it[DISPATCH_ITEM_FIELD.dispatchedRolls]) || 0,

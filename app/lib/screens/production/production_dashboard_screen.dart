@@ -29,13 +29,12 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
   void _reload() =>
       setState(() => _future = Api.getApprovedPOsForProduction());
 
-  /// Searches the order number and the route only. The customer is never
-  /// loaded for production, so there is nothing else to match on — and a
-  /// search box that quietly matched a hidden field would be a way of
-  /// confirming who an order belongs to by guessing.
+  /// Searches the order number, the route and the customer. The customer
+  /// joined the list on 19 Aug 2026, when it stopped being withheld from
+  /// production — see Api.getApprovedPOsForProduction.
   bool _match(Map<String, dynamic> r) {
     if (_q.isEmpty) return true;
-    final hay = [r['name'], r['destination']]
+    final hay = [r['name'], r['destination'], r['customer_name']]
         .map((e) => (e ?? '').toString().toLowerCase())
         .join(' ');
     return hay.contains(_q.toLowerCase());
@@ -109,11 +108,12 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
                         color: changed
                             ? Colors.red
                             : const Color(0xFF7C3AED)),
-                    // The route, not the customer. Production never receives
-                    // the identity — see Api.getApprovedPOsForProduction.
+                    // The customer leads and the route qualifies it, below.
+                    // Production was shown the route alone until 19 Aug 2026
+                    // — see Api.getApprovedPOsForProduction for what changed.
                     title: Row(children: [
                       Expanded(
-                        child: Text('${r['destination'] ?? 'No route set'}',
+                        child: Text('${r['customer_name'] ?? ''}',
                             style: const TextStyle(
                                 fontWeight: FontWeight.w600)),
                       ),
@@ -135,7 +135,8 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                              '${r['name']}  ·  raised ${r['transaction_date'] ?? ''}'
+                              '${r['destination'] ?? 'No route set'}'
+                              '\n${r['name']}  ·  raised ${r['transaction_date'] ?? ''}'
                               '\nDeliver by ${delivery.isEmpty || delivery == 'null' ? 'not set' : delivery}'),
                           const SizedBox(height: 4),
                           OrderCompleteTick(order: r),

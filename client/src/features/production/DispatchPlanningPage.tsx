@@ -15,7 +15,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Dispatch, DispatchableLine } from '@/domain/types';
 import { Api } from '@/api/client';
-import { UNITS } from '@/api/endpoints';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import {
@@ -26,7 +25,6 @@ import {
   Field,
   Input,
   Modal,
-  Select,
   Tabs,
   Textarea,
   type TabDef,
@@ -45,6 +43,8 @@ interface DraftLine {
   itemCode: string;
   itemName: string;
   route: string;
+  /** Whose goods these are — the van is loaded per customer, not per route. */
+  customerName: string;
   plannedRolls: number;
   plannedLooseBelts: number;
 }
@@ -63,6 +63,7 @@ function toDraftLines(d: Dispatch): DraftLine[] {
     itemCode: l.itemCode,
     itemName: l.itemName,
     route: l.route,
+    customerName: l.customerName,
     plannedRolls: l.plannedRolls,
     plannedLooseBelts: l.plannedLooseBelts,
   }));
@@ -71,7 +72,15 @@ function toDraftLines(d: Dispatch): DraftLine[] {
 export function DispatchPlanningPage() {
   const user = useAppSelector(selectUser);
 
-  const [unit, setUnit] = useState<string>(user?.productionUnit ?? '');
+  /*
+   * This manager's own unit, fixed — not a dropdown.
+   *
+   * Each unit's dispatches are planned by its own production manager, so a
+   * unit picker offered a choice nobody has to make and let one manager load
+   * a van against another unit's orders. Undefined (the flag is not on every
+   * User yet) means unfiltered, which is what the picker defaulted to anyway.
+   */
+  const unit = user?.productionUnit ?? '';
   const [view, setView] = useState<View>('ready');
   const [readyLines, setReadyLines] = useState<DispatchableLine[]>([]);
   const [drafts, setDrafts] = useState<Dispatch[]>([]);
@@ -79,6 +88,18 @@ export function DispatchPlanningPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+
+  /*
+   * Whether the draft panel is open, held explicitly rather than derived from
+   * `draftId != null || lines.length > 0`.
+   *
+   * Deriving it deadlocked the screen: "Start a new dispatch" clears both, so
+   * the panel closed again the instant it was asked to open, and the Add
+   * buttons — gated on the same flag — stayed disabled. There was no way to
+   * add the first line to a new dispatch at all. A new dispatch has no id and
+   * no lines by definition, so neither can stand in for "is one open".
+   */
+  const [draftOpen, setDraftOpen] = useState(false);
 
   // The draft currently being built. `id` is unset until the first save.
   const [draftId, setDraftId] = useState<string | null>(null);
@@ -114,31 +135,73 @@ export function DispatchPlanningPage() {
 
   // Lines already staged in the open draft never show up again as "ready to add".
   const stagedKeys = useMemo(() => new Set(lines.map((l) => l.salesOrderItem)), [lines]);
+
+  /*
+   * Lines staged in somebody's OTHER draft are also off the table.
+   *
+   * "Remaining to dispatch" counts what has actually gone, so a line sitting
+   * planned in another draft still reads as fully available — and the same
+   * rolls could be loaded onto two vans, each planner believing they had
+   * them. The draft being edited is excluded, or its own lines would
+   * disappear from the list the moment they were added.
+   */
+  const stagedElsewhere = useMemo(() => {
+    const keys = new Set<string>();
+    for (const d of drafts) {
+      if (d.id === draftId) continue;
+      for (const l of d.lines) keys.add(l.salesOrderItem);
+    }
+    return keys;
+  }, [drafts, draftId]);
+
   const readyByRoute = useMemo(() => {
     const groups = new Map<string, DispatchableLine[]>();
     for (const l of readyLines) {
       if (stagedKeys.has(l.salesOrderItem)) continue;
+      if (stagedElsewhere.has(l.salesOrderItem)) continue;
       const bucket = groups.get(l.route) ?? [];
       bucket.push(l);
       groups.set(l.route, bucket);
     }
     return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [readyLines, stagedKeys]);
+  }, [readyLines, stagedKeys, stagedElsewhere]);
+
+  /** How many lines the Ready tab is actually offering. */
+  const readyCount = useMemo(
+    () => readyByRoute.reduce((n, [, rows]) => n + rows.length, 0),
+    [readyByRoute],
+  );
 
   const tabs: TabDef<View>[] = [
-    { id: 'ready', label: `Ready to add (${readyLines.length - lines.length < 0 ? 0 : readyLines.length - lines.length})` },
+    // Counted off the list actually rendered, not `readyLines - lines`, which
+    // double-subtracted anything staged in another draft.
+    { id: 'ready', label: `Ready to add (${readyCount})` },
     { id: 'drafts', label: `Draft dispatches (${drafts.length})` },
   ];
 
   const startNew = () => {
+    setDraftOpen(true);
     setDraftId(null);
     setVehicle('');
     setDispatchDate('');
     setLines([]);
     setDone(null);
+    // Straight to the list they are about to pick from — a new dispatch with
+    // no lines is only useful next to the things that can go into it.
+    setView('ready');
+  };
+
+  /** Put the panel away. The draft itself is already saved in ERPNext. */
+  const closeDraft = () => {
+    setDraftOpen(false);
+    setDraftId(null);
+    setVehicle('');
+    setDispatchDate('');
+    setLines([]);
   };
 
   const resume = (d: Dispatch) => {
+    setDraftOpen(true);
     setDraftId(d.id);
     setVehicle(d.vehicle);
     setDispatchDate(d.dispatchDate ?? '');
@@ -188,6 +251,7 @@ export function DispatchPlanningPage() {
         itemCode: l.itemCode,
         itemName: l.itemName,
         route: l.route,
+        customerName: l.customerName,
         plannedRolls: qty.rolls,
         plannedLooseBelts: qty.looseBelts,
       },
@@ -235,7 +299,9 @@ export function DispatchPlanningPage() {
       });
       setDone(`${vehicle || 'The vehicle'} dispatched — ${lines.length} line(s) sent.`);
       setFinalizing(null);
-      startNew();
+      // Closed, not reopened: the van has gone, and the next one is a
+      // deliberate act rather than something the screen assumes.
+      closeDraft();
       setTick((t) => t + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not finalize the dispatch.');
@@ -246,27 +312,18 @@ export function DispatchPlanningPage() {
 
   if (!user) return null;
 
-  const draftOpen = draftId != null || lines.length > 0;
-
   return (
     <div>
       <div className="page-head">
         <div className="grow">
           <div className="page-head__title">Dispatch planning</div>
           <div className="page-head__sub">
-            Bundle ready order lines onto one vehicle and date — destination shown, customer
-            identity withheld
+            Bundle ready order lines onto one vehicle and date — what is left to send, and who
+            it is going to
           </div>
         </div>
         <div className="cal__nav">
-          <Select value={unit} onChange={(e) => setUnit(e.target.value)} aria-label="Unit">
-            <option value="">All units</option>
-            {UNITS.map((u) => (
-              <option key={u} value={u}>
-                {u}
-              </option>
-            ))}
-          </Select>
+          {unit && <span className="small dim">{unit}</span>}
           <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
         </div>
       </div>
@@ -286,8 +343,8 @@ export function DispatchPlanningPage() {
       <Card title={draftOpen ? 'This dispatch' : 'No dispatch open'}>
         {!draftOpen ? (
           <div className="prod__actions">
-            <Button size="sm" onClick={startNew}>
-              Start a new dispatch
+            <Button variant="primary" onClick={startNew}>
+              🚚 Start a new dispatch
             </Button>
             <span className="note">Or resume one from the Draft dispatches tab below.</span>
           </div>
@@ -322,6 +379,7 @@ export function DispatchPlanningPage() {
                 <table className="table">
                   <thead>
                     <tr>
+                      <th>Customer</th>
                       <th>Route</th>
                       <th>Order</th>
                       <th>Item</th>
@@ -332,6 +390,7 @@ export function DispatchPlanningPage() {
                   <tbody>
                     {lines.map((l) => (
                       <tr key={l.salesOrderItem}>
+                        <td className="small strong">{l.customerName}</td>
                         <td className="small">{l.route}</td>
                         <td className="mono small">{l.salesOrder}</td>
                         <td className="small">{l.itemName}</td>
@@ -365,11 +424,9 @@ export function DispatchPlanningPage() {
               >
                 Dispatch
               </Button>
-              {draftOpen && (
-                <Button variant="ghost" onClick={startNew}>
-                  Close (stays saved as a draft)
-                </Button>
-              )}
+              <Button variant="ghost" onClick={closeDraft}>
+                Close (stays saved as a draft)
+              </Button>
             </div>
           </>
         )}
@@ -385,8 +442,15 @@ export function DispatchPlanningPage() {
 
         {!loading && view === 'ready' && (
           readyByRoute.length === 0 ? (
-            <Empty icon="✓" title="Nothing ready">
-              Every Ready line is already staged, or nothing has reached Ready yet.
+            <Empty icon="✓" title="Nothing ready to add">
+              {/*
+                Says which of the three reasons it is. "Nothing ready" on its
+                own sent people looking for a broken screen when the real
+                answer was that no line had reached Packed yet.
+              */}
+              {readyLines.length === 0
+                ? 'No order line has reached Ready yet — a line becomes dispatchable once production packs it.'
+                : 'Every ready line is already staged, either on this dispatch or on another draft.'}
             </Empty>
           ) : (
             <div style={{ padding: '10px 14px' }}>
@@ -399,6 +463,7 @@ export function DispatchPlanningPage() {
                     <table className="table">
                       <thead>
                         <tr>
+                          <th>Customer</th>
                           <th>Order</th>
                           <th>Item</th>
                           <th className="right">Remaining</th>
@@ -414,6 +479,7 @@ export function DispatchPlanningPage() {
                           };
                           return (
                             <tr key={l.salesOrderItem}>
+                              <td className="small strong">{l.customerName}</td>
                               <td className="mono small">{l.salesOrder}</td>
                               <td className="small">{l.itemName}</td>
                               <td className="right num">
@@ -520,7 +586,10 @@ export function DispatchPlanningPage() {
             {finalizing.map((l, i) => {
               const short = l.dispatchedRolls < l.plannedRolls || l.dispatchedLooseBelts < l.plannedLooseBelts;
               return (
-                <Card key={l.salesOrderItem} title={`${l.itemName} — ${l.route}`}>
+                <Card
+                  key={l.salesOrderItem}
+                  title={`${l.itemName} — ${l.customerName} · ${l.route}`}
+                >
                   <div className="prod__actions" style={{ marginBottom: short ? 8 : 0 }}>
                     <Field label={`Dispatched rolls (of ${l.plannedRolls})`}>
                       <Input

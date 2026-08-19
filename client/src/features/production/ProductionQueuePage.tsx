@@ -1,14 +1,15 @@
 /**
  * B1 — Production dashboard, the queue.
  *
- * **Production must never see the customer.** The API resolves customer →
- * route and deletes the customer before the payload reaches this screen, so
- * there is no identity on the object to render and none for the search box to
- * match. Hiding it in CSS would leave it in the DOM; leaving it on the object
- * would let a search confirm a customer by guessing. It simply is not here.
+ * Production used to be sent the route and never the customer: the API
+ * resolved customer → route and deleted the identity before the payload
+ * reached this screen.
  *
- * The search therefore matches **order number and route only** — and can only
- * match those, because nothing else was sent.
+ * That was reversed on 19 Aug 2026, because dispatch needs it — somebody
+ * loading a vehicle has to know whose pallet is whose, and a route does not
+ * say that when two customers sit on one round. The customer now leads each
+ * row, with the route beneath it, and the search matches order number, route
+ * and customer.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -72,7 +73,10 @@ export function ProductionQueuePage() {
     if (!q) return rows;
     // Order number and route only. There is nothing else on the object.
     return rows.filter(
-      (r) => r.id.toLowerCase().includes(q) || r.route.toLowerCase().includes(q),
+      (r) =>
+        r.id.toLowerCase().includes(q) ||
+        r.route.toLowerCase().includes(q) ||
+        r.customerName.toLowerCase().includes(q),
     );
   }, [rows, query]);
 
@@ -98,9 +102,7 @@ export function ProductionQueuePage() {
           </div>
         </div>
         <div className="cal__nav">
-          <Link to="/production/dispatch" className="btn btn--ghost btn--sm">
-            Dispatch planning
-          </Link>
+          {/* Dispatch planning is a view of its own and lives in the sidebar. */}
           <Link to="/production/close-week" className="btn btn--ghost btn--sm">
             Close the week
           </Link>
@@ -175,15 +177,18 @@ export function ProductionQueuePage() {
               <div className="ordrow__top">
                 <span className="ordrow__party">
                   <span aria-hidden="true">{r.changedAfterApproval ? '⚠' : '🧾'}</span>
-                  {/* The route is the title. Never the customer, and never the
-                      territory — see the API for why "No route set" stands. */}
-                  <span className={r.route === 'No route set' ? 'dim' : ''}>{r.route}</span>
+                  {/* The customer leads, the route qualifies it. Production was
+                      shown the route alone until 19 Aug 2026; dispatch needs to
+                      know whose goods these are. Never the territory — see the
+                      API for why "No route set" stands rather than falling back. */}
+                  <span>{r.customerName}</span>
                   {r.changedAfterApproval && <Badge tone="danger">CHANGED</Badge>}
                 </span>
                 <b className="num">{money(r.total, 0)}</b>
               </div>
 
               <div className="ordrow__meta">
+                <span className={r.route === 'No route set' ? 'dim' : ''}>{r.route}</span> ·{' '}
                 <span className="mono">{r.id}</span> · raised {formatDate(r.placedOn)}
               </div>
               <div className="ordrow__meta">

@@ -1,15 +1,15 @@
 // An approved order as the production floor sees it.
 //
-// WHAT IS DELIBERATELY MISSING
+// The customer used to be deliberately missing here — never fetched, on the
+// reasoning that production plans vans rather than relationships, and the
+// destination route was enough to do that.
 //
-// The customer. Not hidden behind a toggle, not greyed out — never fetched.
-// Production plans and routes; who the order is for is billing's business.
-// `Api.getOrderForProduction` resolves the customer to a territory and drops
-// the link before the screen ever has it, so nothing here can render an
-// identity by accident.
-//
-// What replaces it is the destination, which is what the job actually needs:
-// enough to plan a van, not enough to name a shop.
+// Dispatch is what changed it, on 19 Aug 2026. Somebody loading a vehicle has
+// to know whose pallet is whose, and a route does not say that when two
+// customers sit on one round. `Api.getOrderForProduction` now resolves the
+// name off the Customer record — not the copy stored on the order, which goes
+// stale the moment a customer is renamed — and this screen leads with it,
+// with the route underneath.
 
 import 'dart:async';
 
@@ -193,17 +193,18 @@ class _ProductionOrderDetailScreenState
         padding: const EdgeInsets.all(12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const Icon(Icons.place_outlined, size: 18, color: Colors.black54),
+            const Icon(Icons.storefront_outlined,
+                size: 18, color: Colors.black54),
             const SizedBox(width: 6),
             Expanded(
-              child: Text('${_order['destination'] ?? 'No route set'}',
+              child: Text('${_order['customer_name'] ?? ''}',
                   style: const TextStyle(
                       fontSize: 18, fontWeight: FontWeight.bold)),
             ),
           ]),
           const SizedBox(height: 2),
-          const Text('Destination route',
-              style: TextStyle(fontSize: 11, color: Colors.black45)),
+          Text('${_order['destination'] ?? 'No route set'}  ·  destination route',
+              style: const TextStyle(fontSize: 11, color: Colors.black45)),
           const Divider(height: 20),
           _kv('Order', '${_order['name']}'),
           _kv('Raised', '${_order['transaction_date'] ?? '—'}'),
@@ -405,9 +406,16 @@ class _ProductionOrderDetailScreenState
     required Color colour,
     required bool stockPart,
   }) {
-    final index = stageIndex(stages, current);
-    final progress = stageProgress(stages, current);
-    final done = isDispatched(current);
+    // Counted against the stages the FLOOR works, not the stored sequence:
+    // Dispatch Planning owns `Dispatched` now, so measuring against it left a
+    // packed line — finished, as far as this screen's reader is concerned —
+    // showing "Stage 2 of 3" behind a half-empty bar. See `workPosition` in
+    // core/production_stages.dart.
+    final position = workPosition(stages, current);
+    final total = workTotal(stages);
+    final progress = workProgress(stages, current);
+    final done = workComplete(stages, current);
+    final dispatched = isDispatched(current);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -417,14 +425,14 @@ class _ProductionOrderDetailScreenState
                 fontSize: 11.5, fontWeight: FontWeight.bold, color: colour)),
         const SizedBox(height: 3),
         Text(
-            index < 0
+            position < 0
                 ? 'Stage "$current" is not in this cycle'
-                : 'Stage ${index + 1} of ${stages.length}  ·  '
+                : 'Stage $position of $total  ·  '
                     '${current.isEmpty ? kStageNotStarted : current}',
             style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: index < 0
+                color: position < 0
                     ? Colors.red.shade700
                     : (done ? Colors.green : Colors.black87))),
         const SizedBox(height: 4),
@@ -443,14 +451,19 @@ class _ProductionOrderDetailScreenState
         // only thing that writes it now, and only once a line's full ordered
         // quantity has actually gone out. `stages` itself stays unfiltered
         // above (index/progress/caption still need to recognise it); only
-        // the picker's own option list drops it. Once a track is already
-        // done, the picker is retired outright — moving it "back" would
+        // the picker's own option list drops it. Once a track is actually
+        // DISPATCHED the picker is retired outright — moving it "back" would
         // corrupt the cumulative-quantity invariant Dispatch Planning
         // depends on, and `initialValue` must never be given a value absent
         // from `items` or DropdownButtonFormField throws.
+        //
+        // Gated on `dispatched`, not on `done`: a packed line reads as
+        // complete to the floor, but Packed is still theirs to correct — it
+        // is only once the goods have physically gone that the stage stops
+        // being an opinion.
         DropdownButtonFormField<String>(
           initialValue:
-              (!done && stages.contains(current)) ? current : null,
+              (!dispatched && stages.contains(current)) ? current : null,
           isExpanded: true,
           decoration: const InputDecoration(
               labelText: 'Move to stage',
@@ -461,7 +474,7 @@ class _ProductionOrderDetailScreenState
               if (s != kStageDispatched)
                 DropdownMenuItem(value: s, child: Text(s))
           ],
-          onChanged: (_busy || done)
+          onChanged: (_busy || dispatched)
               ? null
               : (v) =>
                   v == null ? null : _setStage(it, v, stockPart: stockPart),
