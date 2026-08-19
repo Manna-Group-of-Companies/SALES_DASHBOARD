@@ -63,6 +63,26 @@ void main() {
     }
   });
 
+  group('shared fixture: what an unassigned record needs to be seen', () {
+    for (final raw in fx['owner_values'] as List) {
+      final c = (raw as Map).cast<String, dynamic>();
+      test(c['why'] as String, () {
+        final got = visibleOwnerValues(people, c['person'] as String?)..sort();
+        final want = (c['expect'] as List).map((e) => '$e').toList()..sort();
+        expect(got, want);
+      });
+    }
+  });
+
+  group('shared fixture: who may assign an owner', () {
+    for (final raw in fx['can_assign'] as List) {
+      final c = (raw as Map).cast<String, dynamic>();
+      test(c['why'] as String, () {
+        expect(canAssignOwner(people, c['person'] as String?), c['expect']);
+      });
+    }
+  });
+
   // --------------------------------------------------- phone-side detail ---
 
   group('pooling never leaks across units', () {

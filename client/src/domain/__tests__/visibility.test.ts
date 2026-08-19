@@ -12,9 +12,11 @@ import cases from '../../../../shared/fixtures/visibility.json';
 import {
   POOLED_UNITS,
   VISIBILITY_FIELD,
+  canAssignOwner,
   isCoveringFor,
   isPooledUnit,
   sharesWithUnit,
+  visibleOwnerValues,
   visibleReps,
   type Person,
 } from '../visibility';
@@ -54,6 +56,22 @@ describe('shared fixture: who sees whose records', () => {
       const got = visibleReps(PEOPLE, c.person);
       if (c.expect) expect(got.sort()).toEqual([...c.expect].sort());
       for (const excluded of c.expect_excludes ?? []) expect(got).not.toContain(excluded);
+    });
+  }
+});
+
+describe('shared fixture: what an unassigned record needs to be seen', () => {
+  for (const c of cases.owner_values) {
+    it(c.why, () => {
+      expect(visibleOwnerValues(PEOPLE, c.person).sort()).toEqual([...c.expect].sort());
+    });
+  }
+});
+
+describe('shared fixture: who may assign an owner', () => {
+  for (const c of cases.can_assign) {
+    it(c.why, () => {
+      expect(canAssignOwner(PEOPLE, c.person)).toBe(c.expect);
     });
   }
 });

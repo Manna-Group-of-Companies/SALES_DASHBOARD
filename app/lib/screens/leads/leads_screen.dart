@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/leads/add_lead_screen.dart';
 import 'package:manna_field_sales/screens/leads/lead_detail_screen.dart';
 import 'package:manna_field_sales/screens/customers/routes_screen.dart';
@@ -263,19 +264,29 @@ class _LeadsScreenState extends State<LeadsScreen> {
         separatorBuilder: (_, __) => const Divider(height: 1),
         itemBuilder: (ctx, i) {
           final r = rows[i];
+          // UAE only (see core/visibility.dart) — an unassigned lead is
+          // invisible everywhere else, so this can only fire in a pool.
+          final unassigned =
+              Session.I.sharesUnit && '${r['custom_sales_person'] ?? ''}'.isEmpty;
           return ListTile(
-            leading: const Icon(Icons.emoji_objects_outlined),
+            leading: Icon(
+                unassigned ? Icons.person_off_outlined : Icons.emoji_objects_outlined,
+                color: unassigned ? Colors.orange.shade700 : null),
             title: Text(r['lead_name'] ?? r['name']),
             // The sales route, not the territory — the same leftover that left
             // the customer card blank after routes moved to their own doctype.
             subtitle: Text([
+              if (unassigned) 'Unassigned',
               r['company_name'],
               r['custom_sales_route'],
               r['mobile_no']
             ]
                 .where((x) =>
                     x != null && '$x'.isNotEmpty && '$x' != 'null')
-                .join(' · ')),
+                .join(' · '),
+                style: unassigned
+                    ? TextStyle(color: Colors.orange.shade700)
+                    : null),
             trailing: Row(mainAxisSize: MainAxisSize.min, children: [
               // Deliberately behind a menu rather than a swipe. A swipe-to-
               // delete on a list a rep scrolls one-handed in a shop doorway is

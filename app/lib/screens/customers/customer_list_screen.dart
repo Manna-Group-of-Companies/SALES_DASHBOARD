@@ -176,6 +176,53 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
     }
   }
 
+  /// Lets a UAE rep set or change who a customer belongs to.
+  ///
+  /// Only offered in a pooled unit (`Session.I.sharesUnit`) — everywhere else
+  /// a customer has always belonged to one rep and reassignment is not
+  /// something the app hands out. Any pool member may pick any pool member,
+  /// including themselves, which is exactly what lets a freshly imported,
+  /// unowned customer be claimed by whoever gets to it first.
+  Future<void> _assignRep(Map<String, dynamic> c) async {
+    final current = '${c[kFieldCustomerOwner] ?? ''}';
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Assign to'),
+        children: [
+          for (final name in Session.I.unitPeers)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, name),
+              child: Row(children: [
+                Icon(
+                    name == current
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 18,
+                    color: const Color(0xFF1A56A8)),
+                const SizedBox(width: 10),
+                Text(name),
+              ]),
+            ),
+        ],
+      ),
+    );
+    if (chosen == null || chosen == current || !mounted) return;
+
+    try {
+      await Api.assignCustomerOwner('${c['name']}', chosen);
+      if (!mounted) return;
+      setState(() => c[kFieldCustomerOwner] = chosen);
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Assigned to $chosen.')));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
+      }
+    }
+  }
+
   /// Quick look at one customer without leaving the list — the fields a rep
   /// checks while working down a route, plus call/navigate shortcuts.
   void _showDetails(Map<String, dynamic> c) {
@@ -235,6 +282,25 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
                 if (mappable)
                   row('Coordinates',
                       '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}'),
+                if (Session.I.sharesUnit) ...[
+                  row(
+                      'Assigned to',
+                      '${c[kFieldCustomerOwner] ?? ''}'.isEmpty
+                          ? 'Unassigned'
+                          : '${c[kFieldCustomerOwner]}',
+                      color: '${c[kFieldCustomerOwner] ?? ''}'.isEmpty
+                          ? Colors.orange
+                          : null),
+                  const SizedBox(height: 4),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(sheet);
+                      _assignRep(c);
+                    },
+                    icon: const Icon(Icons.person_add_alt, size: 16),
+                    label: const Text('Assign rep'),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 Row(children: [
                   Expanded(
@@ -299,6 +365,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
     final owner = '${c[kFieldCustomerOwner] ?? ''}';
     final covering =
         Session.I.sharesUnit && owner.isNotEmpty && owner != Session.I.salesPerson;
+    final unassigned = Session.I.sharesUnit && owner.isEmpty;
 
     return ListTile(
       title: Text(c['customer_name'] ?? c['name']),
@@ -312,6 +379,16 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
             const SizedBox(width: 4),
             Text('$owner’s customer',
                 style: TextStyle(fontSize: 11.5, color: Colors.indigo.shade400)),
+          ]),
+        ],
+        if (unassigned) ...[
+          const SizedBox(height: 2),
+          Row(children: [
+            Icon(Icons.person_off_outlined,
+                size: 13, color: Colors.orange.shade700),
+            const SizedBox(width: 4),
+            Text('Unassigned — tap to assign',
+                style: TextStyle(fontSize: 11.5, color: Colors.orange.shade700)),
           ]),
         ],
         const SizedBox(height: 2),

@@ -19,11 +19,13 @@ import type { SalesCustomer, SalesPerson, SalesRoute } from '@/domain/types';
 import { activeSalesPeople } from '@/domain/attendance';
 import { creditBreached, hasRoute, scopeFor, teamOf, NO_TEAM_MESSAGE } from '@/domain/sales';
 import { agingOf, bucketsOf } from '@/domain/credit';
+import { canAssignOwner, isPooledUnit, visibleReps, type Person } from '@/domain/visibility';
 import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import { Alert, Badge, Card, Empty, Input, Segmented, Select } from '@/components/ui';
 import { RouteCell } from './RouteCell';
+import { OwnerCell } from './OwnerCell';
 import { money } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
@@ -78,8 +80,20 @@ export function CustomersPage() {
           setError(NO_TEAM_MESSAGE);
           return;
         }
+        // A pooled unit's list also includes an unassigned customer — a
+        // freshly imported UAE record with no owner yet must be visible to
+        // the manager immediately, not sit dark until somebody opens Desk.
+        // See domain/visibility.ts, visibleOwnerValues.
+        const asVis: Person[] = p.map((sp) => ({
+          name: sp.id,
+          unit: sp.unit,
+          enabled: sp.enabled,
+          isGroup: sp.isGroup,
+        }));
+        const myUnit = asVis.find((v) => v.name === user?.salesPerson)?.unit;
+        const fetchTeam = isPooledUnit(myUnit) ? [...team, ''] : team;
         const [c, r] = await Promise.all([
-          Api.sales.listCustomers(team),
+          Api.sales.listCustomers(fetchTeam),
           Api.sales.listRoutesFor(),
         ]);
         if (!live) return;
@@ -99,6 +113,17 @@ export function CustomersPage() {
 
   const staff = useMemo(() => activeSalesPeople(people), [people]);
   const myTeam = useMemo(() => teamOf(people, user?.salesPerson), [people, user]);
+
+  /** Who this manager may hand a customer/lead to — empty outside UAE. */
+  const assignPeers = useMemo(() => {
+    const asVis: Person[] = people.map((p) => ({
+      name: p.id,
+      unit: p.unit,
+      enabled: p.enabled,
+      isGroup: p.isGroup,
+    }));
+    return canAssignOwner(asVis, user?.salesPerson) ? visibleReps(asVis, user?.salesPerson) : [];
+  }, [people, user]);
 
   /** Only the manager's own reps appear in the dropdown. */
   const repOptions = useMemo(
@@ -238,8 +263,19 @@ export function CustomersPage() {
                     return (
                       <tr key={c.id}>
                         <td>{c.name}</td>
-                        <td className="dim">
-                          {c.assignedRep || <Badge tone="warn">unassigned</Badge>}
+                        <td className="small">
+                          <OwnerCell
+                            kind="customer"
+                            id={c.id}
+                            owner={c.assignedRep}
+                            peers={assignPeers}
+                            onSaved={(rep) =>
+                              setCustomers((cur) =>
+                                cur.map((x) => (x.id === c.id ? { ...x, assignedRep: rep } : x)),
+                              )
+                            }
+                            onError={setError}
+                          />
                         </td>
                         <td className="small">
                           <RouteCell

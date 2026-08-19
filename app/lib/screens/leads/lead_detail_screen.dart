@@ -54,6 +54,49 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
   /// 'Rejected' does not count: that location has to be captured again.
   bool get _locationCaptured => _submitted || _verified;
 
+  /// Lets a UAE rep set or change who this lead belongs to. Any pool member
+  /// may pick any pool member, including themselves, which is exactly what
+  /// lets a freshly imported, unowned lead be claimed by whoever gets to it
+  /// first.
+  Future<void> _assignRep() async {
+    final current = '${_l['custom_sales_person'] ?? ''}';
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Assign to'),
+        children: [
+          for (final name in Session.I.unitPeers)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, name),
+              child: Row(children: [
+                Icon(
+                    name == current
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 18,
+                    color: const Color(0xFF1A56A8)),
+                const SizedBox(width: 10),
+                Text(name),
+              ]),
+            ),
+        ],
+      ),
+    );
+    if (chosen == null || chosen == current || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await Api.assignLeadOwner(_l['name'] as String, chosen);
+      if (!mounted) return;
+      setState(() => _l['custom_sales_person'] = chosen);
+      _snack('Assigned to $chosen.');
+    } catch (e) {
+      if (mounted) _snack(humanError(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   /// One-time location capture for the lead. This never logs a visit —
   /// punching in on the visit card is the only thing that creates a visit.
   ///
@@ -199,6 +242,35 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
             // Shown even when unset. A lead that converts with no route leaves
             // production unable to plan its first delivery.
             RouteChip(route: '${l['custom_sales_route'] ?? ''}'),
+            // UAE only (see core/visibility.dart) — everywhere else a lead
+            // has always belonged to one rep and reassignment is not
+            // offered.
+            if (Session.I.sharesUnit) ...[
+              const SizedBox(height: 6),
+              InkWell(
+                onTap: _busy ? null : _assignRep,
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(
+                      '${l['custom_sales_person'] ?? ''}'.isEmpty
+                          ? Icons.person_off_outlined
+                          : Icons.person_outline,
+                      size: 15,
+                      color: '${l['custom_sales_person'] ?? ''}'.isEmpty
+                          ? Colors.orange.shade700
+                          : Colors.black54),
+                  const SizedBox(width: 4),
+                  Text(
+                      '${l['custom_sales_person'] ?? ''}'.isEmpty
+                          ? 'Unassigned — tap to assign'
+                          : 'Assigned to ${l['custom_sales_person']} · tap to change',
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          color: '${l['custom_sales_person'] ?? ''}'.isEmpty
+                              ? Colors.orange.shade700
+                              : Colors.black54)),
+                ]),
+              ),
+            ],
             if ('${l['email_id'] ?? ''}'.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),

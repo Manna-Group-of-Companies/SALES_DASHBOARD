@@ -154,6 +154,83 @@
       ]
     }
   ],
+  "owner_values": [
+    {
+      "why": "a UAE rep's filter also matches an unassigned record - a customer or lead imported with no owner yet must be visible to the whole team immediately, not sit dark until somebody opens Desk",
+      "person": "Kailas Babu",
+      "expect": [
+        "Kailas Babu",
+        "Manikandan",
+        "Rajeev S",
+        "Renjith",
+        "Shihab K",
+        ""
+      ]
+    },
+    {
+      "why": "the UAE manager's filter widens the same way as any other pool member's",
+      "person": "Renjith",
+      "expect": [
+        "Kailas Babu",
+        "Manikandan",
+        "Rajeev S",
+        "Renjith",
+        "Shihab K",
+        ""
+      ]
+    },
+    {
+      "why": "outside a pool an unassigned record stays invisible - only the individual rep's own name is matched, never the empty owner",
+      "person": "Amjad Pr",
+      "expect": [
+        "Amjad Pr"
+      ]
+    },
+    {
+      "why": "a rep with no unit recorded is not pooled, so no widening - missing data must not be read as membership of anything",
+      "person": "Test Rep",
+      "expect": [
+        "Test Rep"
+      ]
+    },
+    {
+      "why": "unresolvable stays unresolvable - a login matching no Sales Person gets nothing to filter by, pooled or not",
+      "person": "nobody@nowhere",
+      "expect": []
+    }
+  ],
+  "can_assign": [
+    {
+      "why": "a UAE rep may assign the owner of a customer or lead in their pool",
+      "person": "Kailas Babu",
+      "expect": true
+    },
+    {
+      "why": "the UAE manager can assign too, like any other pool member",
+      "person": "Renjith",
+      "expect": true
+    },
+    {
+      "why": "outside a pool, reassignment is not offered - a customer has always belonged to one rep and the app must not let a colleague take it",
+      "person": "Amjad Pr",
+      "expect": false
+    },
+    {
+      "why": "a rep with no unit recorded cannot assign anything - there is no pool to assign within",
+      "person": "Test Rep",
+      "expect": false
+    },
+    {
+      "why": "someone who has left cannot assign customers, whatever unit they were in",
+      "person": "Ex UAE Rep",
+      "expect": false
+    },
+    {
+      "why": "an unresolvable login has no pool and no permission",
+      "person": "nobody@nowhere",
+      "expect": false
+    }
+  ],
   "pooled": [
     {
       "why": "UAE is pooled",

@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { SalesLead, SalesPerson, SalesRoute } from '@/domain/types';
 import { hasRoute, scopeFor, teamOf, NO_TEAM_MESSAGE } from '@/domain/sales';
+import { canAssignOwner, isPooledUnit, visibleReps, type Person } from '@/domain/visibility';
 import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
@@ -20,6 +21,7 @@ import { Alert, Badge, Card, Empty, Input, Segmented, Select } from '@/component
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import { RouteCell } from './RouteCell';
+import { OwnerCell } from './OwnerCell';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 
@@ -40,6 +42,17 @@ export function LeadsPage() {
 
   const myTeam = useMemo(() => teamOf(people, user?.salesPerson), [people, user]);
 
+  /** Who this manager may hand a lead to — empty outside UAE. */
+  const assignPeers = useMemo(() => {
+    const asVis: Person[] = people.map((p) => ({
+      name: p.id,
+      unit: p.unit,
+      enabled: p.enabled,
+      isGroup: p.isGroup,
+    }));
+    return canAssignOwner(asVis, user?.salesPerson) ? visibleReps(asVis, user?.salesPerson) : [];
+  }, [people, user]);
+
   useEffect(() => {
     let live = true;
     setLoading(true);
@@ -55,8 +68,18 @@ export function LeadsPage() {
           setError(NO_TEAM_MESSAGE);
           return;
         }
+        // A pooled unit's list also includes an unassigned lead — see
+        // domain/visibility.ts, visibleOwnerValues.
+        const asVis: Person[] = p.map((sp) => ({
+          name: sp.id,
+          unit: sp.unit,
+          enabled: sp.enabled,
+          isGroup: sp.isGroup,
+        }));
+        const myUnit = asVis.find((v) => v.name === user?.salesPerson)?.unit;
+        const fetchTeam = isPooledUnit(myUnit) ? [...team, ''] : team;
         const [l, r] = await Promise.all([
-          Api.sales.listLeads(team),
+          Api.sales.listLeads(fetchTeam),
           Api.sales.listRoutesFor(),
         ]);
         if (!live) return;
@@ -204,7 +227,20 @@ export function LeadsPage() {
                         <div>{l.name}</div>
                         <div className="mono tiny dim">{l.id}</div>
                       </td>
-                      <td className="dim">{l.rep || <Badge tone="warn">unassigned</Badge>}</td>
+                      <td className="small">
+                        <OwnerCell
+                          kind="lead"
+                          id={l.id}
+                          owner={l.rep}
+                          peers={assignPeers}
+                          onSaved={(rep) =>
+                            setLeads((cur) =>
+                              cur.map((x) => (x.id === l.id ? { ...x, rep } : x)),
+                            )
+                          }
+                          onError={setError}
+                        />
+                      </td>
                       <td>
                         <RouteCell
                           kind="lead"

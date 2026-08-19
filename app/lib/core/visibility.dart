@@ -92,6 +92,50 @@ List<String> visibleReps(List<VisPerson> people, String? personId) {
 bool sharesWithUnit(List<VisPerson> people, String? personId) =>
     visibleReps(people, personId).length > 1;
 
+/// The owner-field VALUES a customer or lead may hold for this person to see
+/// it — [visibleReps] plus, in a pooled unit only, an unassigned record.
+///
+/// Outside a pool, an unowned record has nobody to route it to and stays
+/// invisible until someone claims it — that is unchanged. Inside a pool the
+/// business wants the opposite: a batch of customers/leads imported for the
+/// UAE unit lands with no owner, and the whole team must see them
+/// immediately rather than have them sit dark until somebody opens Desk. So
+/// a pooled unit's filter additionally matches an empty owner field.
+///
+/// `[]` still means "show nothing" — unresolvable is unresolvable whether or
+/// not the unit is pooled.
+List<String> visibleOwnerValues(List<VisPerson> people, String? personId) {
+  final reps = visibleReps(people, personId);
+  if (reps.isEmpty) return <String>[];
+  VisPerson? me;
+  for (final p in people) {
+    if (p.name == personId) {
+      me = p;
+      break;
+    }
+  }
+  return isPooledUnit(me?.unit) ? [...reps, ''] : reps;
+}
+
+/// Whether this person may set or change who a customer or lead belongs to.
+///
+/// Restricted to a pooled unit deliberately: everywhere else a customer
+/// belongs to the one rep who has always owned it, and reassignment is not a
+/// decision the app hands out — it would let one rep quietly take another's
+/// customer. A pooled unit is different because the business already treats
+/// ownership there as a team-level fact, not a personal one.
+bool canAssignOwner(List<VisPerson> people, String? personId) {
+  VisPerson? me;
+  for (final p in people) {
+    if (p.name == personId) {
+      me = p;
+      break;
+    }
+  }
+  if (me == null || !me.usable) return false;
+  return isPooledUnit(me.unit);
+}
+
 /// Whether a record this person can see is actually somebody else's.
 ///
 /// Drives the "covering for X" marker. Only meaningful in a pooled unit, where
