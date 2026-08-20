@@ -44,6 +44,35 @@ export function isSynced(): boolean {
 }
 
 /**
+ * Now, in the only datetime format Frappe accepts: `YYYY-MM-DD HH:MM:SS`.
+ *
+ * **Never send `toISOString()` to a Frappe Datetime field.** MariaDB rejects
+ * the `T` separator and the trailing `Z` outright — the whole write fails
+ * with *Incorrect datetime value*, taking the rest of the document with it.
+ * That is what stopped a dispatch draft from saving on 20 Aug 2026, and it
+ * had gone unnoticed because every other datetime the dashboard writes goes
+ * to a doctype that does not exist yet.
+ *
+ * Local parts, not UTC: Frappe stores naive datetimes in the site's own
+ * timezone, so a UTC stamp would read as the wrong wall-clock time by the
+ * offset — 5½ hours here. `app/lib/core/utils.dart`'s `nowStamp()` is the
+ * same function on the phone side, for the same reason.
+ */
+export function frappeNow(): string {
+  const t = serverNow();
+  const two = (v: number) => String(v).padStart(2, '0');
+  return (
+    `${t.getFullYear()}-${two(t.getMonth() + 1)}-${two(t.getDate())} ` +
+    `${two(t.getHours())}:${two(t.getMinutes())}:${two(t.getSeconds())}`
+  );
+}
+
+/** Today, as `YYYY-MM-DD`, on the server's clock. */
+export function frappeToday(): string {
+  return frappeNow().slice(0, 10);
+}
+
+/**
  * How far this machine's clock is from the server's, in seconds.
  *
  * Surfaced so a screen can warn when the two disagree by enough to change an

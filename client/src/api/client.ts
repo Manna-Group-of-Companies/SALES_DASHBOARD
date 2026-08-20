@@ -93,7 +93,7 @@ import { normaliseWeights, orderTotal } from '@/domain/productRules';
 import { expenseOwner, parseTagged, RATE_FALLBACK } from '@/domain/trips';
 import { allItemsReady, firstStage, isTerminalStage, stageLabel } from '@/domain/processStages';
 import { availableQty, isBelowThreshold } from '@/domain/aging';
-import { noteServerDate, serverNow } from '@/domain/serverClock';
+import { frappeNow, frappeToday, noteServerDate, serverNow } from '@/domain/serverClock';
 import { DISPATCHED, rollUp } from '@/domain/production';
 import { isFullyDispatched, remainingToDispatch } from '@/domain/dispatch';
 import { heldBy, holdPlan, trueReserved } from '@/domain/minimumStock';
@@ -1297,7 +1297,7 @@ async function raiseReplenishment(
   qty: number,
   user: User,
 ): Promise<ProductionOrder> {
-  const raisedAt = nowIso();
+  const raisedAt = frappeNow();
   const order: ProductionOrder = {
     id: uid('PROD'),
     itemCode: item.itemCode,
@@ -1365,7 +1365,7 @@ async function recordReplenishment(
   productionOrderId?: string,
   looseBelts = 0,
 ): Promise<MinStockItem | undefined> {
-  const today = nowIso().slice(0, 10);
+  const today = frappeToday();
 
   if (USE_MOCK) {
     return mutate((d) => {
@@ -1410,7 +1410,7 @@ async function recordReplenishment(
   if (productionOrderId) {
     await updateDoc(DOCTYPE.productionOrder, productionOrderId, {
       [PRODUCTION_ORDER_FIELD.status]: PRODUCTION_ORDER_STATUS.received,
-      [PRODUCTION_ORDER_FIELD.receivedOn]: nowIso(),
+      [PRODUCTION_ORDER_FIELD.receivedOn]: frappeNow(),
       [PRODUCTION_ORDER_FIELD.receivedBy]: user.name,
       [PRODUCTION_ORDER_FIELD.batch]: batchName,
     });
@@ -1456,7 +1456,7 @@ async function divertToStock(input: {
 }): Promise<ProductionOrder> {
   const { salesOrderId, itemCode, qty, user } = input;
   const looseBelts = input.looseBelts ?? 0;
-  const receivedAt = nowIso();
+  const receivedAt = frappeNow();
   const today = receivedAt.slice(0, 10);
 
   if (USE_MOCK) {
@@ -5036,7 +5036,7 @@ async function saveDispatchDraft(input: SaveDispatchDraftInput): Promise<Dispatc
       ...body,
       [DISPATCH_FIELD.status]: DISPATCH_STATUS.draft,
       [DISPATCH_FIELD.createdBy]: input.user.name,
-      [DISPATCH_FIELD.createdOn]: nowIso(),
+      [DISPATCH_FIELD.createdOn]: frappeNow(),
     });
     id = String(created.name);
   }
@@ -5221,7 +5221,7 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
     [DISPATCH_FIELD.items]: nextDispatchItems,
     [DISPATCH_FIELD.status]: DISPATCH_STATUS.dispatched,
     [DISPATCH_FIELD.dispatchedBy]: input.user.name,
-    [DISPATCH_FIELD.dispatchedAt]: nowIso(),
+    [DISPATCH_FIELD.dispatchedAt]: frappeNow(),
   });
 
   return getDispatch(input.id);
