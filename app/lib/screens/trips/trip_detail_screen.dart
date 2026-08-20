@@ -12,6 +12,7 @@ import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/map_service.dart';
 import 'package:manna_field_sales/services/trip_tracker.dart';
+import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
 
 class TripDetailScreen extends StatefulWidget {
   final String tripName;
@@ -524,9 +525,14 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(builder: (ctx, setL) {
+        // Camera OR gallery. Re-photographing an odometer during an edit
+        // usually means the reading was already photographed at the time and
+        // the shot is sitting in the phone's roll — the van may be parked up
+        // or gone by the time anyone notices the leg needs correcting, so
+        // camera-only made the correction impossible rather than careful.
         Future<void> shoot(bool start) async {
-          final s = await ImagePicker()
-              .pickImage(source: ImageSource.camera, imageQuality: 60);
+          final s = await pickPhoto(ctx,
+              title: start ? 'Start odometer photo' : 'End odometer photo');
           if (s != null) {
             setL(() => start ? newStartPhoto = s.path : newEndPhoto = s.path);
           }
@@ -833,6 +839,52 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     }
   }
 
+  /// Attaches (or replaces) the bill on an expense that is already posted.
+  ///
+  /// A rep paying for fuel at a pump with a queue behind them records the
+  /// amount and moves; the paper bill goes in their pocket and is
+  /// photographed later. Before this, the bill could only go on at the moment
+  /// the expense was created, so the choice was to hold the expense back —
+  /// and an unrecorded expense is the one that gets forgotten — or to post it
+  /// billless and have HR query it.
+  ///
+  /// Camera or gallery, because by the time they come back to it the photo is
+  /// usually already on the phone.
+  Future<void> _attachBill(int index) async {
+    final x = _expenses[index];
+    final had = (x['has_bill'] ?? 0) == 1;
+    final shot = await pickPhoto(context,
+        title: had ? 'Replace bill photo' : 'Bill photo');
+    if (shot == null || !mounted) return;
+
+    String? url;
+    try {
+      url = await Api.uploadFileGetUrl(
+          filePath: shot.path,
+          doctype: 'Trip',
+          docname: widget.tripName,
+          filename: 'bill.jpg');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
+      }
+      return;
+    }
+
+    // The upload succeeded, so the row is only now safe to rewrite. Doing it
+    // the other way round would clear a good bill on a failed upload.
+    final list = List<Map<String, dynamic>>.from(_expenses);
+    list[index] = Map<String, dynamic>.from(list[index])
+      ..['bill_photo'] = url
+      ..['has_bill'] = 1;
+    await _saveExpenses(list);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(had ? 'Bill replaced.' : 'Bill attached.')));
+    }
+  }
+
   Future<void> _deleteExpense(int index) async {
     final list = List<Map<String, dynamic>>.from(_expenses);
     list.removeAt(index);
@@ -916,9 +968,11 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                 ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
+                // Gallery as well as camera: a bill photographed earlier in
+                // the day is already on the phone. Still optional here — it
+                // can also go on afterwards, see `_attachBill`.
                 onPressed: () async {
-                  final shot = await ImagePicker()
-                      .pickImage(source: ImageSource.camera, imageQuality: 70);
+                  final shot = await pickPhoto(ctx, title: 'Bill photo');
                   if (shot != null) setL(() => photoPath = shot.path);
                 },
                 icon: Icon(
@@ -1252,11 +1306,30 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                   ? const Icon(Icons.rate_review_outlined,
                   color: Color(0xFF4338CA))
                   : (_canEdit
-                  ? IconButton(
-                icon: const Icon(Icons.delete_outline,
-                    color: Colors.red),
-                onPressed: () => _deleteExpense(e.key),
-              )
+                  ? Row(mainAxisSize: MainAxisSize.min, children: [
+                      // A bill can go on after the fact — the rep at a busy
+                      // pump records the amount and photographs the paper
+                      // later. Highlighted while missing, because an expense
+                      // with no bill is the one HR comes back about.
+                      IconButton(
+                        tooltip:
+                            hasBill ? 'Replace bill' : 'Attach bill',
+                        icon: Icon(
+                            hasBill
+                                ? Icons.receipt_outlined
+                                : Icons.add_a_photo_outlined,
+                            color: hasBill
+                                ? Colors.black45
+                                : const Color(0xFFF46A21)),
+                        onPressed: () => _attachBill(e.key),
+                      ),
+                      IconButton(
+                        tooltip: 'Delete expense',
+                        icon: const Icon(Icons.delete_outline,
+                            color: Colors.red),
+                        onPressed: () => _deleteExpense(e.key),
+                      ),
+                    ])
                   : null),
               onTap: Session.I.isHR ? () => _reviewExpense(e.key) : null,
             ),
