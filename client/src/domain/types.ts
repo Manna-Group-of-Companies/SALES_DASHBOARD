@@ -557,6 +557,9 @@ export interface DispatchableLine {
   itemName: string;
   route: string;
   customerName: string;
+  /** Who sold it. The floor rings this person when a line has to be short-shipped. */
+  rep: string;
+  /** Still owed on this line: ordered, less whatever has already gone out. */
   remainingRolls: number;
   remainingLooseBelts: number;
 }

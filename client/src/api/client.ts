@@ -4905,6 +4905,7 @@ async function listDispatchableLines(unit?: string): Promise<DispatchableLine[]>
         itemName: l.itemName,
         route: order.route,
         customerName: order.customerName,
+        rep: order.rep,
         remainingRolls: left.rolls,
         remainingLooseBelts: left.looseBelts,
       });
