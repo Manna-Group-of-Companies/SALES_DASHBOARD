@@ -108,6 +108,78 @@ export function Input({ invalid, numeric, compact, className = '', ...rest }: In
   return <input className={classes} aria-invalid={invalid || undefined} {...rest} />;
 }
 
+/**
+ * A number with a minus and a plus either side of it.
+ *
+ * For quantities that are picked rather than keyed. Loading a van means
+ * nudging a figure up and down against what is left, and typing it is both
+ * slower and a way to enter 30 where 3 was meant — the buttons cannot
+ * overshoot, because they clamp to `min`/`max` themselves.
+ *
+ * The field stays editable for the case the buttons are bad at: jumping
+ * straight to a large number. It clamps on the way in too, so a pasted or
+ * typed value cannot escape the bounds either.
+ */
+export function Stepper({
+  value,
+  onChange,
+  min = 0,
+  max,
+  step = 1,
+  disabled,
+  ariaLabel,
+}: {
+  value: number;
+  onChange: (next: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  disabled?: boolean;
+  ariaLabel: string;
+}) {
+  const clamp = (n: number) => {
+    if (!Number.isFinite(n)) return min;
+    if (max != null && n > max) return max;
+    return n < min ? min : n;
+  };
+
+  return (
+    <div className="stepper">
+      <button
+        type="button"
+        className="stepper__btn"
+        // Not `value <= min`: a max of 0 — nothing left to add — must disable
+        // both sides, and this reads the same for that case.
+        disabled={disabled || value <= min}
+        onClick={() => onChange(clamp(value - step))}
+        aria-label={`Decrease ${ariaLabel}`}
+      >
+        −
+      </button>
+      <input
+        className="input input--num input--sm stepper__field"
+        type="number"
+        inputMode="numeric"
+        value={value}
+        min={min}
+        max={max}
+        disabled={disabled}
+        onChange={(e) => onChange(clamp(Number(e.target.value)))}
+        aria-label={ariaLabel}
+      />
+      <button
+        type="button"
+        className="stepper__btn"
+        disabled={disabled || (max != null && value >= max)}
+        onClick={() => onChange(clamp(value + step))}
+        aria-label={`Increase ${ariaLabel}`}
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
 /** A number input with a unit stuck to its right edge — "28.5 kg", "12 rolls". */
 export function UnitInput({
   suffix,
