@@ -154,9 +154,15 @@
       ]
     }
   ],
+  "unassigned_scope": {
+    "note": "Widening a pooled unit's filter to include unassigned records must ALSO be scoped to that unit, or `is not set` answers with every unowned record in the company. That is what put India's unassigned customers and leads in front of a UAE rep on 19 Aug 2026 - the cross-unit leak `visible` exists to prevent, walked around by the widening meant to help. A Sales Route names one rep and a rep belongs to one unit, so the record's own route is what ties it back. A record with neither a rep nor a route belongs to no derivable unit and is shown to NOBODY rather than to everybody.",
+    "route_field": "custom_sales_route",
+    "route_owner_field": "sales_person"
+  },
+
   "owner_values": [
     {
-      "why": "a UAE rep's filter also matches an unassigned record - a customer or lead imported with no owner yet must be visible to the whole team immediately, not sit dark until somebody opens Desk",
+      "why": "a UAE rep's filter also matches an unassigned record - a customer or lead imported with no owner yet must be visible to the whole team immediately, not sit dark until somebody opens Desk. NOTE: the filter VALUES widen here; scoping those unassigned rows to the unit's own routes is a separate step - see unassigned_scope",
       "person": "Kailas Babu",
       "expect": [
         "Kailas Babu",

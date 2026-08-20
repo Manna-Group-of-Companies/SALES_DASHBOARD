@@ -447,9 +447,31 @@ class Api {
         : '["$field","in",${_inList(peers)}]';
   }
 
+  /// The routes belonging to this rep's pool, for scoping unowned records.
+  ///
+  /// A Sales Route names one rep (`sales_person`), and a rep belongs to one
+  /// unit — so a record's route is the only thing that ties it to a unit once
+  /// it has no rep of its own. Empty on failure or when the pool owns no
+  /// routes, which callers must read as "widen to nothing".
+  static Future<List<String>> _poolRoutes() async {
+    final peers = Session.I.unitPeers;
+    if (peers.isEmpty) return const [];
+    try {
+      final rows = await _list('Sales Route',
+          fields: '["name","$kFieldRouteOwner"]',
+          filters: '[["$kFieldRouteOwner","in",${_inList(peers)}]]',
+          orderBy: 'name asc');
+      return rows.map((r) => '${r['name']}').toList();
+    } catch (_) {
+      // Fail closed: no routes means no widening, never widening to all.
+      return const [];
+    }
+  }
+
   /// Records this rep may SEE, by owner field — the pool's own rows plus, in
-  /// a pool, whatever nobody has claimed yet. Empty when nothing can be
-  /// scoped by, which callers must treat as "show nothing", never everyone.
+  /// a pool, the unclaimed records ON THAT POOL'S OWN ROUTES. Empty when
+  /// nothing can be scoped by, which callers must treat as "show nothing",
+  /// never everyone.
   ///
   /// Two queries, not one: Frappe stores an omitted Link/Data field as SQL
   /// `NULL`, not `''` — verified live on 18 Aug 2026 by inserting a Customer
@@ -457,9 +479,15 @@ class Api {
   /// match `NULL`, in any SQL, whatever is in the list — there is no way to
   /// fold "unassigned" into a single `in` filter. `is not set` is what
   /// actually catches it, and empty string too, which Frappe treats the same
-  /// way there. So a pooled unit gets both queries, merged; everywhere else
-  /// the second query is skipped and an unowned record stays invisible,
-  /// exactly as it always has.
+  /// way there.
+  ///
+  /// **The second query is scoped by route, and that scoping is the point.**
+  /// Without it `is not set` answers with every unowned record in the
+  /// company, so a UAE rep was shown India's unassigned customers and leads —
+  /// exactly the cross-unit leak `visibleReps` exists to prevent, walked
+  /// straight around by the widening that was meant to help. A record with
+  /// neither a rep nor a route belongs to no unit that can be derived, and is
+  /// deliberately shown to nobody rather than to everybody.
   static Future<List<Map<String, dynamic>>> _visibleRows(
     String doctype,
     String field, {
@@ -478,9 +506,13 @@ class Api {
 
     if (!isPooledUnit(Session.I.company)) return owned;
 
+    final routes = await _poolRoutes();
+    if (routes.isEmpty) return owned;
+
     final unclaimed = await _list(doctype,
         fields: fields,
-        filters: '[["$field","is","not set"]]',
+        filters: '[["$field","is","not set"],'
+            '["$kFieldPartyRoute","in",${_inList(routes)}]]',
         orderBy: orderBy);
 
     final seen = owned.map((r) => '${r['name']}').toSet();

@@ -29,6 +29,13 @@ const String kFieldCustomerOwner = 'custom_assigned_reps';
 const String kFieldLeadOwner = 'custom_sales_person';
 const String kFieldRouteOwner = 'sales_person';
 
+/// The route a customer or lead sits on. Both doctypes spell it the same way.
+///
+/// This is what ties an UNOWNED record to a unit. A record with no rep has
+/// nothing else pointing at one — a Sales Route belongs to a rep, and that
+/// rep belongs to a unit, so the route is the only honest link back.
+const String kFieldPartyRoute = 'custom_sales_route';
+
 /// Units whose reps share their customers, leads and routes.
 ///
 /// A list rather than a flag on the unit, because there is no `Business Unit`

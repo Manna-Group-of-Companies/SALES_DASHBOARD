@@ -38,6 +38,14 @@ export const VISIBILITY_FIELD = {
   customerOwner: 'custom_assigned_reps',
   leadOwner: 'custom_sales_person',
   routeOwner: 'sales_person',
+  /**
+   * The route a customer or lead sits on. Both doctypes spell it the same way.
+   *
+   * This is what ties an UNOWNED record to a unit. A record with no rep has
+   * nothing else pointing at one — a Sales Route belongs to a rep, and that
+   * rep belongs to a unit, so the route is the only honest link back.
+   */
+  partyRoute: 'custom_sales_route',
 } as const;
 
 /**

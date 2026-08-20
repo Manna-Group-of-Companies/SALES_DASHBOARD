@@ -68,6 +68,13 @@ describe('shared fixture: what an unassigned record needs to be seen', () => {
   }
 });
 
+describe('shared fixture: scoping unassigned records to the unit', () => {
+  it('reads the route fields the fixture names', () => {
+    expect(VISIBILITY_FIELD.partyRoute).toBe(cases.unassigned_scope.route_field);
+    expect(VISIBILITY_FIELD.routeOwner).toBe(cases.unassigned_scope.route_owner_field);
+  });
+});
+
 describe('shared fixture: who may assign an owner', () => {
   for (const c of cases.can_assign) {
     it(c.why, () => {

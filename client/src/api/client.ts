@@ -2889,6 +2889,8 @@ function toRegularization(r: Record<string, unknown>): AttendanceRegularization 
 async function visibleDocs(
   doctype: string,
   field: string,
+  /** The record's own route field — what scopes an unowned row to a unit. */
+  routeField: string,
   reps: string[] | undefined,
   fields: string[],
   orderBy: string,
@@ -2905,15 +2907,44 @@ async function visibleDocs(
   const owned = named.length ? await fetch([[field, 'in', named]]) : [];
   if (!includeUnassigned) return owned;
 
-  const unclaimed = await fetch([[field, 'is', 'not set']]);
+  /*
+   * Scoped by route, and that scoping is the point.
+   *
+   * Unscoped, `is not set` answers with every unowned record in the company,
+   * so a UAE login was shown India's unassigned customers and leads — the
+   * cross-unit leak `visibleReps` exists to prevent, walked straight around
+   * by the widening meant to help. A Sales Route names one rep and a rep
+   * belongs to one unit, so the route is the only thing tying an unowned
+   * record back to a unit. A record with neither rep nor route is shown to
+   * nobody rather than to everybody.
+   */
+  const routes = await listRoutesOwnedBy(named);
+  if (!routes.length) return owned;
+
+  const unclaimed = await fetch([
+    [field, 'is', 'not set'],
+    [routeField, 'in', routes],
+  ]);
   const seen = new Set(owned.map((r) => String(r.name)));
   return [...owned, ...unclaimed.filter((r) => !seen.has(String(r.name)))];
+}
+
+/** Route names belonging to these reps. Empty on failure — never "all". */
+async function listRoutesOwnedBy(reps: string[]): Promise<string[]> {
+  if (!reps.length) return [];
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.salesRoute, {
+    fields: ['name', SALES_ROUTE_FIELD.rep],
+    filters: [[SALES_ROUTE_FIELD.rep, 'in', reps]],
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.salesRoute));
+  return rows.map((r) => String(r.name));
 }
 
 async function listSalesCustomers(reps?: string[]): Promise<SalesCustomer[]> {
   const rows = await visibleDocs(
     DOCTYPE.customer,
     SALES_CUSTOMER_FIELD.assignedRep,
+    SALES_CUSTOMER_FIELD.route,
     reps,
     ['name', ...Object.values(SALES_CUSTOMER_FIELD)],
     `${SALES_CUSTOMER_FIELD.customerName} asc`,
@@ -2944,6 +2975,7 @@ async function listLeads(reps?: string[]): Promise<SalesLead[]> {
   const rows = await visibleDocs(
     DOCTYPE.lead,
     LEAD_FIELD.rep,
+    LEAD_FIELD.route,
     reps,
     ['name', ...Object.values(LEAD_FIELD)],
     'modified desc',

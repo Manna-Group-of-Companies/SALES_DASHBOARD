@@ -74,6 +74,14 @@ void main() {
     }
   });
 
+  group('shared fixture: scoping unassigned records to the unit', () {
+    test('reads the route fields the fixture names', () {
+      final s = (fx['unassigned_scope'] as Map).cast<String, dynamic>();
+      expect(kFieldPartyRoute, s['route_field']);
+      expect(kFieldRouteOwner, s['route_owner_field']);
+    });
+  });
+
   group('shared fixture: who may assign an owner', () {
     for (final raw in fx['can_assign'] as List) {
       final c = (raw as Map).cast<String, dynamic>();
