@@ -11,14 +11,17 @@ import { describe, expect, it } from 'vitest';
 import cases from '../../../../shared/fixtures/visibility.json';
 import {
   POOLED_UNITS,
+  UNIT_TERRITORY_ROOT,
   VISIBILITY_FIELD,
   canAssignOwner,
   isCoveringFor,
   isPooledUnit,
   sharesWithUnit,
+  territorySubtree,
   visibleOwnerValues,
   visibleReps,
   type Person,
+  type TerritoryNode,
 } from '../visibility';
 
 /** The fixture speaks raw ERPNext field names; the domain speaks its own. */
@@ -69,10 +72,30 @@ describe('shared fixture: what an unassigned record needs to be seen', () => {
 });
 
 describe('shared fixture: scoping unassigned records to the unit', () => {
-  it('reads the route fields the fixture names', () => {
-    expect(VISIBILITY_FIELD.partyRoute).toBe(cases.unassigned_scope.route_field);
-    expect(VISIBILITY_FIELD.routeOwner).toBe(cases.unassigned_scope.route_owner_field);
+  it('reads the territory field the fixture names', () => {
+    expect(VISIBILITY_FIELD.territory).toBe(cases.unassigned_scope.territory_field);
   });
+
+  it('roots each pooled unit where the fixture roots it', () => {
+    expect(UNIT_TERRITORY_ROOT).toEqual(cases.unassigned_scope.unit_territory_root);
+  });
+
+  it('roots every pooled unit somewhere — an unrooted pool would widen to nothing', () => {
+    for (const unit of POOLED_UNITS) expect(UNIT_TERRITORY_ROOT[unit]).toBeTruthy();
+  });
+});
+
+describe('shared fixture: the territory subtree', () => {
+  const TREE: TerritoryNode[] = cases.territory_tree.map((t) => ({
+    name: t.name,
+    parent: t.parent_territory,
+  }));
+
+  for (const c of cases.territory_subtree) {
+    it(c.why, () => {
+      expect(territorySubtree(TREE, c.root).sort()).toEqual([...c.expect].sort());
+    });
+  }
 });
 
 describe('shared fixture: who may assign an owner', () => {

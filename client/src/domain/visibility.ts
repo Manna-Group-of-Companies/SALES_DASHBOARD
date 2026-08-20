@@ -38,15 +38,69 @@ export const VISIBILITY_FIELD = {
   customerOwner: 'custom_assigned_reps',
   leadOwner: 'custom_sales_person',
   routeOwner: 'sales_person',
-  /**
-   * The route a customer or lead sits on. Both doctypes spell it the same way.
-   *
-   * This is what ties an UNOWNED record to a unit. A record with no rep has
-   * nothing else pointing at one — a Sales Route belongs to a rep, and that
-   * rep belongs to a unit, so the route is the only honest link back.
-   */
+  /** The route a customer or lead sits on. Both doctypes spell it the same way. */
   partyRoute: 'custom_sales_route',
+  /**
+   * The territory a customer or lead sits in — what ties an UNOWNED record to
+   * a unit.
+   *
+   * The route cannot do it: the UAE parties were imported with no rep *and*
+   * no route, so their territory is the only thing on the record that says
+   * which side of the business they belong to.
+   */
+  territory: 'territory',
 } as const;
+
+/**
+ * The territory each pooled unit's parties sit under.
+ *
+ * Territory is a tree, so this is a ROOT — everything beneath it counts too;
+ * see `territorySubtree`. Held here rather than inferred, because a unit with
+ * no assigned records yet has nothing to infer from, which is exactly the
+ * situation this exists for.
+ */
+export const UNIT_TERRITORY_ROOT: Record<string, string> = {
+  'Manna Tyres UAE': 'UAE',
+};
+
+/** One Territory row, as either app reads it. */
+export interface TerritoryNode {
+  name: string;
+  parent?: string | null;
+}
+
+/**
+ * Every territory at or beneath `root`, the root included.
+ *
+ * Walks down the tree rather than matching on the root alone: a customer in
+ * Deira, under Dubai, under UAE, is still the UAE team's. An unknown root
+ * yields `[]` — never everything — so a renamed or missing territory hides
+ * records rather than exposing another unit's.
+ */
+export function territorySubtree(all: TerritoryNode[], root: string): string[] {
+  if (!all.some((t) => t.name === root)) return [];
+
+  const childrenOf = new Map<string, string[]>();
+  for (const t of all) {
+    const parent = (t.parent ?? '').trim();
+    if (!parent) continue;
+    childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), t.name]);
+  }
+
+  const out: string[] = [];
+  const queue = [root];
+  const seen = new Set<string>();
+  while (queue.length) {
+    const node = queue.shift()!;
+    // A cycle in the tree would otherwise spin forever; Frappe does not
+    // promise one cannot exist.
+    if (seen.has(node)) continue;
+    seen.add(node);
+    out.push(node);
+    queue.push(...(childrenOf.get(node) ?? []));
+  }
+  return out;
+}
 
 /**
  * Units whose reps share their customers, leads and routes.

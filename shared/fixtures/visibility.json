@@ -155,10 +155,51 @@
     }
   ],
   "unassigned_scope": {
-    "note": "Widening a pooled unit's filter to include unassigned records must ALSO be scoped to that unit, or `is not set` answers with every unowned record in the company. That is what put India's unassigned customers and leads in front of a UAE rep on 19 Aug 2026 - the cross-unit leak `visible` exists to prevent, walked around by the widening meant to help. A Sales Route names one rep and a rep belongs to one unit, so the record's own route is what ties it back. A record with neither a rep nor a route belongs to no derivable unit and is shown to NOBODY rather than to everybody.",
-    "route_field": "custom_sales_route",
-    "route_owner_field": "sales_person"
+    "note": "Widening a pooled unit's filter to include unassigned records must ALSO be scoped to that unit, or `is not set` answers with every unowned record in the company. That is what put India's unassigned customers and leads in front of a UAE rep on 19 Aug 2026 - the cross-unit leak `visible` exists to prevent, walked around by the widening meant to help. The scope is TERRITORY: the UAE parties were imported with no rep AND no route, so the route cannot tie them to a unit - their territory is the only thing that does. Territory is a tree, so the whole subtree under the unit's root counts, not just the root itself.",
+    "territory_field": "territory",
+    "unit_territory_root": {
+      "Manna Tyres UAE": "UAE"
+    }
   },
+
+  "territory_tree": [
+    { "name": "All Territories", "parent_territory": null },
+    { "name": "India", "parent_territory": "All Territories" },
+    { "name": "Kerala", "parent_territory": "India" },
+    { "name": "Ernakulam", "parent_territory": "Kerala" },
+    { "name": "UAE", "parent_territory": "All Territories" },
+    { "name": "Dubai", "parent_territory": "UAE" },
+    { "name": "Deira", "parent_territory": "Dubai" },
+    { "name": "Sharjah", "parent_territory": "UAE" }
+  ],
+
+  "territory_subtree": [
+    {
+      "why": "the root counts as part of its own subtree - a customer sitting directly on UAE is a UAE customer",
+      "root": "UAE",
+      "expect": ["UAE", "Dubai", "Deira", "Sharjah"]
+    },
+    {
+      "why": "the walk goes all the way down, not one level - Deira hangs off Dubai which hangs off UAE, and a customer there is still the UAE team's",
+      "root": "Dubai",
+      "expect": ["Dubai", "Deira"]
+    },
+    {
+      "why": "India's subtree never contains UAE's, which is the whole point of scoping by it",
+      "root": "India",
+      "expect": ["India", "Kerala", "Ernakulam"]
+    },
+    {
+      "why": "a leaf is its own subtree and nothing else",
+      "root": "Deira",
+      "expect": ["Deira"]
+    },
+    {
+      "why": "a root that is not in the tree yields nothing rather than everything - failing closed, the same direction as the rest of this module",
+      "root": "Atlantis",
+      "expect": []
+    }
+  ],
 
   "owner_values": [
     {

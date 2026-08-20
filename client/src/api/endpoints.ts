@@ -83,6 +83,8 @@ export const DOCTYPE = {
   salesVisit: 'Sales Visit',
   lead: 'Lead',
   salesRoute: 'Sales Route',
+  /** A tree. Read whole and walked in memory — see `territorySubtree`. */
+  territory: 'Territory',
 
   /**
    * DEPRECATED — the original HR guess. `Employee` exists but is unused (one

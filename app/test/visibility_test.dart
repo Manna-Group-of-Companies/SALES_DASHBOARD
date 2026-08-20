@@ -75,11 +75,37 @@ void main() {
   });
 
   group('shared fixture: scoping unassigned records to the unit', () {
-    test('reads the route fields the fixture names', () {
-      final s = (fx['unassigned_scope'] as Map).cast<String, dynamic>();
-      expect(kFieldPartyRoute, s['route_field']);
-      expect(kFieldRouteOwner, s['route_owner_field']);
+    final scope = (fx['unassigned_scope'] as Map).cast<String, dynamic>();
+
+    test('reads the territory field the fixture names', () {
+      expect(kFieldPartyTerritory, scope['territory_field']);
     });
+
+    test('roots each pooled unit where the fixture roots it', () {
+      expect(kUnitTerritoryRoot, scope['unit_territory_root']);
+    });
+
+    test('roots every pooled unit somewhere — an unrooted pool widens to nothing',
+        () {
+      for (final unit in kPooledUnits) {
+        expect(kUnitTerritoryRoot[unit], isNotNull, reason: unit);
+      }
+    });
+  });
+
+  group('shared fixture: the territory subtree', () {
+    final tree = (fx['territory_tree'] as List)
+        .map((e) => TerritoryNode.fromRow((e as Map).cast<String, dynamic>()))
+        .toList();
+
+    for (final raw in fx['territory_subtree'] as List) {
+      final c = (raw as Map).cast<String, dynamic>();
+      test(c['why'] as String, () {
+        final got = territorySubtree(tree, c['root'] as String)..sort();
+        final want = (c['expect'] as List).map((e) => '$e').toList()..sort();
+        expect(got, want);
+      });
+    }
   });
 
   group('shared fixture: who may assign an owner', () {

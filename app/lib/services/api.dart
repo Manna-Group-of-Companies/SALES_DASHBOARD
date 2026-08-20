@@ -447,23 +447,18 @@ class Api {
         : '["$field","in",${_inList(peers)}]';
   }
 
-  /// The routes belonging to this rep's pool, for scoping unowned records.
-  ///
-  /// A Sales Route names one rep (`sales_person`), and a rep belongs to one
-  /// unit — so a record's route is the only thing that ties it to a unit once
-  /// it has no rep of its own. Empty on failure or when the pool owns no
-  /// routes, which callers must read as "widen to nothing".
-  static Future<List<String>> _poolRoutes() async {
-    final peers = Session.I.unitPeers;
-    if (peers.isEmpty) return const [];
+  /// The territories this rep's unit covers — its root and everything under
+  /// it. Empty when the unit has no configured root, or on any failure, which
+  /// callers must read as "widen to nothing" rather than "widen to all".
+  static Future<List<String>> _poolTerritories() async {
+    final root = kUnitTerritoryRoot[Session.I.company ?? ''];
+    if (root == null || root.isEmpty) return const [];
     try {
-      final rows = await _list('Sales Route',
-          fields: '["name","$kFieldRouteOwner"]',
-          filters: '[["$kFieldRouteOwner","in",${_inList(peers)}]]',
-          orderBy: 'name asc');
-      return rows.map((r) => '${r['name']}').toList();
+      final rows = await _list('Territory',
+          fields: '["name","parent_territory"]', orderBy: 'name asc');
+      return territorySubtree(
+          rows.map(TerritoryNode.fromRow).toList(), root);
     } catch (_) {
-      // Fail closed: no routes means no widening, never widening to all.
       return const [];
     }
   }
@@ -481,13 +476,16 @@ class Api {
   /// actually catches it, and empty string too, which Frappe treats the same
   /// way there.
   ///
-  /// **The second query is scoped by route, and that scoping is the point.**
-  /// Without it `is not set` answers with every unowned record in the
-  /// company, so a UAE rep was shown India's unassigned customers and leads —
-  /// exactly the cross-unit leak `visibleReps` exists to prevent, walked
-  /// straight around by the widening that was meant to help. A record with
-  /// neither a rep nor a route belongs to no unit that can be derived, and is
-  /// deliberately shown to nobody rather than to everybody.
+  /// **The second query is scoped by territory, and that scoping is the
+  /// point.** Without it `is not set` answers with every unowned record in
+  /// the company, so a UAE rep was shown India's unassigned customers and
+  /// leads — exactly the cross-unit leak `visibleReps` exists to prevent,
+  /// walked straight around by the widening that was meant to help.
+  ///
+  /// Territory rather than route, because the UAE parties were imported with
+  /// no rep *and* no route: the territory is the only thing on such a record
+  /// that says which side of the business it belongs to. A unit with no
+  /// configured territory root widens to nothing rather than to everything.
   static Future<List<Map<String, dynamic>>> _visibleRows(
     String doctype,
     String field, {
@@ -506,13 +504,13 @@ class Api {
 
     if (!isPooledUnit(Session.I.company)) return owned;
 
-    final routes = await _poolRoutes();
-    if (routes.isEmpty) return owned;
+    final territories = await _poolTerritories();
+    if (territories.isEmpty) return owned;
 
     final unclaimed = await _list(doctype,
         fields: fields,
         filters: '[["$field","is","not set"],'
-            '["$kFieldPartyRoute","in",${_inList(routes)}]]',
+            '["$kFieldPartyTerritory","in",${_inList(territories)}]]',
         orderBy: orderBy);
 
     final seen = owned.map((r) => '${r['name']}').toSet();

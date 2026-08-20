@@ -93,7 +93,7 @@ export function CustomersPage() {
         const myUnit = asVis.find((v) => v.name === user?.salesPerson)?.unit;
         const fetchTeam = isPooledUnit(myUnit) ? [...team, ''] : team;
         const [c, r] = await Promise.all([
-          Api.sales.listCustomers(fetchTeam),
+          Api.sales.listCustomers(fetchTeam, myUnit ?? undefined),
           Api.sales.listRoutesFor(),
         ]);
         if (!live) return;

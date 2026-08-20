@@ -98,6 +98,11 @@ import { DISPATCHED, rollUp } from '@/domain/production';
 import { isFullyDispatched, remainingToDispatch } from '@/domain/dispatch';
 import { heldBy, holdPlan, trueReserved } from '@/domain/minimumStock';
 import {
+  UNIT_TERRITORY_ROOT,
+  VISIBILITY_FIELD,
+  territorySubtree,
+} from '@/domain/visibility';
+import {
   discountFields,
   discountPercentOf,
   rateBeforeDiscount,
@@ -2889,8 +2894,11 @@ function toRegularization(r: Record<string, unknown>): AttendanceRegularization 
 async function visibleDocs(
   doctype: string,
   field: string,
-  /** The record's own route field — what scopes an unowned row to a unit. */
-  routeField: string,
+  /**
+   * The caller's own unit. Its territory root is what scopes an unowned row
+   * to a unit; a unit with no configured root does not widen at all.
+   */
+  unit: string | undefined,
   reps: string[] | undefined,
   fields: string[],
   orderBy: string,
@@ -2908,43 +2916,47 @@ async function visibleDocs(
   if (!includeUnassigned) return owned;
 
   /*
-   * Scoped by route, and that scoping is the point.
+   * Scoped by territory, and that scoping is the point.
    *
    * Unscoped, `is not set` answers with every unowned record in the company,
    * so a UAE login was shown India's unassigned customers and leads — the
    * cross-unit leak `visibleReps` exists to prevent, walked straight around
-   * by the widening meant to help. A Sales Route names one rep and a rep
-   * belongs to one unit, so the route is the only thing tying an unowned
-   * record back to a unit. A record with neither rep nor route is shown to
-   * nobody rather than to everybody.
+   * by the widening meant to help.
+   *
+   * Territory rather than route, because the UAE parties were imported with
+   * no rep *and* no route: the territory is the only thing on such a record
+   * that says which side of the business it belongs to.
    */
-  const routes = await listRoutesOwnedBy(named);
-  if (!routes.length) return owned;
+  const root = unit ? UNIT_TERRITORY_ROOT[unit] : undefined;
+  if (!root) return owned;
+  const territories = await listTerritorySubtree(root);
+  if (!territories.length) return owned;
 
   const unclaimed = await fetch([
     [field, 'is', 'not set'],
-    [routeField, 'in', routes],
+    [VISIBILITY_FIELD.territory, 'in', territories],
   ]);
   const seen = new Set(owned.map((r) => String(r.name)));
   return [...owned, ...unclaimed.filter((r) => !seen.has(String(r.name)))];
 }
 
-/** Route names belonging to these reps. Empty on failure — never "all". */
-async function listRoutesOwnedBy(reps: string[]): Promise<string[]> {
-  if (!reps.length) return [];
-  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.salesRoute, {
-    fields: ['name', SALES_ROUTE_FIELD.rep],
-    filters: [[SALES_ROUTE_FIELD.rep, 'in', reps]],
+/** A territory and everything under it. Empty on failure — never "all". */
+async function listTerritorySubtree(root: string): Promise<string[]> {
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.territory, {
+    fields: ['name', 'parent_territory'],
     limit: 0,
-  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.salesRoute));
-  return rows.map((r) => String(r.name));
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.territory));
+  return territorySubtree(
+    rows.map((r) => ({ name: String(r.name), parent: str(r.parent_territory) })),
+    root,
+  );
 }
 
-async function listSalesCustomers(reps?: string[]): Promise<SalesCustomer[]> {
+async function listSalesCustomers(reps?: string[], unit?: string): Promise<SalesCustomer[]> {
   const rows = await visibleDocs(
     DOCTYPE.customer,
     SALES_CUSTOMER_FIELD.assignedRep,
-    SALES_CUSTOMER_FIELD.route,
+    unit,
     reps,
     ['name', ...Object.values(SALES_CUSTOMER_FIELD)],
     `${SALES_CUSTOMER_FIELD.customerName} asc`,
@@ -2971,11 +2983,11 @@ async function listSalesCustomers(reps?: string[]): Promise<SalesCustomer[]> {
 }
 
 /** Leads, optionally narrowed to a set of reps. */
-async function listLeads(reps?: string[]): Promise<SalesLead[]> {
+async function listLeads(reps?: string[], unit?: string): Promise<SalesLead[]> {
   const rows = await visibleDocs(
     DOCTYPE.lead,
     LEAD_FIELD.rep,
-    LEAD_FIELD.route,
+    unit,
     reps,
     ['name', ...Object.values(LEAD_FIELD)],
     'modified desc',
