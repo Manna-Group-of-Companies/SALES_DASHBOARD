@@ -5,7 +5,7 @@
 
 import { createSelector } from '@reduxjs/toolkit';
 import type { MinStockItem, Order } from '@/domain/types';
-import { agingPriorityList, availableQty } from '@/domain/aging';
+import { availableQty } from '@/domain/stockLevels';
 import {
   activeEmployees,
   headcountByDepartment,
@@ -34,11 +34,6 @@ export const selectMinStockByCode = createSelector(
 export const selectAvailableByCode = createSelector(
   selectMinStockItems,
   (items): Map<string, number> => new Map(items.map((i) => [i.itemCode, availableQty(i)])),
-);
-
-/** Aged stock a rep should push first, worst first (1.6). */
-export const selectAgingList = createSelector(selectMinStockItems, (items) =>
-  agingPriorityList(items),
 );
 
 export const selectLowStockItems = createSelector(selectMinStockItems, (items) =>

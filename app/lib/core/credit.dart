@@ -179,6 +179,14 @@ bool overCreditLimit(Map<String, dynamic> customer, double orderTotal) {
   return a.total + orderTotal > a.creditLimit;
 }
 
+/// What a bucket reads when SAP has sent no breakdown at all.
+///
+/// A dash, not a zero. Zero is a statement — "they owe nothing in this band" —
+/// and it is one nobody has the data to make until the sync has run. The
+/// buckets are still drawn with their labels, so a reader sees the shape of
+/// what is missing rather than an empty space. Asked for 21 August 2026.
+const String kAgingNoData = '—';
+
 const String kAgingNotSynced =
     'SAP has not sent an age breakdown for this customer yet. '
     'The total is still the total.';

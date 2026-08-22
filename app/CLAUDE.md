@@ -153,7 +153,7 @@ Custom doctypes worth knowing (all `custom = 1`, module `Selling` or `Custom`):
 | `Manna Minimum Stock Batch` | dated physical stock behind a pool |
 | `Manna Stock Reservation` | one booking, pointing at a Sales Order **or** a Lead Order |
 | `Lead Order` / `Lead Order Item` | an order against a lead, before it is a customer |
-| `Combined Order` | a week's orders for one customer, rolled up |
+| `Combined Order` | one customer's orders that went out on one dispatch, rolled up. Was a *week's* orders until 20 Aug 2026 — see `shared/DIVERGENCES.md`; the phone reads these but no longer makes them |
 | `Sales Visit`, `Trip`, `Trip Log` | field activity |
 | `Sales Route` | delivery routes, named `<Rep> - <Place>` |
 | `Attendance Log`, `Attendance Regularization`, `Leave Request` | attendance |

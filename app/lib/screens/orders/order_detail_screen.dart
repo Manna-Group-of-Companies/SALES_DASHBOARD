@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/stage_watch.dart';
+import 'package:manna_field_sales/core/app_bus.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/pdf/proforma_pdf.dart';
@@ -139,6 +140,54 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   /// Reopens the order for changes. Everything — adding a product, dropping
   /// one, changing quantities — happens on the order screen the rep already
   /// knows, rather than a second editor that would drift away from it.
+  int get _editCount {
+    final v = _order['custom_edit_count'];
+    return v is num ? v.toInt() : (int.tryParse('${v ?? ''}'.trim()) ?? 0);
+  }
+
+  /// Throw the order away. Narrow on purpose — see [canDeleteOrder].
+  ///
+  /// Confirmed first, because this destroys the record rather than parking it,
+  /// and the stock it holds is released by `Api.deleteOrder` BEFORE the
+  /// document goes; deleting an order that still holds a reservation leaves the
+  /// pool over-booked with phantom bookings nothing can clear.
+  Future<void> _delete() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete this order?'),
+        content: const Text(
+            'The order and its lines are removed for good, and any minimum '
+            'stock it is holding goes back to the shelf. This cannot be '
+            'undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Keep it')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await Api.deleteOrder(widget.orderName);
+      if (!mounted) return;
+      AppBus.I.bump();
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(humanError(e))));
+    }
+  }
+
   Future<void> _edit() async {
     final changed = await Navigator.push<bool>(
       context,
@@ -439,7 +488,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 _editDeadlineNote,
                 style: const TextStyle(fontSize: 12, color: Colors.black54)),
             const SizedBox(height: 8),
-            if (canEditOrder(_order))
+            if (canEditOrder(_order)) ...[
               FilledButton.icon(
                 style: FilledButton.styleFrom(backgroundColor: Colors.indigo),
                 onPressed: _busy ? null : _edit,
@@ -447,7 +496,21 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 label: const Padding(
                     padding: EdgeInsets.all(10),
                     child: Text('Add / Remove Products')),
-              )
+              ),
+              // How often this order has already been changed, beside the
+              // button that changes it. A rep about to edit for the fifth time
+              // should see that, and so should the manager who approves it.
+              if (_editCount > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    editCountLabel(_editCount),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        fontSize: 12, color: Colors.black54),
+                  ),
+                ),
+            ]
             else
               Container(
                   padding: const EdgeInsets.all(12),
@@ -463,6 +526,25 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                             style: const TextStyle(
                                 fontSize: 12, color: Colors.black54))),
                   ])),
+            /*
+             * Deleting is deliberately last, quiet, and much narrower than
+             * editing: only the rep who raised it, only while it is still a
+             * draft, and only before production has been told about it. See
+             * canDeleteOrder. Anything past that is cancelled by a person in
+             * Desk, not thrown away from a phone.
+             */
+            if (canDeleteOrder(_order)) ...[
+              const SizedBox(height: 24),
+              Center(
+                child: TextButton.icon(
+                  onPressed: _busy ? null : _delete,
+                  icon: Icon(Icons.delete_outline,
+                      size: 18, color: Colors.red.shade700),
+                  label: Text('Delete this order',
+                      style: TextStyle(color: Colors.red.shade700)),
+                ),
+              ),
+            ],
             if (_busy)
               const Padding(
                   padding: EdgeInsets.only(top: 20),

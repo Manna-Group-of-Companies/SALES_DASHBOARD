@@ -11,11 +11,10 @@ import 'package:flutter/services.dart';
 
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/pool_allocation.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/services/api.dart';
-import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart'
-    show lastSoldLabel;
 
 class ProductRow extends StatefulWidget {
   final OrderLine line;
@@ -222,11 +221,30 @@ class _ProductRowState extends State<ProductRow> {
     return s.availableQty + s.myReservedQty;
   }
 
+  /// Loose belts free to this line, BEFORE any roll is opened for it.
+  ///
+  /// Not the belt ceiling: [_allocation] is what decides how many belts the
+  /// pool can actually serve, because a whole roll can be opened to cover
+  /// them. See core/pool_allocation.dart.
   int get _beltHeadroom {
     final s = widget.stock;
     if (s == null) return 0;
     return s.availableLooseBelts + s.myReservedLooseBelts;
   }
+
+  /// How this line divides between the pool and production.
+  ///
+  /// Rolls and belts draw on the SAME shelf, so this is one decision and not
+  /// two clamps — a belt asked for against a pool of whole rolls opens one
+  /// rather than going to production, which is what it used to do while 48
+  /// rolls sat on the shelf.
+  PoolAllocation get _allocation => allocateFromPool(
+        wantRolls: _wouldBook,
+        wantBelts: _wouldBookBelts,
+        poolRolls: _headroom,
+        poolBelts: _beltHeadroom,
+        beltsPerRoll: widget.stock?.beltsPerRoll ?? 0,
+      );
 
   /// True when this line asks for more than the pool it draws on can cover.
   ///
@@ -236,7 +254,7 @@ class _ProductRowState extends State<ProductRow> {
   /// having, and the rep was being told to reduce the order.
   bool get _splitsWithProduction {
     if (widget.stock == null) return false;
-    return _wouldBook > _headroom + 0.0001 || _wouldBookBelts > _beltHeadroom;
+    return _allocation.splits;
   }
 
   /// What the pool covers and what has to be made, said before the rep sends
@@ -244,10 +262,11 @@ class _ProductRowState extends State<ProductRow> {
   /// customer discovers when half the order arrives later.
   Widget _splitLine() {
     final unit = p.category.stockUnit;
-    final fromPool = _wouldBook.clamp(0, _headroom).toDouble();
-    final made = _wouldBook - fromPool;
-    final beltsFromPool = _wouldBookBelts.clamp(0, _beltHeadroom).toInt();
-    final beltsMade = _wouldBookBelts - beltsFromPool;
+    final a = _allocation;
+    final fromPool = a.rolls;
+    final made = a.shortRolls;
+    final beltsFromPool = a.belts;
+    final beltsMade = a.shortBelts;
 
     // Always the shelf now. A rep cannot draw on a replenishment run.
     const source = 'minimum stock';
@@ -331,24 +350,10 @@ class _ProductRowState extends State<ProductRow> {
          * or production is raised against their order and dispatched to the
          * customer.
          */
-        // A minimum-stock item is meant to be fast-moving. One that has stopped
-        // selling is drifting towards a write-off, and the rep standing in
-        // front of a customer is the only person who can turn that around.
-        if (widget.showMinimumStock &&
-            widget.stock?.isDeadStockRisk == true) ...[
-          const SizedBox(height: 4),
-          Row(children: [
-            Icon(Icons.trending_down, size: 13, color: Colors.red.shade700),
-            const SizedBox(width: 4),
-            Expanded(
-              child: Text(lastSoldLabel(widget.stock!),
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.red.shade700,
-                      fontWeight: FontWeight.w500)),
-            ),
-          ]),
-        ],
+        // A "drifting towards dead stock" warning stood here until 21 August
+        // 2026, telling the rep how long it had been since the item last sold.
+        // Removed with the rest of the dead-stock feature: how old stock is, is
+        // not a rep's decision to make in front of a customer.
         if (p.isMisconfigured) ...[
           const SizedBox(height: 6),
           _packingPrompt(),
@@ -430,29 +435,40 @@ class _ProductRowState extends State<ProductRow> {
     final avail = s.availableQty;
     final belts = s.availableLooseBelts;
     final unit = p.category.stockUnit;
-    // Below the minimum is the state worth colouring: the shelf is meant to
-    // hold at least that much, and dropping under it is what replenishment
-    // exists to catch. Above it is simply healthy.
-    final belowMinimum = s.minimumQty > 0 && avail < s.minimumQty;
-    final colour = (avail <= 0 && belts <= 0)
-        ? Colors.red
-        : (belowMinimum ? Colors.orange.shade800 : Colors.green);
+    // Empty is the only state worth colouring now. "Below the minimum" was
+    // orange here until 21 August 2026, but the minimum is management's figure
+    // and is no longer shown to reps — a colour keyed to a number the rep
+    // cannot see is a warning they have no way to read.
+    final colour = (avail <= 0 && belts <= 0) ? Colors.red : Colors.green;
     // Belts are only mentioned when there are some — on CTR, bonding gum and
     // solution the counter is always zero and saying so would be noise.
     final beltSuffix = belts > 0 ? ' + $belts loose belt${belts == 1 ? '' : 's'}' : '';
+
+    /*
+     * What other reps are holding, rolls AND belts.
+     *
+     * The belts were missing until 21 August 2026: this read the roll counter
+     * alone, so a pool with twelve rolls and twelve belts booked against it
+     * told the rep "12 booked". Twelve of what, and twelve belts unaccounted
+     * for — the figure exists precisely to explain why what is available is
+     * lower than what is on the shelf, and it could not explain the belts.
+     */
+    final bookedBelts = s.reservedLooseBelts;
+    final booked = (s.reservedQty > 0 || bookedBelts > 0)
+        ? '  ·  ${s.describe(s.reservedQty, bookedBelts, unit)} booked'
+        : '';
     return Row(children: [
       Icon(Icons.inventory_2_outlined, size: 14, color: colour),
       const SizedBox(width: 4),
       Expanded(
         child: Text(
           (avail <= 0 && belts <= 0)
-              ? 'None left (minimum ${trimQty(s.minimumQty)} $unit)'
-              // Available first, because that is what the rep can sell. The
-              // minimum only earns a mention when the shelf has fallen under
-              // it — quoting a threshold nobody is near is noise.
-              : '${trimQty(avail)} $unit$beltSuffix available'
-                  '${belowMinimum ? '  ·  below minimum ${trimQty(s.minimumQty)}' : ''}'
-                  '${s.reservedQty > 0 ? '  ·  ${trimQty(s.reservedQty)} booked' : ''}',
+              ? 'None left'
+              // What the rep can sell, and what is already spoken for. The
+              // minimum held back is management's figure and is not theirs to
+              // quote; what other reps have booked is, because it is why the
+              // number in front of them moved.
+              : '${trimQty(avail)} $unit$beltSuffix available$booked',
           style: TextStyle(
               fontSize: 12, color: colour, fontWeight: FontWeight.w500),
         ),

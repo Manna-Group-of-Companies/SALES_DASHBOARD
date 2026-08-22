@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/utils.dart';
+import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class ProductionOrderDetailScreen extends StatefulWidget {
@@ -118,6 +119,11 @@ class _ProductionOrderDetailScreenState
         'Delivery date moved — the rep sees this on their order.');
   }
 
+  int get _editCount {
+    final v = _order['custom_edit_count'];
+    return v is num ? v.toInt() : (int.tryParse('${v ?? ''}'.trim()) ?? 0);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -210,6 +216,11 @@ class _ProductionOrderDetailScreenState
           _kv('Raised', '${_order['transaction_date'] ?? '—'}'),
           _kv('Order value',
               'Rs ${_num(_order['grand_total']).toStringAsFixed(2)}'),
+          // The floor is building to whatever the order says now. Knowing it
+          // has been changed several times is the difference between trusting
+          // the spec in front of them and going back to check it.
+          if (editCountLabel(_editCount).isNotEmpty)
+            _kv('Changes', editCountLabel(_editCount)),
           const SizedBox(height: 10),
           Row(children: [
             const Icon(Icons.event_available,

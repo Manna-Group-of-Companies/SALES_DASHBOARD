@@ -531,8 +531,12 @@ class _ProductionStockScreenState extends State<ProductionStockScreen> {
 
           // The four numbers, in the order the question is asked: what should
           // be here, what is here, what is spoken for, what is left.
-          _row('Minimum to hold', '${trimQty(s.minimumQty)} $unit'),
-          _row('On the shelf', '${trimQty(s.shelfQty)} $unit',
+          // Belts on both of these too, since 21 August 2026. The two rows
+          // below always carried them and these two did not, so a pool could
+          // read "12 on the shelf" while the rows under it accounted for
+          // twelve rolls and twelve belts.
+          _row('Minimum to hold', s.describe(s.minimumQty, s.minimumLooseBelts, unit)),
+          _row('On the shelf', s.describe(s.shelfQty, s.shelfLooseBelts, unit),
               bold: true,
               colour: s.belowMinimum ? const Color(0xFFB3261E) : null),
           _row('Booked by reps', '${trimQty(s.reservedQty)} $unit'
@@ -693,11 +697,10 @@ class _ProductionStockScreenState extends State<ProductionStockScreen> {
         : days == 0
             ? 'sold today'
             : 'last sold $days ${days == 1 ? 'day' : 'days'} ago');
-    final oldest = s.oldestOpenBatch;
-    if (oldest != null) {
-      parts.add('oldest stock ${oldest.ageDays} days '
-          '(since ${oldest.batchDate})');
-    }
+    // "oldest stock N days (since DATE)" stood here until 21 August 2026, and
+    // went with the rest of the dead-stock feature. The dated batches are
+    // still what `availableQty` is summed from — they are simply not a thing
+    // anyone is asked to make a decision about any more.
     if (s.batches.isEmpty) parts.add('no batch record');
     return parts.join('  ·  ');
   }

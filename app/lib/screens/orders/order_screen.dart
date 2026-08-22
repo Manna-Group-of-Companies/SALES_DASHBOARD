@@ -9,7 +9,7 @@ import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
-import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart';
+import 'package:manna_field_sales/screens/orders/min_stock_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
 import 'package:manna_field_sales/screens/orders/product_row.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -552,7 +552,7 @@ class _OrderScreenState extends State<OrderScreen> {
               tooltip: 'Slow movers',
               icon: const Icon(Icons.trending_down),
               onPressed: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const AgingStockScreen())),
+                  MaterialPageRoute(builder: (_) => const MinimumStockScreen())),
             ),
         ],
       ),

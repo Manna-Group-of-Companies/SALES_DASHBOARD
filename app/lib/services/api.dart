@@ -13,6 +13,7 @@ import 'package:manna_field_sales/core/discount.dart';
 import 'package:manna_field_sales/core/expenses.dart';
 import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
+import 'package:manna_field_sales/core/duplicate_order.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/proximity.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
@@ -1552,15 +1553,12 @@ class Api {
       if (s != null) out.add(MinStockDetail(stock: s, product: Product(doc)));
     }
 
-    out.sort((a, b) {
-      // Never-sold sorts as worst; after that, longest since a sale wins.
-      final da = a.stock.daysSinceSold < 0 ? 1 << 30 : a.stock.daysSinceSold;
-      final db = b.stock.daysSinceSold < 0 ? 1 << 30 : b.stock.daysSinceSold;
-      if (da != db) return db.compareTo(da);
-      final oa = a.stock.oldestOpenBatch?.ageDays ?? 0;
-      final ob = b.stock.oldestOpenBatch?.ageDays ?? 0;
-      return ob.compareTo(oa);
-    });
+    // Alphabetical, because the rep is looking something up rather than being
+    // steered. This sorted worst-moving first until 21 August 2026 — the point
+    // of the aging list was to float items drifting towards dead stock to the
+    // top, and with that feature gone the ordering was a ranking of a thing
+    // nobody is shown.
+    out.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return out;
   }
 
@@ -2061,7 +2059,7 @@ class Api {
           final results = await Future.wait([
             _list('Sales Order',
                 fields:
-                    '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_proforma_required","custom_order_placed_at","custom_po_status","custom_production_status","custom_production_finish_date","custom_combined_order"]',
+                    '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_proforma_required","custom_order_placed_at","custom_po_status","custom_production_status","custom_production_finish_date","custom_combined_order","custom_duplicate_of","custom_duplicate_ignored","custom_edit_count","docstatus"]',
                 filters: _mineFilter('custom_sales_person'),
                 limit: 50),
             // A rep's own lead orders. Failing here must not cost them their
@@ -2084,7 +2082,7 @@ class Api {
               'grand_total': l['total_amount'],
             });
           }
-          final collapsed = await _collapseIntoWeeks(rows);
+          final collapsed = await _collapseIntoGroups(rows);
           // Newest first across all of them, so the list reads as one history
           // rather than as several lists stapled together.
           collapsed.sort((a, b) => '${b['transaction_date'] ?? ''}'
@@ -2103,7 +2101,7 @@ class Api {
   ///
   /// Ungrouped orders are untouched, so a week still running reads exactly as
   /// it did before it was closed.
-  static Future<List<Map<String, dynamic>>> _collapseIntoWeeks(
+  static Future<List<Map<String, dynamic>>> _collapseIntoGroups(
       List<Map<String, dynamic>> rows) async {
     final groups = <String, List<Map<String, dynamic>>>{};
     for (final r in rows) {
@@ -2121,22 +2119,57 @@ class Api {
     try {
       heads = await _list('Combined Order',
           fields: '["name","customer","customer_name","week_start","week_end",'
-              '"status","order_count","total_amount"]',
+              '"custom_dispatch","status","order_count","total_amount"]',
           filters: '[["name","in",${_inList(groups.keys.toList())}]]');
+
+      // The van, for the groups a dispatch made. The rep is asked "when did
+      // it come and on what", and the combined order holds only the link —
+      // so the vehicle and date are read from the dispatch itself rather
+      // than copied onto the group, where they would go stale if the van
+      // or the date changed before it left.
+      final dispatchIds = <String>{
+        for (final h in heads)
+          if ('${h['custom_dispatch'] ?? ''}'.trim().isNotEmpty &&
+              '${h['custom_dispatch']}'.trim() != 'null')
+            '${h['custom_dispatch']}'.trim()
+      };
+      if (dispatchIds.isNotEmpty) {
+        // Best-effort: a group with no readable dispatch still lists, it just
+        // shows no van. Losing the row entirely would be far worse.
+        try {
+          final vans = await _list('Manna Dispatch',
+              fields: '["name","vehicle","dispatch_date"]',
+              filters: '[["name","in",${_inList(dispatchIds.toList())}]]');
+          final byId = {for (final v in vans) '${v['name']}': v};
+          heads = [
+            for (final h in heads)
+              {
+                ...h,
+                if (byId['${h['custom_dispatch']}'] != null) ...{
+                  'vehicle': byId['${h['custom_dispatch']}']!['vehicle'],
+                  'dispatch_date': byId['${h['custom_dispatch']}']!
+                      ['dispatch_date'],
+                }
+              }
+          ];
+        } catch (_) {
+          // Leave the groups without their van details.
+        }
+      }
     } catch (_) {
       // If the headers cannot be read, leave the individual orders showing.
       // A rep seeing their orders un-grouped is a worse list; a rep seeing
       // neither the group nor its members has lost work off their screen.
       return rows;
     }
-    return collapseIntoWeeks(rows, heads);
+    return collapseIntoGroups(rows, heads);
   }
 
   /// The swap itself, given the headers. Separated from fetching them because
   /// this is where an order could go missing, and that is worth testing without
   /// a network.
   @visibleForTesting
-  static List<Map<String, dynamic>> collapseIntoWeeks(
+  static List<Map<String, dynamic>> collapseIntoGroups(
       List<Map<String, dynamic>> rows, List<Map<String, dynamic>> heads) {
     if (heads.isEmpty) return rows;
     final found = {for (final h in heads) '${h['name']}'};
@@ -2155,7 +2188,11 @@ class Api {
         // Mapped onto the same shape the list already speaks, so the row sorts
         // and renders beside ordinary orders instead of needing its own path.
         'customer': h['customer_name'] ?? h['customer'],
-        'transaction_date': h['week_end'] ?? h['week_start'],
+        // Dated by the van where there was one, falling back to the week for
+        // the older groups "Close the week" made. This is what the row sorts
+        // on, so a dispatch group must not date itself from an empty week.
+        'transaction_date':
+            h['dispatch_date'] ?? h['week_end'] ?? h['week_start'],
         'grand_total': h['total_amount'],
       });
     }
@@ -2296,6 +2333,149 @@ class Api {
     if (r.statusCode != 200 && r.statusCode != 201) {
       throw Exception(_frappeError(r));
     }
+
+    /*
+     * Both of these run AFTER the save and neither can fail it. A rep who was
+     * told their edit did not go through, when it did, would key it again.
+     *
+     * Lead orders are excluded: the count and the duplicate check are about
+     * Sales Orders, and a Lead Order has neither field.
+     */
+    if (!isLead) {
+      await bumpEditCount(orderName);
+      await refreshDuplicateFlag(orderName);
+    }
+  }
+
+  /// Frappe hands numbers back as num or as a string, depending on the path.
+  static int _toInt(dynamic v) =>
+      v is num ? v.toInt() : (int.tryParse('${v ?? ''}'.trim()) ?? 0);
+
+  // -------- Duplicate orders, edit count, deletion --------
+  //
+  // All three were asked for on 21 August 2026. The rule behind the first is in
+  // core/duplicate_order.dart and pinned by shared/fixtures/duplicate_order.json.
+
+  /// Item codes on the customer's other OPEN orders, keyed by order name.
+  ///
+  /// One document read per order, because `Sales Order Item` cannot be listed
+  /// directly on this site — it answers 403, see CLAUDE.md section 4. That is
+  /// why this runs when an order is SAVED and not while a list renders.
+  ///
+  /// Capped at the ten most recent. A customer with more open orders than that
+  /// has a bigger problem than a duplicate warning, and ten document reads is
+  /// already the most a rep should wait through on a shop counter.
+  static Future<Map<String, List<String>>> _openOrderItems({
+    required String customer,
+    required String excluding,
+  }) async {
+    if (customer.isEmpty) return {};
+    final heads = await _list('Sales Order',
+        fields: '["name","custom_production_status","docstatus"]',
+        filters: '[["customer","=","$customer"]]',
+        orderBy: 'creation desc',
+        limit: 40);
+
+    final out = <String, List<String>>{};
+    for (final h in heads) {
+      if (out.length >= 10) break;
+      final name = '${h['name']}';
+      if (name == excluding) continue;
+      // Cancelled is docstatus 2. Dispatched is done with. Both are filtered
+      // here rather than in the query: an unset production status reads back
+      // three different ways and a SQL "!=" would silently drop those rows,
+      // which are exactly the open orders this is looking for.
+      if (_toInt(h['docstatus']) == 2) continue;
+      if ('${h['custom_production_status'] ?? ''}' == kStageDispatched) continue;
+
+      try {
+        final doc = await getOrder(name);
+        final items = ((doc['items'] as List?) ?? const [])
+            .cast<Map<String, dynamic>>();
+        out[name] = items.map((i) => '${i['item_code'] ?? ''}').toList();
+      } catch (_) {
+        // One unreadable order is not a reason to give up on the warning.
+      }
+    }
+    return out;
+  }
+
+  /// Work out whether [orderName] repeats a customer's open order, and store it.
+  ///
+  /// Best-effort and never rethrows: this runs after the order has already been
+  /// saved, and a warning that could not be computed must not surface as a
+  /// failure to save. The rep would have no idea what had actually happened to
+  /// their order.
+  static Future<void> refreshDuplicateFlag(String orderName) async {
+    try {
+      final doc = await getOrder(orderName);
+      final mine = ((doc['items'] as List?) ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map((i) => '${i['item_code'] ?? ''}')
+          .toList();
+
+      final others = await _openOrderItems(
+          customer: '${doc['customer'] ?? ''}', excluding: orderName);
+      final found = findDuplicate(mine: mine, otherOpenOrders: others);
+
+      final was = '${doc['custom_duplicate_of'] ?? ''}'.trim();
+      final now = found?.order ?? '';
+      if (was == now) return;
+
+      await _put('Sales Order', orderName, {
+        'custom_duplicate_of': now,
+        // A dismissal covers the overlap the rep actually looked at. Pointing
+        // at a DIFFERENT order is new information and deserves a fresh look;
+        // re-flagging the same one would nag somebody who already decided.
+        'custom_duplicate_ignored': 0,
+      });
+      await OfflineCache.clear();
+    } catch (_) {
+      // Left as it was. The order itself is saved, which is what matters.
+    }
+  }
+
+  /// The rep has seen the duplicate warning and wants it gone.
+  ///
+  /// Stored on the order, not the phone, so it stays dismissed on every device
+  /// and survives a reinstall.
+  static Future<void> ignoreDuplicate(String orderName) async {
+    await _put('Sales Order', orderName, {'custom_duplicate_ignored': 1});
+    await OfflineCache.clear();
+  }
+
+  /// Count one more rep edit against the order.
+  ///
+  /// Read-then-write rather than a server-side increment, because this site has
+  /// no Server Scripts. Two edits racing would lose one count, which is a price
+  /// worth paying for a figure that exists to say "this has been changed a lot".
+  static Future<void> bumpEditCount(String orderName) async {
+    try {
+      final doc = await getOrder(orderName);
+      final n = _toInt(doc['custom_edit_count']);
+      await _put('Sales Order', orderName, {'custom_edit_count': n + 1});
+    } catch (_) {
+      // Never the reason an edit fails.
+    }
+  }
+
+  /// Delete an order the rep raised and no longer wants.
+  ///
+  /// **Stock is released first, always.** Deleting a Sales Order that still
+  /// holds a reservation leaves the pool permanently over-booked with phantom
+  /// bookings nothing in the app can clear — see CLAUDE.md section 4. If the
+  /// release fails, the delete does not happen: an order still holding stock is
+  /// far better than stock held by an order that no longer exists.
+  ///
+  /// The caller decides who may do this; [canDeleteOrder] in core/order_rules
+  /// is the rule.
+  static Future<void> deleteOrder(String orderName) async {
+    await StockService.release(OrderRef(orderName));
+    final r = await Session.I.dio.delete('${_res('Sales Order')}/$orderName');
+    if (r.statusCode != 200 && r.statusCode != 202) {
+      throw Exception(_frappeError(r));
+    }
+    await OfflineCache.clear();
   }
 
   // -------- Leads --------
@@ -2772,7 +2952,15 @@ class Api {
         items: items,
         deliveryDate: deliveryDate);
 
-    return _bookOrUnwind(OrderRef(name), reservations);
+    final placed = await _bookOrUnwind(OrderRef(name), reservations);
+
+    /*
+     * After booking, not before: the duplicate check reads the order back, and
+     * an order that was about to be unwound for want of stock is not one to
+     * warn anybody about. Best-effort — see refreshDuplicateFlag.
+     */
+    await refreshDuplicateFlag(name);
+    return placed;
   }
 
   /// Raises an order against a lead and books its minimum-stock lines.
@@ -4035,88 +4223,6 @@ class Api {
   /// it.
   static bool isOrderComplete(Map<String, dynamic> order) =>
       '${order['custom_production_status'] ?? ''}' == kStageDispatched;
-
-  /// Complete, ungrouped orders from a closed week, ready to be combined.
-  ///
-  /// Only complete ones: grouping is the last thing that happens to a week, and
-  /// sweeping in an order still on the floor would close a combined order over
-  /// work that has not finished. Only ungrouped ones, so running the grouping
-  /// twice cannot put an order in two places.
-  static Future<List<Map<String, dynamic>>> groupableOrders({
-    required String weekStartIso,
-    required String weekEndIso,
-  }) async {
-    final rows = await _list('Sales Order',
-        fields: '["name","customer","customer_name","transaction_date",'
-            '"grand_total","custom_production_status","custom_combined_order",'
-            '"custom_sales_person","docstatus"]',
-        filters: '[["transaction_date",">=","$weekStartIso"],'
-            '["transaction_date","<=","$weekEndIso"],'
-            '["custom_production_status","=","$kStageDispatched"],'
-            '["docstatus","<",2]]',
-        orderBy: 'customer asc, transaction_date asc');
-    // Frappe treats an empty Link as '' or null depending on how it was
-    // written; both mean ungrouped, and `!= null` alone would miss one of them.
-    return rows.where((r) {
-      final g = '${r['custom_combined_order'] ?? ''}'.trim();
-      return g.isEmpty || g == 'null';
-    }).toList();
-  }
-
-  /// Groups a closed week's complete orders into one combined order per
-  /// customer, and returns the combined orders made.
-  ///
-  /// Each customer's orders are pointed at their combined order one at a time.
-  /// If a later write fails the earlier ones stay pointed at a combined order
-  /// that exists and is correct as far as it goes — the run can simply be
-  /// repeated, because [groupableOrders] excludes anything already grouped.
-  /// The alternative, unwinding the whole customer on any failure, would risk
-  /// leaving orders pointing at a combined order that had just been deleted.
-  static Future<List<Map<String, dynamic>>> combineWeek({
-    required String weekStartIso,
-    required String weekEndIso,
-  }) async {
-    final orders = await groupableOrders(
-        weekStartIso: weekStartIso, weekEndIso: weekEndIso);
-    if (orders.isEmpty) return const [];
-
-    final byCustomer = <String, List<Map<String, dynamic>>>{};
-    for (final o in orders) {
-      final c = '${o['customer'] ?? ''}'.trim();
-      if (c.isEmpty) continue;
-      byCustomer.putIfAbsent(c, () => []).add(o);
-    }
-
-    double n(dynamic v) =>
-        v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
-
-    final made = <Map<String, dynamic>>[];
-    for (final entry in byCustomer.entries) {
-      final total =
-          entry.value.fold<double>(0, (s, o) => s + n(o['grand_total']));
-      final r = await Session.I.dio.post(_res('Combined Order'), data: {
-        'customer': entry.key,
-        'week_start': weekStartIso,
-        'week_end': weekEndIso,
-        'status': 'Draft',
-        'order_count': entry.value.length,
-        'total_amount': double.parse(total.toStringAsFixed(2)),
-        if (Session.I.salesPerson != null) 'grouped_by': Session.I.salesPerson,
-      });
-      final combined = (r.data is Map) ? r.data['data'] : null;
-      if (combined is! Map || combined['name'] == null) {
-        throw Exception(_frappeError(r));
-      }
-      final name = '${combined['name']}';
-      for (final o in entry.value) {
-        await _put('Sales Order', '${o['name']}',
-            {'custom_combined_order': name});
-      }
-      made.add(combined.cast<String, dynamic>());
-    }
-    await OfflineCache.clear();
-    return made;
-  }
 
   static Future<List<Map<String, dynamic>>> getCombinedOrders({
     String? customer,

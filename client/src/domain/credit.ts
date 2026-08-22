@@ -165,6 +165,16 @@ export function bucketsOf(a: Aging): AgingBucket[] {
   ];
 }
 
+/**
+ * What a bucket reads when SAP has sent no breakdown at all.
+ *
+ * A dash, not a zero. Zero is a statement — "they owe nothing in this band" —
+ * and it is one nobody has the data to make until the sync has run. The boxes
+ * are still drawn with their labels, so a reader sees the shape of what is
+ * missing rather than an empty space. Asked for 21 August 2026.
+ */
+export const AGING_NO_DATA = '—';
+
 export const AGING_NOT_SYNCED =
   'SAP has not sent an age breakdown for this customer yet. The total is still the total.';
 

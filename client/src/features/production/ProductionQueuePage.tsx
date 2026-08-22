@@ -102,9 +102,13 @@ export function ProductionQueuePage() {
           </div>
         </div>
         <div className="cal__nav">
-          {/* Dispatch planning is a view of its own and lives in the sidebar. */}
-          <Link to="/production/close-week" className="btn btn--ghost btn--sm">
-            Close the week
+          {/*
+            Was "Close the week", which grouped a finished week's orders into
+            one combined order per customer. Combining is what a dispatch does
+            now, so this points at the screen that actually does it.
+          */}
+          <Link to="/production/dispatch" className="btn btn--ghost btn--sm">
+            Dispatch planning
           </Link>
           <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
         </div>
@@ -194,6 +198,14 @@ export function ProductionQueuePage() {
               <div className="ordrow__meta">
                 Deliver by {r.deliveryDate ? formatDate(r.deliveryDate) : 'not set'}
                 {r.productionFinishDate ? ` · est. finish ${formatDate(r.productionFinishDate)}` : ''}
+                {/*
+                  How often the rep has changed this order. The floor is
+                  building to whatever it says now, and an order rewritten
+                  several times is worth checking the spec on rather than
+                  trusting from memory. Silent at zero, which is most orders.
+                */}
+                {r.editCount > 0 &&
+                  ` · edited ${r.editCount} ${r.editCount === 1 ? 'time' : 'times'}`}
               </div>
 
               <div className="ordrow__status">

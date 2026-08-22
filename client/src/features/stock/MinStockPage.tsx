@@ -12,12 +12,9 @@ import type { MinStockItem } from '@/domain/types';
 import { CATEGORY_LABEL } from '@/domain/types';
 import {
   availableQty,
-  describeBatches,
-  hasAgedStock,
   isBelowThreshold,
   stockLevel,
-} from '@/domain/aging';
-import { formatDate } from '@/domain/orderRules';
+} from '@/domain/stockLevels';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { selectMinStockItems, selectReservations, selectUser } from '@/store/selectors';
 import { raiseReplenishment } from '@/store/slices/minStockSlice';
@@ -36,9 +33,8 @@ import {
   type TabDef,
 } from '@/components/ui';
 import { relativeTime } from '@/components/common/format';
-import { BatchBar } from './AgingPanel';
 
-type View = 'all' | 'low' | 'aged';
+type View = 'all' | 'low';
 
 export function MinStockPage() {
   const dispatch = useAppDispatch();
@@ -52,14 +48,11 @@ export function MinStockPage() {
   const [qty, setQty] = useState(0);
 
   const low = useMemo(() => items.filter(isBelowThreshold), [items]);
-  const aged = useMemo(() => items.filter((i) => hasAgedStock(i)), [items]);
-
-  const rows = view === 'low' ? low : view === 'aged' ? aged : items;
+  const rows = view === 'low' ? low : items;
 
   const tabs: TabDef<View>[] = [
     { id: 'all', label: 'All items', count: items.length },
     { id: 'low', label: 'Below minimum', count: low.length },
-    { id: 'aged', label: 'Has aged stock', count: aged.length },
   ];
 
   const canReplenish = user?.role === 'production_manager';
@@ -129,7 +122,6 @@ export function MinStockPage() {
                   <th className="right">Available</th>
                   <th className="right">Threshold</th>
                   <th style={{ width: 160 }}>Level</th>
-                  <th style={{ minWidth: 220 }}>Batches</th>
                   {canReplenish && <th />}
                 </tr>
               </thead>
@@ -188,15 +180,6 @@ export function MinStockPage() {
                             `${Math.round(stockLevel(item) * 100)}% of minimum`
                           )}
                         </div>
-                      </td>
-                      <td>
-                        <div className="tiny">{describeBatches(item)}</div>
-                        <BatchBar batches={item.batches} />
-                        {item.lastRestockedOn && (
-                          <div className="tiny dim" style={{ marginTop: 3 }}>
-                            last restocked {formatDate(item.lastRestockedOn)}
-                          </div>
-                        )}
                       </td>
                       {canReplenish && (
                         <td className="right">

@@ -31,7 +31,7 @@ Map<String, dynamic> head(String name, {int count = 2, double total = 200}) => {
 void main() {
   group('collapsing', () {
     test('grouped orders are replaced by their combined order', () {
-      final out = Api.collapseIntoWeeks(
+      final out = Api.collapseIntoGroups(
         [order('SO-1', group: 'COMB-1'), order('SO-2', group: 'COMB-1')],
         [head('COMB-1')],
       );
@@ -45,7 +45,7 @@ void main() {
 
     test('ungrouped orders are left exactly as they were', () {
       final loose = order('SO-3');
-      final out = Api.collapseIntoWeeks(
+      final out = Api.collapseIntoGroups(
         [order('SO-1', group: 'COMB-1'), loose],
         [head('COMB-1')],
       );
@@ -55,14 +55,14 @@ void main() {
 
     test('nothing grouped means nothing changes', () {
       final rows = [order('SO-1'), order('SO-2')];
-      expect(Api.collapseIntoWeeks(rows, const []), rows);
+      expect(Api.collapseIntoGroups(rows, const []), rows);
     });
 
     test('an order is never lost when its combined order cannot be read', () {
       // The degraded case: the group header is missing or unreadable. The
       // member must stay on the list — a rep seeing an ungrouped order is a
       // worse list, but a rep seeing neither has lost work off their screen.
-      final out = Api.collapseIntoWeeks(
+      final out = Api.collapseIntoGroups(
         [order('SO-1', group: 'COMB-MISSING')],
         const [],
       );
@@ -71,7 +71,7 @@ void main() {
     });
 
     test('only the groups that were read are collapsed', () {
-      final out = Api.collapseIntoWeeks(
+      final out = Api.collapseIntoGroups(
         [order('SO-1', group: 'COMB-1'), order('SO-2', group: 'COMB-GONE')],
         [head('COMB-1')],
       );
@@ -83,7 +83,7 @@ void main() {
       // The header counts every order in the week, including any raised by
       // another rep. A rep looking at their customer's week sees the whole
       // week, not just their own share of it.
-      final out = Api.collapseIntoWeeks(
+      final out = Api.collapseIntoGroups(
         [order('SO-1', group: 'COMB-1', amount: 100)],
         [head('COMB-1', count: 3, total: 999)],
       );
@@ -94,7 +94,7 @@ void main() {
     test('a combined row sorts by the week it closed', () {
       // It is mapped onto transaction_date so it sorts beside ordinary orders
       // rather than falling to the bottom with a blank date.
-      final out = Api.collapseIntoWeeks(
+      final out = Api.collapseIntoGroups(
         [order('SO-1', group: 'COMB-1')],
         [head('COMB-1')],
       );
@@ -105,7 +105,7 @@ void main() {
       // Frappe writes an unset Link both ways; either must read as ungrouped
       // rather than as a group whose header will never be found.
       for (final g in ['', '   ', 'null']) {
-        final out = Api.collapseIntoWeeks(
+        final out = Api.collapseIntoGroups(
             [order('SO-1', group: g)], [head('COMB-1')]);
         final so = out.where((r) => r['name'] == 'SO-1');
         expect(so, hasLength(1), reason: 'group "$g" should stay ungrouped');
@@ -120,7 +120,7 @@ void main() {
         'customer': 'Some Lead',
         'transaction_date': '2026-07-29',
       };
-      final out = Api.collapseIntoWeeks(
+      final out = Api.collapseIntoGroups(
           [order('SO-1', group: 'COMB-1'), lead], [head('COMB-1')]);
       expect(out.any((r) => r['name'] == 'LO-1'), isTrue);
     });

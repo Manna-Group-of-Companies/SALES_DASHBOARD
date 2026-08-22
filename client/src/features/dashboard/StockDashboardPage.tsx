@@ -23,18 +23,16 @@
 
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { MinStockItem } from '@/domain/types';
-import { availableQty, batchAgeDays, oldestBatch, stockLevel } from '@/domain/aging';
+import { availableQty, stockLevel } from '@/domain/stockLevels';
 import { formatDate, todayIso } from '@/domain/orderRules';
 import { useAppSelector } from '@/store/hooks';
 import {
-  selectAgingList,
   selectLowStockItems,
   selectMinStockItems,
   selectReservations,
   selectUser,
 } from '@/store/selectors';
-import { Alert, Badge, Button, Card, Empty, Meter } from '@/components/ui';
+import { Alert, Button, Card, Empty, Meter } from '@/components/ui';
 import { greeting, qty } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
 import { plural } from './dashboardRules';
@@ -46,7 +44,6 @@ export function StockDashboardPage() {
   const user = useAppSelector(selectUser);
   const items = useAppSelector(selectMinStockItems);
   const low = useAppSelector(selectLowStockItems);
-  const aging = useAppSelector(selectAgingList);
   const reservations = useAppSelector(selectReservations);
 
   /** Worst shortfall first — the list is worked from the top. */
@@ -67,8 +64,6 @@ export function StockDashboardPage() {
     () => items.filter((i) => availableQty(i) <= 0 && i.onHand > 0),
     [items],
   );
-
-  const agedItems = useMemo(() => aging.filter((a) => a.agedQty > 0), [aging]);
 
   if (!user) return null;
 
@@ -136,13 +131,6 @@ export function StockDashboardPage() {
           foot={`${reservations.length} ${plural(reservations.length, 'booking')}`}
           onClick={() => navigate('/stock/min')}
         />
-        <Tile
-          label="Aged stock"
-          value={String(agedItems.length)}
-          tone={agedItems.length ? 'warn' : undefined}
-          foot={agedItems.length ? 'Clear these first' : 'Nothing ageing'}
-          onClick={() => navigate('/stock/aging')}
-        />
       </div>
 
       <div className="cols cols--sidebar">
@@ -198,33 +186,14 @@ export function StockDashboardPage() {
           )}
         </Card>
 
-        {/* --- ageing ---------------------------------------------------- */}
-        <Card title="Oldest on the shelf">
-          {agedItems.length === 0 ? (
-            <Empty icon="✓" title="Nothing has aged" />
-          ) : (
-            <div className="stack gap-2">
-              {agedItems.slice(0, 6).map(({ item, agedQty: aged }) => (
-                <button
-                  key={item.itemCode}
-                  className="linkrow"
-                  onClick={() => navigate('/stock/aging')}
-                >
-                  <span className="small">{item.itemName}</span>
-                  <span className="small dim">{qty(aged, item.uom)} aged</span>
-                  <Badge tone="warn">{ageOf(item)}</Badge>
-                </button>
-              ))}
-            </div>
-          )}
-        </Card>
+        {/*
+          An "Oldest on the shelf" card and an "Aged stock" tile stood here
+          until 21 August 2026, both linking to /stock/aging. They went with
+          the dead-stock feature; the dated batches still back every figure on
+          this page, they are just not something to act on any more.
+        */}
       </div>
     </div>
   );
 }
 
-/** Age of the oldest live batch, for the chip on the ageing list. */
-function ageOf(item: MinStockItem): string {
-  const oldest = oldestBatch(item);
-  return oldest ? `${batchAgeDays(oldest)}d` : '—';
-}

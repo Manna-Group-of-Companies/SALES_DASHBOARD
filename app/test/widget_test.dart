@@ -52,7 +52,30 @@ void main() {
     // Counted in rolls, the item's stock UOM — not the kilograms the rate is
     // quoted against.
     expect(find.textContaining('6 rolls available'), findsOneWidget);
-    expect(find.textContaining('4 booked'), findsOneWidget);
+    // "4 booked" until 21 August 2026, which named no unit and mentioned no
+    // belts. Four of what was the rep's problem.
+    expect(find.textContaining('4 rolls booked'), findsOneWidget);
+  });
+
+  testWidgets('booked belts are counted, not silently dropped', (tester) async {
+    // Reported from the field: a pool with twelve rolls AND twelve loose belts
+    // booked against it told the rep "12 booked". The belts were spoken for and
+    // nothing on the row said so.
+    await tester.pumpWidget(_host(ProductRow(
+      line: OrderLine(product: _pctr()),
+      stock: MinStock(
+        itemCode: 'PCTR-100',
+        minimumQty: 20,
+        minimumLooseBelts: 12,
+        reservedQty: 12,
+        reservedLooseBelts: 12,
+        myReservedQty: 0,
+        myReservedLooseBelts: 0,
+      ),
+      onChanged: () {},
+    )));
+
+    expect(find.textContaining('12 rolls + 12 belts booked'), findsOneWidget);
   });
 
   testWidgets('a restocked shelf reads above the minimum, not pinned to it',
@@ -93,7 +116,8 @@ void main() {
     expect(find.textContaining('below minimum'), findsNothing);
   });
 
-  testWidgets('a shelf under the minimum says so', (tester) async {
+  testWidgets('a rep is never told what the minimum is, even under it',
+      (tester) async {
     await tester.pumpWidget(_host(ProductRow(
       line: OrderLine(product: _pctr()),
       stock: MinStock(
@@ -116,7 +140,17 @@ void main() {
     )));
 
     expect(find.textContaining('3 rolls available'), findsOneWidget);
-    expect(find.textContaining('below minimum 10'), findsOneWidget);
+    /*
+     * This read "below minimum 10" until 21 August 2026 and now must not.
+     * The minimum is management's figure: a rep quoting it to a customer is
+     * describing how the company runs its shelf rather than what they can
+     * sell. The shelf being under it is still true — it is simply not the
+     * rep's to know, and this is the case where it would have leaked.
+     */
+    expect(find.textContaining('below minimum'), findsNothing);
+    // Not a bare '10' — the product is called "Precured 100mm" and would
+    // match it. What must not appear is the word alongside the figure.
+    expect(find.textContaining('minimum 10'), findsNothing);
   });
 
   testWidgets('an empty shelf does not read as an item with no pool at all',

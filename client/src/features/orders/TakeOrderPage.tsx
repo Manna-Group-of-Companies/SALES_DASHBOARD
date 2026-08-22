@@ -7,8 +7,9 @@
  *  - Minimum-stock lines are *booked as you type*. The hold hits the shared
  *    ledger immediately, so another rep's screen shows the reduced availability
  *    within one poll and the same rolls cannot be sold twice (1.2).
- *  - Aged stock is offered alongside the requested item, so old inventory gets
- *    cleared before it goes stale (1.6).
+ *  - Aged stock used to be offered alongside the requested item, to clear old
+ *    inventory first. That panel went with the dead-stock feature on 21 Aug
+ *    2026 — see domain/stockLevels.ts.
  *  - A proforma is optional: the order can be raised for approval with or
  *    without one (1.3).
  */
@@ -16,7 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { canStartOrder, NO_ROUTE_MESSAGE } from '@/domain/sales';
-import type { MinStockItem, OrderItem, Product, ProductCategory } from '@/domain/types';
+import type { OrderItem, Product, ProductCategory } from '@/domain/types';
 import { CATEGORY_LABEL } from '@/domain/types';
 import {
   computeLine,
@@ -39,7 +40,6 @@ import { releaseHolds, reserveStock } from '@/store/slices/minStockSlice';
 import { pushToast } from '@/store/slices/notificationsSlice';
 import { Alert, Button, Card, Field, Input, Segmented, Empty, Modal } from '@/components/ui';
 import { money } from '@/components/common/format';
-import { AgingPanel } from '@/features/stock/AgingPanel';
 import { ProductRow, hasQuantity } from './ProductRow';
 import { ProformaDocument } from './ProformaDocument';
 import './orders.css';
@@ -233,20 +233,6 @@ export function TakeOrderPage() {
       );
       navigate(`/orders/${result.payload.id}`);
     }
-  };
-
-  /** Swap a requested line onto an aged batch after checking with the customer (1.6). */
-  const substitute = (item: MinStockItem) => {
-    const product = productByCode.get(item.itemCode);
-    if (!product) return;
-    setTab(product.category);
-    setSearch(product.name);
-    dispatch(
-      pushToast(
-        `Showing ${item.itemName} — confirm the substitution with the customer before booking.`,
-        'info',
-      ),
-    );
   };
 
   if (!user) return null;
@@ -457,9 +443,10 @@ export function TakeOrderPage() {
             </div>
           </Card>
 
-          <Card title="Aged stock">
-            <AgingPanel items={minStockItems} onSubstitute={substitute} />
-          </Card>
+          {/*
+            An "Aged stock" panel offering substitutions stood here until
+            21 August 2026, and went with the rest of the dead-stock feature.
+          */}
         </div>
       </div>
 

@@ -26,7 +26,7 @@ import 'package:manna_field_sales/screens/home/update_sheet.dart';
 import 'package:manna_field_sales/screens/manager/manager_dashboard_screen.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/screens/map/map_screen.dart';
-import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart';
+import 'package:manna_field_sales/screens/orders/min_stock_screen.dart';
 import 'package:manna_field_sales/screens/production/production_stock_screen.dart';
 import 'package:manna_field_sales/screens/production/production_dashboard_screen.dart';
 import 'package:manna_field_sales/screens/production/replenishment_receiving_screen.dart';
@@ -566,7 +566,7 @@ class _HomeDashboardState extends State<HomeDashboard>
       // manager can see what their team is being told to clear.
       if ((isRep || Session.I.isManager) && Session.I.isTreadsUnit)
         _Tile('Min Stock', Icons.inventory_2,
-                () => _go(const AgingStockScreen())),
+                () => _go(const MinimumStockScreen())),
       if (isRep && Session.I.company == kUnitRetreads)
         _Tile('Retread Rates', Icons.request_quote,
                 () => _go(const RetreadProformaListScreen())),

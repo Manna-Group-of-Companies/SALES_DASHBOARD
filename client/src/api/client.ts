@@ -92,10 +92,11 @@ import {
 import { normaliseWeights, orderTotal } from '@/domain/productRules';
 import { expenseOwner, parseTagged, RATE_FALLBACK } from '@/domain/trips';
 import { allItemsReady, firstStage, isTerminalStage, stageLabel } from '@/domain/processStages';
-import { availableQty, isBelowThreshold } from '@/domain/aging';
+import { availableQty, isBelowThreshold } from '@/domain/stockLevels';
 import { frappeNow, frappeToday, noteServerDate, serverNow } from '@/domain/serverClock';
 import { DISPATCHED, rollUp } from '@/domain/production';
 import { isFullyDispatched, remainingToDispatch } from '@/domain/dispatch';
+import { planCombinedOrders, type CombinableOrder } from '@/domain/combinedOrders';
 import { heldBy, holdPlan, trueReserved } from '@/domain/minimumStock';
 import {
   UNIT_TERRITORY_ROOT,
@@ -143,6 +144,7 @@ import {
   LEAD_ORDER_FIELD,
   LEAD_ORDER_ITEM_FIELD,
   COMBINED_ORDER_FIELD,
+  COMBINED_ORDER_STATUS,
   PROFORMA_STATUS,
   ATTENDANCE_LOG_FIELD,
   LEAVE_FIELD,
@@ -1209,7 +1211,11 @@ function bindHoldsToOrder(user: User, orderId: string): void {
 /**
  * Consume stock for real. Called when the Sales Manager approves an order being
  * served from minimum stock (2.3, 3.5): the hold becomes a withdrawal, drawn
- * oldest-batch-first so aged stock clears before fresh (1.6).
+ * oldest-batch-first.
+ *
+ * Oldest-first survives the removal of the dead-stock feature on 21 Aug 2026,
+ * and should. Rubber genuinely is better sold in the order it was made, and
+ * nothing about that needed a rep to see a date — it happens underneath.
  */
 function consumeStock(itemCode: string, qty: number, orderId: string): void {
   if (!USE_MOCK) return;
@@ -3960,6 +3966,20 @@ async function holdFromShelf(input: {
 }): Promise<{ rolls: number; belts: number; short: number } | null> {
   const maxAttempts = input.attempts ?? 3;
 
+  /*
+   * How many belts one roll cuts into, so a belt asked for against a pool of
+   * whole rolls can open one instead of going to production — see
+   * `allocateFromPool` and shared/fixtures/belt_from_roll.json.
+   *
+   * Read once, outside the retry loop: it is Item master data and cannot
+   * change between attempts. A missing item, or a master without the figure,
+   * leaves it 0, which means "not cuttable" and is the safe reading.
+   */
+  const itemDoc = await getDoc<Record<string, unknown>>(DOCTYPE.item, input.itemCode).catch(
+    () => null,
+  );
+  const beltsPerRoll = Number(itemDoc?.[ITEM_FIELD.beltsPerRoll]) || 0;
+
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const pool = await getDoc<Record<string, unknown>>(DOCTYPE.minStock, input.itemCode).catch(
       () => null,
@@ -3996,6 +4016,7 @@ async function holdFromShelf(input: {
       held: { rolls: heldRolls, belts: heldBelts },
       shelf: { rolls: shelfRolls, belts: shelfBelts },
       reservedTotal: trueReserved(all, input.itemCode),
+      beltsPerRoll,
     });
 
     const targetRolls = plan.target.rolls;
@@ -4583,93 +4604,6 @@ async function listCombinedOrders(input: { from?: string; to?: string } = {}): P
   }));
 }
 
-/**
- * Orders eligible for grouping into a week's combined orders.
- *
- * All four conditions from the spec, and the `custom_combined_order` one is
- * checked in the client because Frappe writes an unset Link as `''` on one
- * path and `null` on another — a single `=` filter misses half of them.
- */
-async function listGroupableOrders(week: { start: string; end: string }): Promise<TeamOrder[]> {
-  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.salesOrder, {
-    fields: ['name', 'docstatus', ...Object.values(SALES_ORDER_FIELD)],
-    filters: [
-      [SALES_ORDER_FIELD.placedOn, 'between', [week.start, week.end]],
-      [SALES_ORDER_FIELD.productionStatus, '=', PRODUCTION_STATUS.dispatched],
-    ],
-    limit: 0,
-  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.salesOrder));
-
-  return rows
-    .filter((r) => Number(r.docstatus) < 2 && !isLinkSet(str(r[SALES_ORDER_FIELD.combinedOrder])))
-    .map(toTeamOrder);
-}
-
-/**
- * Group a week's completed orders, one `Combined Order` per customer.
- *
- * **Repeatable, never unwound.** Because already-grouped orders are excluded
- * from the eligible set, a run that fails halfway is finished by running it
- * again. There is deliberately no rollback: deleting a partially-populated
- * combined order risks pointing member orders at a record that no longer
- * exists, which is worse than the half-done state it was trying to tidy.
- *
- * Membership is written only to `Sales Order.custom_combined_order`. There is
- * no child table on `Combined Order`, on purpose — with no server scripts, two
- * records of the same fact drift the first time a save half-fails.
- */
-async function closeWeek(input: {
-  week: { start: string; end: string };
-  groupedBy?: string;
-}): Promise<{ groups: number; orders: number; failed: string[] }> {
-  const eligible = await listGroupableOrders(input.week);
-
-  const byCustomer = new Map<string, TeamOrder[]>();
-  for (const o of eligible) {
-    if (!o.customer) continue;
-    const list = byCustomer.get(o.customer) ?? [];
-    list.push(o);
-    byCustomer.set(o.customer, list);
-  }
-
-  let groups = 0;
-  let orders = 0;
-  const failed: string[] = [];
-
-  for (const [customer, list] of byCustomer) {
-    try {
-      const combined = await createDoc<Record<string, unknown>>(DOCTYPE.combinedOrder, {
-        [COMBINED_ORDER_FIELD.customer]: customer,
-        [COMBINED_ORDER_FIELD.weekStart]: input.week.start,
-        [COMBINED_ORDER_FIELD.weekEnd]: input.week.end,
-        [COMBINED_ORDER_FIELD.status]: 'Draft',
-        [COMBINED_ORDER_FIELD.orderCount]: list.length,
-        [COMBINED_ORDER_FIELD.total]: Math.round(list.reduce((s, o) => s + o.total, 0) * 100) / 100,
-        // Usually null: a production manager is rarely a Sales Person. Omitted
-        // rather than sent empty, so Frappe does not try to validate a Link
-        // against a blank string.
-        ...(input.groupedBy ? { [COMBINED_ORDER_FIELD.groupedBy]: input.groupedBy } : {}),
-      });
-      groups += 1;
-
-      for (const o of list) {
-        try {
-          await updateDoc(DOCTYPE.salesOrder, o.id, {
-            [SALES_ORDER_FIELD.combinedOrder]: String(combined.name),
-          });
-          orders += 1;
-        } catch {
-          failed.push(o.id);
-        }
-      }
-    } catch {
-      failed.push(`group for ${customer}`);
-    }
-  }
-
-  return { groups, orders, failed };
-}
-
 // -------------------------------------------------------------- production ---
 
 /**
@@ -4727,6 +4661,7 @@ async function listProductionQueue(unit?: string): Promise<ProductionOrderRow[]>
       productionFinishDate:
         (str(r[SALES_ORDER_FIELD.productionFinishDate]) ?? '').slice(0, 10) || undefined,
       changedAfterApproval: Number(r[SALES_ORDER_FIELD.changedAfterApproval]) === 1,
+      editCount: Number(r[SALES_ORDER_FIELD.editCount]) || 0,
       combinedOrder: str(r[SALES_ORDER_FIELD.combinedOrder]),
     };
   });
@@ -4759,6 +4694,7 @@ async function getOrderForProduction(
     productionFinishDate:
       (str(doc[SALES_ORDER_FIELD.productionFinishDate]) ?? '').slice(0, 10) || undefined,
     changedAfterApproval: Number(doc[SALES_ORDER_FIELD.changedAfterApproval]) === 1,
+    editCount: Number(doc[SALES_ORDER_FIELD.editCount]) || 0,
     combinedOrder: str(doc[SALES_ORDER_FIELD.combinedOrder]),
     lines: items.map(toOrderLine),
   };
@@ -5060,6 +4996,103 @@ export interface FinalizeDispatchInput {
 }
 
 /**
+ * Throw away a dispatch that is not going to be sent.
+ *
+ * Planning has two endings, dispatched or abandoned, and abandoning has to
+ * DELETE the document rather than leave it sitting at Draft. A draft still
+ * owns its lines — `stagedElsewhere` on the planning screen subtracts them
+ * from what anyone else is allowed to add — so one left behind quietly makes
+ * stock unplannable that no van is ever coming to collect.
+ *
+ * A dispatch that has already gone out is refused. That record is the fact
+ * that a vehicle left the yard, and deleting it would strand the quantities
+ * already added to each Sales Order Item's dispatched totals.
+ */
+async function discardDispatch(id: string): Promise<void> {
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.dispatch, id);
+  if (str(doc[DISPATCH_FIELD.status]) === DISPATCH_STATUS.dispatched) {
+    throw new Error('That dispatch has already gone out, so it cannot be cancelled.');
+  }
+  await deleteDoc(DOCTYPE.dispatch, id);
+}
+
+/**
+ * Fold a dispatch's finished orders into one `Combined Order` per customer.
+ *
+ * This replaced "Close the week" on 20 Aug 2026. A week was never a thing the
+ * customer received; a van is. Two of a customer's orders arriving together
+ * are one delivery to them, and that is what their rep should be able to name.
+ *
+ * **Only orders this dispatch FINISHED are grouped.** A part-loaded order —
+ * seven of ten rolls now, three on the next van — is deliberately left alone
+ * until the dispatch that clears the remainder, and joins that one's group
+ * instead. `Sales Order.custom_combined_order` holds a single link, so an
+ * order carried by two dispatches could otherwise only point at one of them,
+ * and whichever wrote second would silently move it out of a group whose
+ * count and total then said something untrue.
+ *
+ * **Two or more, or nothing.** One order is not a combination; grouping it
+ * alone would give the rep a second identifier for a thing that already had
+ * one, and the old weekly close made exactly those pointless groups of one.
+ *
+ * **Never unwound.** Members are pointed at the group one at a time, and if
+ * one write fails the header is corrected down to the members that actually
+ * landed rather than the group being deleted — deleting it would strand any
+ * order already pointing at it.
+ */
+async function combineDispatchedOrders(
+  dispatchId: string,
+  touched: CombinableOrder[],
+  groupedBy?: string,
+): Promise<void> {
+  const totalOf = new Map(touched.map((o) => [o.id, o.total]));
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  /*
+   * Every order the van touched goes in; which of them group is the rule's
+   * decision, not this function's. Pinned by
+   * `shared/fixtures/combined_order.json` and settled without a network, so
+   * the live path and the tests cannot come to different answers.
+   */
+  const plan = planCombinedOrders(touched);
+
+  for (const group of plan) {
+    const combined = await createDoc<Record<string, unknown>>(DOCTYPE.combinedOrder, {
+      [COMBINED_ORDER_FIELD.customer]: group.customer,
+      [COMBINED_ORDER_FIELD.dispatch]: dispatchId,
+      // Made at the moment the van is sent, so it is never anything else.
+      [COMBINED_ORDER_FIELD.status]: COMBINED_ORDER_STATUS.dispatched,
+      [COMBINED_ORDER_FIELD.orderCount]: group.orders.length,
+      [COMBINED_ORDER_FIELD.total]: group.total,
+      // Usually absent: whoever sends a van is rarely a Sales Person. Omitted
+      // rather than sent empty, so Frappe does not validate a Link against ''.
+      ...(groupedBy ? { [COMBINED_ORDER_FIELD.groupedBy]: groupedBy } : {}),
+    });
+
+    const members: string[] = [];
+    for (const id of group.orders) {
+      try {
+        await updateDoc(DOCTYPE.salesOrder, id, {
+          [SALES_ORDER_FIELD.combinedOrder]: String(combined.name),
+        });
+        members.push(id);
+      } catch {
+        // Left out of the group, and out of its totals below.
+      }
+    }
+
+    if (members.length !== group.orders.length) {
+      await updateDoc(DOCTYPE.combinedOrder, String(combined.name), {
+        [COMBINED_ORDER_FIELD.orderCount]: members.length,
+        [COMBINED_ORDER_FIELD.total]: round2(
+          members.reduce((s, id) => s + (totalOf.get(id) ?? 0), 0),
+        ),
+      });
+    }
+  }
+}
+
+/**
  * Lock a Draft. What actually left is captured per line here — defaulting to
  * planned in the UI, editable down at this last moment — added to each Sales
  * Order Item's running total, and the order's own status recomputed exactly
@@ -5082,6 +5115,10 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
   // Item codes that became fully dispatched, per order — the best-effort
   // Manna Production Order flip reads this after the Sales Order is saved.
   const fullyDoneByOrder = new Map<string, string[]>();
+
+  // Every order this van touched, with the two facts the grouping rule turns
+  // on. It decides which of them combine; see `combineDispatchedOrders`.
+  const touched: CombinableOrder[] = [];
 
   for (const [orderId, lines] of bySalesOrder) {
     const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, orderId);
@@ -5169,6 +5206,20 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
       [SALES_ORDER_FIELD.productionStatus]: status,
     });
     if (fullyDone.length) fullyDoneByOrder.set(orderId, fullyDone);
+
+    /*
+     * `rollUp` returns Dispatched only when every line on the order has
+     * reached the terminal stage, which is exactly "this van finished it" —
+     * the fact the grouping rule needs, and one this loop has already
+     * computed for the Sales Order write above.
+     */
+    touched.push({
+      id: orderId,
+      customer: str(doc[SALES_ORDER_FIELD.customer]),
+      total: Number(doc[SALES_ORDER_FIELD.total]) || 0,
+      complete: status === PRODUCTION_STATUS.dispatched,
+      alreadyCombined: isLinkSet(str(doc[SALES_ORDER_FIELD.combinedOrder])),
+    });
   }
 
   // Best-effort: a Manna Production Order raised for a now-fully-dispatched
@@ -5224,6 +5275,14 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
     [DISPATCH_FIELD.dispatchedBy]: input.user.name,
     [DISPATCH_FIELD.dispatchedAt]: frappeNow(),
   });
+
+  /*
+   * Last, and deliberately after the dispatch is locked. The van has gone
+   * either way; combining is bookkeeping on top of that fact, and doing it
+   * first would leave a group pointing at a dispatch that then failed to
+   * close. Running it again is safe — orders already grouped are skipped.
+   */
+  await combineDispatchedOrders(input.id, touched, input.user.salesPerson);
 
   return getDispatch(input.id);
 }
@@ -5966,8 +6025,6 @@ export const Api = {
     approveLeadOrder,
     rejectLeadOrder,
     listCombinedOrders,
-    listGroupableOrders,
-    closeWeek,
     listApprovalInbox,
     decideInboxItem,
     captureLocation,
@@ -5989,6 +6046,7 @@ export const Api = {
     listDispatchDrafts,
     getDispatch,
     saveDispatchDraft,
+    discardDispatch,
     finalizeDispatch,
   },
 

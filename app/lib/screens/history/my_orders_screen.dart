@@ -5,6 +5,7 @@ import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
 import 'package:manna_field_sales/screens/orders/combined_order_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/history_list.dart';
 import 'package:manna_field_sales/widgets/order_complete_tick.dart';
@@ -18,17 +19,34 @@ class MyOrdersScreen extends StatelessWidget {
       loader: Api.getMyOrders,
       cacheKey: CacheKeys.orders,
       tileBuilder: (ctx, r, _) {
-        // A closed week arrives as one row standing for all of its orders.
+        // A combined order arrives as one row standing for all of its orders.
         // Its members are not listed separately — see Api.getMyOrders — so the
         // same money is never counted twice down the screen.
         if (r['is_combined'] == true) {
           final count = (r['order_count'] ?? 0);
+
+          // What made the group. Since 20 Aug 2026 that is a dispatch: the
+          // customer's orders that went out on one van are one delivery to
+          // them, and the van and the day are what they will ring about.
+          // Groups made by the old "Close the week" carry a week instead, and
+          // still have to read properly — they are what is already on phones.
+          final vehicle = '${r['vehicle'] ?? ''}'.trim();
+          final dispatchDate = '${r['dispatch_date'] ?? ''}'.trim();
+          final String origin;
+          if (dispatchDate.isNotEmpty && dispatchDate != 'null') {
+            origin = vehicle.isEmpty || vehicle == 'null'
+                ? 'dispatched $dispatchDate'
+                : 'dispatched $dispatchDate  ·  vehicle $vehicle';
+          } else {
+            origin = 'week ${r['week_start'] ?? ''} to ${r['week_end'] ?? ''}';
+          }
+
           return ListTile(
             leading: const Icon(Icons.merge_type, color: Color(0xFF6D4C41)),
             title: Text('${r['customer'] ?? r['name']}',
                 style: const TextStyle(fontWeight: FontWeight.w600)),
             subtitle: Text(
-                '${r['name']}  ·  week ${r['week_start'] ?? ''} to ${r['week_end'] ?? ''}'
+                '${r['name']}  ·  $origin'
                 '\n$count ${count == 1 ? 'order' : 'orders'} combined  ·  '
                 'Rs ${r['grand_total'] ?? 0}'),
             isThreeLine: true,
@@ -66,7 +84,21 @@ class MyOrdersScreen extends StatelessWidget {
                   '${(fin.isNotEmpty && fin != 'null') ? '  ·  est. finish $fin' : ''}' : approvalLabel(po)}';
         }
 
-        return ListTile(
+        /*
+         * A possible duplicate of another open order for the same customer.
+         * Worked out when the order was saved and stored on it — see
+         * core/duplicate_order.dart for why it is not computed here.
+         *
+         * A warning and never a block: a rep may genuinely want two open
+         * orders for the same product. Dismissing writes to the order, so it
+         * stays dismissed on every device.
+         */
+        final dupOf = '${r['custom_duplicate_of'] ?? ''}'.trim();
+        final dupIgnored = '${r['custom_duplicate_ignored'] ?? 0}' == '1';
+        final showDup =
+            !isLead && dupOf.isNotEmpty && dupOf != 'null' && !dupIgnored;
+
+        final tile = ListTile(
           leading: Icon(isLead ? Icons.emoji_objects : Icons.shopping_cart,
               color: isLead ? const Color(0xFF5C6BC0) : null),
           title: Row(children: [
@@ -97,7 +129,73 @@ class MyOrdersScreen extends StatelessWidget {
                     OrderDetailScreen(orderName: r['name'] as String)));
           },
         );
+
+        if (!showDup) return tile;
+        return Column(mainAxisSize: MainAxisSize.min, children: [
+          tile,
+          _DuplicateWarning(orderName: '${r['name']}', duplicateOf: dupOf),
+        ]);
       },
+    );
+  }
+}
+
+/// The duplicate banner under an order row, with the way to make it go away.
+///
+/// Its own widget because dismissing has to redraw just this row — rebuilding
+/// the whole list would scroll a rep back to the top mid-round.
+class _DuplicateWarning extends StatefulWidget {
+  final String orderName;
+  final String duplicateOf;
+  const _DuplicateWarning({required this.orderName, required this.duplicateOf});
+
+  @override
+  State<_DuplicateWarning> createState() => _DuplicateWarningState();
+}
+
+class _DuplicateWarningState extends State<_DuplicateWarning> {
+  bool _gone = false;
+  bool _busy = false;
+
+  Future<void> _ignore() async {
+    setState(() => _busy = true);
+    try {
+      await Api.ignoreDuplicate(widget.orderName);
+      if (mounted) setState(() => _gone = true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(humanError(e))));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_gone) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF3E0),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFFFCC80)),
+      ),
+      child: Row(children: [
+        Icon(Icons.copy_all_outlined, size: 18, color: Colors.orange.shade900),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'Possible duplicate — products here are also on '
+            '${widget.duplicateOf}, which has not been dispatched yet.',
+            style: TextStyle(fontSize: 12, color: Colors.orange.shade900),
+          ),
+        ),
+        TextButton(
+          onPressed: _busy ? null : _ignore,
+          child: const Text('Ignore'),
+        ),
+      ]),
     );
   }
 }

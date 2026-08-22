@@ -249,11 +249,16 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             Text(b.label,
                 style: const TextStyle(fontSize: 10, color: Colors.black54)),
             const SizedBox(height: 3),
-            Text('₹${b.amount.toStringAsFixed(0)}',
+            // A dash, not a zero, when SAP has sent no breakdown — see
+            // kAgingNoData. Zero would say "nothing due in this band", which
+            // is a statement nobody has the data to make.
+            Text(a.bucketsKnown ? '₹${b.amount.toStringAsFixed(0)}' : kAgingNoData,
                 style: TextStyle(
                     fontSize: 13.5,
                     fontWeight: FontWeight.bold,
-                    color: b.overdue ? Colors.red.shade700 : null)),
+                    color: (b.overdue && a.bucketsKnown)
+                        ? Colors.red.shade700
+                        : null)),
           ]),
         ),
       ),
@@ -272,10 +277,12 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
 
       // How old the debt is. Shown, never enforced: the credit rule is still
       // the total against the limit, and nothing here blocks an order.
+      // The buckets are always drawn, synced or not: a reader can then see
+      // WHICH bands are unknown, and the four labels stay in the same place
+      // either way. The explanation follows underneath when there is one.
       const SizedBox(height: 4),
-      if (a.bucketsKnown)
-        Row(children: a.buckets.map(bucket).toList())
-      else
+      Row(children: a.buckets.map(bucket).toList()),
+      if (!a.bucketsKnown)
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
           child: Text(kAgingNotSynced,

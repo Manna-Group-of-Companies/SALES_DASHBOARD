@@ -12,6 +12,13 @@
 // catches that: an item on the list that has not been sold in months is on its
 // way to being dead stock, and wants clearing before it gets there.
 //
+// **Nothing shows that any more.** Every screen that displayed dead-stock risk,
+// batch ages or batch dates was stripped on 21 August 2026. [isDeadStockRisk],
+// [isSlowMoving] and [StockBatch.ageDays] are kept, and still tested, because
+// the rule was worked out once and turning the display back on should not mean
+// deriving it again — but nothing in the app reads them today. Do not wire one
+// back in without asking; it was removed deliberately.
+//
 // Two reps standing in two different shops can also both be shown the same
 // eight rolls. Whoever commits first should get them, and the other rep's
 // screen has to stop offering them. See `services/stock_service.dart` for how
@@ -396,11 +403,15 @@ class MinStockDetail {
   String get name => product.name;
   ProductCategory get category => product.category;
 
-  /// The pool and what is left of it, in the product's own unit — "6 of 10
-  /// rolls", "40 of 60 kg".
+  /// What is left to sell, in the product's own unit — "6 rolls", "40 kg".
+  ///
+  /// It read "6 **of 10** rolls" until 21 August 2026. The 10 was
+  /// [MinStock.minimumQty], the level management holds against the item, and
+  /// this label is rep-facing: a rep quoting it to a customer describes how
+  /// the company runs its shelf rather than what they can sell. The figure is
+  /// still on the model for the production and stock screens, which decide it.
   String get availabilityLabel =>
-      '${trimQty(stock.availableQty)} of ${trimQty(stock.minimumQty)} '
-      '${category.stockUnit}';
+      '${trimQty(stock.availableQty)} ${category.stockUnit}';
 }
 
 /// A dated slice of a minimum-stock pool.

@@ -265,6 +265,11 @@ export const SALES_ORDER_FIELD = {
   originalDeliveryDate: 'custom_original_delivery_date',
   productionFinishDate: 'custom_production_finish_date',
   changedAfterApproval: 'custom_changed_after_approval',
+  /**
+   * How many times the rep has changed the order since raising it. Counted by
+   * the phone (see `Api.bumpEditCount`), read here. Added 21 Aug 2026.
+   */
+  editCount: 'custom_edit_count',
   proformaStatus: 'custom_proforma_status',
   proformaRequired: 'custom_proforma_required',
   poNumber: 'custom_po_number',
@@ -806,7 +811,18 @@ export const LEAD_ORDER_ITEM_FIELD = {
 } as const;
 
 /**
- * `Combined Order` — the weekly grouping. Verified against COMB-00001..3.
+ * `Combined Order` — one customer's orders that went out on one dispatch.
+ *
+ * **It used to be a weekly grouping**, made by "Close the week". Combining is
+ * now what a dispatch does: a van leaves with several of a customer's orders
+ * on it, and those become one order to that customer. The week is what the
+ * office happened to close on, and was never what the customer received.
+ *
+ * `week_start`/`week_end` survive only because the older weekly groups carry
+ * them. They were mandatory on the doctype and were relaxed to optional (two
+ * Property Setters, 20 Aug 2026) rather than deleted, so nothing that already
+ * reads them breaks. Dispatch-made groups leave them empty and set
+ * `custom_dispatch` instead.
  *
  * Membership lives only on `Sales Order.custom_combined_order`; there is no
  * child table here. With no server scripts, two records of the same fact drift
@@ -815,14 +831,24 @@ export const LEAD_ORDER_ITEM_FIELD = {
 export const COMBINED_ORDER_FIELD = {
   customer: 'customer',
   customerName: 'customer_name',
+  /** Empty on anything made by a dispatch — see the note above. */
   weekStart: 'week_start',
   weekEnd: 'week_end',
+  /** The dispatch that made the group. Added as a Custom Field, 20 Aug 2026. */
+  dispatch: 'custom_dispatch',
   status: 'status',
   orderCount: 'order_count',
   total: 'total_amount',
   /** Often null — a production manager is usually not a Sales Person. */
   groupedBy: 'grouped_by',
   notes: 'notes',
+} as const;
+
+/** The three values `Combined Order.status` accepts. */
+export const COMBINED_ORDER_STATUS = {
+  draft: 'Draft',
+  confirmed: 'Confirmed',
+  dispatched: 'Dispatched',
 } as const;
 
 /** Custom fields added to `Customer` (address/GST arrive via Excel import). */

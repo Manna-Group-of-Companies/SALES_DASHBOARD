@@ -303,3 +303,101 @@ figure to the range summary — a lunch a rep bought on a colleague's trip is
 their money and belongs on their row, not on the trip owner's.
 
 *Pinned in `fixtures/trip_sharing.json`; both suites read the same 20 cases.*
+
+---
+
+## Combining orders lives on the dashboard only — **decided 20 Aug 2026**
+
+| | `app/` (Flutter) | `client/` (React) |
+|---|---|---|
+| Who may combine | ~~"Close the week", production dashboard~~ → **nothing** | **Dispatch Planning**, when the van is sent |
+| Trigger | ~~a closed week~~ | one dispatch |
+| Reads groups | yes — My Orders collapses them | yes — Combined Orders |
+
+**This is a deliberate one-sided rule, not drift. Do not "fix" the phone by
+giving it a way to combine again.**
+
+Both apps used to implement the identical weekly grouping, independently — the
+exact duplication this file exists to catch. Combining is now something a
+**dispatch** does: a week was what the office closed, a van is what the
+customer received, and two of a customer's orders arriving together are one
+delivery to them. There is one place a van is sent from, so there is now one
+place that combines, and nothing left to drift against.
+
+The phone keeps the whole **reading** half — a group still collapses into a
+single row in My Orders — and lost only the ability to create one.
+
+**Only orders the dispatch finishes are grouped.** `Sales Order
+.custom_combined_order` holds a single Link, so an order carried by two
+dispatches could point at only one of them; whichever wrote second would move
+it out of a group whose count and total then said something untrue. A
+part-loaded order therefore waits for the van that clears its remainder. And a
+customer with fewer than two finished orders gets no group at all — one order
+is not a combination, and the weekly close's groups of one only ever gave the
+rep a second name for something that already had one.
+
+*Pinned in `fixtures/combined_order.json`. Unusually, `client/` alone reads it;
+the `about` field says so, and says why.*
+
+---
+
+## The minimum held back is a dashboard figure — **decided 21 Aug 2026**
+
+| | `app/` (Flutter) | `client/` (React) |
+|---|---|---|
+| Units available | **shown** | **shown** |
+| The minimum to hold | ~~shown~~ → **hidden** | **shown** (Minimum column) |
+| Batch dates / ages / dead-stock risk | ~~shown~~ → **gone** | ~~shown~~ → **gone** |
+
+**Deliberate, on both counts. Do not "fix" the phone by putting the minimum
+back.**
+
+A rep quoting the held-back level to a customer is describing how the company
+runs its shelf rather than what they can sell. Reps get the available number
+and nothing else; the sales, production and stock screens on the dashboard keep
+the minimum, because deciding it is their job.
+
+**The dead-stock feature was removed from both sides**, not hidden on one:
+batch-age columns, aging filters, "clear this first" badges, substitution
+panels, and the sorts that ranked lists by staleness. The dated
+`Manna Minimum Stock Batch` records are untouched in ERPNext and still add up
+to what is on the shelf — nobody is asked to make a decision about how old they
+are.
+
+Oldest-batch-first allocation **stays**. Rubber is better sold in the order it
+was made, and that never needed anyone to see a date.
+
+The rule itself survives unshown in `app/lib/models/min_stock.dart`
+(`isDeadStockRisk`, `isSlowMoving`) with its tests, so turning it back on is a
+decision rather than a re-derivation. The dashboard's `domain/aging.ts` was
+stripped to what is still load-bearing and renamed `domain/stockLevels.ts`.
+
+---
+
+## The duplicate-order warning is phone-only — **decided 21 Aug 2026**
+
+| | `app/` (Flutter) | `client/` (React) |
+|---|---|---|
+| Warns on a duplicate | **yes**, in My Orders | not yet |
+| Dismissing it | **yes**, writes to the order | — |
+| Times edited | **shown** to rep, sales manager, production | **shown** on the production queue |
+
+**Not drift — a gap with a reason.** The warning exists because a rep in a shop
+with bad signal raises the same order twice; My Orders is where they would
+notice, and the dashboard has no equivalent list of *my* orders. The dashboard
+takes orders too and could adopt the same rule, which is why the rule lives in
+`fixtures/duplicate_order.json` as data rather than buried in a Dart file.
+
+**It is worked out when an order is SAVED, never while a list renders.**
+`Sales Order Item` cannot be listed directly on this site — it answers 403, see
+`app/CLAUDE.md` §4 — so there is no way to ask "which open orders contain this
+item". The app computes the overlap while it still holds the lines and stores
+the answer on `custom_duplicate_of`. Capped at the customer's ten most recent
+open orders, because each one costs a document read.
+
+**Only open orders count.** A customer who buys the same tread every month is
+not making a mistake, and warning on their history would train reps to dismiss
+the thing blind — which is worse than never showing it.
+
+Dismissal is stored on the order (`custom_duplicate_ignored`), not on the
+phone, so it stays dismissed on every device and after a reinstall.

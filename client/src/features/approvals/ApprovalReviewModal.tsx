@@ -16,13 +16,12 @@ import { useMemo, useState } from 'react';
 import type { FulfilmentSource, Order } from '@/domain/types';
 import { effectiveDeliveryDate, formatDate } from '@/domain/orderRules';
 import { computeLine, rateUnitFor, round2 } from '@/domain/productRules';
-import { availableQty } from '@/domain/aging';
+import { availableQty } from '@/domain/stockLevels';
 import { checkCredit } from '@/api/client';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import {
   selectCustomers,
   selectMinStockByCode,
-  selectMinStockItems,
   selectProducts,
   selectUser,
 } from '@/store/selectors';
@@ -41,7 +40,6 @@ import {
   Textarea,
 } from '@/components/ui';
 import { money } from '@/components/common/format';
-import { AgingPanel } from '@/features/stock/AgingPanel';
 import { describeEntry } from '@/domain/productRules';
 
 export function ApprovalReviewModal({ order, onClose }: { order: Order; onClose: () => void }) {
@@ -50,7 +48,6 @@ export function ApprovalReviewModal({ order, onClose }: { order: Order; onClose:
   const customers = useAppSelector(selectCustomers);
   const products = useAppSelector(selectProducts);
   const minStockByCode = useAppSelector(selectMinStockByCode);
-  const minStockItems = useAppSelector(selectMinStockItems);
   const saving = useAppSelector((s) => s.orders.saving);
 
   const customer = customers.find((c) => c.id === order.customerId);
@@ -257,6 +254,17 @@ export function ApprovalReviewModal({ order, onClose }: { order: Order; onClose:
                   label="Credit utilisation"
                 />
               </div>
+
+              {/*
+                No age breakdown here yet, deliberately. This modal reads the
+                fixture-era `Customer` from the catalog slice, which carries
+                `outstandingBalance` and `creditLimit` and none of SAP's four
+                buckets. The live customer surfaces — the Customers list and
+                the order detail — do show them. Wiring this one means adding
+                the buckets to that older model and whatever populates it,
+                which is its own piece of work rather than part of a display
+                change. See shared/fixtures/credit.json for the rule.
+              */}
               {credit.breaches && (
                 <div style={{ marginTop: 10 }}>
                   <Alert tone="danger" title="Order exceeds available credit">
@@ -373,13 +381,12 @@ export function ApprovalReviewModal({ order, onClose }: { order: Order; onClose:
             </div>
           </Card>
 
-          {/* 2.1 — aged stock highlighted inside the review itself. */}
-          <Card title="Aged stock available">
-            <AgingPanel
-              items={minStockItems}
-              title="Swap a line onto these to clear old inventory (confirm with the customer first)."
-            />
-          </Card>
+          {/*
+            An "Aged stock available" panel stood here, offering to swap a
+            line onto older inventory. Removed with the dead-stock feature on
+            21 August 2026 — approving an order is not the moment to be sold
+            a substitution based on how long something has sat.
+          */}
         </div>
       </div>
     </Modal>

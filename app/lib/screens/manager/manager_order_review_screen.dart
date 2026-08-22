@@ -19,12 +19,12 @@
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/discount.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
-import 'package:manna_field_sales/screens/orders/aging_stock_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -150,6 +150,18 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
 
   double _heldElsewhere(MinStock s) {
     final other = s.reservedQty - _heldHere(s);
+    return other < 0 ? 0 : other;
+  }
+
+  /// Belts held by every OTHER order.
+  ///
+  /// This did not exist until 21 August 2026, and its absence was the bug:
+  /// "Booked by other orders" was rendered with a hard-coded zero belts, so a
+  /// pool with twelve rolls and twelve belts booked against it read as twelve
+  /// rolls. A manager deciding whether to give this order the stock could not
+  /// see half of what was already spoken for.
+  int _beltsHeldElsewhere(MinStock s) {
+    final other = s.reservedLooseBelts - _beltsHeldHere(s);
     return other < 0 ? 0 : other;
   }
 
@@ -408,6 +420,13 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     color: _approved ? Colors.green : Colors.orange.shade800)),
+            // How much this order has been churned before it reached approval.
+            // An order rewritten five times is worth a second look at, and the
+            // manager had no way to tell one from an order raised once.
+            if (editCountLabel(_int(_order['custom_edit_count'])).isNotEmpty)
+              Text(editCountLabel(_int(_order['custom_edit_count'])),
+                  style: const TextStyle(
+                      fontSize: 12, color: Colors.black54)),
             if (_missing.isNotEmpty) ...[
               const SizedBox(height: 12),
               _missingCard(),
@@ -543,8 +562,83 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
         _kv('Would owe', 'Rs ${_projected.toStringAsFixed(0)}'),
         _kv('Credit limit',
             _limit > 0 ? 'Rs ${_limit.toStringAsFixed(0)}' : 'none set'),
+
+        /*
+         * How old the debt is, added 21 August 2026. "Owes now" alone answers
+         * only half the question a manager is actually asking: forty thousand
+         * owed for three weeks and forty thousand owed for six months are the
+         * same figure and not remotely the same decision.
+         *
+         * Shown, never enforced — the credit rule is still the total against
+         * the limit, exactly as core/credit.dart has it, and nothing here
+         * blocks an order.
+         */
+        const SizedBox(height: 10),
+        const Text('How old it is',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        _agingRow(),
       ]),
     );
+  }
+
+  /// The four SAP buckets, oldest last and only the oldest coloured.
+  ///
+  /// Reads through core/credit.dart so the phone and the dashboard cannot
+  /// disagree about what "not synced" means — pinned by
+  /// shared/fixtures/credit.json.
+  Widget _agingRow() {
+    final a = agingOf(_customer);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(
+        children: a.buckets
+            .map((b) => Expanded(
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: (b.overdue && a.bucketsKnown)
+                          ? const Color(0xFFFFEBEE)
+                          : const Color(0xFFF7F7F8),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(b.label,
+                              style: const TextStyle(
+                                  fontSize: 10, color: Colors.black54)),
+                          const SizedBox(height: 3),
+                          // A dash, not a zero, when nothing has synced.
+                          Text(
+                              a.bucketsKnown
+                                  ? 'Rs ${b.amount.toStringAsFixed(0)}'
+                                  : kAgingNoData,
+                              style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: (b.overdue && a.bucketsKnown)
+                                      ? Colors.red.shade700
+                                      : null)),
+                        ]),
+                  ),
+                ))
+            .toList(),
+      ),
+      if (!a.bucketsKnown)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(kAgingNotSynced,
+              style: const TextStyle(fontSize: 11, color: Colors.black45)),
+        ),
+      if (a.mismatch)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(kAgingMismatch,
+              style: TextStyle(fontSize: 11, color: Colors.orange.shade900)),
+        ),
+    ]);
   }
 
   Widget _lineCard(Map<String, dynamic> it) {
@@ -553,8 +647,6 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
     final p = _products[code];
     final unit = p?.category.stockUnit ?? 'units';
     final mode = _modeOf(it);
-    final oldest = s?.oldestOpenBatch;
-    final hasOld = oldest != null && oldest.ageDays >= kSlowMovingDays;
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -612,31 +704,6 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
           else ...[
             const Divider(height: 14),
             _stockBreakdown(s, unit, it),
-            // Not a warning, and nothing to decide. The oldest batch goes out
-            // first automatically, and the shelf life is long enough that age
-            // is not a quality question. This is here so the product gets
-            // pushed harder in the market before it turns into dead stock.
-            if (hasOld)
-              Container(
-                margin: const EdgeInsets.only(top: 6),
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                    color: const Color(0xFFFFF3E0),
-                    borderRadius: BorderRadius.circular(6)),
-                child: Row(children: [
-                  Icon(Icons.campaign_outlined,
-                      size: 14, color: Colors.orange.shade900),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                        'Worth pushing — ${trimQty(oldest.qty)} $unit have been '
-                        'in stock ${oldest.ageDays} days (since '
-                        '${oldest.batchDate}).',
-                        style: TextStyle(
-                            fontSize: 11, color: Colors.orange.shade900)),
-                  ),
-                ]),
-              ),
             const SizedBox(height: 8),
             _modeToggle(it, mode),
           ],
@@ -785,6 +852,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
     final here = _heldHere(s);
     final hereBelts = _beltsHeldHere(s);
     final elsewhere = _heldElsewhere(s);
+    final elsewhereBelts = _beltsHeldElsewhere(s);
 
     // What the customer actually asked for, against what the pool could cover.
     //
@@ -816,20 +884,19 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                 beltsToMake < 0 ? 0 : beltsToMake, unit),
             Colors.deepPurple,
             bold: true),
-      if (elsewhere > 0)
-        _dot('Booked by other orders', s.describe(elsewhere, 0, unit),
-            Colors.black54),
+      // Belts count as "booked by somebody else" exactly as rolls do. The row
+      // appears when EITHER is held, not just when rolls are: a pool with only
+      // belts booked against it used to show nothing here at all.
+      if (elsewhere > 0 || elsewhereBelts > 0)
+        _dot('Booked by other orders',
+            s.describe(elsewhere, elsewhereBelts, unit), Colors.black54),
       _dot('Free for anyone else',
           s.describe(s.availableQty, s.availableLooseBelts, unit),
           s.availableQty <= 0 ? Colors.red : Colors.green),
-      Padding(
-        padding: const EdgeInsets.only(top: 2),
-        child: Text(lastSoldLabel(s),
-            style: TextStyle(
-                fontSize: 11,
-                color:
-                    s.isDeadStockRisk ? Colors.red.shade700 : Colors.black54)),
-      ),
+      // A "last sold" line, reddened when the item was drifting towards dead
+      // stock, stood here until 21 August 2026. Removed with the rest of the
+      // dead-stock feature; approving an order is not the moment to weigh how
+      // long something has been on a shelf.
     ]);
   }
 

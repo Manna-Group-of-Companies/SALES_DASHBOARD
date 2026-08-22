@@ -24,7 +24,7 @@ import {
   rollWeight,
   type LineInput,
 } from '@/domain/productRules';
-import { availableQty } from '@/domain/aging';
+import { availableQty } from '@/domain/stockLevels';
 import { Field, Input, UnitInput } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { StockChip } from '@/features/stock/StockChip';

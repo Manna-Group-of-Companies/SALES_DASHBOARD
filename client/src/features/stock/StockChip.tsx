@@ -11,8 +11,7 @@
  */
 
 import type { MinStockItem } from '@/domain/types';
-import { availableQty, describeBatches, hasAgedStock } from '@/domain/aging';
-import { Tooltip } from '@/components/ui';
+import { availableQty } from '@/domain/stockLevels';
 
 export function StockChip({
   item,
@@ -32,21 +31,18 @@ export function StockChip({
   const tone = free <= 0 ? 'out' : item.onHand < item.threshold ? 'low' : 'ok';
   const label = free <= 0 ? 'Fully booked' : `${format(free)} ${item.uom} available`;
 
+  /*
+   * The chip carried a dated-batch breakdown in its tooltip and an
+   * "Aged stock — clear first" badge beside it until 21 August 2026. Both
+   * went with the dead-stock feature. What is free to sell is the whole
+   * point of the chip and is unchanged.
+   */
   return (
     <span className="stack gap-1" style={{ alignItems: 'flex-start' }}>
-      <Tooltip text={describeBatches(item)}>
-        <span className={`stock-chip stock-chip--${tone}`}>
-          {tone === 'low' && '⚠ '}
-          {label}
-        </span>
-      </Tooltip>
-
-      {/* Aged stock is worth pushing before it goes stale (1.6). */}
-      {hasAgedStock(item) && free > 0 && (
-        <Tooltip text={describeBatches(item)}>
-          <span className="stock-chip stock-chip--aged">🕰 Aged stock — clear first</span>
-        </Tooltip>
-      )}
+      <span className={`stock-chip stock-chip--${tone}`}>
+        {tone === 'low' && '⚠ '}
+        {label}
+      </span>
 
       {heldElsewhere > 0 && (
         <span className="reserved-note">

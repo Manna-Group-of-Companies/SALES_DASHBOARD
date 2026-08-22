@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
-import 'package:manna_field_sales/screens/production/combine_week_screen.dart';
 import 'package:manna_field_sales/screens/production/production_order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/order_complete_tick.dart';
@@ -45,17 +44,11 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
     return Scaffold(
       appBar: AppBar(
           title: Text('Production · ${Session.I.productionCompany ?? ''}'),
+          // "Close the week" was removed on 20 Aug 2026. Combining a
+          // customer's orders is what a dispatch does now, on the dashboard's
+          // Dispatch Planning screen, so the phone no longer offers a second
+          // way to do it — two triggers for one rule is how they drift.
           actions: [
-            IconButton(
-                icon: const Icon(Icons.merge_type),
-                tooltip: 'Close the week',
-                onPressed: () async {
-                  await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => const CombineWeekScreen()));
-                  _reload();
-                }),
             IconButton(icon: const Icon(Icons.refresh), onPressed: _reload)
           ]),
       body: Column(children: [

@@ -1,0 +1,106 @@
+{
+  "about": "Serving loose belts by opening a whole roll. Both apps read this file in their tests. Fixed 21 August 2026 after a rep ordered 5 rolls + 1 loose belt of a PCTR item against a pool of 48 rolls and was told the 5 rolls came from minimum stock and the 1 belt would be MADE TO ORDER. There were 48 rolls on the shelf. A belt comes out of a roll - one roll gets opened, the belt goes out, and the rest of that roll stays in the pool as loose stock. Nothing needed making.",
+
+  "the_bug": "Rolls and belts were clamped against the pool INDEPENDENTLY: rolls against whole rolls, belts against loose belts only. A pool holding whole rolls and no loose belts therefore covered zero belts, however much stock was on the shelf. In client/ that was holdPlan() deciding what to book and what was short; in app/ it was _beltHeadroom on the rep's order row and the manager's review breakdown. Both said production for something sitting on the shelf.",
+
+  "fields": {
+    "poolRolls": "whole rolls free to this order",
+    "poolBelts": "loose belts free to this order - the remainder of rolls already opened",
+    "beltsPerRoll": "Item.custom_belts_per_roll. Real values on this site are 4, 6, 8, 10, 14, 16",
+    "note": "beltsPerRoll of 0 means the item is not sold in belts OR its master is incomplete. Either way no roll is ever cut - see MinStock.beltsPerRoll in app/lib/models/min_stock.dart."
+  },
+
+  "rules": {
+    "loose_belts_first": "Belts are served from loose belts before any roll is opened. A roll already cut should be finished before another one is broken into.",
+    "then_open_rolls": "Belts still wanted open whole rolls: ceil(remaining / beltsPerRoll). The opened roll leaves the roll count; the belts not sold stay in the pool as loose stock, which is what MinStock.availableLooseBelts already adds back.",
+    "whole_rolls_first": "When the pool cannot cover everything, whole rolls asked for are served BEFORE rolls are opened for belts. A customer gets more product that way - a whole roll rather than one belt off it - and the roll is the larger commitment. This only ever bites at the boundary, where the pool cannot satisfy both.",
+    "never_cut_what_is_not_cuttable": "beltsPerRoll of 0 or less means no roll is opened, whatever the belt demand. A wrong guess here would sell belts that cannot be cut."
+  },
+
+  "allocate": [
+    {
+      "why": "THE REPORTED BUG: 5 rolls and 1 belt against 48 rolls on the shelf. Every bit of it comes from stock - one roll is opened for the belt - and nothing is made to order",
+      "want": { "rolls": 5, "belts": 1 },
+      "pool": { "rolls": 48, "belts": 0, "beltsPerRoll": 6 },
+      "expect": { "rolls": 5, "belts": 1, "rollsOpened": 1, "shortRolls": 0, "shortBelts": 0 }
+    },
+    {
+      "why": "loose belts are used before a roll is broken into - a roll already cut should be finished first",
+      "want": { "rolls": 0, "belts": 3 },
+      "pool": { "rolls": 10, "belts": 4, "beltsPerRoll": 6 },
+      "expect": { "rolls": 0, "belts": 3, "rollsOpened": 0, "shortRolls": 0, "shortBelts": 0 }
+    },
+    {
+      "why": "loose belts cover part of it and a single roll is opened for the rest",
+      "want": { "rolls": 0, "belts": 5 },
+      "pool": { "rolls": 10, "belts": 2, "beltsPerRoll": 6 },
+      "expect": { "rolls": 0, "belts": 5, "rollsOpened": 1, "shortRolls": 0, "shortBelts": 0 }
+    },
+    {
+      "why": "exactly one roll's worth of belts opens exactly one roll, not two",
+      "want": { "rolls": 0, "belts": 6 },
+      "pool": { "rolls": 10, "belts": 0, "beltsPerRoll": 6 },
+      "expect": { "rolls": 0, "belts": 6, "rollsOpened": 1, "shortRolls": 0, "shortBelts": 0 }
+    },
+    {
+      "why": "one belt past a roll opens a second one - belts do not come in fractions of a roll",
+      "want": { "rolls": 0, "belts": 7 },
+      "pool": { "rolls": 10, "belts": 0, "beltsPerRoll": 6 },
+      "expect": { "rolls": 0, "belts": 7, "rollsOpened": 2, "shortRolls": 0, "shortBelts": 0 }
+    },
+    {
+      "why": "rolls and belts draw on the same shelf: 5 rolls plus 7 belts costs 5 whole rolls and 2 opened ones",
+      "want": { "rolls": 5, "belts": 7 },
+      "pool": { "rolls": 10, "belts": 0, "beltsPerRoll": 6 },
+      "expect": { "rolls": 5, "belts": 7, "rollsOpened": 2, "shortRolls": 0, "shortBelts": 0 }
+    },
+    {
+      "why": "at the boundary the whole roll wins: one roll on the shelf and an order for a roll AND a belt gives the customer the roll, and the belt is made",
+      "want": { "rolls": 1, "belts": 1 },
+      "pool": { "rolls": 1, "belts": 0, "beltsPerRoll": 6 },
+      "expect": { "rolls": 1, "belts": 0, "rollsOpened": 0, "shortRolls": 0, "shortBelts": 1 }
+    },
+    {
+      "why": "rolls short as well: what the shelf has goes out whole, and there is nothing spare left to open for the belt",
+      "want": { "rolls": 5, "belts": 1 },
+      "pool": { "rolls": 3, "belts": 0, "beltsPerRoll": 6 },
+      "expect": { "rolls": 3, "belts": 0, "rollsOpened": 0, "shortRolls": 2, "shortBelts": 1 }
+    },
+    {
+      "why": "more belts than the shelf can cut: two rolls give twelve belts and the rest is made",
+      "want": { "rolls": 0, "belts": 20 },
+      "pool": { "rolls": 2, "belts": 0, "beltsPerRoll": 6 },
+      "expect": { "rolls": 0, "belts": 12, "rollsOpened": 2, "shortRolls": 0, "shortBelts": 8 }
+    },
+    {
+      "why": "an item with no belts-per-roll on its master is never cut, however many rolls are sitting there - selling belts that cannot be cut is the worse mistake",
+      "want": { "rolls": 0, "belts": 2 },
+      "pool": { "rolls": 10, "belts": 0, "beltsPerRoll": 0 },
+      "expect": { "rolls": 0, "belts": 0, "rollsOpened": 0, "shortRolls": 0, "shortBelts": 2 }
+    },
+    {
+      "why": "an empty pool makes the whole line, exactly as before - this fix must not invent stock",
+      "want": { "rolls": 2, "belts": 1 },
+      "pool": { "rolls": 0, "belts": 0, "beltsPerRoll": 6 },
+      "expect": { "rolls": 0, "belts": 0, "rollsOpened": 0, "shortRolls": 2, "shortBelts": 1 }
+    },
+    {
+      "why": "a rolls-only order is untouched by any of this",
+      "want": { "rolls": 4, "belts": 0 },
+      "pool": { "rolls": 10, "belts": 3, "beltsPerRoll": 6 },
+      "expect": { "rolls": 4, "belts": 0, "rollsOpened": 0, "shortRolls": 0, "shortBelts": 0 }
+    },
+    {
+      "why": "a large belts-per-roll still opens only one roll for a single belt - the other 15 belts stay in the pool, they are not sold to this order",
+      "want": { "rolls": 0, "belts": 1 },
+      "pool": { "rolls": 5, "belts": 0, "beltsPerRoll": 16 },
+      "expect": { "rolls": 0, "belts": 1, "rollsOpened": 1, "shortRolls": 0, "shortBelts": 0 }
+    },
+    {
+      "why": "nothing asked for is nothing allocated, and no roll is opened on a whim",
+      "want": { "rolls": 0, "belts": 0 },
+      "pool": { "rolls": 10, "belts": 5, "beltsPerRoll": 6 },
+      "expect": { "rolls": 0, "belts": 0, "rollsOpened": 0, "shortRolls": 0, "shortBelts": 0 }
+    }
+  ]
+}

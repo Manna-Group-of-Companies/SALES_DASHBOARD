@@ -1,0 +1,86 @@
+{
+  "about": "Warning a rep that an order repeats products the same customer already has on another OPEN order - the 'I raised this twice' mistake. Asked for on 21 August 2026. Only app/ implements it today, because only the phone shows My Orders; the dashboard takes orders too and could adopt the same rule, which is why it lives here as data rather than inside a Dart file. See ../DIVERGENCES.md.",
+
+  "fields": {
+    "duplicateOf": "Sales Order.custom_duplicate_of - the other order's name, or empty",
+    "ignored": "Sales Order.custom_duplicate_ignored - set when the rep dismisses it",
+    "note": "Sales Order Item cannot be listed directly on this site (403, see app/CLAUDE.md section 4), so the overlap is worked out when the order is SAVED, while the app still holds its lines, and stored on the order. Nothing recomputes it while My Orders renders."
+  },
+
+  "rules": {
+    "open_only": "Only orders that have not been dispatched and are not cancelled count. A customer who buys the same tread every month is not making a mistake, and warning on their history would train reps to dismiss it blind.",
+    "same_customer": "Only that customer's own orders. Two customers buying the same product is the business working.",
+    "not_itself": "An order never duplicates itself.",
+    "most_overlap_wins": "When several open orders overlap, name the one sharing the most products; ties break on the order name so the warning does not change wording between two identical reads.",
+    "blank_items_ignored": "An item code that is empty or the string 'null' is not a product. Frappe reads an unset Link back three ways and none of them are a duplicate."
+  },
+
+  "find": [
+    {
+      "why": "the case the warning exists for: the rep raised the same order twice and both are still open",
+      "mine": ["TREAD RUBBER PRECURED BLACK PEARL 102 EA 60"],
+      "others": { "SAL-ORD-2026-00120": ["TREAD RUBBER PRECURED BLACK PEARL 102 EA 60"] },
+      "expect": { "order": "SAL-ORD-2026-00120", "items": ["TREAD RUBBER PRECURED BLACK PEARL 102 EA 60"] }
+    },
+    {
+      "why": "one shared product out of several is still worth saying - the rep may have meant to add it to the existing order",
+      "mine": ["A", "B", "C"],
+      "others": { "SAL-ORD-1": ["C", "D"] },
+      "expect": { "order": "SAL-ORD-1", "items": ["C"] }
+    },
+    {
+      "why": "no overlap at all is not a duplicate, however many open orders the customer has",
+      "mine": ["A", "B"],
+      "others": { "SAL-ORD-1": ["C"], "SAL-ORD-2": ["D", "E"] },
+      "expect": null
+    },
+    {
+      "why": "a customer with no other open orders can never duplicate",
+      "mine": ["A"],
+      "others": {},
+      "expect": null
+    },
+    {
+      "why": "the order sharing the most products is the one named - it is the likeliest thing the rep meant to edit",
+      "mine": ["A", "B", "C"],
+      "others": { "SAL-ORD-1": ["A"], "SAL-ORD-2": ["A", "B", "C"] },
+      "expect": { "order": "SAL-ORD-2", "items": ["A", "B", "C"] }
+    },
+    {
+      "why": "an equal overlap breaks on the order name, so two reads of the same data word the warning identically",
+      "mine": ["A", "B"],
+      "others": { "SAL-ORD-9": ["A"], "SAL-ORD-2": ["B"] },
+      "expect": { "order": "SAL-ORD-2", "items": ["B"] }
+    },
+    {
+      "why": "an empty order of the rep's own has nothing to duplicate",
+      "mine": [],
+      "others": { "SAL-ORD-1": ["A"] },
+      "expect": null
+    },
+    {
+      "why": "blank and 'null' item codes are not products - Frappe reads an unset value back three ways",
+      "mine": ["", "null", "A"],
+      "others": { "SAL-ORD-1": ["", "null"] },
+      "expect": null
+    },
+    {
+      "why": "the same product listed twice on one side is still one shared product, not two",
+      "mine": ["A", "A"],
+      "others": { "SAL-ORD-1": ["A", "A"] },
+      "expect": { "order": "SAL-ORD-1", "items": ["A"] }
+    },
+    {
+      "why": "item codes differing only by surrounding whitespace are the same product",
+      "mine": [" A "],
+      "others": { "SAL-ORD-1": ["A"] },
+      "expect": { "order": "SAL-ORD-1", "items": ["A"] }
+    },
+    {
+      "why": "shared products are reported in a stable order, so the warning does not reshuffle between reads",
+      "mine": ["C", "A", "B"],
+      "others": { "SAL-ORD-1": ["B", "C", "A"] },
+      "expect": { "order": "SAL-ORD-1", "items": ["A", "B", "C"] }
+    }
+  ]
+}

@@ -278,9 +278,14 @@ export function coverFor(split: Split, free: Qty): Cover {
  * what *other* orders hold, and the shelf less that is what this order may
  * take.
  *
- * Rolls and belts are planned on separate axes throughout. A roll is not a
- * belt until somebody cuts it, and netting them together would hold belts that
- * do not exist.
+ * Rolls and belts draw on the SAME shelf. They were planned on separate axes
+ * until 21 August 2026, on the reasoning that "a roll is not a belt until
+ * somebody cuts it" — which is true, and which nonetheless produced the wrong
+ * answer: a pool of 48 whole rolls and no loose belts covered zero belts, so a
+ * rep ordering five rolls and one belt was told the belt would be made to
+ * order while 48 rolls sat on the shelf. Somebody cuts it. That is what
+ * `allocateFromPool` does, and it is pinned by
+ * `shared/fixtures/belt_from_roll.json`.
  */
 export interface HoldPlan {
   /** What the order should hold once this is applied. */
@@ -295,11 +300,94 @@ export interface HoldPlan {
   changed: boolean;
 }
 
+/** What one order can take off a pool, and what is left for production. */
+export interface PoolAllocation {
+  /** Whole rolls served from the pool. */
+  rolls: number;
+  /** Belts served, whether loose or cut from a roll opened for them. */
+  belts: number;
+  /**
+   * Rolls broken into to cover [belts]. They leave the roll count; the belts
+   * not sold stay in the pool as loose stock, which is what the reserved
+   * counters already imply — see `MinStock.availableLooseBelts` on the phone.
+   */
+  rollsOpened: number;
+  /** What the pool could not cover. This, and only this, is production. */
+  shortRolls: number;
+  shortBelts: number;
+}
+
+/**
+ * Split an order line between a minimum-stock pool and production.
+ *
+ * **A belt comes out of a roll.** Serving one against a pool with no loose
+ * belts opens a whole roll: the belt goes out and the rest of that roll stays
+ * in the pool. Treating belts as coverable only by loose belts is what sent a
+ * single belt to production while 48 rolls sat on the shelf.
+ *
+ * Order of service, and why:
+ *
+ *  - **Loose belts before opening a roll.** A roll already cut should be
+ *    finished before another one is broken into.
+ *  - **Whole rolls before rolls opened for belts.** Only bites when the pool
+ *    cannot cover everything, and there it gives the customer more product —
+ *    a whole roll rather than one belt cut off it.
+ *  - **Nothing is cut when `beltsPerRoll` is 0 or less.** That means the item
+ *    is not sold in belts, or its master is incomplete; either way selling
+ *    belts that cannot be cut is the worse mistake.
+ *
+ * Pinned by `shared/fixtures/belt_from_roll.json`, which both suites read.
+ */
+export function allocateFromPool(input: {
+  wantRolls: number;
+  wantBelts: number;
+  poolRolls: number;
+  poolBelts: number;
+  beltsPerRoll: number;
+}): PoolAllocation {
+  const wantRolls = clamp(input.wantRolls);
+  const wantBelts = clamp(input.wantBelts);
+  const poolRolls = clamp(input.poolRolls);
+  const poolBelts = clamp(input.poolBelts);
+  const perRoll = clamp(input.beltsPerRoll);
+
+  const rolls = Math.min(wantRolls, poolRolls);
+
+  const fromLoose = Math.min(wantBelts, poolBelts);
+  let stillWanted = wantBelts - fromLoose;
+
+  let rollsOpened = 0;
+  let fromOpened = 0;
+  if (stillWanted > 0 && perRoll > 0) {
+    // Whole rolls only: half a roll cannot be opened, and what is left of the
+    // pool after the whole rolls above have been promised is all there is.
+    const spare = Math.floor(poolRolls - rolls);
+    rollsOpened = Math.min(Math.ceil(stillWanted / perRoll), Math.max(0, spare));
+    fromOpened = Math.min(stillWanted, rollsOpened * perRoll);
+    stillWanted -= fromOpened;
+  }
+
+  const belts = fromLoose + fromOpened;
+  return {
+    rolls,
+    belts,
+    rollsOpened,
+    shortRolls: wantRolls - rolls,
+    shortBelts: wantBelts - belts,
+  };
+}
+
 export function holdPlan(input: {
   ordered: Qty;
   held: Qty;
   shelf: Qty;
   reservedTotal: Qty;
+  /**
+   * From the Item master. Absent means "not cuttable", which is the safe
+   * reading for an item that is not sold in belts or whose master is
+   * incomplete — it can only ever narrow what the pool is said to cover.
+   */
+  beltsPerRoll?: number;
 }): HoldPlan {
   const heldRolls = clamp(input.held.rolls);
   const heldBelts = clamp(input.held.belts);
@@ -308,18 +396,20 @@ export function holdPlan(input: {
   const freeRolls = clamp(input.shelf.rolls - (input.reservedTotal.rolls - heldRolls));
   const freeBelts = clamp(input.shelf.belts - (input.reservedTotal.belts - heldBelts));
 
-  const target: Qty = {
-    rolls: Math.min(clamp(input.ordered.rolls), freeRolls),
-    belts: Math.min(clamp(input.ordered.belts), freeBelts),
-  };
+  const allocated = allocateFromPool({
+    wantRolls: input.ordered.rolls,
+    wantBelts: input.ordered.belts,
+    poolRolls: freeRolls,
+    poolBelts: freeBelts,
+    beltsPerRoll: input.beltsPerRoll ?? 0,
+  });
+
+  const target: Qty = { rolls: allocated.rolls, belts: allocated.belts };
 
   return {
     target,
     delta: { rolls: target.rolls - heldRolls, belts: target.belts - heldBelts },
-    short: {
-      rolls: clamp(input.ordered.rolls) - target.rolls,
-      belts: clamp(input.ordered.belts) - target.belts,
-    },
+    short: { rolls: allocated.shortRolls, belts: allocated.shortBelts },
     // Rebuilt from the row sum rather than nudged, so a counter that has
     // drifted away from the rows is repaired by the same write.
     counter: {

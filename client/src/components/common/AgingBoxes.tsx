@@ -17,7 +17,14 @@
  *     months.
  */
 
-import { agingOf, bucketsOf, AGING_MISMATCH, AGING_NOT_SYNCED, type CustomerRow } from '@/domain/credit';
+import {
+  agingOf,
+  bucketsOf,
+  AGING_MISMATCH,
+  AGING_NOT_SYNCED,
+  AGING_NO_DATA,
+  type CustomerRow,
+} from '@/domain/credit';
 import { money } from './format';
 import './aging.css';
 
@@ -32,28 +39,36 @@ export function AgingBoxes({
 }) {
   const a = agingOf(customer);
 
-  if (!a.bucketsKnown) {
-    return (
-      <div className="aging aging--empty">
-        <span className="tiny dim">{AGING_NOT_SYNCED}</span>
-      </div>
-    );
-  }
-
+  /*
+   * An unsynced customer used to render as a single line of explanation and no
+   * boxes at all. Since 21 August 2026 the boxes are always drawn, reading a
+   * dash — a reader can then see WHICH bands are unknown, and the four labels
+   * stay in the same place whether or not the sync has run, so a list does not
+   * reflow row by row. The explanation still follows underneath.
+   */
   return (
     <div className="aging">
       <div className="aging__boxes">
         {bucketsOf(a).map((b) => (
-          <div key={b.key} className={`aging__box${b.overdue ? ' aging__box--overdue' : ''}`}>
+          <div
+            key={b.key}
+            className={`aging__box${b.overdue && a.bucketsKnown ? ' aging__box--overdue' : ''}`}
+          >
             <span className="aging__label">{b.label}</span>
-            <span className="aging__amount">{money(b.amount, 0)}</span>
+            <span className="aging__amount">
+              {a.bucketsKnown ? money(b.amount, 0) : AGING_NO_DATA}
+            </span>
           </div>
         ))}
       </div>
 
+      {!a.bucketsKnown && <p className="aging__warn">{AGING_NOT_SYNCED}</p>}
+
       {!compact && (
         <div className="aging__foot">
           <span>Total outstanding</span>
+          {/* The total is real even when the breakdown is not — SAP sends it
+              separately, and dashing it out would hide a live balance. */}
           <b>{money(a.total, 0)}</b>
         </div>
       )}

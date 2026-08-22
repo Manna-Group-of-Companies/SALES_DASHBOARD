@@ -1,6 +1,6 @@
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
 import type { MinStockItem, ProductionOrder, StockReservation, User } from '@/domain/types';
-import { joinProductionOrders } from '@/domain/aging';
+import { joinProductionOrders } from '@/domain/stockLevels';
 import { Api, toApiError } from '@/api/client';
 
 interface MinStockState {

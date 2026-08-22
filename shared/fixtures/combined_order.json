@@ -1,0 +1,105 @@
+{
+  "about": "Which of a dispatch's orders get folded into one Combined Order per customer. Replaced 'Close the week' on 20 August 2026: a week was never something the customer received, a van is. ONLY THE DASHBOARD IMPLEMENTS THIS - the phone's own weekly combine was deleted in the same commit, so this file is read by client/ only. That is deliberate and recorded in ../DIVERGENCES.md; do not 'fix' the phone by adding a second way to combine.",
+
+  "fields": {
+    "combinedOrder": "Sales Order.custom_combined_order",
+    "dispatch": "Combined Order.custom_dispatch",
+    "note": "Membership lives ONLY on Sales Order.custom_combined_order, a single Link - an order can be in at most one group. Combined Order.custom_dispatch was added 20 Aug 2026; week_start/week_end were relaxed from mandatory to optional the same day and are left empty by dispatch-made groups."
+  },
+
+  "rules": {
+    "complete_only": "An order is grouped only by the dispatch that leaves NOTHING outstanding on it. A part-loaded order waits for the van that clears its remainder and joins that group instead - because custom_combined_order holds one link, so an order carried by two dispatches could otherwise only point at one, and whichever wrote second would move it out of a group whose count and total then said something untrue.",
+    "two_or_more": "A group is made only where a customer has two or more eligible orders. One order is not a combination; grouping it alone hands the rep a second identifier for something that already had one. The old weekly close made exactly those pointless groups of one.",
+    "never_moved": "An order already in a group is left alone. It belongs to the dispatch that completed it, and that has already happened."
+  },
+
+  "plan": [
+    {
+      "why": "the case the feature exists for: two of one customer's orders finish on the same van, so the customer received one delivery and sees one order",
+      "orders": [
+        { "id": "SO-1", "customer": "Royal Tyres", "total": 1000, "complete": true, "already_combined": false },
+        { "id": "SO-2", "customer": "Royal Tyres", "total": 500, "complete": true, "already_combined": false }
+      ],
+      "expect": [{ "customer": "Royal Tyres", "orders": ["SO-1", "SO-2"], "total": 1500 }]
+    },
+    {
+      "why": "one order alone is not a combination - it keeps its own identity rather than gaining a second one",
+      "orders": [
+        { "id": "SO-1", "customer": "Royal Tyres", "total": 1000, "complete": true, "already_combined": false }
+      ],
+      "expect": []
+    },
+    {
+      "why": "a part-loaded order is not grouped by this van: 7 of 10 rolls went, so the order is not finished and must stay free to join the dispatch that clears the other 3",
+      "orders": [
+        { "id": "SO-1", "customer": "Royal Tyres", "total": 1000, "complete": true, "already_combined": false },
+        { "id": "SO-2", "customer": "Royal Tyres", "total": 500, "complete": false, "already_combined": false }
+      ],
+      "expect": []
+    },
+    {
+      "why": "two customers on one van are two separate deliveries and two separate groups - a combined order is per customer, never per van",
+      "orders": [
+        { "id": "SO-1", "customer": "Royal Tyres", "total": 1000, "complete": true, "already_combined": false },
+        { "id": "SO-2", "customer": "Royal Tyres", "total": 500, "complete": true, "already_combined": false },
+        { "id": "SO-3", "customer": "Excel Tyres", "total": 300, "complete": true, "already_combined": false },
+        { "id": "SO-4", "customer": "Excel Tyres", "total": 200, "complete": true, "already_combined": false }
+      ],
+      "expect": [
+        { "customer": "Royal Tyres", "orders": ["SO-1", "SO-2"], "total": 1500 },
+        { "customer": "Excel Tyres", "orders": ["SO-3", "SO-4"], "total": 500 }
+      ]
+    },
+    {
+      "why": "an order already in a group is never moved into a newer one - it belongs to the dispatch that completed it, and the older group's count and total must stay true",
+      "orders": [
+        { "id": "SO-1", "customer": "Royal Tyres", "total": 1000, "complete": true, "already_combined": true },
+        { "id": "SO-2", "customer": "Royal Tyres", "total": 500, "complete": true, "already_combined": false }
+      ],
+      "expect": []
+    },
+    {
+      "why": "excluding the already-grouped one can drop a customer below two, and then no group is made at all rather than one of one",
+      "orders": [
+        { "id": "SO-1", "customer": "Royal Tyres", "total": 1000, "complete": true, "already_combined": true },
+        { "id": "SO-2", "customer": "Royal Tyres", "total": 500, "complete": true, "already_combined": true },
+        { "id": "SO-3", "customer": "Royal Tyres", "total": 250, "complete": true, "already_combined": false }
+      ],
+      "expect": []
+    },
+    {
+      "why": "three of one customer's orders finishing together are one group of three, and the total is their sum - this is what the rep quotes when the customer rings",
+      "orders": [
+        { "id": "SO-1", "customer": "Royal Tyres", "total": 1000, "complete": true, "already_combined": false },
+        { "id": "SO-2", "customer": "Royal Tyres", "total": 500, "complete": true, "already_combined": false },
+        { "id": "SO-3", "customer": "Royal Tyres", "total": 250.5, "complete": true, "already_combined": false }
+      ],
+      "expect": [{ "customer": "Royal Tyres", "orders": ["SO-1", "SO-2", "SO-3"], "total": 1750.5 }]
+    },
+    {
+      "why": "an order with no customer cannot be grouped by customer, and must be skipped rather than gathered under a blank key - Frappe reads an unset Link back as null, '' or the string 'null'",
+      "orders": [
+        { "id": "SO-1", "customer": "", "total": 1000, "complete": true, "already_combined": false },
+        { "id": "SO-2", "customer": null, "total": 500, "complete": true, "already_combined": false },
+        { "id": "SO-3", "customer": "null", "total": 400, "complete": true, "already_combined": false }
+      ],
+      "expect": []
+    },
+    {
+      "why": "money is rounded to paise on the group total, so a sum of thirds does not carry a floating-point tail into what the customer is told they owe",
+      "orders": [
+        { "id": "SO-1", "customer": "Royal Tyres", "total": 0.1, "complete": true, "already_combined": false },
+        { "id": "SO-2", "customer": "Royal Tyres", "total": 0.2, "complete": true, "already_combined": false }
+      ],
+      "expect": [{ "customer": "Royal Tyres", "orders": ["SO-1", "SO-2"], "total": 0.3 }]
+    },
+    {
+      "why": "a van that finished nothing makes no groups at all - every order on it is still part-owed",
+      "orders": [
+        { "id": "SO-1", "customer": "Royal Tyres", "total": 1000, "complete": false, "already_combined": false },
+        { "id": "SO-2", "customer": "Excel Tyres", "total": 500, "complete": false, "already_combined": false }
+      ],
+      "expect": []
+    }
+  ]
+}

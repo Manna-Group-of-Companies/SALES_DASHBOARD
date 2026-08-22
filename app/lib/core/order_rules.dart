@@ -64,6 +64,53 @@ bool canEditOrder(Map<String, dynamic> order) {
   return Session.I.isManager && Session.I.teamReps.contains(owner);
 }
 
+/// How an order's edit count reads, wherever it is shown.
+///
+/// One phrasing, used by the rep's order screen, the sales manager's review and
+/// the production manager's detail, so the same order does not describe its own
+/// history three different ways. Added 21 August 2026.
+///
+/// Zero says nothing at all: "edited 0 times" is noise on the overwhelming
+/// majority of orders, which are raised once and left alone.
+String editCountLabel(int count) {
+  if (count <= 0) return '';
+  return count == 1 ? 'Edited once' : 'Edited $count times';
+}
+
+/// Whether this order may be deleted, and by whom.
+///
+/// Deliberately much narrower than [canEditOrder]. Deleting destroys the
+/// record, so it is allowed only where nothing downstream can have acted on it:
+///
+///  - the rep who raised it (or the GM), and nobody else — a manager tidying
+///    up somebody else's order is how an order disappears while a rep is still
+///    telling a customer it is coming;
+///  - **still a draft**, `docstatus` 0, so nothing is submitted;
+///  - **not PO-approved**, so production has never been told about it.
+///
+/// Anything past that is cancelled through Desk with a human deciding, not
+/// deleted from a phone. Added 21 August 2026.
+///
+/// The stock a deleted order holds must be released FIRST — see
+/// `Api.deleteOrder`, which will not delete without it.
+bool canDeleteOrder(Map<String, dynamic> order) {
+  final n = order['docstatus'];
+  final docstatus = n is num ? n.toInt() : int.tryParse('${n ?? 0}') ?? 0;
+  if (docstatus != 0) return false;
+
+  // Approved means production has it. Past this point the order is somebody
+  // else's work in progress, not just the rep's intention.
+  final po = '${order['custom_po_status'] ?? ''}';
+  if (po == 'PO Approved - Ready for SAP') return false;
+
+  if (Session.I.isGM) return true;
+
+  final owner =
+      '${order['custom_sales_person'] ?? order['sales_person'] ?? ''}';
+  if (owner.isEmpty) return false;
+  return Session.I.salesPerson != null && owner == Session.I.salesPerson;
+}
+
 /// Why editing is closed, for the rep who is looking at a locked order. Empty
 /// when it is open.
 String orderLockReason(Map<String, dynamic> order) {

@@ -541,6 +541,8 @@ export interface ProductionOrderRow {
   productionStatus?: string;
   productionFinishDate?: string;
   changedAfterApproval: boolean;
+  /** Times the rep has edited it since raising it. 0 on most orders. */
+  editCount: number;
   combinedOrder?: string;
 }
 

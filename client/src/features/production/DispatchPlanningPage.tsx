@@ -3,9 +3,15 @@
  * "Dispatched" off a line's stage dropdown.
  *
  * A dispatch bundles any number of lines from any number of Ready orders
- * onto one vehicle and one date. It stays a Draft — freely editable, saved to
- * ERPNext on every change so it survives a refresh — until the manager clicks
- * "Dispatch", at which point it locks and what was planned is what went.
+ * onto one vehicle and one date. It is saved to ERPNext on every change so it
+ * survives a refresh, and it ends exactly two ways: **Dispatch**, which locks
+ * it and makes what was planned what went, or **Cancel**, which deletes it.
+ *
+ * There is no third ending where it is kept "as a draft" for later. A dispatch
+ * still sitting at Draft holds its lines against every other planner — see
+ * `stagedElsewhere` — so one parked indefinitely makes stock unplannable that
+ * no van is coming to collect, and nothing on screen tells the next person
+ * apart from stock genuinely spoken for.
  *
  * **The quantity is decided once, when the line is added.** A partial load is
  * planned as a partial load — 7 of 10 — and the remaining 3 stay on the order
@@ -234,7 +240,14 @@ export function DispatchPlanningPage() {
     // Counted off the list actually rendered, not `readyLines - lines`, which
     // double-subtracted anything staged in another draft.
     { id: 'ready', label: `Ready to add (${readyCount})` },
-    { id: 'drafts', label: `Draft dispatches (${drafts.length})` },
+    /*
+     * Not "drafts" any more — planning ends in Dispatch or Cancel, and Cancel
+     * deletes. What can still land here is one nobody finished: the tab was
+     * closed, or the browser died, mid-plan. Those are worth surfacing rather
+     * than hiding, because an unfinished dispatch still holds its lines out
+     * of everyone else's Ready to add and is otherwise invisible.
+     */
+    { id: 'drafts', label: `Unfinished (${drafts.length})` },
   ];
 
   const startNew = () => {
@@ -249,13 +262,42 @@ export function DispatchPlanningPage() {
     setView('ready');
   };
 
-  /** Put the panel away. The draft itself is already saved in ERPNext. */
-  const closeDraft = () => {
+  /** Clear the panel. Local only — says nothing about what is in ERPNext. */
+  const closePanel = () => {
     setDraftOpen(false);
     setDraftId(null);
     setVehicle('');
     setDispatchDate('');
     setLines([]);
+  };
+
+  /**
+   * Abandon the dispatch being planned, and delete it.
+   *
+   * There is deliberately no "leave it for later". A dispatch still sitting
+   * at Draft holds its lines against everybody else — `stagedElsewhere`
+   * subtracts them from what anyone can add — so a half-planned one left
+   * behind makes stock unplannable that no van is coming for, and the next
+   * planner has no way to tell that from stock genuinely spoken for.
+   */
+  const cancelDispatch = async () => {
+    // Nothing written yet: no vehicle or date has been entered, so no
+    // document exists to delete and clearing the panel is the whole job.
+    if (!draftId) {
+      closePanel();
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await Api.production.discardDispatch(draftId);
+      closePanel();
+      setTick((t) => t + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not cancel the dispatch.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const resume = (d: Dispatch) => {
@@ -395,7 +437,7 @@ export function DispatchPlanningPage() {
       setDone(`${vehicle || 'The vehicle'} dispatched — ${lines.length} line(s) sent.`);
       // Closed, not reopened: the van has gone, and the next one is a
       // deliberate act rather than something the screen assumes.
-      closeDraft();
+      closePanel();
       setTick((t) => t + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not dispatch.');
@@ -440,7 +482,7 @@ export function DispatchPlanningPage() {
             <Button variant="primary" onClick={startNew}>
               🚚 Start a new dispatch
             </Button>
-            <span className="note">Or resume one from the Draft dispatches tab below.</span>
+            <span className="note">Or pick up an unfinished one from the tab below.</span>
           </div>
         ) : (
           <>
@@ -517,8 +559,8 @@ export function DispatchPlanningPage() {
               >
                 Dispatch
               </Button>
-              <Button variant="ghost" onClick={closeDraft}>
-                Close (stays saved as a draft)
+              <Button variant="danger" disabled={saving} onClick={() => void cancelDispatch()}>
+                Cancel this dispatch
               </Button>
             </div>
           </>
@@ -543,14 +585,33 @@ export function DispatchPlanningPage() {
               */}
               {readyLines.length === 0
                 ? 'No order line has reached Ready yet — a line becomes dispatchable once production packs it.'
-                : 'Every ready line is already staged, either on this dispatch or on another draft.'}
+                : 'Every ready line is already staged, either on this dispatch or on an unfinished one.'}
             </Empty>
           ) : (
             <div style={{ padding: '10px 14px' }}>
-              {readyByOrder.map(([orderId, g]) => {
+              {readyByOrder.map(([orderId, g], groupIndex) => {
                 const done = g.rows.every((r) => r.full);
                 return (
-                <div key={orderId} style={{ marginBottom: 16 }}>
+                <div
+                  key={orderId}
+                  /*
+                   * A rule between orders. Two orders' tables sat flush
+                   * against one another and read as one long list, so a line
+                   * belonging to the next customer down looked like part of
+                   * the order above it — which is how something gets loaded
+                   * onto the wrong van. None above the first: a line at the
+                   * top of a list separates it from nothing.
+                   */
+                  style={
+                    groupIndex === 0
+                      ? { marginBottom: 16 }
+                      : {
+                          marginBottom: 16,
+                          borderTop: '1px solid var(--border)',
+                          paddingTop: 16,
+                        }
+                  }
+                >
                   {/*
                     One heading per order: who it is for, where it goes, who
                     sold it, and whether the whole thing is on the van yet.
@@ -690,7 +751,9 @@ export function DispatchPlanningPage() {
 
         {!loading && view === 'drafts' && (
           drafts.length === 0 ? (
-            <Empty icon="🗂" title="No drafts yet" />
+            <Empty icon="🗂" title="Nothing unfinished">
+              Every dispatch has either gone out or been cancelled.
+            </Empty>
           ) : (
             <div className="table-wrap">
               <table className="table">

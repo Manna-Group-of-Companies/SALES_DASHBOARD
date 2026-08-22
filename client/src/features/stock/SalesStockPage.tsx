@@ -4,8 +4,19 @@
  * Deliberately a different screen from the production manager's, because it
  * answers a different question. Production asks *what should we make next*, so
  * theirs is ordered by how badly a pool needs a run. Sales asks *what can I
- * promise, and what should I clear first*, so this one leads with what is free
- * to sell and orders by stock age — old rubber goes out before new.
+ * promise*, so this one leads with what is free to sell.
+ *
+ * It answered "and what should I clear first" too until 21 August 2026, with
+ * an Age column, an Aging filter and an oldest-first sort. That was the
+ * dead-stock feature and it has been removed — the dated batches still exist
+ * in ERPNext and still add up to what is on the shelf, but nobody is asked to
+ * make a decision about how old they are. The column that replaced Age is the
+ * **minimum** the pool is meant to hold, which is what this screen is for.
+ *
+ * That minimum is shown here and **not** on the reps' phones. See
+ * `app/lib/screens/orders/min_stock_screen.dart`: it is management's figure,
+ * and a rep quoting it to a customer describes how the company runs its shelf
+ * rather than what they can sell.
  *
  * It is **read-only**. Recording a run, moving its stage and receiving it are
  * production's decisions, and putting the controls on two screens would be two
@@ -20,7 +31,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { MinStockLine, StockReservationRow } from '@/domain/types';
 import {
-  daysInStock,
   fullyBooked,
   shelfAvailable,
   trueReserved,
@@ -39,18 +49,7 @@ import '@/features/hr/attendance.css';
 import '@/features/orders/orders.css';
 import '@/features/production/production.css';
 
-type Filter = 'sellable' | 'aging' | 'coming' | 'none_left' | 'all';
-
-/**
- * Stock sitting this long is worth clearing before newer rubber.
- *
- * A month is the business threshold, not a derived one. Note that every batch
- * on the site currently carries the same import date (2026-06-30), so this
- * filter cannot discriminate between pools yet — the screen says so rather
- * than leaving a filter that looks broken. The oldest-first sort is the part
- * that works today and keeps working once batches differ.
- */
-const AGING_DAYS = 30;
+type Filter = 'sellable' | 'coming' | 'none_left' | 'all';
 
 export function SalesStockPage() {
   const user = useAppSelector(selectUser);
@@ -120,7 +119,6 @@ export function SalesStockPage() {
         return {
           s: reconciled,
           free: shelfAvailable(reconciled),
-          age: daysInStock(s.batchDate, now),
           phantom: s.reservedRolls - actual.rolls,
         };
       }),
@@ -130,7 +128,6 @@ export function SalesStockPage() {
   const counts = useMemo(
     () => ({
       sellable: rowsWithTruth.filter((r) => r.free.rolls > 0 || r.free.belts > 0).length,
-      aging: rowsWithTruth.filter((r) => (r.age ?? 0) >= AGING_DAYS && r.free.rolls > 0).length,
       coming: rowsWithTruth.filter((r) => r.s.inProductionRolls > 0).length,
       noneLeft: rowsWithTruth.filter((r) => fullyBooked(r.s)).length,
       all: rowsWithTruth.length,
@@ -150,7 +147,6 @@ export function SalesStockPage() {
   const rows = useMemo(() => {
     let list = rowsWithTruth;
     if (filter === 'sellable') list = list.filter((r) => r.free.rolls > 0 || r.free.belts > 0);
-    if (filter === 'aging') list = list.filter((r) => (r.age ?? 0) >= AGING_DAYS && r.free.rolls > 0);
     if (filter === 'coming') list = list.filter((r) => r.s.inProductionRolls > 0);
     if (filter === 'none_left') list = list.filter((r) => fullyBooked(r.s));
 
@@ -161,39 +157,22 @@ export function SalesStockPage() {
     if (q) list = list.filter((r) => r.s.itemCode.toLowerCase().includes(q));
 
     /*
-     * Oldest first — this is the rep's ordering. Production sorts by urgency
-     * because they are deciding what to make; sales sorts by age because they
-     * are deciding what to shift. Pools with no batch date sort last: an
-     * unknown age is not an old one.
+     * By name, because the reader is looking something up. This sorted oldest
+     * first until 21 August 2026, when the dead-stock feature was removed:
+     * ordering the list by an age nobody is shown ranks it against a rule the
+     * reader cannot see.
      */
-    return [...list].sort((a, b) => {
-      const ax = a.age ?? -1;
-      const bx = b.age ?? -1;
-      if (ax !== bx) return bx - ax;
-      return a.s.itemCode.localeCompare(b.s.itemCode);
-    });
+    return [...list].sort((a, b) => a.s.itemCode.localeCompare(b.s.itemCode));
   }, [rowsWithTruth, filter, quality, pattern, query]);
 
   const totals = useMemo(
     () => ({
       free: rowsWithTruth.reduce((n, r) => n + r.free.rolls, 0),
       coming: rowsWithTruth.reduce((n, r) => n + r.s.inProductionRolls, 0),
+      minimum: rowsWithTruth.reduce((n, r) => n + r.s.minimumRolls, 0),
     }),
     [rowsWithTruth],
   );
-
-  /**
-   * Whether every pool shares one batch date.
-   *
-   * True today: all 164 batches were imported on 2026-06-30, so every pool is
-   * the same age and the aging filter cannot separate them. Saying so is
-   * better than letting the filter look broken — it is the data that has not
-   * moved yet, not the screen.
-   */
-  const uniformAge = useMemo(() => {
-    const dates = new Set(pool.map((s) => s.batchDate).filter(Boolean));
-    return dates.size === 1 && pool.length > 1;
-  }, [pool]);
 
   if (!user) return null;
 
@@ -203,7 +182,7 @@ export function SalesStockPage() {
         <div className="grow">
           <div className="page-head__title">Minimum stock</div>
           <div className="page-head__sub">
-            What is free to sell, oldest stock first
+            What is free to sell, and what is already spoken for
           </div>
         </div>
         <div className="cal__nav">
@@ -217,8 +196,9 @@ export function SalesStockPage() {
                 'Free to sell': r.free.rolls,
                 'Loose belts free': r.free.belts,
                 'On the shelf': r.s.shelfRolls,
+                'Loose belts on the shelf': r.s.shelfBelts,
                 'Booked by reps': r.s.reservedRolls,
-                'Days in stock': r.age ?? '',
+                'Loose belts booked': r.s.reservedBelts,
                 'Being made': r.s.inProductionRolls,
                 'Last sold': r.s.lastSoldOn ?? '',
               }))
@@ -246,10 +226,9 @@ export function SalesStockPage() {
       <div className="tiles" style={{ marginBottom: 14 }}>
         <Tile label="Free to sell" value={String(totals.free)} tone="ok" foot="Rolls, across all pools" />
         <Tile
-          label="Aging"
-          value={String(counts.aging)}
-          tone={counts.aging ? 'warn' : undefined}
-          foot={`Sellable, ${AGING_DAYS}+ days old`}
+          label="Minimum held"
+          value={String(totals.minimum)}
+          foot="Rolls the shelf is meant to hold"
         />
         <Tile
           label="Nothing left"
@@ -267,7 +246,6 @@ export function SalesStockPage() {
           onChange={setFilter}
           options={[
             { value: 'sellable', label: `Free to sell (${counts.sellable})` },
-            { value: 'aging', label: `Aging (${counts.aging})` },
             { value: 'coming', label: `Being made (${counts.coming})` },
             { value: 'none_left', label: `Nothing left (${counts.noneLeft})` },
             { value: 'all', label: `All (${counts.all})` },
@@ -321,14 +299,13 @@ export function SalesStockPage() {
                   <th className="right">Free to sell</th>
                   <th className="right">On the shelf</th>
                   <th className="right">Booked</th>
-                  <th>Age</th>
+                  <th className="right">Minimum</th>
                   <th>Being made</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => {
                   const p = parseItemName(r.s.itemCode);
-                  const old = (r.age ?? 0) >= AGING_DAYS;
                   return (
                     <tr key={r.s.itemCode}>
                       <td>
@@ -351,9 +328,21 @@ export function SalesStockPage() {
                           <Badge tone="warn">none</Badge>
                         )}
                       </td>
-                      <td className="right num dim">{r.s.shelfRolls}</td>
+                      {/*
+                        Belts alongside the rolls on both of these, since
+                        21 August 2026. "Free to sell" above always carried
+                        them and these two did not, so a pool with twelve
+                        rolls and twelve belts booked against it read as
+                        twelve booked — and the belts were unaccounted for
+                        exactly where somebody would go looking for them.
+                      */}
+                      <td className="right num dim">
+                        {r.s.shelfRolls}
+                        {r.s.shelfBelts ? ` + ${r.s.shelfBelts} belts` : ''}
+                      </td>
                       <td className="right num dim">
                         {r.s.reservedRolls}
+                        {r.s.reservedBelts ? ` + ${r.s.reservedBelts} belts` : ''}
                         {/* A counter claiming more booked than any reservation
                             supports means an order was deleted without
                             releasing its hold. The stock is really free. */}
@@ -366,17 +355,15 @@ export function SalesStockPage() {
                           </div>
                         )}
                       </td>
-                      <td className="small">
-                        {r.age == null ? (
-                          <span className="dim">—</span>
-                        ) : old ? (
-                          <Badge tone="warn" title="Clear this before newer stock">
-                            {r.age} days
-                          </Badge>
-                        ) : (
-                          <span className="dim">{r.age} days</span>
-                        )}
-                      </td>
+                      {/*
+                        What the shelf is meant to hold. This column was the
+                        batch's age until 21 August 2026; the dead-stock
+                        feature it belonged to was removed, and the minimum is
+                        what this screen is actually for. It is shown here and
+                        deliberately NOT on the reps' phones — see
+                        app/lib/screens/orders/min_stock_screen.dart.
+                      */}
+                      <td className="right num dim">{r.s.minimumRolls}</td>
                       <td className="small">
                         {r.s.inProductionRolls > 0 ? (
                           /* Its own column, never added to "free to sell". */
@@ -397,14 +384,8 @@ export function SalesStockPage() {
       {!loading && rows.length > 0 && (
         <p className="note" style={{ marginTop: 12 }}>
           “Being made” is a production run raised in SAP — it is <b>not on the shelf</b> and is never
-          counted as free to sell. Oldest stock is listed first so it clears before newer rubber.
-          {uniformAge && (
-            <>
-              {' '}
-              Every pool currently shares one batch date, so all stock is the same age and the Aging
-              filter cannot separate them yet — it will once goods are booked in on different dates.
-            </>
-          )}
+          counted as free to sell. “Minimum” is the level this pool is meant to hold, and is not
+          shown to reps on their phones.
         </p>
       )}
     </div>

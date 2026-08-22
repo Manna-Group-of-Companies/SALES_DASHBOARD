@@ -18,7 +18,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { SalesCustomer, SalesPerson, SalesRoute } from '@/domain/types';
 import { activeSalesPeople } from '@/domain/attendance';
 import { creditBreached, hasRoute, scopeFor, teamOf, NO_TEAM_MESSAGE } from '@/domain/sales';
-import { agingOf, bucketsOf } from '@/domain/credit';
+import { agingOf, bucketsOf, AGING_NO_DATA } from '@/domain/credit';
 import { canAssignOwner, isPooledUnit, visibleReps, type Person } from '@/domain/visibility';
 import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
@@ -312,7 +312,7 @@ export function CustomersPage() {
                             {agingOf(rowOf(c)).bucketsKnown ? (
                               money(b.amount, 0)
                             ) : (
-                              <span className="dim">—</span>
+                              <span className="dim">{AGING_NO_DATA}</span>
                             )}
                           </td>
                         ))}
