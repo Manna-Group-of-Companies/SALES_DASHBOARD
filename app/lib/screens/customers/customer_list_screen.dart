@@ -36,6 +36,22 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
   String _q = '';
   String _route = _allRoutes;
 
+  /*
+   * The customer this rep is currently punched in at, pinned to the top of
+   * the list until they punch out.
+   *
+   * A rep checks in at a shop, does an hour's work, and then has to find that
+   * same customer again to check out — through a filter, a search box and six
+   * hundred names. Since only one visit can be open at a time (see
+   * Api.getAnyOpenVisit) there is at most ever one pinned row, and it is the
+   * one they are most likely to want.
+   *
+   * Pinned ABOVE the filters rather than within them: the whole point is to
+   * reach it without searching, so a route filter or a half-typed query must
+   * not hide it. The badge on the row says why it is there.
+   */
+  String? _punchedInAt;
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +74,17 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
       } catch (_) {
         reps = _reps;
       }
+      // Best-effort, like the sales persons above: a rep must not lose their
+      // customer list because the visit lookup failed.
+      String? punched;
+      try {
+        final open = await Api.getAnyOpenVisit();
+        final code = '${open?['customer'] ?? ''}'.trim();
+        punched = (code.isEmpty || code == 'null') ? null : code;
+      } catch (_) {
+        punched = _punchedInAt;
+      }
+
       final routes = all
           .map((c) => (c['custom_sales_route'] ?? '').toString())
           .where((t) => t.isNotEmpty)
@@ -68,6 +95,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
       setState(() {
         _all = all;
         _reps = reps;
+        _punchedInAt = punched;
         _staleNotice = cached.ageLabel;
         _routes = routes;
         if (_route != _allRoutes && !routes.contains(_route)) {
@@ -160,9 +188,25 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
     );
   }
 
-  void _open(Map<String, dynamic> c) => Navigator.of(context).push(
-      MaterialPageRoute(
-          builder: (_) => CustomerDetailScreen(customer: c, reps: _reps)));
+  /// Opens the customer, then re-reads the open visit on the way back.
+  ///
+  /// Punching out happens on the detail screen, so returning from it is
+  /// exactly when a pin should clear. Awaited for that reason — it used to be
+  /// fire-and-forget.
+  Future<void> _open(Map<String, dynamic> c) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => CustomerDetailScreen(customer: c, reps: _reps)));
+    if (!mounted) return;
+    try {
+      final open = await Api.getAnyOpenVisit();
+      final code = '${open?['customer'] ?? ''}'.trim();
+      final next = (code.isEmpty || code == 'null') ? null : code;
+      if (mounted && next != _punchedInAt) setState(() => _punchedInAt = next);
+    } catch (_) {
+      // Leave the pin as it was rather than dropping it on a failed read —
+      // a rep still in the shop should not lose their way back.
+    }
+  }
 
   Future<void> _call(String phone) async {
     final uri = Uri.parse('tel:${phone.replaceAll(RegExp(r'[^0-9+]'), '')}');
@@ -367,8 +411,27 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
         Session.I.sharesUnit && owner.isNotEmpty && owner != Session.I.salesPerson;
     final unassigned = Session.I.sharesUnit && owner.isEmpty;
 
+    final punchedIn = _punchedInAt != null && '${c['name']}' == _punchedInAt;
+
     return ListTile(
-      title: Text(c['customer_name'] ?? c['name']),
+      // Tinted and labelled, so a row sitting above the filters explains
+      // itself rather than looking like a sorting bug.
+      tileColor: punchedIn ? const Color(0xFFE8F5E9) : null,
+      title: Row(children: [
+        Expanded(child: Text(c['customer_name'] ?? c['name'])),
+        if (punchedIn)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+                color: Colors.green.shade600,
+                borderRadius: BorderRadius.circular(4)),
+            child: const Text('CHECKED IN',
+                style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white)),
+          ),
+      ]),
       subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (sub.isNotEmpty) Text(sub),
         if (covering) ...[
@@ -420,9 +483,30 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
           onPressed: () => _showDetails(c),
         ),
       ]),
-      onTap: () => _open(c),
+      onTap: () => unawaited(_open(c)),
       onLongPress: () => _showDetails(c),
     );
+  }
+
+  /// The rows actually rendered, in order.
+  ///
+  /// The shop the rep is punched in at goes first, whatever the filters say.
+  /// Removed from its place before being put on top so it never appears
+  /// twice, and included even when the current filter would exclude it —
+  /// having to clear a filter to punch out is the problem this solves.
+  ///
+  /// One method rather than two, because the header counts these rows: worked
+  /// out separately, the count and the list disagree by one exactly when a
+  /// pinned customer falls outside the filter.
+  List<Map<String, dynamic>> _visible() {
+    final rows = _all.where(_match).toList();
+    final pinned = _punchedInAt;
+    if (pinned == null) return rows;
+
+    rows.removeWhere((c) => '${c['name']}' == pinned);
+    final match = _all.where((c) => '${c['name']}' == pinned).toList();
+    if (match.isNotEmpty) rows.insert(0, match.first);
+    return rows;
   }
 
   Widget _list() {
@@ -433,7 +517,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
               padding: const EdgeInsets.all(20), child: Text('Error: $_error')));
     }
     if (_all.isEmpty) return const Center(child: Text('No customers found.'));
-    final customers = _all.where(_match).toList();
+    final customers = _visible();
     if (customers.isEmpty) {
       return Center(
           child: Text(_route == _allRoutes
@@ -449,7 +533,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final shown = _loading ? 0 : _all.where(_match).length;
+    final shown = _loading ? 0 : _visible().length;
     return Scaffold(
       appBar: AppBar(title: const Text('Customers'), actions: [
         IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
