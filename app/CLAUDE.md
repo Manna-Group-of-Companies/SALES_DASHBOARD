@@ -51,6 +51,26 @@ ADB="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"
 "$ADB" install -r build/app/outputs/flutter-apk/app-release.apk
 ```
 
+### Getting a build to the reps
+
+**You no longer send an APK on WhatsApp.** Since 21 August 2026, pushing to
+`main` with anything under `app/` changed builds a release-signed APK in CI and
+publishes it to a GitHub Release; the app reads `version.json` from that
+release on open and offers the rep an in-place update.
+
+`docs/ANDROID_RELEASE.md` is the full account. Two things to know before you
+rely on it:
+
+- **It needs four secrets** holding the release keystore, and it fails the run
+  loudly without them rather than publishing an APK that cannot install over
+  what is in the field.
+- **The build number is what decides an update**, not `version:` in
+  `pubspec.yaml` — CI supplies it from the run number, so an update is offered
+  whether or not anyone bumped the version.
+
+The commands above still matter for local work and for the first install on a
+new phone.
+
 **Always build `--release`, never `--profile` or `--debug`.** The phones in the
 field have the release build on them, signed with the release key; a
 debug-signed build will not install over it without an uninstall, which wipes

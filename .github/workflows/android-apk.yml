@@ -1,0 +1,213 @@
+# Build the reps' Android app and publish it so the app can update itself.
+#
+# Until 21 August 2026 a new build reached the field as an APK on WhatsApp:
+# somebody had to remember to build it, remember to send it, and every rep had
+# to remember to install it. There was no way to tell who was still on what.
+#
+# This workflow removes all three steps. Every push that touches `app/` builds
+# a release-signed APK, publishes it to a GitHub Release, and writes a small
+# `version.json` alongside it. The app reads that file on open and offers the
+# update in place — see `app/lib/services/update_service.dart`.
+#
+# SIGNING IS THE PART THAT MATTERS. The APK must be signed with the SAME key as
+# the builds already on the phones, or Android refuses to install over them and
+# every rep has to uninstall first — which wipes their login and any unsent
+# order drafts. The four secrets are listed in docs/ANDROID_RELEASE.md. Without
+# them this workflow fails loudly rather than shipping something that cannot
+# install; a debug-signed APK published as a release would be worse than no
+# release at all.
+#
+# Secrets are never exposed to pull requests from forks, which matters because
+# this repository is public.
+
+name: Android APK → Release
+
+on:
+  push:
+    branches: [main]
+    # Only when the phone app actually changed. The dashboard lives in the same
+    # repository and deploys separately; rebuilding the APK for a CSS change
+    # would publish a "new version" reps would be prompted to install for
+    # nothing, and prompts nobody needs are how people learn to dismiss them.
+    paths:
+      - 'app/**'
+      - 'shared/**'
+      - '.github/workflows/android-apk.yml'
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: 'What reps should be told changed'
+        required: false
+        default: ''
+
+# Two runs at once would race for the same tag and the same "latest" release.
+concurrency:
+  group: android-apk
+  cancel-in-progress: false
+
+permissions:
+  # Needed to create the release. Nothing else is written.
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          # Pinned to a channel rather than "latest" for the same reason the
+          # iOS workflow is: the toolchain should not upgrade itself on an
+          # unrelated day.
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      # -------------------------------------------------------------- version --
+      #
+      # The build number has to increase on every run, because that is what the
+      # app compares to decide there is an update. `pubspec.yaml` has said
+      # 1.1.0+2 since launch and nobody has ever bumped it, so it cannot be the
+      # signal. `github.run_number` is monotonic and never reused.
+      #
+      # The offset clears the handful of builds pushed by hand from the one
+      # machine that had the keystore, so no published build number collides
+      # with one already installed in the field.
+      - name: Work out the version
+        id: version
+        run: |
+          set -euo pipefail
+          NAME=$(grep '^version:' app/pubspec.yaml | sed 's/version: *//' | cut -d+ -f1)
+          NUMBER=$(( ${{ github.run_number }} + 100 ))
+          echo "name=$NAME"       >> "$GITHUB_OUTPUT"
+          echo "number=$NUMBER"   >> "$GITHUB_OUTPUT"
+          echo "tag=android-v$NAME+$NUMBER" >> "$GITHUB_OUTPUT"
+          echo "Building $NAME ($NUMBER)"
+
+      # -------------------------------------------------------------- signing --
+      #
+      # Rebuilt from secrets into the same two files a local build uses, so the
+      # gradle config needs no CI-specific branch. Both are gitignored and are
+      # gone when the runner is discarded minutes later.
+      - name: Restore the signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set. See docs/ANDROID_RELEASE.md."
+            echo "Refusing to publish a build that cannot install over what the reps already have."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > app/android/app/manna-release.jks
+          cat > app/android/key.properties <<EOF
+          storeFile=manna-release.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: Build the APK
+        working-directory: app
+        run: |
+          set -euo pipefail
+          flutter build apk --release \
+            --build-name "${{ steps.version.outputs.name }}" \
+            --build-number "${{ steps.version.outputs.number }}"
+
+      # Proves the APK carries the release key and not a debug one. An APK
+      # signed by the wrong key installs fine on a clean phone and fails only
+      # on the reps' — which is the worst possible place to find out.
+      - name: Check it is release-signed
+        run: |
+          set -euo pipefail
+          APK=app/build/app/outputs/flutter-apk/app-release.apk
+          # Newest build-tools on the runner. Globbing straight into the command
+          # would pass every installed version as arguments when there is more
+          # than one, which there usually is.
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          # Not matched against a fixed prefix: apksigner labels these
+          # "Signer #1 certificate DN" or "V2 Signer: certificate DN"
+          # depending on version, and a grep for the wrong one silently passes
+          # every APK, which defeats the point of the check.
+          CERTS=$("$APKSIGNER" verify --print-certs "$APK")
+          echo "$CERTS" | grep -i 'certificate DN' || true
+
+          if ! echo "$CERTS" | grep -qi 'certificate DN'; then
+            echo "::error::apksigner reported no certificate at all — the APK is unsigned."
+            exit 1
+          fi
+          if echo "$CERTS" | grep -qi 'CN=Android Debug'; then
+            echo "::error::This APK is debug-signed and will not install over the field builds."
+            exit 1
+          fi
+          # Positive assertion, not just the absence of a debug DN: this is the
+          # certificate the phones in the field already trust.
+          if ! echo "$CERTS" | grep -qi 'CN=Manna Rubber'; then
+            echo "::error::Signed by an unexpected certificate. Reps' phones will refuse this build."
+            exit 1
+          fi
+
+      # --------------------------------------------------------------- publish --
+      #
+      # `version.json` is what the app actually reads. It is fetched through
+      # releases/latest/download/, which always resolves to the newest release
+      # and is a plain file download — NOT the GitHub API, whose 60 requests an
+      # hour per IP would be shared by every rep in one office.
+      - name: Write version.json
+        id: manifest
+        env:
+          # Through the environment, not interpolated into the script: a
+          # quote or a backtick in a hand-typed note would otherwise break
+          # the shell, and this input is typed by a person.
+          INPUT_NOTES: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          NOTES="${INPUT_NOTES:-}"
+          if [ -z "$NOTES" ]; then
+            NOTES=$(git log -1 --pretty=%s)
+          fi
+          cat > version.json <<EOF
+          {
+            "version": "${{ steps.version.outputs.name }}",
+            "build": ${{ steps.version.outputs.number }},
+            "apk": "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/manna-field-sales.apk",
+            "notes": $(printf '%s' "$NOTES" | jq -Rs .),
+            "commit": "${{ github.sha }}"
+          }
+          EOF
+          cat version.json
+          cp app/build/app/outputs/flutter-apk/app-release.apk manna-field-sales.apk
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Field Sales ${{ steps.version.outputs.name }} (${{ steps.version.outputs.number }})
+          body: |
+            Android build ${{ steps.version.outputs.number }} for the reps' phones.
+
+            Installed in place from the app itself — reps are prompted on next
+            open. Nothing needs sending on WhatsApp.
+
+            Commit: ${{ github.sha }}
+          # Marking it latest is what makes releases/latest/download/ resolve
+          # here, which is the only thing the app looks at.
+          make_latest: true
+          files: |
+            manna-field-sales.apk
+            version.json

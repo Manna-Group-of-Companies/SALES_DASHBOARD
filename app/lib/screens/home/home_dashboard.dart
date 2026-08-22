@@ -22,6 +22,7 @@ import 'package:manna_field_sales/screens/leave/hr_add_leave_screen.dart';
 import 'package:manna_field_sales/screens/leave/leave_approvals_screen.dart';
 import 'package:manna_field_sales/screens/leave/leave_screen.dart';
 import 'package:manna_field_sales/screens/manager/gm_approvals_screen.dart';
+import 'package:manna_field_sales/screens/home/update_sheet.dart';
 import 'package:manna_field_sales/screens/manager/manager_dashboard_screen.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/screens/map/map_screen.dart';
@@ -38,6 +39,7 @@ import 'package:manna_field_sales/screens/trips/trip_rates_screen.dart';
 import 'package:manna_field_sales/screens/trips/trips_screen.dart';
 import 'package:manna_field_sales/screens/orders/unsent_orders_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/update_service.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/trip_tracker.dart';
@@ -82,6 +84,11 @@ class _HomeDashboardState extends State<HomeDashboard>
     if (mounted && n != _unsent) setState(() => _unsent = n);
   }
 
+  /// Offered once per launch. A rep who says "Later" is not asked again until
+  /// they next open the app — the same prompt on every home-screen rebuild is
+  /// how a convenience turns into something people learn to dismiss blind.
+  static bool _updateOffered = false;
+
   @override
   void initState() {
     super.initState();
@@ -91,6 +98,19 @@ class _HomeDashboardState extends State<HomeDashboard>
     _activeTrip = _loadActiveTrip();
     _loadAtt();
     _loadUnsent();
+    _offerUpdate();
+  }
+
+  /// Ask GitHub whether there is a newer build, and offer it if so.
+  ///
+  /// Deliberately not awaited by anything: the home screen renders while this
+  /// runs, and every failure is silent — see `services/update_service.dart`.
+  Future<void> _offerUpdate() async {
+    if (_updateOffered) return;
+    _updateOffered = true;
+    final update = await UpdateService.check();
+    if (update == null || !mounted) return;
+    await showUpdateSheet(context, update);
   }
 
   @override

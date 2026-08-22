@@ -7,6 +7,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <!--
+      Lets the app hand a downloaded APK to Android's package installer, which
+      is how the in-app update works (see lib/services/update_service.dart).
+      Android still asks the rep once, per device, to allow this app to install
+      app files; that prompt cannot be skipped outside the Play Store.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     
     <application
         android:label="manna_field_sales"

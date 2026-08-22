@@ -2,8 +2,15 @@ name: manna_field_sales
 description: "Manna Group field sales application."
 publish_to: 'none'
 
-# Must stay in step with kAppVersion in lib/core/app_version.dart — the backend
-# compares that value against Manna App Settings > Minimum App Version.
+# The NAME must stay in step with kAppVersion in lib/core/app_version.dart —
+# the backend compares that value against Manna App Settings > Minimum App
+# Version.
+#
+# The BUILD NUMBER after the + is only what a local build gets. Every published
+# build takes its number from the CI run instead (--build-number, see
+# .github/workflows/android-apk.yml), because that is what the in-app updater
+# compares and this line has not moved since launch. Bump the name when a
+# release deserves one; nothing breaks if you never touch the number.
 version: 1.1.0+2
 
 environment:
@@ -20,6 +27,7 @@ dependencies:
   image_picker: ^1.2.3
   latlong2: ^0.10.1
   open_filex: ^4.7.0
+  package_info_plus: ^10.2.1
   path_provider: ^2.1.6
   pdf: ^3.13.0
   printing: ^5.15.0
