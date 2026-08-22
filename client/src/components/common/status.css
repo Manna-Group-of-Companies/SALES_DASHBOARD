@@ -30,11 +30,10 @@
   background: color-mix(in srgb, #b3261e 12%, transparent);
   border-color: color-mix(in srgb, #b3261e 30%, transparent);
 }
-@media (prefers-color-scheme: dark) {
-  .spill--ok { color: #63d18a; }
-  .spill--warn { color: #e0b341; }
-  .spill--danger { color: #ff8a80; }
-}
+/*
+ * Lighter spill colours for dark mode stood here until 21 August 2026, when
+ * the dashboard was pinned to the light palette. See styles/global.css.
+ */
 
 .tick {
   display: inline-flex;

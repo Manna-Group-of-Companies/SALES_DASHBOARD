@@ -8,7 +8,19 @@
    ========================================================================== */
 
 :root {
-  color-scheme: light dark;
+  /*
+   * Light only, pinned on 21 August 2026. This read `light dark` and the whole
+   * palette flipped with the operating system, so anyone whose laptop was set
+   * to dark got a dark dashboard without ever choosing one. Asked for as
+   * "make the dashboard white". Leaving this as `light dark` while the dark
+   * token block is gone would be worse than either: the browser would darken
+   * form controls and scrollbars against a light page.
+   *
+   * There is no toggle. If one is ever added, this becomes `light dark` again
+   * and the dark tokens come back under a `[data-theme]` selector rather than
+   * a media query, so the choice is the user's and not the OS's.
+   */
+  color-scheme: light;
 
   /* --- surfaces ------------------------------------------------------- */
   --bg: #f4f6f8;
@@ -64,48 +76,6 @@
 
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --mono: 'SF Mono', 'Cascadia Mono', 'Roboto Mono', Consolas, monospace;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1319;
-    --surface: #161d26;
-    --surface-2: #1b232e;
-    --surface-3: #212b38;
-    --border: #2a3644;
-    --border-strong: #3b4a5c;
-
-    --text: #e6edf5;
-    --text-2: #9fb0c4;
-    --text-3: #6c7f94;
-
-    --accent: #5b9bf5;
-    --accent-hover: #77aef8;
-    --accent-soft: #16283f;
-    --accent-border: #2c4d78;
-
-    --ok: #4ec78d;
-    --ok-soft: #11291f;
-    --ok-border: #245c42;
-
-    --warn: #e5a743;
-    --warn-soft: #2a2013;
-    --warn-border: #5c4520;
-
-    --danger: #f28b82;
-    --danger-soft: #2c1715;
-    --danger-border: #63302c;
-
-    --info: #5b9bf5;
-    --info-soft: #16283f;
-
-    --neutral: #9fb0c4;
-    --neutral-soft: #212b38;
-
-    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.3);
-    --shadow-2: 0 4px 8px -2px rgb(0 0 0 / 0.4);
-    --shadow-3: 0 12px 24px -6px rgb(0 0 0 / 0.5);
-  }
 }
 
 * {
