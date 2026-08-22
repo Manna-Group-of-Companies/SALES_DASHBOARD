@@ -1,23 +1,36 @@
 {
   "_comment": "Copy to sap_config.json and fill in. sap_config.json is gitignored — never commit real credentials.",
 
+  "_server": "Shared Service Layer address and login. Any company below may override all three if its book lives on another server.",
   "base_url": "https://sap-server:50000/b1s/v1",
-  "company_db": "MANNA_LIVE",
-  "username": "manager",
+  "username": "",
   "password": "",
 
-  "_verify_ssl": "Most B1 Service Layers ship a self-signed certificate. Set false ONLY on a trusted internal network; over the internet this disables the check that you are talking to your own server.",
+  "_verify_ssl": "Most B1 Service Layers ship a self-signed certificate. Set false ONLY on a trusted internal network; over the internet it disables the check that you are talking to your own server.",
   "verify_ssl": true,
+
+  "_companies": "One entry per SAP company database. 'label' is what appears in the summary — use the unit names the apps already use, so a figure can be traced back. Add base_url / username / password inside an entry to override the shared ones.",
+  "companies": [
+    { "label": "Manna Tyre Retreads", "company_db": "REPLACE_WITH_RETREADS_DB" },
+    { "label": "Manna Treads",        "company_db": "REPLACE_WITH_TREADS_DB" },
+    { "label": "Manna Tyres UAE",     "company_db": "REPLACE_WITH_UAE_DB" }
+  ],
 
   "_aging_basis": "'due' ages from DocDueDate — how overdue the debt is, which is what credit control asks. 'posting' ages from DocDate instead.",
   "aging_basis": "due",
 
-  "_not_due_bucket": "Where an invoice that is not yet due goes. '0_30' reads that bucket as 'current and up to a month past due'. 'exclude' leaves future invoices out of the buckets — the balance still includes them, so expect a bigger mismatch.",
+  "_not_due_bucket": "Where an invoice not yet due goes. '0_30' reads that bucket as 'current and up to a month past due'. 'exclude' leaves future invoices out — the balance still includes them, so expect a bigger mismatch.",
   "not_due_bucket": "0_30",
+
+  "_credit_limit_policy": "A customer trading with two companies has two limits. 'sum' keeps the figures comparable, because the outstanding is summed too and the app checks one against the other. 'max' takes the largest instead.",
+  "credit_limit_policy": "sum",
+
+  "_credit_limit_mode": "'overwrite' makes SAP the source of truth. 'fill_blanks' leaves alone any limit already set in ERPNext — 841 customers have one that did NOT come from SAP, so choose deliberately.",
+  "credit_limit_mode": "overwrite",
 
   "page_size": 200,
 
-  "_erpnext": "Only needed for --push. Generate the key and secret on the ERPNext user (Settings > API Access). Leave blank to produce a file and load it yourself.",
+  "_erpnext": "Where the figures are written. Generate the key and secret on the ERPNext user (Settings > API Access).",
   "erpnext": {
     "url": "https://mannarubber.m.frappe.cloud",
     "api_key": "",
