@@ -1,0 +1,26 @@
+{
+  "_comment": "Copy to sap_config.json and fill in. sap_config.json is gitignored — never commit real credentials.",
+
+  "base_url": "https://sap-server:50000/b1s/v1",
+  "company_db": "MANNA_LIVE",
+  "username": "manager",
+  "password": "",
+
+  "_verify_ssl": "Most B1 Service Layers ship a self-signed certificate. Set false ONLY on a trusted internal network; over the internet this disables the check that you are talking to your own server.",
+  "verify_ssl": true,
+
+  "_aging_basis": "'due' ages from DocDueDate — how overdue the debt is, which is what credit control asks. 'posting' ages from DocDate instead.",
+  "aging_basis": "due",
+
+  "_not_due_bucket": "Where an invoice that is not yet due goes. '0_30' reads that bucket as 'current and up to a month past due'. 'exclude' leaves future invoices out of the buckets — the balance still includes them, so expect a bigger mismatch.",
+  "not_due_bucket": "0_30",
+
+  "page_size": 200,
+
+  "_erpnext": "Only needed for --push. Generate the key and secret on the ERPNext user (Settings > API Access). Leave blank to produce a file and load it yourself.",
+  "erpnext": {
+    "url": "https://mannarubber.m.frappe.cloud",
+    "api_key": "",
+    "api_secret": ""
+  }
+}

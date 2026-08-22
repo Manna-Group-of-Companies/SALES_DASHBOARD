@@ -1,3 +1,8 @@
 
 # Build artefacts. APKs are 60 MB and this repository is public.
 release/
+
+# SAP Service Layer credentials and the figures pulled with them.
+# The example file is committed; the real one never is.
+scripts/sap_config.json
+out/
