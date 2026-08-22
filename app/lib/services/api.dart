@@ -2351,6 +2351,100 @@ class Api {
   static int _toInt(dynamic v) =>
       v is num ? v.toInt() : (int.tryParse('${v ?? ''}'.trim()) ?? 0);
 
+  // -------- Credit conditions (GM approval) --------
+  //
+  // When the GM lets an over-limit order through, the approval can carry a
+  // condition — "clear the 60-day outstanding by the 15th" — owned by the rep
+  // who raised the order. Before this the GM's yes left no trace of what was
+  // promised in return, and nobody was accountable for it afterwards.
+  //
+  // Deliberately toothless: nothing here refuses an order. A condition is
+  // shown, chased and closed, and a rule that blocked a sale on one that had
+  // been forgotten would stop a rep selling in front of a customer.
+
+  /// Attach a condition to a customer, owned by [salesPerson].
+  ///
+  /// Written after the approval, never before, and never able to fail it: an
+  /// approval the GM believes they gave and the rep cannot see is worse than
+  /// a condition nobody recorded.
+  static Future<String?> addCreditCondition({
+    required String customer,
+    required String salesPerson,
+    required String condition,
+    required String dueDateIso,
+    String? salesOrder,
+  }) async {
+    try {
+      final r = await Session.I.dio.post(
+        _res('Manna Credit Condition'),
+        data: {
+          'customer': customer,
+          'sales_person': salesPerson,
+          'condition': condition,
+          'due_date': dueDateIso,
+          'status': 'Open',
+          if (salesOrder != null && salesOrder.isNotEmpty) 'sales_order': salesOrder,
+          // A display name, matching custom_approved_by and the other
+          // who-did-this fields on this site, which are Data and not Links.
+          'set_by': Session.I.salesPersonLabel ?? Session.I.salesPerson ?? Session.I.email,
+          'set_on': nowStamp(),
+        },
+      );
+      if (r.statusCode == 200 || r.statusCode == 201) {
+        await OfflineCache.clear();
+        return r.data['data']['name'] as String;
+      }
+    } catch (_) {
+      // Swallowed on purpose — see the doc comment.
+    }
+    return null;
+  }
+
+  /// Every condition on a customer, open ones first and oldest deadline first.
+  ///
+  /// Closed ones are kept and shown: the record of what was demanded and
+  /// whether it was met is the point, and hiding them would leave the tab
+  /// looking empty for a customer with a long history of them.
+  static Future<List<Map<String, dynamic>>> creditConditions(
+      String customer) async {
+    return _list('Manna Credit Condition',
+        fields: '["name","customer","sales_person","sales_order","condition",'
+            '"due_date","status","set_by","set_on","response","responded_on",'
+            '"close_note","closed_by","closed_on"]',
+        filters: '[["customer","=","$customer"]]',
+        orderBy: 'status asc, due_date asc');
+  }
+
+  /// The rep's answer. Moves it to Awaiting Review — the rep says what they
+  /// did, the GM decides whether that settles it.
+  static Future<void> respondToCondition(String name, String response) async {
+    await _put('Manna Credit Condition', name, {
+      'response': response,
+      'responded_on': nowStamp(),
+      'status': 'Awaiting Review',
+    });
+    await OfflineCache.clear();
+  }
+
+  /// The GM's decision. [closed] false sends it back to the rep.
+  ///
+  /// Only the GM closes one. The person under an obligation declaring it
+  /// satisfied is not accountability, and this is the door that enforces it —
+  /// the screen hides the button, and there is no Server Script behind it.
+  static Future<void> decideCondition(String name,
+      {required bool closed, String? note}) async {
+    if (!Session.I.isGM) {
+      throw Exception('Only the general manager can close a credit condition.');
+    }
+    await _put('Manna Credit Condition', name, {
+      'status': closed ? 'Closed' : 'Open',
+      if (note != null && note.trim().isNotEmpty) 'close_note': note.trim(),
+      'closed_by': closed ? (Session.I.salesPersonLabel ?? Session.I.salesPerson ?? Session.I.email) : '',
+      'closed_on': closed ? nowStamp() : '',
+    });
+    await OfflineCache.clear();
+  }
+
   // -------- Duplicate orders, edit count, deletion --------
   //
   // All three were asked for on 21 August 2026. The rule behind the first is in

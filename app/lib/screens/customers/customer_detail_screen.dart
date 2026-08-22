@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart' show XFile;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:manna_field_sales/core/credit.dart';
+import 'package:manna_field_sales/widgets/credit_conditions_section.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/collections/collection_screen.dart';
@@ -404,6 +405,12 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           _detailsSection(),
           const SizedBox(height: 16),
           _creditSection(),
+          // Directly under the credit figures, because that is what a
+          // condition is about — the GM let an over-limit order through and
+          // this is what was promised in return. Renders nothing at all when
+          // the customer has none, which is most of them.
+          const SizedBox(height: 16),
+          CreditConditionsSection(customer: c['name'] as String),
           const SizedBox(height: 16),
           _locationSection(),
           const SizedBox(height: 16),

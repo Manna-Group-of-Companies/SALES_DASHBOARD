@@ -401,3 +401,39 @@ the thing blind — which is worse than never showing it.
 
 Dismissal is stored on the order (`custom_duplicate_ignored`), not on the
 phone, so it stays dismissed on every device and after a reinstall.
+
+---
+
+## GM credit conditions are phone-only — **decided 22 Aug 2026**
+
+| | `app/` (Flutter) | `client/` (React) |
+|---|---|---|
+| GM attaches a condition on approval | **yes** | no |
+| Rep responds, GM closes | **yes**, on the customer | no |
+
+**A gap with a reason, not drift.** An over-limit order escalates to the
+general manager, who usually says yes *on terms* — clear the sixty-day
+outstanding by the fifteenth, collect a cheque first. None of that was recorded
+anywhere: the approval went through, the terms lived in a phone call, and
+nobody was accountable afterwards.
+
+The GM now types the condition at the moment of approval and it lands on the
+customer, owned by the rep who raised the order. `Manna Credit Condition` on
+the live site holds it: customer, rep, order, the GM's own words, a due date
+and a status of Open → Awaiting Review → Closed.
+
+Phone-only because that is where the GM approves and where the rep would see
+it. The dashboard has a `general_manager` role and could adopt the same
+records; the doctype and the status names are the contract if it does.
+
+**Only the GM closes one.** The rep answers and it moves to Awaiting Review.
+The person under an obligation declaring it satisfied is not accountability,
+so the close is the GM's alone — enforced in `Api.decideCondition` as well as
+hidden in the UI, because this site has no Server Script behind the screen.
+
+**It blocks nothing.** No order is refused because a condition is open or
+overdue. A rule that stopped a rep selling in front of a customer over an
+obligation somebody forgot to close would cost more than it saved. Teeth can
+be added once there is evidence of how conditions behave; the options
+considered were a warning to the sales manager at approval, and forcing
+re-escalation to the GM.
