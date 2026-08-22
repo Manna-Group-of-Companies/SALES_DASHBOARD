@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class LeaveApprovalsScreen extends StatefulWidget {
@@ -14,7 +15,7 @@ class LeaveApprovalsScreen extends StatefulWidget {
 
 class _LeaveApprovalsScreenState extends State<LeaveApprovalsScreen> {
   late Future<List<Map<String, dynamic>>> _future;
-  final Map<String, Map<String, double>> _balances = {};
+  final Map<String, LeaveBalance> _balances = {};
 
   @override
   void initState() {
@@ -107,7 +108,7 @@ class _LeaveApprovalsScreenState extends State<LeaveApprovalsScreen> {
               final half = (l['half_day'] ?? 0) == 1;
               final bal = _balances[rep];
               final reason = '${l['reason'] ?? ''}';
-              final rem = bal == null ? 0.0 : (bal['remaining'] ?? 0);
+              final rem = bal?.remaining ?? 0.0;
               return Card(
                 child: Padding(
                   padding: const EdgeInsets.all(12),
@@ -138,11 +139,19 @@ class _LeaveApprovalsScreenState extends State<LeaveApprovalsScreen> {
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
                             child: Text(
-                                'Balance: ${(bal['taken'] ?? 0).toStringAsFixed(1)} taken · ${rem.toStringAsFixed(1)} left of 12'
-                                    '${rem <= 0 ? '  ·  will be LOP' : ''}',
+                                // Against what this rep has actually earned.
+                                // Somebody off the scheme has no entitlement
+                                // to be measured against, and saying "0 left"
+                                // would read as having used them all.
+                                !bal.onScheme
+                                    ? 'No paid leave scheme — this will be LOP'
+                                    : 'Balance: ${bal.taken.toStringAsFixed(1)} taken · '
+                                        '${rem.toStringAsFixed(1)} left of '
+                                        '${bal.entitlement.toStringAsFixed(1)} earned'
+                                        '${rem <= 0 ? '  ·  will be LOP' : ''}',
                                 style: TextStyle(
                                     fontSize: 12,
-                                    color: rem <= 0
+                                    color: (!bal.onScheme || rem <= 0)
                                         ? Colors.red
                                         : Colors.black87)),
                           ),

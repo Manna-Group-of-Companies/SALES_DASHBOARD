@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class ApplyLeaveScreen extends StatefulWidget {
@@ -19,7 +20,7 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
   String _halfPeriod = 'Morning';
   final _reason = TextEditingController();
   bool _busy = false;
-  Map<String, double>? _balance;
+  LeaveBalance? _balance;
 
   @override
   void initState() {
@@ -82,19 +83,34 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
   @override
   Widget build(BuildContext context) {
     final days = _halfDay ? 0.5 : 1.0;
-    final taken = _balance?['taken'] ?? 0;
-    final willBeOver = _balance != null && (taken + days) > 12;
+    final b = _balance;
+    /*
+     * Beyond what this rep has actually earned — not beyond a flat twelve.
+     * Somebody off the scheme is never "over": they have no paid entitlement
+     * to exceed, and warning them about an allowance they do not have would
+     * be telling them a rule that does not apply to them.
+     */
+    final willBeOver = b != null && b.onScheme && (b.taken + days) > b.entitlement;
     return Scaffold(
       appBar: AppBar(title: const Text('Apply for Leave')),
       body: ListView(padding: const EdgeInsets.all(16), children: [
-        if (_balance != null)
+        if (b != null)
           Card(
             color: const Color(0xFFF7F7F8),
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Text(
-                  'Remaining this year: ${(_balance!['remaining'] ?? 0).toStringAsFixed(1)} of 12'
-                      '${(_balance!['pending'] ?? 0) > 0 ? '   ·   ${(_balance!['pending'])!.toStringAsFixed(1)} pending' : ''}',
+                  // "Not on the scheme" is a different sentence from "0 left".
+                  // Five reps carry a zero balance and still accrue; the UAE
+                  // team have no entitlement at all, and telling them they
+                  // have none left would read as having used them up.
+                  !b.onScheme
+                      ? 'No paid leave scheme is set for you. Anything you '
+                          'apply for will be without pay (LOP).'
+                      : '${b.remaining.toStringAsFixed(1)} left of '
+                          '${b.entitlement.toStringAsFixed(1)} earned so far'
+                          '${b.pending > 0 ? '   ·   ${b.pending.toStringAsFixed(1)} pending' : ''}'
+                          '${b.overdrawn ? '   ·   already over' : ''}',
                   style: const TextStyle(fontWeight: FontWeight.w600)),
             ),
           ),
@@ -157,7 +173,8 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                      'This goes beyond your 12-day allowance — it will be treated as without pay (LOP). You can still apply.',
+                      'This goes beyond the leave you have earned — it will be '
+                      'treated as without pay (LOP). You can still apply.',
                       style: TextStyle(color: Colors.red, fontSize: 13)),
                 ),
               ]),

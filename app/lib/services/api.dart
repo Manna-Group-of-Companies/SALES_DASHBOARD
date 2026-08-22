@@ -14,6 +14,7 @@ import 'package:manna_field_sales/core/expenses.dart';
 import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/duplicate_order.dart';
+import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/proximity.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
@@ -24,7 +25,6 @@ import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/models/production_order.dart' as prod_order;
-import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/services/offline_cache.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/services/stock_service.dart';
@@ -2348,6 +2348,9 @@ class Api {
   }
 
   /// Frappe hands numbers back as num or as a string, depending on the path.
+  static double _toNum(dynamic v) =>
+      v is num ? v.toDouble() : (double.tryParse('${v ?? ''}'.trim()) ?? 0);
+
   static int _toInt(dynamic v) =>
       v is num ? v.toInt() : (int.tryParse('${v ?? ''}'.trim()) ?? 0);
 
@@ -3962,35 +3965,70 @@ class Api {
           orderBy: 'leave_date desc',
           limit: 100));
 
-  // Balance in the current financial year: allowance 12 minus approved days.
-  static Future<Map<String, double>> getLeaveBalance(String rep) async {
-    final fy = financialYear(DateTime.now());
-    // The rows are cached, not the computed balance — the arithmetic is cheap
-    // and doing it on the way out means the shape can change without stale
-    // totals surviving in storage.
+  /// What paid leave this rep has left.
+  ///
+  /// A running accrual, not an annual allowance: a balance carried forward
+  /// from before the scheme started, plus one day a month since, less what has
+  /// been approved. This used to hand everybody a flat twelve days per
+  /// financial year, which was wrong in shape as well as in number — nobody
+  /// has twelve, and the balances carry forward rather than resetting each
+  /// April. See core/leave_balance.dart.
+  ///
+  /// Returns [LeaveBalance.none] for anybody not on the scheme. That is a
+  /// different answer from zero and every caller has to keep it different:
+  /// five reps carry a zero balance and still accrue.
+  static Future<LeaveBalance> getLeaveBalance(String rep) async {
+    // The scheme itself, off the rep's own record so HR can change a balance
+    // in Desk without an app release.
+    String? from;
+    double opening = 0;
+    try {
+      final rows = await _list('Sales Person',
+          fields:
+              '["name","custom_leave_opening_balance","custom_leave_accrual_from"]',
+          filters: '[["name","=","$rep"]]',
+          limit: 1);
+      if (rows.isNotEmpty) {
+        from = '${rows.first['custom_leave_accrual_from'] ?? ''}';
+        opening = _toNum(rows.first['custom_leave_opening_balance']);
+      }
+    } catch (_) {
+      // Unreadable reads as "not on the scheme" rather than as twelve days.
+      // Inventing an entitlement is the one failure that costs money.
+      return LeaveBalance.none;
+    }
+    final start = (from ?? '').trim();
+    if (start.isEmpty || start == 'null') return LeaveBalance.none;
+
+    // Only leave since accrual began. The opening balance is already net of
+    // anything taken before then — counting it twice would charge a rep for
+    // the same days again.
     final list = await _cachedRows(
         CacheKeys.leaveBalance,
         () => _list('Leave Request',
-            fields: '["leave_days","status"]',
+            fields: '["leave_days","status","leave_date"]',
             filters:
-                '[["sales_person","=","$rep"],["leave_date","between",["${fy.start}","${fy.end}"]]]',
+                '[["sales_person","=","$rep"],["leave_date",">=","${start.substring(0, 10)}"]]',
             limit: 0));
+
     double taken = 0, pending = 0;
     for (final e in list) {
-      final d = ((e['leave_days'] ?? 0) as num).toDouble();
-      final s = '${e['status']}';
-      if (s == 'Approved') {
-        taken += d;
-      } else if (s == 'Pending Approval') {
-        pending += d;
+      final d = _toNum(e['leave_days']);
+      switch ('${e['status']}') {
+        case 'Approved':
+          taken += d;
+        case 'Pending Approval':
+          pending += d;
       }
     }
-    return {
-      'allowance': 12,
-      'taken': taken,
-      'pending': pending,
-      'remaining': 12 - taken,
-    };
+
+    return leaveBalanceFor(
+      accrualFrom: start,
+      opening: opening,
+      taken: taken,
+      pending: pending,
+      asOf: ServerClock.I.now(),
+    );
   }
 
   static Future<String> createLeaveRequest({
