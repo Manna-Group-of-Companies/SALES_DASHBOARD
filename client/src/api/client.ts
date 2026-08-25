@@ -90,7 +90,12 @@ import {
   weekStartOf,
 } from '@/domain/orderRules';
 import { normaliseWeights, orderTotal } from '@/domain/productRules';
-import { expenseOwner, parseTagged, RATE_FALLBACK } from '@/domain/trips';
+import {
+  expenseOwner,
+  parseTagged,
+  tripTotalsFromLegs,
+  RATE_FALLBACK,
+} from '@/domain/trips';
 import { allItemsReady, firstStage, isTerminalStage, stageLabel } from '@/domain/processStages';
 import { availableQty, isBelowThreshold } from '@/domain/stockLevels';
 import { frappeNow, frappeToday, noteServerDate, serverNow } from '@/domain/serverClock';
@@ -5619,8 +5624,30 @@ async function verifyLeg(input: VerifyLegInput): Promise<Trip> {
     };
   });
 
+  /*
+   * The trip's own figures are rewritten with the legs, never left behind.
+   *
+   * Correcting an odometer changes what a leg earned, and `estimated_cost`,
+   * `total_distance_km` and `primary_mode` are summaries of the legs that
+   * nothing else recomputes — there are no server scripts here. Writing only
+   * `legs` is what left TRP-00311 claiming ₹371 against ₹185.50 after its
+   * leg was changed from Own Vehicle to Bike.
+   *
+   * The rule is shared with the phone, which does the same on its own saves —
+   * see shared/fixtures/trip_totals.json.
+   */
+  const rates = await getTripRates().catch(() => RATE_FALLBACK);
+  const totals = tripTotalsFromLegs(next.map(toLeg), rates);
+
   const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.trip, input.tripId, {
     legs: next,
+    [TRIP_FIELD.distanceKm]: totals.totalKm,
+    [TRIP_FIELD.odometerDistanceKm]: totals.odometerKm,
+    [TRIP_FIELD.estimatedCost]: totals.cost,
+    [TRIP_FIELD.costBasis]: totals.costBasis,
+    // Left alone with no legs: there is nothing to derive it from, and the
+    // stored value is at least what the rep originally chose.
+    ...(totals.primaryMode ? { [TRIP_FIELD.primaryMode]: totals.primaryMode } : {}),
   });
   return toTrip(saved);
 }

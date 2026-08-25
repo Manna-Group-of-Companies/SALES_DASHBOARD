@@ -15,6 +15,7 @@ import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/duplicate_order.dart';
 import 'package:manna_field_sales/core/leave_balance.dart';
+import 'package:manna_field_sales/core/trip_totals.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/proximity.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
@@ -3333,18 +3334,20 @@ class Api {
   static Future<void> saveTripLegs(
       String tripName, List<Map<String, dynamic>> legs) async {
     final rates = await getTripRates();
-    double total = 0, odo = 0, est = 0;
-    final modes = <String>{};
+    final forTotals = <TripLegInput>[];
     final clean = <Map<String, dynamic>>[];
     for (final l in legs) {
       final d = _legDist(l);
-      total += d;
-      if ((l['has_odometer'] ?? 1) == 1) odo += d;
-      est += d * rateForMode(rates, l['mode'] as String?);
-      if (l['mode'] == 'Mixed') {
-        est += ((l['claimed_amount'] ?? 0) as num).toDouble();
-      }
-      if (l['mode'] != null) modes.add('${l['mode']}');
+      // Collected for the shared rule rather than totalled here — the
+      // dashboard writes trips too, and the two must agree exactly on what a
+      // rep is paid. See core/trip_totals.dart and
+      // shared/fixtures/trip_totals.json.
+      forTotals.add(TripLegInput(
+        mode: l['mode'] as String?,
+        km: d,
+        hasOdometer: (l['has_odometer'] ?? 1) == 1,
+        claimedAmount: ((l['claimed_amount'] ?? 0) as num).toDouble(),
+      ));
       clean.add({
         if (l['name'] != null) 'name': l['name'],
         'mode': l['mode'],
@@ -3366,14 +3369,15 @@ class Api {
         'remarks': l['remarks'],
       });
     }
+    final totals =
+        tripTotalsFromLegs(forTotals, (m) => rateForMode(rates, m));
     final body = <String, dynamic>{
       'legs': clean,
-      'odometer_distance_km': odo,
-      'total_distance_km': total,
-      'estimated_cost': est,
-      'primary_mode':
-      modes.isEmpty ? null : (modes.length == 1 ? modes.first : 'Mixed'),
-      'cost_basis': odo > 0 ? 'Odometer' : 'GPS Distance',
+      'odometer_distance_km': totals.odometerKm,
+      'total_distance_km': totals.totalKm,
+      'estimated_cost': totals.cost,
+      'primary_mode': totals.primaryMode,
+      'cost_basis': totals.costBasis,
     };
     await _put('Trip', tripName, body);
   }

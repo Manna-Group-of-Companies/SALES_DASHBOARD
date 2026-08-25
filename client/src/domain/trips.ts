@@ -206,9 +206,70 @@ export function tripDistance(trip: Trip): number {
 
 // ---------------------------------------------------------------- money ---
 
-/** Distance money for one leg. */
+/**
+ * Money for one leg: distance at its own mode's rate, plus a Mixed leg's fare.
+ *
+ * `claimed_amount` on a **Mixed** leg is a ticket — a bus or train fare that
+ * is not per kilometre — and it was being dropped here until 25 August 2026.
+ * Five of Prashanth's trips are a Mixed leg with no distance and a fare of
+ * ₹168 to ₹1,088; this read every one of them as ₹0 and reported the real
+ * stored figure as stale. Had anybody "corrected" the trips to match, he would
+ * have lost ₹3,121.
+ *
+ * Only on Mixed. A claimed amount on a Bike leg is not added — the kilometres
+ * already paid for that journey, and adding it would pay for it twice.
+ */
 export function legClaim(leg: TripLeg, rates: TripRates): number {
-  return round2(legDistance(leg) * rateFor(leg.mode, rates));
+  const perKm = legDistance(leg) * rateFor(leg.mode, rates);
+  const fare = leg.mode === 'Mixed' ? leg.claimedAmount || 0 : 0;
+  return round2(perKm + fare);
+}
+
+/** What a trip's stored fields must say, given its legs. */
+export interface TripTotals {
+  totalKm: number;
+  odometerKm: number;
+  cost: number;
+  /** Null with no legs — nothing to derive it from, so leave the stored one. */
+  primaryMode: string | null;
+  costBasis: 'Odometer' | 'GPS Distance';
+}
+
+/**
+ * Recompute a trip's stored figures from its legs.
+ *
+ * The legs are the record of what was driven; `estimated_cost`,
+ * `primary_mode`, `total_distance_km` and `cost_basis` are summaries of them
+ * and must be rewritten whenever a leg changes. Nothing on this site does that
+ * for us — there are no server scripts — so every writer calls this.
+ *
+ * TRP-00311 is what happens otherwise: a leg edited from Own Vehicle to Bike
+ * left `estimated_cost` at the ₹7 rate, claiming ₹371 against ₹185.50 earned.
+ *
+ * Pinned by `shared/fixtures/trip_totals.json`, which the phone reads too.
+ */
+export function tripTotalsFromLegs(legs: TripLeg[], rates: TripRates): TripTotals {
+  let totalKm = 0;
+  let odometerKm = 0;
+  let cost = 0;
+  const modes = new Set<string>();
+
+  for (const leg of legs) {
+    const km = legDistance(leg);
+    totalKm += km;
+    if (leg.hasOdometer) odometerKm += km;
+    cost += legClaim(leg, rates);
+    if (leg.mode) modes.add(leg.mode);
+  }
+
+  return {
+    totalKm: round1(totalKm),
+    odometerKm: round1(odometerKm),
+    cost: round2(cost),
+    primaryMode:
+      modes.size === 0 ? null : modes.size === 1 ? [...modes][0] : 'Mixed',
+    costBasis: odometerKm > 0 ? 'Odometer' : 'GPS Distance',
+  };
 }
 
 /** Distance money for a whole trip — every leg at its own mode's rate. */

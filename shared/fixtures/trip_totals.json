@@ -1,0 +1,87 @@
+{
+  "about": "What a trip's stored figures must be, computed from its legs. The legs are the record of what was actually driven; total_distance_km, odometer_distance_km, estimated_cost, primary_mode and cost_basis are all derived from them and must never be typed or left behind. Both apps write trips, so both implement this and both test suites read this file.",
+
+  "why": "Found on 25 August 2026 from TRP-00311. A leg was created as 'Own Vehicle' (Rs 7/km), stored 53 x 7 = 371, and later edited to 'Bike' (Rs 3.5/km). Nothing recomputed the stored cost, so the trip claimed 371 against 185.50 actually earned - exactly double. Four of Prasad V's trips are in that state. Separately, five of Prashanth's read as stale only because the dashboard was ignoring claimed_amount on Mixed legs; those stored figures were right all along.",
+
+  "rates": {
+    "note": "Trip Rate Settings on the live site. rate_company is vestigial - a Company Vehicle trip prices at rate_company_car / rate_company_bike, which are the fields read.",
+    "Own Vehicle": 7.0,
+    "Bike": 3.5,
+    "Company Vehicle (Car)": 0.0,
+    "Company Vehicle (Bike)": 0.0,
+    "Mixed": 4.0
+  },
+
+  "rules": {
+    "rate_follows_the_leg": "Money comes from each leg's own mode, never from Trip.primary_mode. The header is derived FROM the legs, so it can never disagree with what was charged.",
+    "own_vehicle_means_car": "'Own Vehicle' prices at the own-CAR rate. A rep on their own motorbike must be recorded as 'Bike' or they are paid double - this is the mistake TRP-00311 is.",
+    "mixed_adds_the_fare": "A Mixed leg earns distance x rate PLUS its claimed_amount. The claimed amount is a ticket - a bus or train fare that is not per kilometre - and dropping it zeroes a real claim. A Mixed leg with no distance is a fare and nothing else.",
+    "claimed_amount_only_on_mixed": "Every other mode is paid per kilometre alone. claimed_amount on a Bike leg is not added, or the rep is paid twice for the same journey.",
+    "primary_mode_from_legs": "No legs: leave it alone, the stored value is at least what the rep chose. One distinct mode: that mode. More than one: 'Mixed'.",
+    "cost_basis": "'Odometer' when any leg carries odometer distance, otherwise 'GPS Distance'."
+  },
+
+  "totals": [
+    {
+      "why": "TRP-00311 as it should have been read once the leg said Bike - the case this rule was written for",
+      "legs": [{ "mode": "Bike", "km": 53, "has_odometer": 1, "claimed_amount": 0 }],
+      "expect": { "total_km": 53, "odometer_km": 53, "cost": 185.5, "primary_mode": "Bike", "cost_basis": "Odometer" }
+    },
+    {
+      "why": "the same distance recorded as Own Vehicle earns exactly double - which is why the two must never be confused",
+      "legs": [{ "mode": "Own Vehicle", "km": 53, "has_odometer": 1, "claimed_amount": 0 }],
+      "expect": { "total_km": 53, "odometer_km": 53, "cost": 371.0, "primary_mode": "Own Vehicle", "cost_basis": "Odometer" }
+    },
+    {
+      "why": "a Mixed leg with no distance is a bus fare and nothing else - five of Prashanth's trips are exactly this, and reading them as zero would take Rs 1088 off one of them",
+      "legs": [{ "mode": "Mixed", "km": 0, "has_odometer": 0, "claimed_amount": 1088 }],
+      "expect": { "total_km": 0, "odometer_km": 0, "cost": 1088.0, "primary_mode": "Mixed", "cost_basis": "GPS Distance" }
+    },
+    {
+      "why": "a Mixed leg that was both driven and ticketed earns both halves",
+      "legs": [{ "mode": "Mixed", "km": 20, "has_odometer": 1, "claimed_amount": 150 }],
+      "expect": { "total_km": 20, "odometer_km": 20, "cost": 230.0, "primary_mode": "Mixed", "cost_basis": "Odometer" }
+    },
+    {
+      "why": "a claimed amount on a non-Mixed leg is ignored - paying it would pay the rep twice for one journey",
+      "legs": [{ "mode": "Bike", "km": 10, "has_odometer": 1, "claimed_amount": 500 }],
+      "expect": { "total_km": 10, "odometer_km": 10, "cost": 35.0, "primary_mode": "Bike", "cost_basis": "Odometer" }
+    },
+    {
+      "why": "two modes on one day make the header Mixed, and each leg is still paid at its own rate",
+      "legs": [
+        { "mode": "Bike", "km": 10, "has_odometer": 1, "claimed_amount": 0 },
+        { "mode": "Own Vehicle", "km": 10, "has_odometer": 1, "claimed_amount": 0 }
+      ],
+      "expect": { "total_km": 20, "odometer_km": 20, "cost": 105.0, "primary_mode": "Mixed", "cost_basis": "Odometer" }
+    },
+    {
+      "why": "a leg without an odometer still counts towards the distance, but not towards the odometer figure - and with none of them the basis is GPS",
+      "legs": [{ "mode": "Bike", "km": 12, "has_odometer": 0, "claimed_amount": 0 }],
+      "expect": { "total_km": 12, "odometer_km": 0, "cost": 42.0, "primary_mode": "Bike", "cost_basis": "GPS Distance" }
+    },
+    {
+      "why": "one leg with an odometer is enough to make the whole trip odometer-based",
+      "legs": [
+        { "mode": "Bike", "km": 12, "has_odometer": 0, "claimed_amount": 0 },
+        { "mode": "Bike", "km": 8, "has_odometer": 1, "claimed_amount": 0 }
+      ],
+      "expect": { "total_km": 20, "odometer_km": 8, "cost": 70.0, "primary_mode": "Bike", "cost_basis": "Odometer" }
+    },
+    {
+      "why": "a company vehicle earns nothing per kilometre - the company already paid for the fuel",
+      "legs": [{ "mode": "Company Vehicle (Car)", "km": 40, "has_odometer": 1, "claimed_amount": 0 }],
+      "expect": { "total_km": 40, "odometer_km": 40, "cost": 0.0, "primary_mode": "Company Vehicle (Car)", "cost_basis": "Odometer" }
+    },
+    {
+      "why": "an unrecognised mode earns nothing rather than guessing a rate, and still counts its distance",
+      "legs": [{ "mode": "Helicopter", "km": 30, "has_odometer": 1, "claimed_amount": 0 }],
+      "expect": { "total_km": 30, "odometer_km": 30, "cost": 0.0, "primary_mode": "Helicopter", "cost_basis": "Odometer" }
+    },
+    {
+      "why": "no legs leaves primary_mode to the caller - there is nothing to derive it from, and the stored value is at least what the rep chose",
+      "legs": [],
+      "expect": { "total_km": 0, "odometer_km": 0, "cost": 0.0, "primary_mode": null, "cost_basis": "GPS Distance" }
+    }
+  ]
+}
