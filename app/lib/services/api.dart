@@ -2834,7 +2834,55 @@ class Api {
             '["check_out_time","is","not set"]]',
         orderBy: 'check_in_time desc',
         limit: 1);
-    return list.isEmpty ? null : list.first;
+    if (list.isEmpty) return null;
+    return _withPartyLabel(list.first);
+  }
+
+  /// Put a readable party name on a visit, under `party_label`.
+  ///
+  /// A visit stores the party as a **docname**, and for a lead that is
+  /// `CRM-LEAD-2026-02014`. Telling a rep they are "still checked in at
+  /// CRM-LEAD-2026-02014" names nothing they can recognise while they are
+  /// standing in front of the next customer, which is the moment this message
+  /// exists for.
+  ///
+  /// Resolved once here so the three places that say it — the punch-in guard,
+  /// the still-checked-in dialog and the checked-in-elsewhere banner — cannot
+  /// each fall back differently.
+  ///
+  /// Falls back to the docname on any failure. An ugly identifier still tells
+  /// a rep WHICH place to go and punch out of; no name at all does not.
+  static Future<Map<String, dynamic>> _withPartyLabel(
+      Map<String, dynamic> visit) async {
+    final customer = '${visit['customer'] ?? ''}'.trim();
+    final lead = '${visit['custom_lead'] ?? ''}'.trim();
+    final id = customer.isNotEmpty ? customer : lead;
+    if (id.isEmpty || id == 'null') return visit;
+
+    visit['party_label'] = id;
+    try {
+      final rows = customer.isNotEmpty
+          ? await _list('Customer',
+              fields: '["name","customer_name"]',
+              filters: '[["name","=","$customer"]]',
+              limit: 1)
+          : await _list('Lead',
+              fields: '["name","lead_name","company_name"]',
+              filters: '[["name","=","$lead"]]',
+              limit: 1);
+      if (rows.isNotEmpty) {
+        final r = rows.first;
+        final label = customer.isNotEmpty
+            ? '${r['customer_name'] ?? ''}'
+            : '${r['lead_name'] ?? r['company_name'] ?? ''}';
+        if (label.trim().isNotEmpty && label.trim() != 'null') {
+          visit['party_label'] = label.trim();
+        }
+      }
+    } catch (_) {
+      // Keeps the docname set above.
+    }
+    return visit;
   }
 
   /// Every place a visit to this party may legitimately be punched at.
@@ -2900,7 +2948,9 @@ class Api {
     // draft synced later or by a screen added in future that forgets.
     final open = await getAnyOpenVisit();
     if (open != null) {
-      final where = '${open['customer'] ?? open['custom_lead'] ?? ''}'.trim();
+      // The readable name, not the docname — see _withPartyLabel.
+      final where = '${open['party_label'] ?? open['customer'] ?? open['custom_lead'] ?? ''}'
+          .trim();
       throw Exception('You are still checked in'
           '${where.isEmpty ? '' : ' at $where'}. '
           'Punch out there before starting another visit.');

@@ -147,8 +147,12 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
   /// ago cannot act on "you have a visit open" — they need to know which one,
   /// because that is the screen they have to go back to.
   Future<void> _showStillCheckedIn(Map<String, dynamic> open) {
-    final where =
-        '${open['customer'] ?? open['custom_lead'] ?? 'another place'}'.trim();
+    // The readable name. A visit stores the party as a docname, and for a lead
+    // that is CRM-LEAD-2026-02014 — which names nothing a rep can recognise
+    // while standing in front of the next customer. Api.getAnyOpenVisit
+    // resolves it into party_label; the docname is the fallback.
+    final where = '${open['party_label'] ?? open['customer'] ?? open['custom_lead'] ?? 'another place'}'
+        .trim();
     final since = _fmtT(open['check_in_time']);
     return showDialog<void>(
       context: context,
@@ -298,7 +302,7 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
               Expanded(
                 child: Text(
                     'Still checked in at '
-                    '${_openElsewhere!['customer'] ?? _openElsewhere!['custom_lead'] ?? 'another place'}'
+                    '${_openElsewhere!['party_label'] ?? _openElsewhere!['customer'] ?? _openElsewhere!['custom_lead'] ?? 'another place'}'
                     ' since ${_fmtT(_openElsewhere!['check_in_time'])}. '
                     'Punch out there first.',
                     style: const TextStyle(
