@@ -6129,6 +6129,87 @@ async function decideCreditCondition(input: {
   return toCreditCondition(doc);
 }
 
+/*
+ * --- the SAP credit-limit refresh -------------------------------------------
+ *
+ * Frappe Cloud cannot reach the SAP LAN, so nothing here talks to SAP. The
+ * button raises a flag on a Single doc; a poller on the on-prem Windows box
+ * picks it up within about two minutes, runs the sync, and writes the outcome
+ * back. See the two Server Scripts `manna_sap_request_sync` and
+ * `manna_sap_get_status` on the live site.
+ *
+ * The cooldown is enforced in the Server Script, not here. The SAP Service
+ * Layer licence pool is tiny and logging in inside the window takes it down
+ * for 20-30 minutes, so the refusal has to be somewhere a browser console
+ * cannot reach. What this file does is explain the refusal, not make it.
+ */
+
+export type SapSyncStatus =
+  | 'Idle'
+  | 'Queued'
+  | 'Running'
+  | 'Success'
+  | 'Failed'
+  | 'Rate Limited';
+
+export interface SapSyncState {
+  status: SapSyncStatus;
+  lastSyncAt: string | null;
+  lastResultMessage: string;
+  lastRowsChanged: number;
+  cooldownUntil: string | null;
+  requestedAt: string | null;
+  requestedBy: string | null;
+}
+
+export interface SapSyncRequestResult {
+  ok: boolean;
+  /** 'in_progress' or 'cooldown' when ok is false. */
+  reason?: string;
+  retryAt?: string;
+  message: string;
+}
+
+function toSapSyncState(m: Record<string, unknown>): SapSyncState {
+  return {
+    status: (str(m.status) as SapSyncStatus) ?? 'Idle',
+    lastSyncAt: str(m.last_sync_at) ?? null,
+    lastResultMessage: str(m.last_result_message) ?? '',
+    lastRowsChanged: Number(m.last_rows_changed ?? 0),
+    cooldownUntil: str(m.cooldown_until) ?? null,
+    requestedAt: str(m.sync_requested_at) ?? null,
+    requestedBy: str(m.sync_requested_by) ?? null,
+  };
+}
+
+/** Polled every 10 seconds while a run is in flight. */
+async function getSapSyncStatus(): Promise<SapSyncState> {
+  const { data } = await http.post<{ message: Record<string, unknown> }>(
+    '/api/method/manna_sap_get_status',
+  );
+  return toSapSyncState(data.message ?? {});
+}
+
+/**
+ * Ask for a refresh.
+ *
+ * A refusal is a normal answer, not an error — the script returns ok:false
+ * with a reason for both "already running" and "still in cooldown", and the
+ * caller shows the message rather than treating it as a failure.
+ */
+async function requestSapSync(): Promise<SapSyncRequestResult> {
+  const { data } = await http.post<{ message: Record<string, unknown> }>(
+    '/api/method/manna_sap_request_sync',
+  );
+  const m = data.message ?? {};
+  return {
+    ok: Boolean(m.ok),
+    reason: str(m.reason),
+    retryAt: str(m.retry_at),
+    message: str(m.message) ?? '',
+  };
+}
+
 export const Api = {
   auth: {
     login,
@@ -6217,6 +6298,8 @@ export const Api = {
   },
 
   sales: {
+    getSapSyncStatus,
+    requestSapSync,
     listCreditConditions,
     addCreditCondition,
     decideCreditCondition,

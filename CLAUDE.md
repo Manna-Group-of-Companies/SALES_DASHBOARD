@@ -23,9 +23,23 @@ file only covers what spans both.
 
 ## The constraint everything bends around
 
-**Server Scripts are not available on this site's plan.** Every business rule
-is enforced in the client — in *both* clients. There is no backstop: ERPNext
-will accept a write either app would have refused.
+**Server Scripts were not available on this site's plan until 7 September
+2026.** Every business rule here is therefore enforced in the client — in
+*both* clients — and for all the existing ones that is still true. There is no
+backstop: ERPNext will accept a write either app would have refused.
+
+The plan changed and Server Scripts now execute; `manna_sap_request_sync` and
+`manna_sap_get_status` are the first two that rely on it. **This does not undo
+anything below.** The duplicated rules stay duplicated and the fixtures stay
+authoritative — two agreeing implementations are not a liability. What changed
+is that a *new* rule now has somewhere better to live, and anything that must
+not be talked around from a browser console belongs there.
+
+Two traps if you write one. `safe_exec` does not whitelist `frappe.get_roles`,
+`frappe.get_single`, `frappe.has_permission` or `hasattr`; each fails at
+runtime with an opaque 500. Read a Single with `frappe.get_doc("<name>")` and
+roles from the `Has Role` table. The eight pre-existing Server Scripts on the
+site are all `disabled = 1` and were left that way.
 
 So a rule is only as good as its weakest implementation. A check that exists in
 `client/` and not in `app/` is not a check.

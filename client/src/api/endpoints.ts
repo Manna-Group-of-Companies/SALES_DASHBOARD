@@ -38,6 +38,12 @@ export const DOCTYPE = {
    * `Customer Site` has none either, so both are read defensively.
    */
   /**
+   * One global row controlling the on-demand SAP credit-limit refresh.
+   * Created 7 Sep 2026. A Single — read it by name, never list it.
+   */
+  sapSyncControl: 'SAP Sync Control',
+
+  /**
    * A condition the GM attached when approving an over-limit order. Created
    * on the live site 22 Aug 2026 by the phone app, which was the only thing
    * that read or wrote it until 7 Sep 2026.

@@ -26,6 +26,7 @@ import { selectUser } from '@/store/selectors';
 import { Alert, Badge, Card, Empty, Input, Segmented, Select } from '@/components/ui';
 import { RouteCell } from './RouteCell';
 import { OwnerCell } from './OwnerCell';
+import { SapSyncPanel } from './SapSyncPanel';
 import { money } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
@@ -181,6 +182,12 @@ export function CustomersPage() {
           {error}
         </Alert>
       )}
+
+      {/* Above the figures it refreshes, so "these are stale" and the way to
+          fix it are the same glance. */}
+      <div style={{ marginBottom: 14 }}>
+        <SapSyncPanel />
+      </div>
 
       <div className="tiles" style={{ marginBottom: 14 }}>
         <Tile label="Shown" value={String(stats.total)} foot={rep || 'Your team'} />
