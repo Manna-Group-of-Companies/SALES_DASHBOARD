@@ -260,3 +260,28 @@ button.month__cell:focus-visible { outline: 2px solid var(--accent); outline-off
 /* The from/to pair when the calendar is showing a custom period. */
 .cal__range { display: flex; gap: 8px; align-items: flex-end; }
 .cal__range .field { margin: 0; }
+
+/* ------------------------------------------------- bill thumbnails --- */
+/*
+ * HR checks a claim against its receipt. A link that navigated away made that
+ * one round trip per row; a thumbnail settles most rows without a click, and
+ * the ones it cannot settle open full size over the page.
+ *
+ * Sized so a table row stays a table row — a full-width receipt would push
+ * the amounts off the screen, which is the column being checked against.
+ */
+.exp__billthumb {
+  width: 54px;
+  height: 54px;
+  padding: 0;
+  cursor: zoom-in;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.exp__billthumb img {
+  width: 100%;
+  height: 100%;
+  /* Receipts are photographed at every angle and ratio. Cropping to fill keeps
+     the row height even; the full image is one click away. */
+  object-fit: cover;
+}

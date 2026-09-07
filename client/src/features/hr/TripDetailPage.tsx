@@ -12,7 +12,7 @@
 
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { SalesVisit, Trip, TripRates, TripTrack } from '@/domain/types';
+import type { SalesVisit, Trip, TripExpense, TripRates, TripTrack } from '@/domain/types';
 import {
   awaitingCorrection,
   billedExpenses,
@@ -36,12 +36,13 @@ import { clockOf } from '@/domain/attendance';
 import { formatDate } from '@/domain/orderRules';
 import { checkDistance, hasFix, haversineKm, pathKm, routeOf, waypointsOf } from '@/domain/geo';
 import { Api } from '@/api/client';
-import { Alert, Badge, Card, Empty } from '@/components/ui';
+import { Alert, Badge, Button, Card, Empty } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import '@/components/layout/layout.css';
 import './attendance.css';
+import '@/features/approvals/approvals.css';
 import './trip-map.css';
 
 /*
@@ -60,6 +61,24 @@ const VERDICT: Record<string, { label: string; tone: 'ok' | 'warn' | 'danger' | 
 
 export function TripDetailPage() {
   const { tripId = '' } = useParams();
+  /*
+   * The bill being looked at, or null.
+   *
+   * HR checks a claim against the receipt, and a link that navigates away
+   * made that a round trip per row — open, squint, come back, lose your
+   * place in the table. The thumbnail answers most rows without a click.
+   */
+  const [bill, setBill] = useState<TripExpense | null>(null);
+
+  useEffect(() => {
+    if (!bill) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setBill(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [bill]);
+
   const [trip, setTrip] = useState<Trip | null>(null);
   const [visits, setVisits] = useState<SalesVisit[]>([]);
   const [rates, setRates] = useState<TripRates | null>(null);
@@ -300,10 +319,21 @@ export function TripDetailPage() {
                           )}
                           <td>
                             {e.billPhoto ? (
-                              <a href={e.billPhoto} target="_blank" rel="noreferrer">
-                                View
-                              </a>
+                              <button
+                                type="button"
+                                className="odo__photo exp__billthumb"
+                                onClick={() => setBill(e)}
+                                aria-label={`View the bill for ${e.category}`}
+                              >
+                                {/* Private files come through Frappe on the same
+                                    session cookie, so no extra auth is needed —
+                                    same as the odometer photos above. */}
+                                <img src={e.billPhoto} alt="" loading="lazy" />
+                              </button>
                             ) : (
+                              // "Claimed, no file" is worth saying out loud: the
+                              // rep ticked that a bill exists and none arrived,
+                              // which is a different problem from no bill at all.
                               <span className="dim">{e.hasBill ? 'claimed, no file' : '—'}</span>
                             )}
                           </td>
@@ -527,6 +557,40 @@ export function TripDetailPage() {
             )}
           </Card>
         </>
+      )}
+
+      {/*
+        Full size, over the page, so HR keeps their place in the table. Closing
+        on the backdrop and on Escape both, because a viewer that traps you is
+        worse than a link that navigated away.
+      */}
+      {bill && (
+        <div
+          className="lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Bill for ${bill.category}`}
+          onClick={() => setBill(null)}
+        >
+          <div className="lightbox__inner" onClick={(e) => e.stopPropagation()}>
+            <img src={bill.billPhoto} alt={`Bill for ${bill.category}`} />
+            <div className="lightbox__bar">
+              <span className="grow">
+                <b>{bill.category}</b>
+                <span className="dim small"> · claimed {money(bill.amount, 2)}</span>
+                {bill.approvedAmount ? (
+                  <span className="dim small"> · approved {money(bill.approvedAmount, 2)}</span>
+                ) : null}
+              </span>
+              <a href={bill.billPhoto} target="_blank" rel="noreferrer" className="small">
+                Open original
+              </a>
+              <Button size="sm" onClick={() => setBill(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
