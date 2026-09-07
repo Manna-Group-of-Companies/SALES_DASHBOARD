@@ -37,6 +37,13 @@ export const DOCTYPE = {
    * All verified present on 7 Aug 2026. `Lead Order` has no rows yet and
    * `Customer Site` has none either, so both are read defensively.
    */
+  /**
+   * A condition the GM attached when approving an over-limit order. Created
+   * on the live site 22 Aug 2026 by the phone app, which was the only thing
+   * that read or wrote it until 7 Sep 2026.
+   */
+  creditCondition: 'Manna Credit Condition',
+
   leadOrder: 'Lead Order',
   combinedOrder: 'Combined Order',
   customerSite: 'Customer Site',

@@ -39,6 +39,7 @@ import 'package:manna_field_sales/screens/trips/trip_rates_screen.dart';
 import 'package:manna_field_sales/screens/trips/trips_screen.dart';
 import 'package:manna_field_sales/screens/orders/unsent_orders_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/screens/conditions/my_conditions_screen.dart';
 import 'package:manna_field_sales/services/update_service.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/services/location_service.dart';
@@ -549,6 +550,10 @@ class _HomeDashboardState extends State<HomeDashboard>
                 () => _go(Session.I.company == kUnitRetreads
                 ? const RetreadOrdersScreen()
                 : const MyOrdersScreen())),
+        // Beside Collections on purpose: both are money the rep owes somebody
+        // an answer about, and a condition is usually discharged by collecting.
+        _Tile('My Conditions', Icons.rule,
+                () => _go(const MyConditionsScreen())),
         _Tile('Collections', Icons.payments,
                 () => _go(const MyCollectionsScreen())),
         _Tile('Map', Icons.map, () => _go(const MapScreen())),

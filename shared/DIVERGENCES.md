@@ -404,12 +404,19 @@ phone, so it stays dismissed on every device and after a reinstall.
 
 ---
 
-## GM credit conditions are phone-only — **decided 22 Aug 2026**
+## GM credit conditions — **phone-only 22 Aug 2026, closed 7 Sep 2026**
 
 | | `app/` (Flutter) | `client/` (React) |
 |---|---|---|
-| GM attaches a condition on approval | **yes** | no |
-| Rep responds, GM closes | **yes**, on the customer | no |
+| GM attaches a condition on approval | yes | yes |
+| Rep responds | yes — customer screen **and** My Conditions | n/a, reps have no login here |
+| GM closes or sends back | yes | yes, on the GM queue |
+
+**This divergence is closed.** Both apps now read and write
+`Manna Credit Condition`, and both enforce the same rule from
+`shared/fixtures/credit_condition.json`. The section below is kept because it
+records *why* the feature exists, which is still the reason to be careful with
+it.
 
 **A gap with a reason, not drift.** An over-limit order escalates to the
 general manager, who usually says yes *on terms* — clear the sixty-day
@@ -422,9 +429,16 @@ customer, owned by the rep who raised the order. `Manna Credit Condition` on
 the live site holds it: customer, rep, order, the GM's own words, a due date
 and a status of Open → Awaiting Review → Closed.
 
-Phone-only because that is where the GM approves and where the rep would see
-it. The dashboard has a `general_manager` role and could adopt the same
-records; the doctype and the status names are the contract if it does.
+It was phone-only at first because that is where the GM approved. On
+7 September 2026 the dashboard adopted the same records, because the sales
+manager raises the escalation there and the GM answers it there — a GM who
+could set a condition on the dashboard but only close it on the phone would
+leave reps answering into silence.
+
+**The rule lives in one place per language now**:
+`app/lib/core/credit_condition.dart` and `client/src/domain/creditCondition.ts`,
+both pinned by `shared/fixtures/credit_condition.json`. Change the fixture and
+both, in the same commit.
 
 **Only the GM closes one.** The rep answers and it moves to Awaiting Review.
 The person under an obligation declaring it satisfied is not accountability,

@@ -1,0 +1,41 @@
+{
+  "about": "A condition the general manager attaches when approving an order that takes a customer past their credit limit. The GM types the terms and a deadline at the moment of approval; the rep who raised the order owes them; only the GM closes them. Both apps show and move these, so both implement this file and both test suites read it.",
+
+  "why": "Built 22 August 2026 for the phone, extended to the dashboard 7 September 2026. Before it, the GM's terms - clear the sixty-day outstanding by the fifteenth, collect a cheque before the next delivery - lived in a phone call. The approval went through and nobody was accountable for the terms afterwards.",
+
+  "doctype": "Manna Credit Condition",
+
+  "rules": {
+    "who_sets_it": "The GM alone, at the moment of approving. Never the rep, never the sales manager. A condition recorded later is one somebody has to remember to record.",
+    "optional": "An approval may carry no condition at all. Plenty do not, and forcing one produces a field full of 'n/a'.",
+    "who_answers": "The rep who raised the order. Answering moves it Open -> Awaiting Review. It never closes it.",
+    "who_closes": "The GM alone. The person under an obligation declaring it satisfied is not accountability. Enforced in code on both sides, because this site has no Server Script behind the screen.",
+    "send_back": "The GM may return it: Awaiting Review -> Open, and the rep's response stays on the record rather than being cleared.",
+    "overdue": "Past its due date AND not Closed. A condition closed late is not overdue - it is closed. Overdue is what is still owed today, not a history of lateness.",
+    "blocks_nothing": "No order is ever refused because a condition is open or overdue. A rule that stopped a rep selling in front of a customer over an obligation somebody forgot to close would cost more than it saved.",
+    "no_deadline": "A condition with no due date is never overdue. It is still owed, and it still shows, but nothing about it is late."
+  },
+
+  "transitions": [
+    { "why": "the rep answers an open condition", "from": "Open", "action": "respond", "actor": "rep", "expect": "Awaiting Review" },
+    { "why": "the GM accepts the answer and closes it", "from": "Awaiting Review", "action": "close", "actor": "gm", "expect": "Closed" },
+    { "why": "the GM is not satisfied and sends it back, and the answer is kept", "from": "Awaiting Review", "action": "reopen", "actor": "gm", "expect": "Open" },
+    { "why": "the GM may close one the rep never answered - chasing a reply on something already settled helps nobody", "from": "Open", "action": "close", "actor": "gm", "expect": "Closed" },
+    { "why": "a rep cannot close their own obligation, and this is the case the whole rule exists for", "from": "Awaiting Review", "action": "close", "actor": "rep", "expect": "REFUSED" },
+    { "why": "a rep cannot close one directly either", "from": "Open", "action": "close", "actor": "rep", "expect": "REFUSED" },
+    { "why": "a sales manager is not the GM, however senior they feel", "from": "Awaiting Review", "action": "close", "actor": "sales_manager", "expect": "REFUSED" },
+    { "why": "answering an already-closed condition changes nothing", "from": "Closed", "action": "respond", "actor": "rep", "expect": "REFUSED" },
+    { "why": "the GM may reopen a closed condition if it turns out it was not met", "from": "Closed", "action": "reopen", "actor": "gm", "expect": "Open" },
+    { "why": "answering twice before review just replaces the answer", "from": "Awaiting Review", "action": "respond", "actor": "rep", "expect": "Awaiting Review" }
+  ],
+
+  "overdue": [
+    { "why": "open and past its date", "status": "Open", "due": "2026-09-01", "today": "2026-09-07", "expect": true },
+    { "why": "due today is not yet late", "status": "Open", "due": "2026-09-07", "today": "2026-09-07", "expect": false },
+    { "why": "still in hand", "status": "Open", "due": "2026-09-20", "today": "2026-09-07", "expect": false },
+    { "why": "awaiting the GM's review and past its date is still owed", "status": "Awaiting Review", "due": "2026-09-01", "today": "2026-09-07", "expect": true },
+    { "why": "closed late is closed, not overdue", "status": "Closed", "due": "2026-09-01", "today": "2026-09-07", "expect": false },
+    { "why": "no deadline is never late", "status": "Open", "due": "", "today": "2026-09-07", "expect": false },
+    { "why": "an unset date read back as the string null is not a deadline either", "status": "Open", "due": "null", "today": "2026-09-07", "expect": false }
+  ]
+}

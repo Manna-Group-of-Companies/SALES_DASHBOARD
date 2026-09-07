@@ -2419,6 +2419,28 @@ class Api {
         orderBy: 'status asc, due_date asc');
   }
 
+  /// Every condition this rep owes, across all their customers.
+  ///
+  /// The customer screen shows one shop's conditions; this is the rep's own
+  /// list, which is the only view that answers "what do I still owe?". A rep
+  /// with an obligation on a shop they are not visiting today would otherwise
+  /// never see it until the deadline had passed.
+  ///
+  /// Open and Awaiting Review first, soonest deadline first — what is still
+  /// owed, in the order it falls due. Closed ones are kept but sink to the
+  /// bottom: the record of what was demanded and whether it was met is the
+  /// point of keeping them.
+  static Future<List<Map<String, dynamic>>> myCreditConditions() async {
+    final rep = Session.I.salesPerson;
+    if (rep == null || rep.isEmpty) return const [];
+    return _list('Manna Credit Condition',
+        fields: '["name","customer","sales_person","sales_order","condition",'
+            '"due_date","status","set_by","set_on","response","responded_on",'
+            '"close_note","closed_by","closed_on"]',
+        filters: '[["sales_person","=","$rep"]]',
+        orderBy: 'status asc, due_date asc');
+  }
+
   /// The rep's answer. Moves it to Awaiting Review — the rep says what they
   /// did, the GM decides whether that settles it.
   static Future<void> respondToCondition(String name, String response) async {

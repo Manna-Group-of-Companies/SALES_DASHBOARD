@@ -99,6 +99,12 @@ import {
 import { allItemsReady, firstStage, isTerminalStage, stageLabel } from '@/domain/processStages';
 import { availableQty, isBelowThreshold } from '@/domain/stockLevels';
 import { frappeNow, frappeToday, noteServerDate, serverNow } from '@/domain/serverClock';
+import {
+  COND_CLOSED,
+  COND_OPEN,
+  nextConditionStatus,
+  type ConditionAction,
+} from '@/domain/creditCondition';
 import { DISPATCHED, rollUp } from '@/domain/production';
 import { isFullyDispatched, remainingToDispatch } from '@/domain/dispatch';
 import { planCombinedOrders, type CombinableOrder } from '@/domain/combinedOrders';
@@ -5944,6 +5950,185 @@ function toLeaveType(raw: string | undefined): LeaveType {
  * Mirrors the `Api` class in the Flutter field-sales app, so the same mental
  * model works across both codebases.
  */
+/*
+ * --- credit conditions -----------------------------------------------------
+ *
+ * The terms the GM attaches when letting an over-limit order through. The
+ * phone has had these since 22 August 2026; the dashboard gained them on
+ * 7 September 2026, because the sales manager raises the escalation here and
+ * the GM answers it here.
+ *
+ * The rule about who may move one lives in `domain/creditCondition.ts` and is
+ * pinned by `shared/fixtures/credit_condition.json`, which the phone's suite
+ * reads too. It is applied in these functions and not only in the screen:
+ * there is no Server Script on this site, so a disabled button stops nobody
+ * who can open a console.
+ */
+
+export interface CreditCondition {
+  id: string;
+  customer: string;
+  salesPerson: string;
+  salesOrder: string;
+  condition: string;
+  dueDate: string;
+  status: string;
+  setBy: string;
+  setOn: string;
+  response: string;
+  respondedOn: string;
+  closeNote: string;
+  closedBy: string;
+  closedOn: string;
+}
+
+const CONDITION_FIELDS = [
+  'name',
+  'customer',
+  'sales_person',
+  'sales_order',
+  'condition',
+  'due_date',
+  'status',
+  'set_by',
+  'set_on',
+  'response',
+  'responded_on',
+  'close_note',
+  'closed_by',
+  'closed_on',
+];
+
+function toCreditCondition(r: Record<string, unknown>): CreditCondition {
+  // `str` yields undefined for a blank, and every consumer here wants a
+  // string it can render. Frappe also reads an unset Link back as the string
+  // 'null', which would print literally — so that is flattened too.
+  const s = (v: unknown): string => {
+    const out = str(v) ?? '';
+    return out === 'null' ? '' : out;
+  };
+  return {
+    id: s(r.name),
+    customer: s(r.customer),
+    salesPerson: s(r.sales_person),
+    salesOrder: s(r.sales_order),
+    condition: s(r.condition),
+    dueDate: s(r.due_date),
+    status: s(r.status) || COND_OPEN,
+    setBy: s(r.set_by),
+    setOn: s(r.set_on),
+    response: s(r.response),
+    respondedOn: s(r.responded_on),
+    closeNote: s(r.close_note),
+    closedBy: s(r.closed_by),
+    closedOn: s(r.closed_on),
+  };
+}
+
+/**
+ * Conditions, optionally narrowed to one customer or one order.
+ *
+ * Open and Awaiting Review sort first and the soonest deadline leads: what is
+ * still owed, in the order it falls due. Closed ones are kept — the record of
+ * what was demanded and whether it was met is the point of having them.
+ */
+async function listCreditConditions(opts: {
+  customer?: string;
+  salesOrder?: string;
+  salesPerson?: string;
+} = {}): Promise<CreditCondition[]> {
+  const filters: Filter[] = [];
+  if (opts.customer) filters.push(['customer', '=', opts.customer]);
+  if (opts.salesOrder) filters.push(['sales_order', '=', opts.salesOrder]);
+  if (opts.salesPerson) filters.push(['sales_person', '=', opts.salesPerson]);
+
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.creditCondition, {
+    fields: CONDITION_FIELDS,
+    filters,
+    orderBy: 'status asc, due_date asc',
+    limit: 0,
+  });
+  return rows.map(toCreditCondition);
+}
+
+/**
+ * Attach a condition to an approval the GM has just given.
+ *
+ * Written after the approval and never able to fail it. An approval the GM
+ * believes they gave, blocked because the condition would not save, is a worse
+ * outcome than a condition nobody recorded — so this reports failure to the
+ * caller rather than throwing into the middle of the decision.
+ */
+async function addCreditCondition(input: {
+  customer: string;
+  salesPerson: string;
+  condition: string;
+  dueDate: string;
+  salesOrder?: string;
+  setBy: string;
+}): Promise<CreditCondition | null> {
+  try {
+    const doc = await createDoc<Record<string, unknown>>(DOCTYPE.creditCondition, {
+      customer: input.customer,
+      sales_person: input.salesPerson,
+      condition: input.condition,
+      due_date: input.dueDate,
+      status: COND_OPEN,
+      ...(input.salesOrder ? { sales_order: input.salesOrder } : {}),
+      // A display name, matching custom_approved_by and the other
+      // who-did-this fields on this site, which are Data and not Links.
+      set_by: input.setBy,
+      set_on: frappeNow(),
+    });
+    return toCreditCondition(doc);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The GM's decision on a condition.
+ *
+ * `role` is checked here and not merely in the screen. The person under an
+ * obligation declaring it satisfied is not accountability, and this is the
+ * door that enforces it.
+ */
+async function decideCreditCondition(input: {
+  id: string;
+  action: ConditionAction;
+  role: string;
+  note?: string;
+  by: string;
+}): Promise<CreditCondition> {
+  const current = await getDoc<Record<string, unknown>>(
+    DOCTYPE.creditCondition,
+    input.id,
+  );
+  const status = (str(current.status) ?? '') || COND_OPEN;
+  const actor = input.role === 'general_manager' ? 'gm' : input.role;
+  const next = nextConditionStatus(status, input.action, actor);
+  if (!next) {
+    throw new Error(
+      'Only the general manager can close or reopen a credit condition.',
+    );
+  }
+
+  const closing = next === COND_CLOSED;
+  const body: Record<string, unknown> = { status: next };
+  if (input.note?.trim()) body.close_note = input.note.trim();
+  // Cleared on reopen, so a reopened condition does not still claim to have
+  // been closed by somebody on a date in the past.
+  body.closed_by = closing ? input.by : '';
+  body.closed_on = closing ? frappeNow() : '';
+
+  const doc = await updateDoc<Record<string, unknown>>(
+    DOCTYPE.creditCondition,
+    input.id,
+    body,
+  );
+  return toCreditCondition(doc);
+}
+
 export const Api = {
   auth: {
     login,
@@ -6032,6 +6217,9 @@ export const Api = {
   },
 
   sales: {
+    listCreditConditions,
+    addCreditCondition,
+    decideCreditCondition,
     listCustomers: listSalesCustomers,
     listOrders: listTeamOrders,
     getOrder: getSalesOrder,

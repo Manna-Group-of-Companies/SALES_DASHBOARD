@@ -24,6 +24,7 @@ import { Alert, Card, Empty, Input } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
+import { GmConditionsPanel } from './GmConditionsPanel';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import '@/components/common/status.css';
@@ -129,6 +130,12 @@ export function GmQueuePage() {
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Search the queue"
         />
+      </div>
+
+      {/* The other half of the loop: the terms set here have to be closable
+          here too, or a rep answers into silence. */}
+      <div style={{ marginBottom: 14 }}>
+        <GmConditionsPanel />
       </div>
 
       {loading && <Empty icon="◔" title="Reading the queue…" />}

@@ -41,6 +41,8 @@ import {
 } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { describeEntry } from '@/domain/productRules';
+import { serverNow } from '@/domain/serverClock';
+import { Api } from '@/api/client';
 
 export function ApprovalReviewModal({ order, onClose }: { order: Order; onClose: () => void }) {
   const dispatch = useAppDispatch();
@@ -70,6 +72,22 @@ export function ApprovalReviewModal({ order, onClose }: { order: Order; onClose:
     ),
   );
   const [confirming, setConfirming] = useState(false);
+  /*
+   * The GM's terms, typed at the moment of approving.
+   *
+   * Asking here is the point. A condition recorded afterwards is one somebody
+   * has to remember to record, and the terms lived in a phone call until
+   * 22 August 2026 precisely because there was never a moment that demanded
+   * them. Optional — plenty of approvals carry none, and forcing one produces
+   * a field full of "n/a".
+   */
+  const [condition, setCondition] = useState('');
+  const [conditionDue, setConditionDue] = useState(() => {
+    const d = serverNow();
+    d.setDate(d.getDate() + 15);
+    return d.toISOString().slice(0, 10);
+  });
+
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
 
@@ -100,15 +118,50 @@ export function ApprovalReviewModal({ order, onClose }: { order: Order; onClose:
   );
 
   const credit = customer ? checkCredit(customer, total) : null;
+
+  /*
+   * Only the GM, and only on an order that actually needed them.
+   *
+   * A sales manager approving a within-limit order has nothing to impose and
+   * no standing to impose it — showing the field to everyone would turn a
+   * record of the GM's terms into a free-text note anybody could write.
+   */
+  const canSetCondition =
+    user?.role === 'general_manager' && Boolean(credit?.breaches);
   const delta = total - quotedTotal;
 
   const approve = async () => {
     if (!user) return;
     const result = await dispatch(approveOrder({ orderId: order.id, user, finalRates: rates, sources }));
-    if (approveOrder.fulfilled.match(result)) {
-      dispatch(pushToast(`${order.orderNo} approved — rates are now locked.`, 'success'));
-      onClose();
+    if (!approveOrder.fulfilled.match(result)) return;
+
+    dispatch(pushToast(`${order.orderNo} approved — rates are now locked.`, 'success'));
+
+    /*
+     * The condition is written after the approval and can never fail it. An
+     * approval the GM believes they gave, blocked because the condition would
+     * not save, is a worse outcome than a condition nobody recorded — so a
+     * failure here is reported and the approval still stands.
+     */
+    if (canSetCondition && condition.trim()) {
+      const made = await Api.sales.addCreditCondition({
+        customer: order.customerId,
+        salesPerson: order.repId,
+        condition: condition.trim(),
+        dueDate: conditionDue,
+        salesOrder: order.id,
+        setBy: user.name || user.id,
+      });
+      dispatch(
+        made
+          ? pushToast('Condition sent to the rep.', 'success')
+          : pushToast(
+              'Approved, but the condition could not be saved. Add it from the customer.',
+              'warning',
+            ),
+      );
     }
+    onClose();
   };
 
   const reject = async () => {
@@ -136,6 +189,30 @@ export function ApprovalReviewModal({ order, onClose }: { order: Order; onClose:
           </>
         }
       >
+        {canSetCondition && (
+          <Card title="Approve on a condition?">
+            <p className="small">
+              Optional. Whatever you type here goes to {order.repName || 'the rep'} and
+              shows on their My Conditions list until you close it. Only you can close it.
+            </p>
+            <Field label="What must the rep do">
+              <Textarea
+                rows={3}
+                value={condition}
+                onChange={(e) => setCondition(e.target.value)}
+                placeholder="Clear the 60-day outstanding before the next delivery"
+              />
+            </Field>
+            <Field label="By when">
+              <Input
+                type="date"
+                value={conditionDue}
+                onChange={(e) => setConditionDue(e.target.value)}
+              />
+            </Field>
+          </Card>
+        )}
+
         <Alert tone="warn" title="Rates lock permanently">
           Approving {order.orderNo} fixes every rate on it. Nobody — you, the rep, or production —
           can change a rate afterwards. Items and quantities stay editable until 1:00 PM on{' '}
