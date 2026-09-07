@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/widgets/credit_conditions_section.dart';
+import 'package:manna_field_sales/widgets/sap_sync_bar.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/collections/collection_screen.dart';
@@ -275,6 +276,11 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             a.creditLimit > 0 ? '₹${a.creditLimit.toStringAsFixed(0)}' : '—',
             over ? const Color(0xFFFFEBEE) : null),
       ]),
+
+      // Directly under the two figures it describes. A limit raised this
+      // morning does not reach here until the nightly job runs, and a rep
+      // being refused by a stale number has no other way to tell.
+      const SapSyncBar(),
 
       // How old the debt is. Shown, never enforced: the credit rule is still
       // the total against the limit, and nothing here blocks an order.

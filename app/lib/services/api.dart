@@ -2419,6 +2419,38 @@ class Api {
         orderBy: 'status asc, due_date asc');
   }
 
+  // -------- The SAP credit-limit refresh --------
+  //
+  // Frappe Cloud cannot reach the SAP LAN, so nothing here speaks to SAP. The
+  // button raises a flag on the `SAP Sync Control` Single; a poller on the
+  // on-prem Windows box picks it up within about two minutes, runs the sync
+  // and writes the outcome back.
+  //
+  // The cooldown lives in the `manna_sap_request_sync` Server Script, not
+  // here. The SAP Service Layer licence pool is tiny and logging in inside the
+  // window takes it down for 20-30 minutes for everybody. This file only
+  // reports the refusal; the server makes it.
+
+  /// The sync state. Polled every 10 seconds while a run is in flight.
+  static Future<Map<String, dynamic>> sapSyncStatus() async {
+    final r = await Session.I.dio.post('/api/method/manna_sap_get_status');
+    final m = r.data is Map ? r.data['message'] : null;
+    return m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
+  }
+
+  /// Ask for a refresh.
+  ///
+  /// A refusal is a normal answer, not an error: `ok` false with a reason of
+  /// `in_progress` or `cooldown`. Only Accounts Manager, Sales Manager and
+  /// System Manager may ask at all — anyone else gets a 403 from the script,
+  /// which is why the button is not offered to a rep in the first place.
+  static Future<Map<String, dynamic>> requestSapSync() async {
+    final r = await Session.I.dio.post('/api/method/manna_sap_request_sync');
+    final m = r.data is Map ? r.data['message'] : null;
+    if (m is Map) return Map<String, dynamic>.from(m);
+    throw Exception(_frappeError(r));
+  }
+
   /// Every condition this rep owes, across all their customers.
   ///
   /// The customer screen shows one shop's conditions; this is the rep's own
