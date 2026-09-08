@@ -3,10 +3,14 @@
 
 WHY THIS IS A SCRIPT AND NOT A SAVED FILE
 
-The sheet has one row per `Manna Minimum Stock Batch`, pre-filled with what
-ERPNext currently believes is on the shelf. That set changes: pools are added
-as items move onto the minimum-stock list, and a stale sheet would silently
-drop the new ones -- an item with no row is an item nobody counts.
+One row per `Manna Minimum Stock Batch`, pre-filled with what ERPNext
+currently believes is on the shelf: two columns to leave alone and two to
+count into.
+
+A script rather than a saved file because that set changes. Pools are added as
+items move onto the minimum-stock list, and a stale sheet would silently drop
+the new ones -- an item with no row is an item nobody counts, and nothing on
+screen would say so.
 
 Regenerate it whenever the pool list changes. It is cheap and it is the only
 way the sheet stays complete.
@@ -48,7 +52,15 @@ SITE = "https://mannarubber.m.frappe.cloud"
 # Import matches on the label shown in Desk. Verified against the live doctype
 # on 8 September 2026 -- if someone relabels a field there, this breaks loudly
 # at mapping time rather than importing into the wrong column.
-HEADER = ["ID", "Item", "Remaining", "Remaining Loose Belts", "In Stock Since"]
+#
+# `batch_date` ("In Stock Since") is deliberately absent. Stock ageing was
+# dropped from this release, so the date is nothing for the manager to maintain
+# and a column he has to skip past 164 times is a column that eventually gets
+# typed into. It stays REQUIRED on the doctype, which sounds like a problem and
+# is not: an update leaves a field it does not mention alone, so every row keeps
+# the date it already has. Proven against MSB-00080 on 8 September 2026 --
+# writing only the two counts left 2026-06-07 untouched.
+HEADER = ["ID", "Item", "Remaining", "Remaining Loose Belts"]
 
 
 def fetch(path, key, secret, **params):
@@ -73,7 +85,7 @@ def main():
 
     batches = fetch(
         "/api/resource/Manna Minimum Stock Batch", a.key, a.secret,
-        fields='["name","item_code","qty","loose_belts","batch_date"]',
+        fields='["name","item_code","qty","loose_belts"]',
         limit_page_length=0,
     )
     pools = fetch(
@@ -111,7 +123,6 @@ def main():
                     r["item_code"],
                     int(q) if q == int(q) else q,
                     int(r["loose_belts"] or 0),
-                    r["batch_date"],
                 ])
 
     write(a.out, rows)
