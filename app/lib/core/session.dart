@@ -21,6 +21,11 @@ class Session {
   String? salesPerson;
   String? salesPersonLabel;
   String? managedTeam;
+
+  /// The rep's OWN team, from `Sales Person.custom_team_manager` — not the
+  /// team they manage. Distinct from [managedTeam]: a rep belongs to a team
+  /// without running one, and the SAP fetch is offered by membership.
+  String? teamManager;
   List<String> teamReps = [];
 
   /// The reps whose customers, leads and routes this login may see.

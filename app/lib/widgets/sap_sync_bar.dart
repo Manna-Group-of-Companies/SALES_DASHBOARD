@@ -10,20 +10,29 @@
 //
 // WHO SEES THE BUTTON
 //
-// Only a manager. `manna_sap_request_sync` admits Accounts Manager, Sales
-// Manager and System Manager and throws for anybody else, so offering it to a
-// rep would be offering a button that always fails. The freshness line is
-// shown to everyone, because it is useful to everyone.
+// The managers, and every rep on the Manna Treads team under Pareeth. A rep
+// standing in a shop is exactly who a stale credit limit blocks, so they are
+// the ones who most need to refresh it. `manna_sap_request_sync` enforces the
+// same two tests server-side — role, or Sales Person.custom_team_manager —
+// so this only decides whether to offer a button, never whether it works.
 //
-// THE COOLDOWN IS NOT A UI PREFERENCE
+// Everyone else still sees the freshness line, because knowing the figure is
+// three days old is useful even when you cannot do anything about it.
 //
-// The SAP Service Layer licence pool is tiny. Logging in inside the window
-// returns HTTP 500 for 20-30 minutes and takes the integration down for
-// everyone. The refusal therefore lives in the Server Script, where nothing on
-// a phone can reach it. Disabling the button here is a courtesy, not the
-// control — and the countdown is drawn from the server's `cooldown_until`,
-// never from a timer started when this screen opened, because a local clock
-// would drift away from the one enforcing the rule.
+// THE COOLDOWN IS NO LONGER A RECOVERY DELAY
+//
+// It was 25 minutes because leaked Service Layer sessions aged out at SAP's
+// 30-minute idle timeout and a login inside that window returned HTTP 500. The
+// sync script now always logs out in a finally, and on 9 September 2026 SAP was
+// verified handling back-to-back logins and six consecutive runs with no gap,
+// each under ten seconds. It is 2 minutes now, purely so the every-2-minute
+// poller and a double-tap cannot stack logins.
+//
+// The refusal still lives in the Server Script, where nothing on a phone can
+// reach it. Greying the button here is a courtesy, not the control — and the
+// countdown reads the server's `cooldown_until`, never a timer started when
+// this screen opened, because a phone clock would drift from the one enforcing
+// the rule.
 
 import 'dart:async';
 
@@ -84,16 +93,17 @@ class _SapSyncBarState extends State<SapSyncBar> {
     }
   }
 
-  /// Poll every 10 seconds until the run settles, then say what happened once.
+  /// Poll every 3 seconds until the run settles, then say what happened once.
   ///
-  /// Ten seconds because a run takes about two minutes: prompt enough to feel
-  /// live, rare enough that a screen left open is not hammering the site. The
-  /// ceiling stops a poller that never writes back from spinning forever.
+  /// Three, because a run now finishes in about ten seconds — at the old
+  /// ten-second interval a sync that had already succeeded sat looking
+  /// unfinished for most of its own duration. The ceiling stops a poller that
+  /// never writes back from spinning forever.
   void _startPolling() {
     if (_poll != null) return;
     var rounds = 0;
-    _poll = Timer.periodic(const Duration(seconds: 10), (t) async {
-      if (!mounted || ++rounds > 60) {
+    _poll = Timer.periodic(const Duration(seconds: 3), (t) async {
+      if (!mounted || ++rounds > 100) {
         t.cancel();
         _poll = null;
         return;
@@ -169,9 +179,13 @@ class _SapSyncBarState extends State<SapSyncBar> {
         coolUntil == null ? 0 : coolUntil.difference(DateTime.now()).inSeconds;
     final cooling = coolLeft > 0;
 
-    // A rep would only ever get "Not permitted" from the script, so they are
-    // not offered the button at all.
-    final mayAsk = Session.I.isGM || Session.I.isManager;
+    // Mirrors the Server Script exactly: a manager by role, or a member of
+    // Pareeth's Manna Treads team. Anyone else would only ever get
+    // "Not permitted", and a button that always fails is worse than no button.
+    final mayAsk = Session.I.isGM ||
+        Session.I.isManager ||
+        (Session.I.teamManager == 'Pareeth' &&
+            Session.I.company == 'Manna Treads');
 
     final rows = int.tryParse('${_s['last_rows_changed'] ?? 0}') ?? 0;
     final note = '${_s['last_result_message'] ?? ''}'.trim();
@@ -201,7 +215,7 @@ class _SapSyncBarState extends State<SapSyncBar> {
                       minimumSize: const Size(0, 32)),
                   child: Text(
                     running
-                        ? 'Syncing…'
+                        ? 'Fetching…'
                         : cooling
                             ? 'Next in ${_mmss(coolLeft)}'
                             : 'Reload',

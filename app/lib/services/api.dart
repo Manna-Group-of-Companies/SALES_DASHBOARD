@@ -389,7 +389,8 @@ class Api {
     final user = await _loggedUser();
     if (user == null) return [];
     return _list('Sales Person',
-        fields: '["name","sales_person_name","custom_company"]',
+        fields: '["name","sales_person_name","custom_company",'
+            '"custom_team_manager"]',
         filters: '[["is_group","=",0],["custom_user","=","$user"]]');
   }
 
@@ -400,10 +401,12 @@ class Api {
       Session.I.salesPersonLabel =
       (list.first['sales_person_name'] ?? list.first['name']) as String;
       Session.I.company = list.first['custom_company'] as String?;
+      Session.I.teamManager = list.first['custom_team_manager'] as String?;
     } else {
       Session.I.salesPerson = null;
       Session.I.salesPersonLabel = null;
       Session.I.company = null;
+      Session.I.teamManager = null;
     }
     await resolveVisibility();
   }

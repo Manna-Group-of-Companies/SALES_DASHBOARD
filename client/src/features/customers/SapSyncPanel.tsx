@@ -7,16 +7,22 @@
  * the button raises a flag on a Single doc; a poller on the on-prem Windows
  * server picks it up within about two minutes, runs the sync, and writes the
  * outcome back. So there is no response to await — the page polls until the
- * status settles.
+ * status settles, and shows the result where the button is rather than leaving
+ * anyone to refresh and go looking.
  *
- * THE COOLDOWN IS NOT A UI PREFERENCE
+ * THE COOLDOWN IS NO LONGER A RECOVERY DELAY
  *
- * The SAP Service Layer licence pool is tiny. Logging in inside the window
- * returns HTTP 500 for 20-30 minutes and takes the integration down for
- * everyone — two days were spent diagnosing exactly that. The refusal
- * therefore lives in the `manna_sap_request_sync` Server Script, where a
- * browser console cannot reach it. Everything here only *explains* the
- * refusal; disabling the button is a courtesy, not the control.
+ * It was 25 minutes, because leaked Service Layer sessions aged out at SAP's
+ * 30-minute idle timeout and a fresh login inside that window returned HTTP
+ * 500 — two days went into diagnosing that. The sync script now always logs
+ * out in a `finally`, and on 9 September 2026 the Service Layer was verified
+ * handling back-to-back logins, four concurrent sessions and six consecutive
+ * runs with no gap, every one under ten seconds.
+ *
+ * So it is 2 minutes now, and its only remaining job is to stop the
+ * every-2-minute poller and rapid double-clicks stacking SAP logins. The
+ * refusal still lives in the `manna_sap_request_sync` Server Script, where a
+ * browser console cannot reach it; this file only explains it.
  *
  * The countdown is drawn from `cooldown_until` returned by the server, never
  * from a timer started locally. A clock that began when this tab opened would
@@ -86,20 +92,21 @@ export function SapSyncPanel() {
   }, []);
 
   /*
-   * Poll every 10 seconds until the run settles, then say what happened once.
+   * Poll every 3 seconds until the run settles, then say what happened once.
    *
-   * Ten seconds because a run takes about two minutes: often enough that the
-   * result feels prompt, rare enough that a forgotten open tab is not hammering
-   * the site all afternoon. The loop stops on unmount.
+   * Three, because a run now finishes in about ten seconds — at the old
+   * ten-second interval a sync that had already succeeded could sit looking
+   * unfinished for most of its own duration. The ceiling below stops a poller
+   * that never writes back from spinning forever. The loop stops on unmount.
    */
   const pollUntilSettled = useCallback(async () => {
     if (polling.current) return;
     polling.current = true;
     try {
       // A hard ceiling, so a poller that never writes back cannot leave this
-      // spinning forever. Ten minutes is five times a normal run.
-      for (let i = 0; i < 60 && polling.current; i += 1) {
-        await new Promise((r) => setTimeout(r, 10_000));
+      // spinning forever. Five minutes is thirty times a normal run.
+      for (let i = 0; i < 100 && polling.current; i += 1) {
+        await new Promise((r) => setTimeout(r, 3_000));
         if (!polling.current) return;
         const s = await read();
         if (s && !BUSY.has(s.status)) {
@@ -137,7 +144,8 @@ export function SapSyncPanel() {
     try {
       const r = await Api.sales.requestSapSync();
       // A refusal is a normal answer, not a failure: the server is the only
-      // thing that knows whether the licence pool can take another login.
+      // thing that knows whether a run is already in flight or the 2-minute
+      // window is still open.
       dispatch(pushToast(r.message, r.ok ? 'success' : 'warning'));
       await read();
       if (r.ok) void pollUntilSettled();
@@ -181,7 +189,16 @@ export function SapSyncPanel() {
         </span>
       </div>
 
-      {state?.lastResultMessage && (
+      {busy && (
+        // Said inline as well as in a toast. A toast can be missed or
+        // dismissed, and the person who pressed the button is looking at the
+        // button.
+        <p className="small" style={{ marginTop: 10, marginBottom: 0 }}>
+          Fetching from SAP — about ten seconds.
+        </p>
+      )}
+
+      {!busy && state?.lastResultMessage && (
         <p className="small" style={{ marginTop: 10, marginBottom: 0 }}>
           {state.lastResultMessage}
           {state.lastRowsChanged > 0 && (
@@ -191,6 +208,9 @@ export function SapSyncPanel() {
               {state.lastRowsChanged === 1 ? '' : 's'} changed
             </>
           )}
+          {state.lastSyncAt && state.status === 'Success' && (
+            <span className="dim"> · {relative(state.lastSyncAt, now)}</span>
+          )}
         </p>
       )}
 
@@ -198,8 +218,8 @@ export function SapSyncPanel() {
         <p className="small dim" style={{ marginTop: 6, marginBottom: 0 }}>
           {/* Said plainly, because "why is the button greyed out" is otherwise a
               question somebody asks IT rather than reads off the screen. */}
-          SAP allows one refresh every 25 minutes. Each customer&rsquo;s own
-          &ldquo;last synced&rdquo; date is on their record.
+          One refresh every 2 minutes, so the poller and a double-click cannot
+          stack up. A fetch itself takes about ten seconds.
         </p>
       )}
     </Card>
