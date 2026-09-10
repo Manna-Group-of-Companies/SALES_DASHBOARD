@@ -40,6 +40,7 @@ import 'package:dio/dio.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
+import 'package:manna_field_sales/core/stock_from_kg.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/offline_cache.dart';
@@ -56,6 +57,11 @@ const String kReservationDoctype = 'Manna Stock Reservation';
 // offline can see what the minimum stock was at the last sync; they cannot
 // take any of it until they have signal.
 const String kStockPoolsKey = 'minstock:pools';
+const String kStockBinsKey = 'minstock:bins';
+const String kStockWeightsKey = 'minstock:weights';
+
+/// Where the SAP finished-goods stock lands. One warehouse, one company.
+const String kFgWarehouse = 'Finished Goods - MT';
 const String kStockBatchesKey = 'minstock:batches';
 const String kStockBookingsKey = 'minstock:bookings';
 const String kStockItemsKey = 'minstock:packsizes';
@@ -134,6 +140,31 @@ class StockService {
           () => _list('Item',
               fields: '["name","custom_belts_per_roll"]',
               filters: '[["custom_belts_per_roll",">",0]]')),
+      // The warehouse itself.
+      //
+      // Until 10 September 2026 every shelf figure came from
+      // `Manna Minimum Stock Batch`, filled in by hand. The SAP FG import
+      // replaced that with real stock in `Finished Goods - MT` and those
+      // doctypes were emptied, so a build reading only pools shows a rep an
+      // empty shelf for the entire catalogue.
+      //
+      // `Bin.actual_qty` is authoritative and is in KILOS. Do not sum Stock
+      // Ledger Entry instead: a Stock Reconciliation writes an ABSOLUTE
+      // quantity, so its ledger rows carry actual_qty = 0 and the real number
+      // sits in qty_after_transaction.
+      _cached(
+          kStockBinsKey,
+          () => _list('Bin',
+              fields: '["item_code","actual_qty"]',
+              filters:
+                  '[["warehouse","=","$kFgWarehouse"],["actual_qty",">",0]]')),
+      // The weights that turn those kilos into rolls and belts.
+      _cached(
+          kStockWeightsKey,
+          () => _list('Item',
+              fields: '["name","custom_weight_per_roll","custom_belts_per_roll",'
+                  '"custom_avg_weight_per_roll","stock_uom"]',
+              filters: '[["custom_weight_per_roll",">",0]]')),
     ]);
 
     final pools = results[0];
@@ -142,6 +173,8 @@ class StockService {
     final perRoll = {
       for (final i in results[3]) '${i['name']}': _int(i['custom_belts_per_roll'])
     };
+    final bins = results[4];
+    final weights = {for (final i in results[5]) '${i['name']}': i};
 
     final me = Session.I.salesPerson;
     final myQty = <String, double>{};
@@ -188,6 +221,60 @@ class StockService {
         'reserved_in_production_qty': p['custom_reserved_in_production_qty'],
         'reserved_in_production_belts': p['custom_reserved_in_production_belts'],
         'production_run_stage': p['custom_production_run_stage'],
+      });
+    }
+
+    /*
+     * Warehouse stock, for anything the pools do not already describe.
+     *
+     * Pools win where they exist: they carry the minimum, the reserved
+     * counters and the production figures, none of which SAP knows about. This
+     * only fills the gap left when those doctypes were emptied.
+     *
+     * An item with kilos but no weights is SKIPPED rather than shown as zero.
+     * Zero reads as "out of stock"; the truth is that nobody has said how many
+     * rolls a kilo is, and an empty shelf would have a rep refuse a sale for
+     * stock physically in the building. It appears the moment weights arrive.
+     */
+    for (final b in bins) {
+      final code = '${b['item_code']}';
+      if (out.containsKey(code)) continue;
+      final w = weights[code];
+      if (w == null) continue;
+      final conv = stockFromKg(
+        kg: _num(b['actual_qty']),
+        weightPerRoll: _num(w['custom_weight_per_roll']),
+        beltsPerRoll: _int(w['custom_belts_per_roll']),
+        storedWeightPerBelt: _num(w['custom_avg_weight_per_roll']),
+        isWeighed: '${w['stock_uom']}' == 'Kg',
+      );
+      if (!conv.known) continue;
+      out[code] = MinStock.fromJson({
+        'item_code': code,
+        // SAP holds no minimum, so nothing here is below minimum by
+        // definition. Inventing one would raise production alerts nobody
+        // asked for.
+        'minimum_qty': 0,
+        'minimum_loose_belts': 0,
+        'reserved_qty': 0,
+        'reserved_loose_belts': 0,
+        'my_reserved_qty': myQty[code] ?? 0,
+        'my_reserved_loose_belts': myBelts[code] ?? 0,
+        'bookings': bookings[code] ?? const [],
+        // One synthetic batch carrying the whole warehouse figure: the batch
+        // list is what every availability calculation reads, so the shape has
+        // to match even though SAP sends no batch dates.
+        'batches': [
+          {
+            'name': 'SAP',
+            'item_code': code,
+            'qty': conv.rolls,
+            'loose_belts': conv.looseBelts,
+            'original_qty': conv.rolls,
+            'age_days': 0,
+          }
+        ],
+        'belts_per_roll': _int(w['custom_belts_per_roll']),
       });
     }
     return out;

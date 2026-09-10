@@ -54,6 +54,57 @@ ProductCategory categoryOfGroup(String? itemGroup) {
   }
 }
 
+/// The category, from the item group if it is one we know, otherwise the name.
+///
+/// WHY THE NAME IS NOW THE NORMAL PATH
+///
+/// The four group names above are the ones this site used until 10 September
+/// 2026. The SAP FG import replaced the catalogue with 1,656 items in groups
+/// called `FG`, `FG - TRP - Black Pearl`, `HOT` and so on — none of which match,
+/// so every one of them fell to `other`. An `other` product has no category,
+/// and with no category it is missing from every type dropdown, prices by no
+/// rule, and never reaches the dialog that would let a rep fill in its weights.
+/// One blank field, four broken screens.
+///
+/// So the name is read when the group does not answer. It carries the family
+/// plainly — "TREAD RUBBER PRECURED BLACK PEARL 205 SR 130", "TREAD RUBBER
+/// HOT PLATINUM 34*14" — and the group is appended because it holds the grade
+/// when a name is terse.
+///
+/// Mirrors `inferCategory` in `client/src/api/client.ts`; the two must agree or
+/// the same item is a different product on a phone and on a dashboard.
+ProductCategory categoryOfItem({String? itemGroup, String? itemName, String? code}) {
+  final byGroup = categoryOfGroup(itemGroup);
+  if (byGroup != ProductCategory.other) return byGroup;
+
+  final t = '${itemName ?? ''} ${code ?? ''} ${itemGroup ?? ''}'.toLowerCase();
+
+  // The word boundaries are load-bearing: without them `hot` matches inside
+  // "PHOTO" and `ctr` inside "SPECTRA", and a mis-set category prices a line
+  // by the wrong rule rather than failing visibly.
+  //
+  // Order matters. Solution and gum are tested first because their names can
+  // also mention rubber; precured beats hot, so an item naming both is
+  // precured, which is the correct precedence.
+  if (RegExp(r'\bvulcan').hasMatch(t) ||
+      RegExp(r'\bvs[-\s]').hasMatch(t) ||
+      t.contains('solution')) {
+    return ProductCategory.vulcanizingSolution;
+  }
+  if (RegExp(r'bonding|\bgum\b|\bbg[-\s]').hasMatch(t)) {
+    return ProductCategory.bondingGum;
+  }
+  if (RegExp(r'precured|\bpctr\b|\bptr\b').hasMatch(t)) {
+    return ProductCategory.pctr;
+  }
+  // Hot-process tread rubber IS the conventional product. 206 items sit in a
+  // group literally called HOT and none of them say "conventional" anywhere.
+  if (RegExp(r'conventional|\bctr\b|\bhot\b').hasMatch(t)) {
+    return ProductCategory.ctr;
+  }
+  return ProductCategory.other;
+}
+
 extension ProductCategoryLabel on ProductCategory {
   String get label => switch (this) {
         ProductCategory.pctr => 'Precured Tread Rubber',
@@ -102,7 +153,12 @@ class Product {
   final Map<String, dynamic> doc;
   final ProductCategory category;
 
-  Product(this.doc) : category = categoryOfGroup(doc['item_group'] as String?);
+  Product(this.doc)
+      : category = categoryOfItem(
+          itemGroup: doc['item_group'] as String?,
+          itemName: doc['item_name'] as String?,
+          code: doc['name'] as String?,
+        );
 
   String get code => '${doc['name']}';
   String get name => '${doc['item_name'] ?? doc['name']}';
