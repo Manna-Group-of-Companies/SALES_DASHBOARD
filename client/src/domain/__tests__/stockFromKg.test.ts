@@ -26,8 +26,9 @@ describe('kilos to rolls and belts', () => {
       });
       expect(got.known).toBe(c.expect.known);
       if (got.known && c.expect.known) {
-        expect(got.rolls).toBeCloseTo(c.expect.rolls as number, 3);
-        expect(got.belts).toBeCloseTo(c.expect.belts as number, 3);
+        expect(got.rolls).toBe(c.expect.rolls);
+        expect(got.looseBelts).toBe(c.expect.loose_belts);
+        expect(got.totalBelts).toBe(c.expect.total_belts);
         expect(got.weightPerBelt).toBeCloseTo(c.expect.weight_per_belt as number, 3);
       }
     });
@@ -63,7 +64,10 @@ describe('the mistakes this rule exists to prevent', () => {
     // answer; no weights is the absence of one.
     const got = stockFromKg({ kg: 0, weightPerRoll: 38.4, beltsPerRoll: 6 });
     expect(got.known).toBe(true);
-    if (got.known) expect(got.rolls).toBe(0);
+    if (got.known) {
+      expect(got.rolls).toBe(0);
+      expect(got.totalBelts).toBe(0);
+    }
   });
 
   it('Nos and Litre items are not asked the question at all', () => {
@@ -72,12 +76,36 @@ describe('the mistakes this rule exists to prevent', () => {
     if (!got.known) expect(got.reason).toBe('not_weighed');
   });
 
-  it('belts come from the unrounded roll count', () => {
-    // Rounding rolls first multiplies the error by belts-per-roll, up to 20x.
+  it('rounds DOWN, never up — an offcut is not a belt', () => {
+    // 149.2 kg is 23.3 belts: 23 sellable and a 2 kg remnant. 24 would promise
+    // a belt that cannot be cut.
     const got = stockFromKg({ kg: 149.2, weightPerRoll: 38.4, beltsPerRoll: 6 });
     if (got.known) {
-      expect(got.belts).toBeCloseTo(23.313, 3);
-      expect(got.belts).not.toBe(Math.round(got.rolls) * 6);
+      expect(got.totalBelts).toBe(23);
+      expect(got.rolls).toBe(3);
+      expect(got.looseBelts).toBe(5);
+      expect(got.rolls * 6 + got.looseBelts).toBe(got.totalBelts);
+    }
+  });
+
+  it('survives binary floating point at an exact roll boundary', () => {
+    // 34.0 / 1.7 is 19.999999999999996. Flooring naively loses a whole roll.
+    const got = stockFromKg({ kg: 34.0, weightPerRoll: 34.0, beltsPerRoll: 20 });
+    if (got.known) {
+      expect(got.totalBelts).toBe(20);
+      expect(got.rolls).toBe(1);
+      expect(got.looseBelts).toBe(0);
+    }
+  });
+
+  it('every result is a whole number', () => {
+    for (const kg of [0.1, 6.39, 6.4, 149.2, 999.99]) {
+      const got = stockFromKg({ kg, weightPerRoll: 38.4, beltsPerRoll: 6 });
+      if (got.known) {
+        expect(Number.isInteger(got.rolls)).toBe(true);
+        expect(Number.isInteger(got.looseBelts)).toBe(true);
+        expect(Number.isInteger(got.totalBelts)).toBe(true);
+      }
     }
   });
 });

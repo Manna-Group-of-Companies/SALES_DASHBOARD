@@ -10,50 +10,52 @@
     "never_divide_unguarded": "kg / 0 is Infinity in both languages, and Infinity rendered into an order screen is an order for an unbounded quantity.",
     "derive_weight_per_belt": "weight-per-belt = weight-per-roll / belts-per-roll when the stored weight-per-belt is missing. The stored field is authoritative when present; this only fills a hole.",
     "only_weighed_units": "Roll and belt maths applies to weight-based stock only. An item sold in Nos or Litre has no rolls and the question is not asked of it.",
-    "partial_rolls_are_real": "Rolls are kept fractional in the model. 149.2 kg at 38.4 kg/roll is 3.89 rolls, not 3 and not 4. What a screen chooses to round is a display decision made where the screen is, not lost here.",
-    "belts_follow_rolls": "belts = rolls x belts-per-roll, from the unrounded roll count. Rounding rolls first and multiplying compounds the error."
+    "whole_units_only": "Rolls and belts are whole numbers. A rep cannot sell 0.885 of a roll, and a screen showing one invites an order for it. The kilos are converted to whole BELTS first, then split into rolls and the loose belts left over - which is how the stock physically sits and how the rest of the app already counts it.",
+    "round_down_never_up": "Always floor. 149.2 kg at 6.4 kg/belt is 23.3 belts, which is 23 sellable belts and a 2 kg offcut. Rounding to 24 promises a belt that cannot be cut, and an over-promise here is a rep standing in a shop unable to deliver.",
+    "belts_first_then_rolls": "Whole belts come first, then rolls = belts / belts-per-roll and the remainder is loose. Computing rolls first and multiplying back compounds the rounding error by belts-per-roll, which reaches 20 in this catalogue.",
+    "float_epsilon": "34.0 / 1.7 is 19.999999999999996 in both languages, and flooring that gives 19 rather than 20 - one whole roll lost to binary floating point. A tiny epsilon is added before flooring."
   },
 
   "cases": [
     {
       "why": "I-11672 as imported - the worked example from the brief",
       "kg": 149.2, "belts_per_roll": 6, "weight_per_roll": 38.4,
-      "expect": { "known": true, "rolls": 3.885, "belts": 23.313, "weight_per_belt": 6.4 }
+      "expect": { "known": true, "rolls": 3, "loose_belts": 5, "total_belts": 23, "weight_per_belt": 6.4 }
     },
     {
       "why": "I-11674, a fourteen-belt roll",
       "kg": 18.8, "belts_per_roll": 14, "weight_per_roll": 35.0,
-      "expect": { "known": true, "rolls": 0.537, "belts": 7.52, "weight_per_belt": 2.5 }
+      "expect": { "known": true, "rolls": 0, "loose_belts": 7, "total_belts": 7, "weight_per_belt": 2.5 }
     },
     {
       "why": "I-11675, the widest roll in the import",
       "kg": 34.0, "belts_per_roll": 20, "weight_per_roll": 34.0,
-      "expect": { "known": true, "rolls": 1.0, "belts": 20.0, "weight_per_belt": 1.7 }
+      "expect": { "known": true, "rolls": 1, "loose_belts": 0, "total_belts": 20, "weight_per_belt": 1.7 }
     },
     {
       "why": "stock present, no weights - the 288 items whose SAP stock is about to land. Not zero rolls, which would read as out of stock",
       "kg": 512.5, "belts_per_roll": 0, "weight_per_roll": 0,
-      "expect": { "known": false, "rolls": null, "belts": null, "weight_per_belt": null }
+      "expect": { "known": false, "rolls": null, "loose_belts": null, "total_belts": null, "weight_per_belt": null }
     },
     {
       "why": "belts known but roll weight missing - still unknown, and still no division",
       "kg": 100.0, "belts_per_roll": 6, "weight_per_roll": 0,
-      "expect": { "known": false, "rolls": null, "belts": null, "weight_per_belt": null }
+      "expect": { "known": false, "rolls": null, "loose_belts": null, "total_belts": null, "weight_per_belt": null }
     },
     {
       "why": "roll weight known but belts missing - a roll count is derivable, but belts are not, so the pair is unknown rather than half-answered",
       "kg": 100.0, "belts_per_roll": 0, "weight_per_roll": 38.4,
-      "expect": { "known": false, "rolls": null, "belts": null, "weight_per_belt": null }
+      "expect": { "known": false, "rolls": null, "loose_belts": null, "total_belts": null, "weight_per_belt": null }
     },
     {
       "why": "no stock and full weights is a known zero, not an unknown - the difference between an empty shelf and an unanswerable question",
       "kg": 0, "belts_per_roll": 6, "weight_per_roll": 38.4,
-      "expect": { "known": true, "rolls": 0, "belts": 0, "weight_per_belt": 6.4 }
+      "expect": { "known": true, "rolls": 0, "loose_belts": 0, "total_belts": 0, "weight_per_belt": 6.4 }
     },
     {
       "why": "a negative weight-per-roll is nonsense data, refused rather than propagated as a negative roll count",
       "kg": 100.0, "belts_per_roll": 6, "weight_per_roll": -38.4,
-      "expect": { "known": false, "rolls": null, "belts": null, "weight_per_belt": null }
+      "expect": { "known": false, "rolls": null, "loose_belts": null, "total_belts": null, "weight_per_belt": null }
     }
   ]
 }

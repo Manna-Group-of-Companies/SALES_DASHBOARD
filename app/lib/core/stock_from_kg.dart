@@ -39,11 +39,14 @@ class StockFromKg {
   /// Always real, and always worth showing even when the rest is unknown.
   final double kg;
 
-  /// Fractional on purpose. 149.2 kg at 38.4 kg/roll is 3.885 rolls, not 3 and
-  /// not 4 — what a screen rounds is a display decision, made where the screen
-  /// is rather than lost here.
-  final double? rolls;
-  final double? belts;
+  /// Whole rolls. A rep cannot sell 0.885 of a roll.
+  final int? rolls;
+
+  /// Belts left over after the whole rolls — 0..beltsPerRoll-1.
+  final int? looseBelts;
+
+  /// Every whole belt the kilos can be cut into.
+  final int? totalBelts;
   final double? weightPerBelt;
   final StockUnknownReason? reason;
 
@@ -51,13 +54,24 @@ class StockFromKg {
     required this.known,
     required this.kg,
     this.rolls,
-    this.belts,
+    this.looseBelts,
+    this.totalBelts,
     this.weightPerBelt,
     this.reason,
   });
 }
 
 double _round3(double v) => (v * 1000).round() / 1000;
+
+/// Whole units, always rounding DOWN.
+///
+/// 149.2 kg at 6.4 kg/belt is 23.3 belts: 23 sellable belts and a 2 kg offcut.
+/// Rounding to 24 promises a belt that cannot be cut, and an over-promise here
+/// is a rep in a shop unable to deliver.
+///
+/// The epsilon is not decoration. 34.0 / 1.7 evaluates to 19.999999999999996,
+/// and flooring that loses a whole roll to binary floating point.
+int _wholeUnits(double v) => (v + 1e-9).floor();
 
 /// A stored number Frappe may have defaulted to 0.
 ///
@@ -123,14 +137,18 @@ StockFromKg stockFromKg({
         known: false, kg: k, reason: StockUnknownReason.noBeltsPerRoll);
   }
 
+  final perBelt = roll / belts;
+  // Whole belts first, then split. Computing rolls first and multiplying back
+  // compounds the rounding error by belts-per-roll, which reaches 20 here.
+  final totalBelts = _wholeUnits(k / perBelt);
+  final perRoll = belts.round();
   return StockFromKg._(
     known: true,
     kg: k,
-    rolls: _round3(k / roll),
-    // From the UNROUNDED roll count: rounding first and multiplying compounds
-    // the error by belts-per-roll, which reaches 20 in this catalogue.
-    belts: _round3((k / roll) * belts),
-    weightPerBelt: _round3(roll / belts),
+    rolls: totalBelts ~/ perRoll,
+    looseBelts: totalBelts % perRoll,
+    totalBelts: totalBelts,
+    weightPerBelt: _round3(perBelt),
   );
 }
 

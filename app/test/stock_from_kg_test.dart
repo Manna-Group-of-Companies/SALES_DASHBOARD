@@ -28,13 +28,14 @@ void main() {
         final want = c['expect'] as Map<String, dynamic>;
         expect(got.known, want['known']);
         if (got.known) {
-          expect(got.rolls, closeTo((want['rolls'] as num).toDouble(), 0.001));
-          expect(got.belts, closeTo((want['belts'] as num).toDouble(), 0.001));
+          expect(got.rolls, want['rolls']);
+          expect(got.looseBelts, want['loose_belts']);
+          expect(got.totalBelts, want['total_belts']);
           expect(got.weightPerBelt,
               closeTo((want['weight_per_belt'] as num).toDouble(), 0.001));
         } else {
           expect(got.rolls, isNull);
-          expect(got.belts, isNull);
+          expect(got.totalBelts, isNull);
         }
       });
     }
@@ -51,7 +52,7 @@ void main() {
             kg: 500, weightPerRoll: pair[0], beltsPerRoll: pair[1]);
         expect(got.known, isFalse, reason: 'w=${pair[0]} b=${pair[1]}');
         expect(got.rolls, isNull);
-        expect(got.belts, isNull);
+        expect(got.totalBelts, isNull);
       }
     });
 
@@ -68,6 +69,7 @@ void main() {
       final got = stockFromKg(kg: 0, weightPerRoll: 38.4, beltsPerRoll: 6);
       expect(got.known, isTrue);
       expect(got.rolls, 0);
+      expect(got.totalBelts, 0);
     });
 
     test('Nos and Litre items are not asked the question at all', () {
@@ -77,11 +79,21 @@ void main() {
       expect(got.reason, StockUnknownReason.notWeighed);
     });
 
-    test('belts come from the unrounded roll count', () {
-      // Rounding rolls first multiplies the error by belts-per-roll, up to 20x.
+    test('rounds DOWN, never up - an offcut is not a belt', () {
+      // 149.2 kg is 23.3 belts: 23 sellable and a 2 kg remnant.
       final got = stockFromKg(kg: 149.2, weightPerRoll: 38.4, beltsPerRoll: 6);
-      expect(got.belts, closeTo(23.313, 0.001));
-      expect(got.belts, isNot(got.rolls!.round() * 6));
+      expect(got.totalBelts, 23);
+      expect(got.rolls, 3);
+      expect(got.looseBelts, 5);
+      expect(got.rolls! * 6 + got.looseBelts!, got.totalBelts);
+    });
+
+    test('survives binary floating point at an exact roll boundary', () {
+      // 34.0 / 1.7 is 19.999999999999996; a naive floor loses a whole roll.
+      final got = stockFromKg(kg: 34.0, weightPerRoll: 34.0, beltsPerRoll: 20);
+      expect(got.totalBelts, 20);
+      expect(got.rolls, 1);
+      expect(got.looseBelts, 0);
     });
   });
 

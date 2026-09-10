@@ -43,9 +43,12 @@ export interface UnknownStock {
 export interface KnownStock {
   known: true;
   kg: number;
-  /** Fractional on purpose — see `partial_rolls_are_real` in the fixture. */
+  /** Whole rolls. A rep cannot sell 0.885 of a roll. */
   rolls: number;
-  belts: number;
+  /** Belts left over after the whole rolls — 0..beltsPerRoll-1. */
+  looseBelts: number;
+  /** Every whole belt the kilos can be cut into. rolls x perRoll + loose. */
+  totalBelts: number;
   weightPerBelt: number;
 }
 
@@ -53,6 +56,18 @@ export type StockFromKg = KnownStock | UnknownStock;
 
 /** Three decimals. Enough that 149.2/38.4 round-trips; short of float noise. */
 const round3 = (v: number): number => Math.round(v * 1000) / 1000;
+
+/**
+ * Whole units, always rounding DOWN.
+ *
+ * 149.2 kg at 6.4 kg/belt is 23.3 belts: 23 sellable belts and a 2 kg offcut.
+ * Rounding to 24 promises a belt that cannot be cut, and an over-promise here
+ * is a rep standing in a shop unable to deliver.
+ *
+ * The epsilon is not decoration. 34.0 / 1.7 evaluates to 19.999999999999996,
+ * and flooring that loses a whole roll to binary floating point.
+ */
+const wholeUnits = (v: number): number => Math.floor(v + 1e-9);
 
 /**
  * A stored number that Frappe may have defaulted to 0.
@@ -119,15 +134,17 @@ export function stockFromKg(input: {
   if (roll === null) return { known: false, kg, reason: 'no_weight_per_roll' };
   if (belts === null) return { known: false, kg, reason: 'no_belts_per_roll' };
 
-  const rolls = round3(kg / roll);
+  const perBelt = roll / belts;
+  // Whole belts first, then split. Computing rolls first and multiplying back
+  // compounds the rounding error by belts-per-roll, which reaches 20 here.
+  const totalBelts = wholeUnits(kg / perBelt);
   return {
     known: true,
     kg,
-    rolls,
-    // From the UNROUNDED roll count: rounding first and multiplying compounds
-    // the error by belts-per-roll, which is up to 20 here.
-    belts: round3((kg / roll) * belts),
-    weightPerBelt: round3(roll / belts),
+    rolls: Math.floor(totalBelts / belts),
+    looseBelts: totalBelts % belts,
+    totalBelts,
+    weightPerBelt: round3(perBelt),
   };
 }
 

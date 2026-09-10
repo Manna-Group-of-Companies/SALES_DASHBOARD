@@ -751,14 +751,29 @@ function toProduct(row: Record<string, unknown>): Product {
     beltsPerRoll: n(ITEM_FIELD.beltsPerRoll),
     weightPerRoll: n(ITEM_FIELD.weightPerRoll),
   });
-  const raw = String(row[ITEM_FIELD.category] ?? '');
+  const raw = String(row[ITEM_FIELD.category] ?? '').trim();
+  /*
+   * The stored category first, then the name.
+   *
+   * `custom_product_category` is empty on all 1,656 items of the FG import and
+   * on all but 4 of the 2,318 on the site, so the name is not a rare fallback
+   * — it is the normal path. Before this, a blank category produced a blank
+   * `category`, and a product with no category prices by no rule at all.
+   *
+   * The name is read with the item group appended, because the group carries
+   * the grade ("FG - TRP - Black Pearl") when the name alone is terse.
+   */
+  const inferred = inferCategory(
+    `${String(row.item_name ?? '')} ${String(row.name ?? '')} ${String(row.item_group ?? '')}`,
+  );
   return {
     code: String(row.name),
     name: String(row.item_name ?? row.name),
     // Translated from the Item vocabulary; a value already in the order-line
     // vocabulary (the inferred fallback path) passes through unchanged.
     category: (ITEM_CATEGORY_TO_LINE[raw as keyof typeof ITEM_CATEGORY_TO_LINE] ??
-      raw ??
+      (raw || undefined) ??
+      inferred ??
       'PCTR') as ProductCategory,
     ...weights,
     tinSize: tin === 10 || tin === 30 ? tin : undefined,
