@@ -16,6 +16,18 @@ const String kBankName = 'CANARA BANK';
 const String kBankBranch = 'M G Road Ernakulam';
 const String kBankAcc = '125002176279';
 const String kBankIFSC = 'CNRB0014301';
+
+/// The UPI address printed on the proforma as a QR code.
+///
+/// Supplied 11 September 2026 as a photograph of the BHIM QR card. The code on
+/// the proforma is GENERATED from this string, never a copy of that photo: a
+/// scan of a printout of a QR is grey, skewed and often unreadable by a phone
+/// camera, and a payment QR that will not scan in front of a customer is worse
+/// than none at all.
+///
+/// VERIFY THIS AGAINST THE BANK CARD BEFORE IT REACHES A CUSTOMER. It was read
+/// off an image, and one wrong character sends money to a stranger.
+const String kUpiVpa = 'pos.5126391@indus';
 const String kDefaultHSN = '40061000';
 const String kJurisdiction = 'SUBJECT TO PERUMBAVOOR JURISDICTION';
 // ================================================================================

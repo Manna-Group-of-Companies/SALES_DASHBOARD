@@ -183,15 +183,18 @@ Future<Uint8List> _richProforma(Map<String, dynamic> order,
           pw.SizedBox(width: 10),
           pw.Expanded(
               flex: 5,
+              // Only the two facts a proforma actually carries.
+              //
+              // Due Date, Reference, Buyers Order No, Dispatch Through,
+              // Vehicle No. and Destination were all printed with empty
+              // values: six labelled blanks inherited from a tax-invoice
+              // layout. A proforma is issued before any of them exist — there
+              // is no due date because nothing is payable yet, and no vehicle
+              // because nothing has been dispatched — so they were promising
+              // detail the document cannot have. Removed 11 Sep 2026.
               child: kvTable([
                 ['Invoice No.', '${order['name'] ?? ''}'],
-                ['Invoice Date', dateStr],
-                ['Due Date', ''],
-                ['Reference', ''],
-                ['Buyers Order No', ''],
-                ['Dispatch Through', ''],
-                ['Vehicle No.', ''],
-                ['Destination', ''],
+                ['Proforma Date', dateStr],
               ])),
         ]),
       ),
@@ -295,6 +298,32 @@ Future<Uint8List> _richProforma(Map<String, dynamic> order,
                   pw.Text('IFSC : $kBankIFSC', style: st(7.5)),
                   pw.Text("Company's PAN : $kCoPAN", style: st(7.5)),
                 ])),
+        // Pay by phone, beside the account details that are the alternative.
+        //
+        // GENERATED from `kUpiVpa`, not a copy of the photographed BHIM card:
+        // a scan of a printout of a QR is grey and skewed, and a payment code
+        // that will not scan in front of a customer is worse than none.
+        //
+        // No amount is encoded. This matches the static counter QR the company
+        // already uses, and it never blocks a part payment — which matters
+        // here, where a customer settling half of a proforma is ordinary. Add
+        // `&am=` to the URI if a fixed amount is ever wanted instead.
+        pw.Column(mainAxisSize: pw.MainAxisSize.min, children: [
+          pw.Text('Pay by UPI', style: st(8, b: true)),
+          pw.SizedBox(height: 2),
+          pw.BarcodeWidget(
+            barcode: pw.Barcode.qrCode(),
+            data: 'upi://pay?pa=$kUpiVpa&pn=${Uri.encodeComponent(kCoName)}&cu=INR',
+            width: 62,
+            height: 62,
+            drawText: false,
+          ),
+          pw.SizedBox(height: 2),
+          // Printed under the code so the address can be typed by hand when a
+          // camera will not read it — a fax, a photocopy, a bad printer.
+          pw.Text(kUpiVpa, style: st(6.5)),
+        ]),
+        pw.SizedBox(width: 8),
         pw.Expanded(
             child: pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.center,
