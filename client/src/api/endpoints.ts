@@ -51,6 +51,18 @@ export const DOCTYPE = {
   creditCondition: 'Manna Credit Condition',
 
   leadOrder: 'Lead Order',
+  /**
+   * ERPNext's own per-item-per-warehouse stock row. Added 10 Sep 2026 with the
+   * FG catalogue import, which put 23,962.589 kg into `Finished Goods - MT`.
+   *
+   * `Bin.actual_qty` is authoritative. Do NOT sum `Stock Ledger Entry` for
+   * these: a Stock Reconciliation writes an ABSOLUTE quantity, so its ledger
+   * rows carry `actual_qty = 0` and the real figure sits in
+   * `qty_after_transaction`. Summing actual_qty returns 0 and reads exactly
+   * like "no stock".
+   */
+  bin: 'Bin',
+
   combinedOrder: 'Combined Order',
   customerSite: 'Customer Site',
   weeklyGroup: 'Weekly Order Group',
@@ -663,6 +675,26 @@ export const MIN_STOCK_FIELD = {
   reservedInProductionBelts: 'custom_reserved_in_production_belts',
   runStage: 'custom_production_run_stage',
 } as const;
+
+/**
+ * `Bin` — what ERPNext itself believes is in a warehouse.
+ *
+ * `valuation_rate` is 0 on all 129 FG rows by design: SAP holds no cost for
+ * them. Never surface a stock VALUE from these, and never read rate 0 as an
+ * error — quantities only.
+ */
+export const BIN_FIELD = {
+  itemCode: 'item_code',
+  warehouse: 'warehouse',
+  /** Kilos, for the FG catalogue. The UOM is the item's, not the bin's. */
+  actualQty: 'actual_qty',
+  reservedQty: 'reserved_qty',
+  projectedQty: 'projected_qty',
+  valuationRate: 'valuation_rate',
+} as const;
+
+/** The warehouse the SAP finished-goods stock lands in. */
+export const FG_WAREHOUSE = 'Finished Goods - MT';
 
 /** `Manna Minimum Stock Batch` — the actual rubber on the shelf. */
 export const MIN_STOCK_BATCH_FIELD = {

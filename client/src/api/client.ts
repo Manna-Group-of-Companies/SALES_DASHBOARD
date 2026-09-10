@@ -99,6 +99,7 @@ import {
 import { allItemsReady, firstStage, isTerminalStage, stageLabel } from '@/domain/processStages';
 import { availableQty, isBelowThreshold } from '@/domain/stockLevels';
 import { frappeNow, frappeToday, noteServerDate, serverNow } from '@/domain/serverClock';
+import { stockFromKg, type StockFromKg } from '@/domain/stockFromKg';
 import {
   COND_CLOSED,
   COND_OPEN,
@@ -175,6 +176,8 @@ import {
   SALES_PERSON_FIELD,
   OPTIONAL_EMPLOYEE_FIELD,
   USER_FIELD,
+  BIN_FIELD,
+  FG_WAREHOUSE,
 } from './endpoints';
 import { clone, delay, getDb, mutate, nextOrderNo, nowIso, uid } from './mock/db';
 import { MOCK_CREDENTIALS } from './mock/fixtures';
@@ -720,7 +723,15 @@ function inferCategory(text: string): ProductCategory | null {
   if (/\bvulcan/.test(t) || /\bvs[-\s]/.test(t) || /solution/.test(t)) return 'VS';
   if (/bonding|\bgum\b|\bbg[-\s]/.test(t)) return 'BG';
   if (/precured|\bpctr\b|\bptr\b/.test(t)) return 'PCTR';
-  if (/conventional|\bctr\b/.test(t)) return 'CTR';
+  // Hot-process tread rubber IS the conventional product. The FG import of
+  // 10 Sep 2026 named all 206 HOT-group items "TREAD RUBBER  HOT <grade>
+  // <size>" and put ~254 more of the same in the FG group, none of which say
+  // "conventional" anywhere — so without this, 498 of the 1,656 new items
+  // reached a rep with no category at all.
+  //
+  // Safe after the precured test above: an item naming both wins as PCTR,
+  // which is the right precedence.
+  if (/conventional|\bctr\b|\bhot\b/.test(t)) return 'CTR';
   return null;
 }
 
@@ -6211,6 +6222,91 @@ async function requestSapSync(): Promise<SapSyncRequestResult> {
   };
 }
 
+/*
+ * --- warehouse stock, in kilos, from SAP ------------------------------------
+ *
+ * The FG catalogue import of 10 September 2026 put 1,656 items on the site and
+ * 23,962.589 kg into `Finished Goods - MT`, and nothing in this codebase read
+ * a warehouse. This does.
+ *
+ * SAP holds the stock as weight. Rolls and belts are derived by
+ * `domain/stockFromKg.ts`, which refuses to divide when an item has no
+ * weights — 288 items hold about 37,260 kg in SAP with none, and they become
+ * eligible to receive it on the next scheduled sync.
+ */
+
+export interface WarehouseStock {
+  itemCode: string;
+  itemName: string;
+  itemGroup: string;
+  /** The item's own UOM. 1,639 of the new items are Kg; 17 are not. */
+  uom: string;
+  kg: number;
+  /** Rolls and belts, or an explicit refusal to guess. */
+  converted: StockFromKg;
+}
+
+/**
+ * Everything in the finished-goods warehouse, with weights attached.
+ *
+ * Two reads and a join in memory rather than one request per item: there are
+ * 130 bin rows against 2,318 items, and a lookup per row would be 130 round
+ * trips to a shared Frappe instance.
+ */
+async function listWarehouseStock(
+  warehouse: string = FG_WAREHOUSE,
+): Promise<WarehouseStock[]> {
+  const bins = await listDocs<Record<string, unknown>>(DOCTYPE.bin, {
+    fields: [
+      BIN_FIELD.itemCode,
+      BIN_FIELD.warehouse,
+      BIN_FIELD.actualQty,
+      BIN_FIELD.valuationRate,
+    ],
+    filters: [[BIN_FIELD.warehouse, '=', warehouse]],
+    limit: 0,
+  });
+  if (!bins.length) return [];
+
+  const items = await listDocs<Record<string, unknown>>(DOCTYPE.item, {
+    fields: [
+      'name',
+      'item_name',
+      'item_group',
+      'stock_uom',
+      ITEM_FIELD.weightPerBelt,
+      ITEM_FIELD.beltsPerRoll,
+      ITEM_FIELD.weightPerRoll,
+    ],
+    filters: [['name', 'in', bins.map((b) => String(b[BIN_FIELD.itemCode]))]],
+    limit: 0,
+  });
+  const byCode = new Map(items.map((i) => [String(i.name), i]));
+
+  return bins.map((b) => {
+    const code = String(b[BIN_FIELD.itemCode]);
+    const item = byCode.get(code);
+    const uom = String(item?.stock_uom ?? '');
+    const kg = Number(b[BIN_FIELD.actualQty] ?? 0);
+    return {
+      itemCode: code,
+      itemName: String(item?.item_name ?? code),
+      itemGroup: String(item?.item_group ?? ''),
+      uom,
+      kg,
+      converted: stockFromKg({
+        kg,
+        weightPerRoll: Number(item?.[ITEM_FIELD.weightPerRoll] ?? 0),
+        beltsPerRoll: Number(item?.[ITEM_FIELD.beltsPerRoll] ?? 0),
+        storedWeightPerBelt: Number(item?.[ITEM_FIELD.weightPerBelt] ?? 0),
+        // Rolls exist only for weight-based stock. A tin of solution has none,
+        // and the question should not be asked of it rather than answered 0.
+        isWeighed: uom === 'Kg',
+      }),
+    };
+  });
+}
+
 export const Api = {
   auth: {
     login,
@@ -6299,6 +6395,7 @@ export const Api = {
   },
 
   sales: {
+    listWarehouseStock,
     getSapSyncStatus,
     requestSapSync,
     listCreditConditions,
