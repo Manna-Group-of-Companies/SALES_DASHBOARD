@@ -10,11 +10,19 @@
 //
 // WHO SEES THE BUTTON
 //
-// The managers, and every rep on the Manna Treads team under Pareeth. A rep
-// standing in a shop is exactly who a stale credit limit blocks, so they are
-// the ones who most need to refresh it. `manna_sap_request_sync` enforces the
-// same two tests server-side — role, or Sales Person.custom_team_manager —
-// so this only decides whether to offer a button, never whether it works.
+// The Manna Treads team, and nobody else. Every rep on it, not just the
+// manager — a rep standing in a shop is exactly who a stale credit limit
+// blocks, so they are the ones who most need to refresh it.
+//
+// Retreads and UAE are excluded because the sync reads ONE company database,
+// MANNA_TREADS_LIVE. A Retreads rep pressing this would spend the SAP login
+// and the cooldown on a book their own customers are not in, and read
+// "0 changed" every time without being told why.
+//
+// `manna_sap_request_sync` enforces the same test server-side, on company and
+// not on role — "Sales Manager" cannot discriminate here, since the UAE and
+// Retreads managers both hold it. This only decides whether to offer the
+// button, never whether it works.
 //
 // Everyone else still sees the freshness line, because knowing the figure is
 // three days old is useful even when you cannot do anything about it.
@@ -179,13 +187,10 @@ class _SapSyncBarState extends State<SapSyncBar> {
         coolUntil == null ? 0 : coolUntil.difference(DateTime.now()).inSeconds;
     final cooling = coolLeft > 0;
 
-    // Mirrors the Server Script exactly: a manager by role, or a member of
-    // Pareeth's Manna Treads team. Anyone else would only ever get
+    // Mirrors the Server Script: the Manna Treads book, whether this login is
+    // a rep in it or the manager over it. Anyone else would only ever get
     // "Not permitted", and a button that always fails is worse than no button.
-    final mayAsk = Session.I.isGM ||
-        Session.I.isManager ||
-        (Session.I.teamManager == 'Pareeth' &&
-            Session.I.company == 'Manna Treads');
+    final mayAsk = Session.I.isTreadsUnit;
 
     final rows = int.tryParse('${_s['last_rows_changed'] ?? 0}') ?? 0;
     final note = '${_s['last_result_message'] ?? ''}'.trim();

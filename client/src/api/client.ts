@@ -642,6 +642,7 @@ async function fetchCurrentUser(): Promise<User> {
     salesPerson,
     productionUnit:
       (u[USER_FIELD.productionCompany] as string | undefined) || salesPersons[0]?.custom_company,
+    salesCompany: salesPersons[0]?.custom_company,
     /*
      * Kept even when `role` came out as something else. Renjith is flagged a
      * production manager and also manages the UAE sales team; the flag wins the

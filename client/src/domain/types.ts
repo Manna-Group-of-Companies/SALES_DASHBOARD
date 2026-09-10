@@ -58,6 +58,18 @@ export interface User {
   salesPerson?: string;
   /** Production unit (ERPNext company). Production/stock managers only. */
   productionUnit?: string;
+
+  /**
+   * The ERPNext company on this login's own `Sales Person` record — `Manna
+   * Treads`, `Manna Tyre Retreads`, `Manna Tyres UAE`.
+   *
+   * Separate from `productionUnit`, which means the unit a production manager
+   * runs. This is which book a sales login belongs to, and the SAP refresh
+   * needs it: that sync reads MANNA_TREADS_LIVE only, so offering the button
+   * to a Retreads or UAE login would spend a SAP login on a book their
+   * customers are not in. Empty for the GM, who has no Sales Person record.
+   */
+  salesCompany?: string;
   /**
    * The team token this login manages — `Pareeth`, `Saneesh`, `Renjith` — from
    * `User.custom_managed_team`.

@@ -32,7 +32,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Api, type SapSyncState } from '@/api/client';
 import { serverNow } from '@/domain/serverClock';
-import { useAppDispatch } from '@/store/hooks';
+import { useAppDispatch, useAppSelector } from '@/store/hooks';
+import { selectUser } from '@/store/selectors';
 import { pushToast } from '@/store/slices/notificationsSlice';
 import { Alert, Button, Card } from '@/components/ui';
 
@@ -60,6 +61,7 @@ function mmss(seconds: number): string {
 
 export function SapSyncPanel() {
   const dispatch = useAppDispatch();
+  const user = useAppSelector(selectUser);
 
   const [state, setState] = useState<SapSyncState | null>(null);
   const [asking, setAsking] = useState(false);
@@ -69,6 +71,15 @@ export function SapSyncPanel() {
 
   // Held in a ref so the polling loop can stop itself without re-subscribing.
   const polling = useRef(false);
+
+  /*
+   * Manna Treads only. The sync reads one company database,
+   * MANNA_TREADS_LIVE, so a Retreads or UAE login pressing this would spend
+   * the SAP login and the cooldown on a book their customers are not in, and
+   * read "0 changed" every time without being told why. The Server Script
+   * refuses them; this stops them being offered it, and stops the status poll.
+   */
+  const isTreads = user?.salesCompany === 'Manna Treads';
 
   const read = useCallback(async () => {
     try {
@@ -83,8 +94,8 @@ export function SapSyncPanel() {
   }, []);
 
   useEffect(() => {
-    void read();
-  }, [read]);
+    if (isTreads) void read();
+  }, [read, isTreads]);
 
   useEffect(() => {
     const t = window.setInterval(() => setTick((n) => n + 1), 1000);
@@ -166,6 +177,8 @@ export function SapSyncPanel() {
     : cooling
       ? `Next refresh in ${mmss(cooldownLeft)}`
       : 'Reload from SAP';
+
+  if (!isTreads) return null;
 
   return (
     <Card title="Credit limits from SAP">
