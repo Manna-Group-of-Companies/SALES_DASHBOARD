@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/leave/apply_leave_screen.dart';
-import 'package:manna_field_sales/screens/map/day_map_screen.dart';
+import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/offline_banner.dart';
 
@@ -16,7 +16,8 @@ class LeaveScreen extends StatefulWidget {
 }
 
 class _LeaveScreenState extends State<LeaveScreen> {
-  late Future<List<dynamic>> _future;
+  late Future<({LeaveBalance balance, List<Map<String, dynamic>> leaves})>
+      _future;
 
   @override
   void initState() {
@@ -24,9 +25,24 @@ class _LeaveScreenState extends State<LeaveScreen> {
     _future = _load();
   }
 
-  Future<List<dynamic>> _load() async {
+  /// Both reads, in parallel, and typed all the way through.
+  ///
+  /// This used to be a `Future.wait` returning `List<dynamic>`, and the screen
+  /// pulled the balance out with `as Map<String, double>`. When the flat
+  /// twelve-day allowance became the accrual scheme, the API started returning
+  /// a `LeaveBalance` and that cast began throwing inside `build` — a blank
+  /// screen in release, with nothing in the analyzer to show for it, because a
+  /// cast from `dynamic` always compiles.
+  ///
+  /// Starting both futures and awaiting them separately keeps the two calls
+  /// concurrent and makes each one statically typed, so the next change of
+  /// shape is a compile error rather than a dark screen.
+  Future<({LeaveBalance balance, List<Map<String, dynamic>> leaves})>
+      _load() async {
     final me = Session.I.salesPerson ?? '__none__';
-    return Future.wait([Api.getLeaveBalance(me), Api.getMyLeaves()]);
+    final balanceF = Api.getLeaveBalance(me);
+    final leavesF = Api.getMyLeaves();
+    return (balance: await balanceF, leaves: await leavesF);
   }
 
   void _reload() => setState(() {
@@ -44,42 +60,84 @@ class _LeaveScreenState extends State<LeaveScreen> {
     }
   }
 
-  Widget _balanceCard(Map<String, double> b) {
-    final fy = financialYear(DateTime.now());
-    final remaining = b['remaining'] ?? 0;
-    final over = remaining < 0;
+  /// The balance card.
+  ///
+  /// Takes a [LeaveBalance], not a map. It used to take `Map<String, double>`,
+  /// and when the flat twelve-day allowance was replaced by the real accrual
+  /// scheme the API started returning the object while this screen went on
+  /// casting it to a map. The cast throws inside `build`, which in a release
+  /// build is a blank screen and no message — the analyzer cannot see it,
+  /// because the value arrives as `dynamic` out of a `Future.wait`.
+  Widget _balanceCard(LeaveBalance b) {
+    // "Not on the scheme" is not "no days left". Saying 0 to someone who was
+    // never enrolled reads as "you have used them all" and would have them
+    // treat every day as unpaid.
+    if (!b.onScheme) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Leave balance', style: TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(height: 8),
+            Text(
+                'You are not on the leave accrual scheme, so no balance is '
+                'held here. Speak to HR about your leave.',
+                style: TextStyle(fontSize: 12, color: Colors.black54)),
+          ]),
+        ),
+      );
+    }
+
     Widget cell(String label, String value, Color color) => Expanded(
-      child: Column(children: [
-        Text(value,
-            style: TextStyle(
-                fontSize: 22, fontWeight: FontWeight.bold, color: color)),
-        Text(label,
-            style: const TextStyle(fontSize: 12, color: Colors.black54)),
-      ]),
-    );
+          child: Column(children: [
+            Text(value,
+                style: TextStyle(
+                    fontSize: 22, fontWeight: FontWeight.bold, color: color)),
+            Text(label,
+                style: const TextStyle(fontSize: 12, color: Colors.black54)),
+          ]),
+        );
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Leave balance · FY ${fy.label}-${fy.label + 1}',
-              style: const TextStyle(fontWeight: FontWeight.bold)),
+          // No financial-year heading. The accrual does not reset in January
+          // or in April — it runs continuously from each rep's own start date
+          // — so naming a year would promise a reset that never happens.
+          const Text('Leave balance',
+              style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          // Where the entitlement comes from, because a number that grows by
+          // itself each month is otherwise unexplainable to the person it
+          // belongs to.
+          Text(
+              '${b.opening.toStringAsFixed(1)} carried forward '
+              '+ ${b.accrued.toStringAsFixed(0)} accrued',
+              style: const TextStyle(fontSize: 11, color: Colors.black54)),
           const SizedBox(height: 12),
           Row(children: [
-            cell('Allowance', (b['allowance'] ?? 12).toStringAsFixed(0),
-                Colors.black87),
-            cell('Taken', (b['taken'] ?? 0).toStringAsFixed(1),
-                const Color(0xFFF46A21)),
-            cell('Pending', (b['pending'] ?? 0).toStringAsFixed(1),
-                Colors.orange),
-            cell('Remaining', remaining.toStringAsFixed(1),
-                over ? Colors.red : Colors.green),
+            cell('Entitled', b.entitlement.toStringAsFixed(1), Colors.black87),
+            cell('Taken', b.taken.toStringAsFixed(1), const Color(0xFFF46A21)),
+            cell('Pending', b.pending.toStringAsFixed(1), Colors.orange),
+            cell('Remaining', b.remaining.toStringAsFixed(1),
+                b.overdrawn ? Colors.red : Colors.green),
           ]),
-          if (over)
+          if (b.overdrawn)
             Padding(
               padding: const EdgeInsets.only(top: 10),
               child: Text(
-                  '${(-remaining).toStringAsFixed(1)} day(s) beyond the 12-day allowance — treated as without pay (LOP).',
+                  '${(b.taken - b.entitlement).toStringAsFixed(1)} day(s) beyond '
+                  'your entitlement - those are without pay (LOP).',
                   style: const TextStyle(fontSize: 12, color: Colors.red)),
+            ),
+          if (b.pending > 0)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text(
+                  'Pending days are shown but not deducted - a request that is '
+                  'refused was never leave.',
+                  style: TextStyle(fontSize: 11, color: Colors.black54)),
             ),
         ]),
       ),
@@ -101,7 +159,7 @@ class _LeaveScreenState extends State<LeaveScreen> {
           if (ok == true) _reload();
         },
       ),
-      body: FutureBuilder<List<dynamic>>(
+      body: FutureBuilder<({LeaveBalance balance, List<Map<String, dynamic>> leaves})>(
         future: _future,
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
@@ -113,8 +171,8 @@ class _LeaveScreenState extends State<LeaveScreen> {
                     padding: const EdgeInsets.all(20),
                     child: Text(humanError(snap.error))));
           }
-          final balance = snap.data![0] as Map<String, double>;
-          final leaves = snap.data![1] as List<Map<String, dynamic>>;
+          final balance = snap.data!.balance;
+          final leaves = snap.data!.leaves;
           return ListView(padding: const EdgeInsets.all(12), children: [
             // A remaining-days figure is exactly the sort of number somebody
             // acts on without checking, so say when it is not current.
