@@ -6,6 +6,7 @@ import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
 import 'package:manna_field_sales/screens/orders/combined_order_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/history_list.dart';
 import 'package:manna_field_sales/widgets/order_complete_tick.dart';
@@ -77,7 +78,19 @@ class MyOrdersScreen extends StatelessWidget {
         } else {
           final po = '${r['custom_po_status'] ?? '—'}';
           final approved = po == 'PO Approved - Ready for SAP';
-          final prod = '${r['custom_production_status'] ?? ''}';
+          /*
+           * Once approved, the floor is SAP's to report.
+           *
+           * The stage and the delivery come from SAP and the status is derived
+           * from them in core/sap_order_state.dart, so an order that has
+           * shipped says so even if the production record behind it is stale.
+           * Where SAP has said nothing yet, the ERPNext field is used, which
+           * is what every order placed before 11 September 2026 has.
+           */
+          final sap = SapOrderState.fromOrder(r);
+          final prod = reachedSap(sap)
+              ? productionStatusFromSap(sap)
+              : '${r['custom_production_status'] ?? ''}';
           final fin = '${r['custom_production_finish_date'] ?? ''}';
           statusLine = 'Proforma: ${r['custom_proforma_status'] ?? '—'}  ·  '
               '${approved ? 'Production: ${prod.isEmpty ? 'Not Started' : prod}'
@@ -98,6 +111,21 @@ class MyOrdersScreen extends StatelessWidget {
         final showDup =
             !isLead && dupOf.isNotEmpty && dupOf != 'null' && !dupIgnored;
 
+        /*
+         * What SAP knows, said in one line under the order.
+         *
+         * A rep's two questions are "did it reach the factory" and "when does
+         * it come". Once a delivery exists this leads with it, because the
+         * delivery date is the answer they repeat to a customer.
+         *
+         * Null when SAP has said nothing, so nothing is drawn rather than an
+         * empty row — an order waiting to be picked up looks the same as one
+         * that failed to push, and only the error below distinguishes them.
+         */
+        final sapLine = isLead ? null : sapSummary(SapOrderState.fromOrder(r));
+        final sapErr =
+            isLead ? '' : '${r['custom_sap_sync_error'] ?? ''}'.trim();
+
         final tile = ListTile(
           leading: Icon(isLead ? Icons.emoji_objects : Icons.shopping_cart,
               color: isLead ? const Color(0xFF5C6BC0) : null),
@@ -109,7 +137,13 @@ class MyOrdersScreen extends StatelessWidget {
             if (!isLead) OrderCompleteTick(order: r, compact: true),
           ]),
           subtitle: Text('${r['transaction_date'] ?? ''}$ddText\n$statusLine'
-              '${combined.isEmpty ? '' : '\nWeek order: $combined'}'),
+              '${combined.isEmpty ? '' : '\nWeek order: $combined'}'
+              // The delivery is what a rep repeats to a customer, so it gets
+              // its own line rather than being run into the status.
+              '${sapLine == null ? '' : '\n$sapLine'}'
+              // A failed push reads exactly like an order not yet picked up.
+              // Saying which is the whole point of keeping the error.
+              '${sapErr.isEmpty ? '' : '\nSAP: $sapErr'}'),
           isThreeLine: true,
           trailing: const Icon(Icons.chevron_right),
           onTap: () {

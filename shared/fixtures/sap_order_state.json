@@ -1,0 +1,40 @@
+{
+  "about": "What an order's SAP identifiers and dates mean to the apps, and how SAP's production stage maps onto the four-value custom_production_status the screens already act on.",
+
+  "why": "From 11 September 2026 the manufacturing floor moves to SAP. An approved order becomes a SAP Sales Order, SAP links it to a production order and moves it through stages, and a SAP Delivery Order eventually carries several orders out together. The apps stop owning any of that and report it instead.",
+
+  "the_shape": {
+    "custom_sap_sales_order": "SAP's DocNum for the order. The rep's proof it reached the factory.",
+    "custom_sap_sales_order_status": "SAP's own words. Shown verbatim, never parsed.",
+    "custom_sap_production_order": "SAP's production order DocNum.",
+    "custom_sap_production_stage": "SAP's stage name, free text, e.g. Curing.",
+    "custom_sap_delivery_order": "SAP's delivery DocNum. One delivery carries many orders.",
+    "custom_sap_delivery_date": "When that delivery ships.",
+    "custom_sap_synced_at": "When the sync last reconciled this order.",
+    "custom_sap_sync_error": "Why the last push or pull failed."
+  },
+
+  "rules": {
+    "stage_is_free_text": "The stage list lives in SAP and must change without an app release, so it is never an enum here. Screens print it; only the mapping below turns it into behaviour.",
+    "unknown_stage_is_in_production": "A stage nobody has mapped means the floor has started and we do not know how far. In Production, never Ready - calling an unknown stage Ready would ship an order that is not made.",
+    "delivery_implies_dispatched": "A delivery order number means it has left, whatever the stage says. The delivery is the later fact.",
+    "no_sap_order_is_not_a_failure": "An order with no SAP number has not been picked up yet. Only custom_sap_sync_error means something went wrong, and the two must never be shown the same way.",
+    "dates_come_only_from_sap": "custom_sap_delivery_date is a promise a rep repeats to a customer. Nothing in either app may write it.",
+    "stale_is_worth_saying": "custom_sap_synced_at going quiet means the floor has moved and nobody here knows. Older than a day is worth showing."
+  },
+
+  "stage_to_status": [
+    { "why": "nothing has reached SAP yet", "sap_stage": "", "sap_order": "", "delivery": "", "expect": "Not Started" },
+    { "why": "SAP has the order but the floor has not begun", "sap_stage": "", "sap_order": "SO-1001", "delivery": "", "expect": "Not Started" },
+    { "why": "planned is not started", "sap_stage": "Planned", "sap_order": "SO-1001", "delivery": "", "expect": "Not Started" },
+    { "why": "released to the floor", "sap_stage": "Released", "sap_order": "SO-1001", "delivery": "", "expect": "In Production" },
+    { "why": "a named floor stage", "sap_stage": "Buffing", "sap_order": "SO-1001", "delivery": "", "expect": "In Production" },
+    { "why": "another named floor stage", "sap_stage": "Curing", "sap_order": "SO-1001", "delivery": "", "expect": "In Production" },
+    { "why": "a stage nobody has mapped - started, distance unknown, and never Ready", "sap_stage": "Zzz Unmapped", "sap_order": "SO-1001", "delivery": "", "expect": "In Production" },
+    { "why": "finished on the floor, not yet gone", "sap_stage": "Finished", "sap_order": "SO-1001", "delivery": "", "expect": "Ready" },
+    { "why": "closed is finished by another name", "sap_stage": "Closed", "sap_order": "SO-1001", "delivery": "", "expect": "Ready" },
+    { "why": "a delivery order means it has left, whatever the stage says", "sap_stage": "Curing", "sap_order": "SO-1001", "delivery": "DN-500", "expect": "Dispatched" },
+    { "why": "delivered with no stage at all still means gone", "sap_stage": "", "sap_order": "SO-1001", "delivery": "DN-500", "expect": "Dispatched" },
+    { "why": "case and padding are SAP's, not ours", "sap_stage": "  cURING  ", "sap_order": "SO-1001", "delivery": "", "expect": "In Production" }
+  ]
+}

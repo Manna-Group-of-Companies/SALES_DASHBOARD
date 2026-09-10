@@ -2063,7 +2063,13 @@ class Api {
           final results = await Future.wait([
             _list('Sales Order',
                 fields:
-                    '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_proforma_required","custom_order_placed_at","custom_po_status","custom_production_status","custom_production_finish_date","custom_combined_order","custom_duplicate_of","custom_duplicate_ignored","custom_edit_count","docstatus"]',
+                    '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_proforma_required","custom_order_placed_at","custom_po_status","custom_production_status","custom_production_finish_date","custom_combined_order","custom_duplicate_of","custom_duplicate_ignored","custom_edit_count","docstatus",'
+                    // What SAP says about it: the order number that proves it
+                    // reached the factory, where it is on the floor, and which
+                    // delivery is carrying it out.
+                    '"custom_sap_sales_order","custom_sap_production_stage",'
+                    '"custom_sap_delivery_order","custom_sap_delivery_date",'
+                    '"custom_sap_synced_at","custom_sap_sync_error"]',
                 filters: _mineFilter('custom_sales_person'),
                 limit: 50),
             // A rep's own lead orders. Failing here must not cost them their

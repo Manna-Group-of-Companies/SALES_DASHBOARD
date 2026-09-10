@@ -304,6 +304,27 @@ export const SALES_ORDER_FIELD = {
    * deadline is measured from it and it is not theirs to move.
    */
   placedAt: 'custom_order_placed_at',
+
+  /*
+   * --- what SAP says, from 11 September 2026 ------------------------------
+   *
+   * The manufacturing floor moved to SAP. An approved order becomes a SAP
+   * Sales Order; SAP links a production order and moves it through stages; a
+   * SAP Delivery Order eventually carries several orders out together.
+   *
+   * All `allow_on_submit`, because the sync writes them AFTER approval and
+   * submission — the trap `custom_production_stage` shipped with. All
+   * read-only in Desk: they are SAP's facts, and `sapDeliveryDate` in
+   * particular is a promise a rep repeats to a customer.
+   */
+  sapSalesOrder: 'custom_sap_sales_order',
+  sapSalesOrderStatus: 'custom_sap_sales_order_status',
+  sapProductionOrder: 'custom_sap_production_order',
+  sapProductionStage: 'custom_sap_production_stage',
+  sapDeliveryOrder: 'custom_sap_delivery_order',
+  sapDeliveryDate: 'custom_sap_delivery_date',
+  sapSyncedAt: 'custom_sap_synced_at',
+  sapSyncError: 'custom_sap_sync_error',
 } as const;
 
 /** The six values `custom_proforma_status` accepts. */
