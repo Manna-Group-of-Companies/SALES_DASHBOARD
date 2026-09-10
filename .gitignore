@@ -6,3 +6,31 @@ release/
 # The example file is committed; the real one never is.
 scripts/sap_config.json
 out/
+
+# ---------------------------------------------------------------- secrets ---
+#
+# THIS REPOSITORY IS PUBLIC. Everything below would be world-readable the
+# moment it were committed, and several of these carry credentials that can
+# write to the live ERPNext site or log in to the SAP Service Layer.
+#
+# Broadened 11 September 2026, before the repo was cloned onto the on-prem SAP
+# server. The sync scripts there keep their credentials in `config.json`, which
+# was ignored by that machine's own rules but by nothing here — so a commit
+# made from inside this repo would have published live SAP and ERPNext keys.
+config.json
+**/config.json
+*.env
+!*.example.env
+erp.env
+
+# Working exports: customer lists, order backups, stock sheets. Not secret in
+# the credential sense, but it is commercial data and the repository is public.
+stock-sheet/
+*.log
+logs/
+
+# Certificates and keys of every shape, in case a sync ever needs one.
+*.pfx
+*.pem
+*.p12
+*.key
