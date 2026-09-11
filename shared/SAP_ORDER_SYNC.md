@@ -11,7 +11,9 @@ The apps do not push to SAP and do not compute floor state. They report it.
 ## The flow
 
 1. A sales manager approves an order in ERPNext.
-   `custom_po_status` becomes `PO Approved - Ready for SAP`.
+   `custom_po_status` becomes `PO Approved - Ready for SAP`. The order is **not
+   submitted** — neither app has ever submitted a Sales Order; approval is a
+   field write and the order stays `docstatus = 0`. See `DIVERGENCES.md`.
 2. **The sync creates a Sales Order in SAP** and writes its DocNum back to
    `custom_sap_sales_order`.
 3. SAP links a production order and moves it through stages. The sync copies
@@ -39,10 +41,12 @@ Desk. Created 11 September 2026 and verified live.
 
 `custom_sap_section` is a Section Break, for the Desk form only.
 
-**`allow_on_submit` matters.** A Sales Order is submitted at approval, and
-every one of these is written afterwards. Without that flag Frappe refuses the
-write and the sync fails on every order — the trap `custom_production_stage`
-originally shipped with.
+**`allow_on_submit` is set on all eight, and kept set.** Today it is inert —
+the apps do not submit Sales Orders, so the sync writes to drafts and Frappe
+would take these fields either way. It stays because the flag is the trap
+`custom_production_stage` originally shipped without: the day anything does
+start submitting orders, a field missing it can never be written again for the
+life of the document.
 
 ---
 
@@ -53,8 +57,10 @@ delivery, in `shared/fixtures/sap_order_state.json`. Writing it as well gives
 two sources for one answer, and they will disagree the first time a delivery
 lands before a stage update.
 
-**Anything on an order that has not been approved.** `custom_po_status` is the
-gate; an order that has not passed it has no business in SAP.
+**Anything on an order that has not been approved.** `custom_po_status ==
+"PO Approved - Ready for SAP"` is the gate, together with `docstatus < 2` (any
+live order — draft or, if that ever changes, submitted — but never a Frappe
+cancel). An order that has not passed the gate has no business in SAP.
 
 **`custom_sap_delivery_date` from anywhere but a delivery order.** It is a date
 a rep repeats to a customer.

@@ -451,3 +451,40 @@ obligation somebody forgot to close would cost more than it saved. Teeth can
 be added once there is evidence of how conditions behave; the options
 considered were a warning to the sales manager at approval, and forcing
 re-escalation to the GM.
+
+---
+
+## An approved Sales Order is a draft, not a submitted document — **decided 10 Sep 2026**
+
+Not a divergence between the two apps — they agree, and always have. It is the
+apps against their own contract, found when the SAP order sync was first run.
+
+| | Written in the contracts | What both apps actually do |
+|---|---|---|
+| On approval | "submitted at approval" — `shared/SAP_ORDER_SYNC.md`, `app/server/PWA_HANDOFF_MANAGERS.md`, `dca0c03` | PUT `custom_po_status` + `custom_rate_approved`; **no submit**, order stays `docstatus = 0` |
+
+Neither `app/lib/services/api.dart` (`approveSalesOrderPO`) nor
+`client/src/api/client.ts` (`decideSalesOrder`) contains a submit call, and
+`createSalesOrder` raises the order as a plain draft. Several handoff documents
+nonetheless assumed submission, and the SAP sync's first cut gated on
+`docstatus == 1` — so it matched nothing.
+
+**Decided: the apps are right, the contract was wrong.** Approved orders stay
+drafts, and there is a reason to leave it that way: after approval a rep can
+reopen an order to fix a quantity and it goes back for approval
+(`updateOrderLines`, `_keepDiscounts`, and `decideSalesOrder`), which
+**replaces the `items` child table**. Frappe forbids that on a submitted order —
+`qty`, `rate`, `discount_percentage` are not `allow_on_submit` — so submitting
+at approval would break the post-approval edit flow on both sides.
+
+**What changed:** the SAP sync now gates on `custom_po_status ==
+"PO Approved - Ready for SAP"` **and `docstatus < 2`** (live order, not a Frappe
+cancel). `shared/SAP_ORDER_SYNC.md` updated to match. No app code changed —
+neither app filters SAP intake by `docstatus`, and no fixture pins it.
+
+**If orders should ever really be submitted** (it would enable Frappe's own
+cancel — `docstatus 2` — which `fixtures/production_order.json` already assumes),
+it is its own piece of work: the post-approval edit flow must move to
+cancel-and-amend or lock line edits, and submit runs India Compliance / GST /
+credit validations a draft skips. Do it deliberately, in both apps plus the
+fixture, not as a side effect.
