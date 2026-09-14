@@ -11,7 +11,7 @@ publish_to: 'none'
 # .github/workflows/android-apk.yml), because that is what the in-app updater
 # compares and this line has not moved since launch. Bump the name when a
 # release deserves one; nothing breaks if you never touch the number.
-version: 1.1.0+2
+version: 1.1.1+2
 
 environment:
   sdk: ^3.12.0

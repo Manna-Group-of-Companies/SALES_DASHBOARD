@@ -33,15 +33,20 @@ Two consequences you must hold in mind:
 
 ## 2. Getting anything done
 
-Flutter is not on PATH, and since 13 August 2026 this project is **`app/`
-inside the `SALES_DASHBOARD` monorepo** — every command below runs from `app/`,
-not from the repository root. See the root `CLAUDE.md` for why.
+Since 13 August 2026 this project is **`app/` inside the `SALES_DASHBOARD`
+monorepo** — every command below runs from `app/`, not from the repository
+root. See the root `CLAUDE.md` for why.
+
+Flutter is on PATH as of 7 September 2026, at
+`C:\flutter_windows_3.44.6-stable\flutter\bin`. (It used to live at
+`C:/src/flutter/`, which no longer exists — if a command in an older note fails
+with "No such file or directory", that is why.)
 
 ```bash
 cd app
-"C:/src/flutter/bin/flutter.bat" analyze          # expect 0 errors
-"C:/src/flutter/bin/flutter.bat" test             # ~455 tests, all should pass
-"C:/src/flutter/bin/flutter.bat" build apk --release
+flutter analyze          # expect 0 errors; ~75 infos/warnings are pre-existing
+flutter test             # 628 tests, all should pass
+flutter build apk --release
 ```
 
 Install on a connected phone:

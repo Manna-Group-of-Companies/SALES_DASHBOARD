@@ -28,7 +28,7 @@
 
 /// This build, as `major.minor.patch`. Must track the `version:` line in
 /// pubspec.yaml — they are compared against the same backend field.
-const String kAppVersion = '1.1.0';
+const String kAppVersion = '1.1.1';
 
 /// What the backend decided about this build.
 enum VersionVerdict {
