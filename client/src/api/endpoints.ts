@@ -1004,6 +1004,11 @@ export const METHOD = {
   login: '/api/method/login',
   logout: '/api/method/logout',
   loggedUser: '/api/method/frappe.auth.get_logged_user',
+  /**
+   * Frappe's own attachment endpoint. Takes a multipart body and returns the
+   * stored file's `file_url`, which is what a Attach field actually holds.
+   */
+  uploadFile: '/api/method/upload_file',
   /** Atomic reserve/release so two reps cannot oversell the same stock. */
   reserveStock: '/api/method/manna_sales.api.reserve_stock',
   releaseStock: '/api/method/manna_sales.api.release_stock',

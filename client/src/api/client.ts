@@ -5716,6 +5716,115 @@ async function verifyLeg(input: VerifyLegInput): Promise<Trip> {
   return toTrip(saved);
 }
 
+export interface UploadLegPhotoInput {
+  tripId: string;
+  legId: string;
+  /** Which of the leg's two odometer photos this replaces. */
+  slot: 'start' | 'end';
+  file: File;
+}
+
+/** Bigger than this is a photo nobody needed, and Frappe's own limit is near. */
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Attach an odometer photo to a leg.
+ *
+ * Two steps, because `Trip Vehicle Leg` is a child table. `upload_file` stores
+ * the image against the parent `Trip` and hands back a `file_url`; that url is
+ * then written into the child row exactly the way `verifyLeg` writes a
+ * reading — re-sending the whole `legs` array, read immediately before the
+ * write so a check somebody else saved in between is not reverted.
+ *
+ * `fieldname` is deliberately NOT sent to `upload_file`. That parameter makes
+ * Frappe write the url onto the named field of `docname` itself, and
+ * `start_odometer_photo` lives on the child row, not on `Trip` — so passing it
+ * either errors or silently lands the url on the wrong document.
+ *
+ * Private on purpose: an odometer photo is evidence in a pay claim, and
+ * `/private/files` is session-gated where `/files` is readable by anyone who
+ * has the link. Frappe stamps the resulting `File` record with who uploaded it
+ * and when, which is the only record of a photo that HR supplied rather than
+ * the rep.
+ */
+async function uploadLegPhoto(input: UploadLegPhotoInput): Promise<Trip> {
+  if (!input.file.type.startsWith('image/')) {
+    throw new Error('That is not an image. Odometer photos must be a picture file.');
+  }
+  if (input.file.size > MAX_PHOTO_BYTES) {
+    throw new Error('That image is over 10 MB. Please use a smaller photo.');
+  }
+
+  const form = new FormData();
+  form.append('file', input.file, input.file.name);
+  form.append('doctype', DOCTYPE.trip);
+  form.append('docname', input.tripId);
+  form.append('is_private', '1');
+
+  // No explicit Content-Type: the browser must set the multipart boundary.
+  const { data } = await http.post<{ message?: { file_url?: string } }>(
+    METHOD.uploadFile,
+    form,
+  );
+  const fileUrl = data.message?.file_url;
+  if (!fileUrl) {
+    throw new Error('ERPNext stored the file but returned no URL for it.');
+  }
+
+  return setLegPhoto(input.tripId, input.legId, input.slot, fileUrl);
+}
+
+/**
+ * Take a photo off a leg.
+ *
+ * Clears the leg's reference and nothing more — the `File` record stays,
+ * still attached to the Trip. An odometer photo is evidence in a pay claim:
+ * removing it from the leg is a correction (wrong picture, wrong leg), but
+ * destroying the file would also destroy the only proof of what had been
+ * there, and of who put it there. It remains in the Trip's attachments in
+ * Desk for anyone auditing the claim.
+ */
+async function removeLegPhoto(input: Omit<UploadLegPhotoInput, 'file'>): Promise<Trip> {
+  return setLegPhoto(input.tripId, input.legId, input.slot, '');
+}
+
+/**
+ * Point one of a leg's photo fields at `fileUrl` ('' to clear it).
+ *
+ * The same whole-array re-send as `verifyLeg`, read immediately before the
+ * write so a check somebody else saved in between is not reverted.
+ *
+ * Unlike `verifyLeg`, this does NOT rewrite the trip's totals. A photo changes
+ * no distance, mode or reading, so the totals it would compute are the ones a
+ * reading-writer would. But some trips hold stored totals already known to be
+ * wrong, left that way on purpose until someone decides how to correct live
+ * money records — recomputing here would make that decision silently, as a
+ * side effect of attaching a picture.
+ */
+async function setLegPhoto(
+  tripId: string,
+  legId: string,
+  slot: UploadLegPhotoInput['slot'],
+  fileUrl: string,
+): Promise<Trip> {
+  const field =
+    slot === 'start' ? TRIP_LEG_FIELD.startOdometerPhoto : TRIP_LEG_FIELD.endOdometerPhoto;
+
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.trip, tripId);
+  const legs = Array.isArray(doc.legs) ? (doc.legs as Record<string, unknown>[]) : [];
+  if (!legs.some((l) => String(l.name) === legId)) {
+    // Re-sending the array unchanged would "succeed" and change nothing,
+    // which reads to the user as a save that worked.
+    throw new Error('That leg is no longer on this trip. Refresh and try again.');
+  }
+  const next = legs.map((l) => (String(l.name) === legId ? { ...l, [field]: fileUrl } : l));
+
+  const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.trip, tripId, {
+    legs: next,
+  });
+  return toTrip(saved);
+}
+
 async function listEmployees(): Promise<Employee[]> {
   if (USE_MOCK) return delay(getDb().employees, 80);
 
@@ -6438,6 +6547,8 @@ export const Api = {
     getTrack: getTripTrack,
     listVisits: listSalesVisits,
     verifyLeg,
+    uploadLegPhoto,
+    removeLegPhoto,
   },
 
   sales: {

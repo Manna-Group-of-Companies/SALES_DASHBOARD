@@ -14,7 +14,7 @@
  * shows who checked it.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Trip, TripLeg, TripRates } from '@/domain/types';
 import {
@@ -31,7 +31,18 @@ import {
 import { formatDate, todayIso } from '@/domain/orderRules';
 import { shiftIso } from '@/domain/attendance';
 import { Api } from '@/api/client';
-import { Alert, Badge, Button, Card, Empty, Field, Input, Segmented, Select } from '@/components/ui';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Empty,
+  Field,
+  Input,
+  Modal,
+  Segmented,
+  Select,
+} from '@/components/ui';
 import { money } from '@/components/common/format';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import './attendance.css';
@@ -81,12 +92,23 @@ export function OdometerVerificationPage() {
     return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [trips]);
 
-  /** Legs worth a human look, newest first, each with its parent trip. */
+  /**
+   * Legs worth a human look, newest first, each with its parent trip.
+   *
+   * `all` means every leg, including the ones with no photo on them at all.
+   * Those are invisible to `needsCheck` by design — there is nothing to check
+   * against — but they are exactly the legs somebody needs to reach in order
+   * to attach the missing photo, so a filter that hides them leaves no way in.
+   */
   const rows = useMemo(() => {
     const out: Array<{ trip: Trip; leg: TripLeg }> = [];
     for (const trip of trips) {
       if (person && trip.person !== person) continue;
       for (const leg of trip.legs) {
+        if (filter === 'all') {
+          out.push({ trip, leg });
+          continue;
+        }
         if (!needsCheck(leg)) continue;
         if (filter === 'flagged' && !leg.notVerified) continue;
         if (filter === 'todo' && leg.notVerified && !awaitingCorrection(leg)) continue;
@@ -95,6 +117,12 @@ export function OdometerVerificationPage() {
     }
     return out.sort((a, b) => b.trip.date.localeCompare(a.trip.date));
   }, [trips, filter, person]);
+
+  /** How many of the shown legs are still missing one or both photos. */
+  const missingPhotos = useMemo(
+    () => rows.filter(({ leg }) => !leg.startOdometerPhoto || !leg.endOdometerPhoto).length,
+    [rows],
+  );
 
   const implausible = useMemo(
     () => trips.flatMap((t) => t.legs.filter(isImplausible).map((l) => ({ trip: t, leg: l }))),
@@ -135,7 +163,7 @@ export function OdometerVerificationPage() {
             options={[
               { value: 'todo', label: 'To check' },
               { value: 'flagged', label: 'Flagged' },
-              { value: 'all', label: 'All' },
+              { value: 'all', label: 'All legs' },
             ]}
           />
         </div>
@@ -144,7 +172,14 @@ export function OdometerVerificationPage() {
       {!loading && !error && rows.length > 0 && (
         <p className="note" style={{ marginBottom: 12 }}>
           Showing <b>{rows.length}</b> leg{rows.length === 1 ? '' : 's'}
-          {person ? ` for ${person}` : ' across everyone'}.
+          {person ? ` for ${person}` : ' across everyone'}
+          {missingPhotos > 0 && (
+            <>
+              {' — '}
+              <b>{missingPhotos}</b> still missing a photo.
+            </>
+          )}
+          {missingPhotos === 0 && '.'}
         </p>
       )}
 
@@ -217,6 +252,45 @@ function LegCard({
   const [end, setEnd] = useState(leg.actualEndOdometer || leg.endOdometer || 0);
   const [saving, setSaving] = useState(false);
 
+  /** Which photo slot is mid-upload, or null. One at a time per leg: both
+   *  writes go through the same `legs` array, so overlapping them would let
+   *  the slower one re-send the other's row as it was before. */
+  const [uploading, setUploading] = useState<'start' | 'end' | null>(null);
+
+  const addPhoto = async (slot: 'start' | 'end', file: File) => {
+    setUploading(slot);
+    try {
+      const updated = await Api.trips.uploadLegPhoto({
+        tripId: trip.id,
+        legId: leg.id,
+        slot,
+        file,
+      });
+      onSaved(updated);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not upload the photo.');
+    } finally {
+      setUploading(null);
+    }
+  };
+
+  /** The slot whose delete is awaiting confirmation, or null. */
+  const [confirmingDelete, setConfirmingDelete] = useState<'start' | 'end' | null>(null);
+
+  const deletePhoto = async (slot: 'start' | 'end') => {
+    setUploading(slot);
+    try {
+      const updated = await Api.trips.removeLegPhoto({ tripId: trip.id, legId: leg.id, slot });
+      onSaved(updated);
+      setConfirmingDelete(null);
+    } catch (e) {
+      setConfirmingDelete(null);
+      onError(e instanceof Error ? e.message : 'Could not delete the photo.');
+    } finally {
+      setUploading(null);
+    }
+  };
+
   const rate = rateFor(leg.mode, rates);
   const currentDistance = legDistance(leg);
   const currentClaim = legClaim(leg, rates);
@@ -280,9 +354,53 @@ function LegCard({
     >
       <div className="odo">
         <div className="odo__photos">
-          <Photo label="Start photo" src={leg.startOdometerPhoto} />
-          <Photo label="End photo" src={leg.endOdometerPhoto} />
+          <Photo
+            label="Start photo"
+            src={leg.startOdometerPhoto}
+            busy={uploading === 'start'}
+            disabled={uploading !== null}
+            onPick={(file) => addPhoto('start', file)}
+            onDelete={() => setConfirmingDelete('start')}
+          />
+          <Photo
+            label="End photo"
+            src={leg.endOdometerPhoto}
+            busy={uploading === 'end'}
+            disabled={uploading !== null}
+            onPick={(file) => addPhoto('end', file)}
+            onDelete={() => setConfirmingDelete('end')}
+          />
         </div>
+
+        {confirmingDelete && (
+          <Modal
+            title={`Delete the ${confirmingDelete} photo?`}
+            onClose={() => uploading === null && setConfirmingDelete(null)}
+            footer={
+              <>
+                <Button onClick={() => setConfirmingDelete(null)} disabled={uploading !== null}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="danger"
+                  loading={uploading !== null}
+                  onClick={() => void deletePhoto(confirmingDelete)}
+                >
+                  Delete photo
+                </Button>
+              </>
+            }
+          >
+            <p>
+              {trip.person} · {formatDate(trip.date)} · {leg.mode}
+            </p>
+            <p className="note">
+              The photo is taken off this leg. The file itself stays attached to trip{' '}
+              <span className="mono">{trip.id}</span> in ERPNext, so there is still a record of
+              what was there and who added it.
+            </p>
+          </Modal>
+        )}
 
         <div className="odo__data">
           <table className="table odo__table">
@@ -407,7 +525,31 @@ function LegCard({
   );
 }
 
-function Photo({ label, src }: { label: string; src?: string }) {
+/**
+ * One odometer photo, and the way to put one there.
+ *
+ * A rep photographs the dial from the phone, but a phone with no signal at the
+ * depot gate, a camera that failed, or a leg entered by hand all end the same
+ * way: a claim with no evidence behind it. HR can attach the picture the rep
+ * sent another way rather than leaving the leg unverifiable for good.
+ */
+function Photo({
+  label,
+  src,
+  busy,
+  disabled,
+  onPick,
+  onDelete,
+}: {
+  label: string;
+  src?: string;
+  busy: boolean;
+  disabled: boolean;
+  onPick: (file: File) => void;
+  onDelete: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
   return (
     <Field label={label}>
       {src ? (
@@ -419,6 +561,36 @@ function Photo({ label, src }: { label: string; src?: string }) {
       ) : (
         <div className="odo__photo is-empty">No photo</div>
       )}
+      <div className="odo__photoadd">
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            // Cleared so that picking the SAME file again still fires
+            // `change` — otherwise a failed upload cannot be retried with the
+            // very file that failed, which is the one you always want to retry.
+            e.target.value = '';
+            if (file) onPick(file);
+          }}
+        />
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => inputRef.current?.click()}
+          loading={busy}
+          disabled={disabled}
+        >
+          {src ? 'Replace photo' : 'Add photo'}
+        </Button>
+        {src && (
+          <Button size="sm" variant="danger" onClick={onDelete} disabled={disabled}>
+            Delete
+          </Button>
+        )}
+      </div>
     </Field>
   );
 }
