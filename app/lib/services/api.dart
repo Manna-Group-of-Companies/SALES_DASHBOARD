@@ -21,6 +21,7 @@ import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/proximity.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/trip_rules.dart';
 import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/core/visibility.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
@@ -1994,6 +1995,29 @@ class Api {
           fields: '[$_visitFields]', filters: _mineFilter(), limit: 50));
 
   // ---- Trip tagging + visit linking (Sub-chunk 4) ----
+  /// Every trip of this rep's that has not been ended.
+  ///
+  /// Unbounded on purpose. The old `limit: 1` here is what let a second Active
+  /// trip hide: it answered with the newest and the older one kept running,
+  /// unrecorded, until somebody noticed it on the Trips list weeks later. See
+  /// `core/trip_rules.dart`.
+  static Future<List<RunningTrip>> getActiveTrips() async {
+    final me = Session.I.salesPerson;
+    if (me == null) return const [];
+    final rows = await _list('Trip',
+        fields: '["name","trip_date","purpose"]',
+        filters: '[["sales_person","=","$me"],["status","=","Active"]]',
+        orderBy: 'creation desc',
+        limit: 0);
+    return rows
+        .map((r) => RunningTrip(
+              name: '${r['name']}',
+              date: '${r['trip_date'] ?? ''}',
+              purpose: '${r['purpose'] ?? ''}',
+            ))
+        .toList();
+  }
+
   static Future<Map<String, dynamic>?> getActiveTrip() async {
     final me = Session.I.salesPerson;
     if (me == null) return null;
@@ -3367,6 +3391,14 @@ class Api {
     double? lat,
     double? lng,
   }) async {
+    // One trip at a time. The screen checks this first and explains it
+    // properly; this is the backstop, so a second trip cannot be opened by a
+    // double tap on Start Trip or by a screen added in future that forgets.
+    // Nothing on the ERPNext side will refuse it — there are no Server Scripts
+    // on this plan — so if this check is not here there is no check at all.
+    final refusal = tripStartRefusal(await getActiveTrips());
+    if (refusal != null) throw Exception(refusal);
+
     final now =
     DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
     final body = {

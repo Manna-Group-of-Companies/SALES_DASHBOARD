@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/trip_rules.dart';
 import 'package:manna_field_sales/screens/trips/trip_detail_screen.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -29,10 +30,35 @@ class _NewTripScreenState extends State<NewTripScreen> {
   String? _route;
   bool _loadingRoutes = true;
 
+  // Trips this rep has left running. Checked before the form is offered
+  // rather than after it is filled in: being refused at the Start Trip button,
+  // having typed a purpose and picked a route, teaches a rep to distrust the
+  // button. Api.createTrip refuses too — see core/trip_rules.dart — and that
+  // backstop is what actually holds.
+  List<RunningTrip> _running = const [];
+  bool _checkingRunning = true;
+
   @override
   void initState() {
     super.initState();
     _loadRoutes();
+    _checkRunning();
+  }
+
+  Future<void> _checkRunning() async {
+    setState(() => _checkingRunning = true);
+    try {
+      final r = await Api.getActiveTrips();
+      if (mounted) setState(() => _running = r);
+    } catch (_) {
+      // Could not ask — no signal, most likely. The form opens and the rep
+      // finds out at the button, which is the worse message but the honest
+      // one: refusing to let anybody start a trip because the check itself
+      // failed would ground the whole team over a lost bar of signal.
+      if (mounted) setState(() => _running = const []);
+    } finally {
+      if (mounted) setState(() => _checkingRunning = false);
+    }
   }
 
   Future<void> _loadRoutes() async {
@@ -80,13 +106,87 @@ class _NewTripScreenState extends State<NewTripScreen> {
       }
     } catch (e) {
       setState(() => _error = humanError(e));
+      // The refusal may be the backstop in Api.createTrip — a trip started on
+      // another device, or a second tap that beat this one. Re-asking swaps
+      // this screen for the one that names the trip and opens it. When the
+      // failure was the network the re-ask fails too, nothing changes, and the
+      // rep is left with the error above, which is the right message for it.
+      unawaited(_checkRunning());
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
+  /// What the rep sees instead of the form when a trip is already running.
+  ///
+  /// Names the trip and opens it, because "end that trip first" is only useful
+  /// to somebody who can find it — and with two trips started on the same day
+  /// the Trips list gives them two identical-looking rows to choose between.
+  Widget _blockedByRunningTrip(String refusal) {
+    return ListView(padding: const EdgeInsets.all(16), children: [
+      Card(
+        color: const Color(0xFFFFF3E0),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: const [
+              Icon(Icons.error_outline, color: Color(0xFFD97706)),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text('Finish your last trip first',
+                    style: TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            ]),
+            const SizedBox(height: 10),
+            Text(refusal, style: const TextStyle(fontSize: 14, height: 1.4)),
+          ]),
+        ),
+      ),
+      const SizedBox(height: 16),
+      for (final t in _running)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: OutlinedButton.icon(
+            onPressed: () async {
+              await Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => TripDetailScreen(tripName: t.name)));
+              // They may have ended it while they were in there.
+              if (mounted) _checkRunning();
+            },
+            icon: const Icon(Icons.directions_car),
+            label: Text('Open ${describeRunningTrip(t)}',
+                overflow: TextOverflow.ellipsis),
+          ),
+        ),
+      const SizedBox(height: 8),
+      TextButton.icon(
+        onPressed: _checkingRunning ? null : _checkRunning,
+        icon: const Icon(Icons.refresh),
+        label: const Text('Check again'),
+      ),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
+    // The check has to finish before the form is offered, or the rep starts
+    // typing into a form that is about to be taken away.
+    if (_checkingRunning) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('New Trip')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final refusal = tripStartRefusal(_running);
+    if (refusal != null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('New Trip')),
+        body: _blockedByRunningTrip(refusal),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(title: const Text('New Trip')),
       body: ListView(padding: const EdgeInsets.all(16), children: [
