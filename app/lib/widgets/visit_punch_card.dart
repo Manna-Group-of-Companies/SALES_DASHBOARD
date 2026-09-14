@@ -18,11 +18,21 @@ class VisitPunchCard extends StatefulWidget {
   /// required so a new caller can't silently skip the gate.
   final bool locationCaptured;
 
+  /// Re-captures the place at where the rep is standing now.
+  ///
+  /// Offered from inside the "too far" dialog because that is the only moment
+  /// a rep learns the pin is wrong, and until this existed the advice they got
+  /// there — ask the manager — was advice nobody could act on: the manager's
+  /// queue only lists captures awaiting verification, and a manager capturing
+  /// from the office would write the office.
+  final VoidCallback? onLocationWrong;
+
   const VisitPunchCard(
       {super.key,
       this.customer,
       this.lead,
-      required this.locationCaptured});
+      required this.locationCaptured,
+      this.onLocationWrong});
   @override
   State<VisitPunchCard> createState() => _VisitPunchCardState();
 }
@@ -106,10 +116,12 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
       final places = await Api.registeredPlacesFor(
           customer: widget.customer, lead: widget.lead);
       final near = nearestRegistered(pos.latitude, pos.longitude, places);
-      if (near != null && near.metres > kPunchInRadiusMetres) {
+      if (near != null &&
+          punchIsTooFar(near.metres, pos.accuracy,
+              allowance: kMaxAccuracyAllowanceMetres)) {
         if (!mounted) return;
         setState(() => _busy = false);
-        return _showTooFar(near.place.label, near.metres);
+        return _showTooFar(near.place.label, near.metres, pos.accuracy);
       }
 
       // Leads only. Established customers genuinely sit close together in a
@@ -190,13 +202,19 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
   /// The distance is quoted because it is the difference between "your GPS is
   /// drifting" and "you are in the wrong town", and the rep can tell those
   /// apart at a glance where the app cannot.
-  Future<void> _showTooFar(String place, double metres) {
+  Future<void> _showTooFar(String place, double metres, double accuracy) {
     final away = metres < 1000
         ? '${metres.round()} m'
         : '${(metres / 1000).toStringAsFixed(1)} km';
     final limit = kPunchInRadiusMetres >= 1000
         ? '${(kPunchInRadiusMetres / 1000).toStringAsFixed(0)} km'
         : '${kPunchInRadiusMetres.round()} m';
+
+    // A fix this coarse is the likeliest explanation of the distance, and the
+    // rep can act on it — going outside costs them a minute. Telling them the
+    // shop's pin is wrong instead sends them to correct a record that may be
+    // perfectly good.
+    final coarse = accuracy > kMaxCaptureAccuracyMetres;
     return showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -215,13 +233,31 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
                 style: const TextStyle(fontSize: 13.5, height: 1.4),
               ),
               const SizedBox(height: 10),
-              const Text(
-                'If you are at the right shop, its saved location is wrong — '
-                'ask your manager to have it captured again.',
-                style: TextStyle(fontSize: 12.5, color: Colors.black54),
+              Text(
+                coarse
+                    ? 'Your phone only knows where it is to within about '
+                        '${accuracy.round()} m, so this distance may be wrong. '
+                        'Step outside, give GPS a few seconds, and try again.'
+                    : widget.onLocationWrong == null
+                        ? 'If you are at the right shop, its saved location is '
+                            'wrong — ask your manager to have it captured again.'
+                        : 'If you are standing at the right shop, its saved '
+                            'location is wrong. Fix it here and punch in again.',
+                style: const TextStyle(fontSize: 12.5, color: Colors.black54),
               ),
             ]),
         actions: [
+          // Withheld while the fix is coarse. Offering to rewrite the pin from
+          // a position the phone itself doubts is how a good location becomes
+          // a bad one.
+          if (widget.onLocationWrong != null && !coarse)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                widget.onLocationWrong!();
+              },
+              child: const Text('Location is wrong'),
+            ),
           FilledButton(
               onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
         ],

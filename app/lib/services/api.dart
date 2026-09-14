@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:manna_field_sales/core/app_version.dart';
 import 'package:manna_field_sales/core/attendance_rules.dart';
 import 'package:manna_field_sales/core/auth_store.dart';
+import 'package:manna_field_sales/core/capture_rules.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/discount.dart';
@@ -1132,7 +1133,7 @@ class Api {
       {'custom_proforma_status': approve ? 'Released' : 'Blocked - Credit'});
 
   // Approve a captured customer location: copy captured coords into the
-  // verified fields so the 100 m check-in works against them. Reject sends
+  // verified fields so the 2 km check-in works against them. Reject sends
   // it back to "Not Captured" so the rep can re-capture.
   static Future<void> approveLocation(
       String name, bool approve, dynamic lat, dynamic lng) {
@@ -1146,12 +1147,25 @@ class Api {
     return _put('Customer', name, {'custom_location_status': 'Not Captured'});
   }
 
+  /// [recapture] carries the same meaning as on [captureCustomerLocation]:
+  /// the pin on record is wrong and must stop outranking the new one.
   static Future<void> captureLeadLocation({
     required String lead,
     required String salesPerson,
     required double lat,
     required double lng,
+    bool recapture = false,
+    double? existingLat,
+    double? existingLng,
   }) async {
+    final verdict = checkCapture(
+        selfVerifying: _selfVerifies,
+        lat: lat,
+        lng: lng,
+        existingLat: existingLat,
+        existingLng: existingLng);
+    if (!verdict.allowed) throw CaptureRefused(verdict);
+
     await _put('Lead', lead, {
       'custom_latitude': lat,
       'custom_longitude': lng,
@@ -1160,6 +1174,9 @@ class Api {
       if (_selfVerifies) ...{
         'custom_verified_latitude': lat,
         'custom_verified_longitude': lng,
+      } else if (recapture) ...{
+        'custom_verified_latitude': null,
+        'custom_verified_longitude': null,
       },
     });
   }
@@ -3671,12 +3688,28 @@ class Api {
   /// Read by the capture screens; the same rule as [_selfVerifies], inverted.
   static bool get locationPhotoRequired => !_selfVerifies;
 
+  /// [recapture] is a rep saying the pin already on record is in the wrong
+  /// place, having stood at the shop and found they cannot punch in.
   static Future<void> captureCustomerLocation({
     required String customer,
     required String salesPerson,
     required double lat,
     required double lng,
+    bool recapture = false,
+    double? existingLat,
+    double? existingLng,
   }) async {
+    // Checked here rather than on the screen so no future caller can write a
+    // verified pair without passing it. A rep's capture is never refused by
+    // this — see `capture_rules.dart`.
+    final verdict = checkCapture(
+        selfVerifying: _selfVerifies,
+        lat: lat,
+        lng: lng,
+        existingLat: existingLat,
+        existingLng: existingLng);
+    if (!verdict.allowed) throw CaptureRefused(verdict);
+
     final stamp =
     DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
     final body = {
@@ -3691,6 +3724,16 @@ class Api {
       if (_selfVerifies) ...{
         'custom_verified_latitude': lat,
         'custom_verified_longitude': lng,
+      }
+      // Clearing the old pair is the whole point of a re-capture. A rep's
+      // capture only writes the unverified pair, and `registeredPlacesFor`
+      // prefers the verified one — so leaving a wrong pin there would let it
+      // go on refusing the punch no matter how many times the rep re-captured.
+      // Frappe reads the cleared field back as 0, which `isRealCoordinate`
+      // already discards, so the fallback to the captured pair is what runs.
+      else if (recapture) ...{
+        'custom_verified_latitude': null,
+        'custom_verified_longitude': null,
       },
     };
     final r = await Session.I.dio.put(

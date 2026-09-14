@@ -1,0 +1,63 @@
+{
+  "about": "Where a place's location may be moved to, and by whom. Both apps read this file in their tests. A capture that writes straight into the verified fields has no second pair of eyes on it, and the verified pair is what every punch-in is measured against - so a self-verified capture taken somewhere other than the shop silently makes that shop unpunchable from its real position, for good.",
+
+  "fields": {
+    "verified": "custom_verified_latitude / custom_verified_longitude on Customer and Lead; verified_latitude / verified_longitude on Customer Site",
+    "self_verifying": "true when the capture writes the verified pair itself - a manager on the phone, or anyone on the dashboard. A rep's capture is false: it lands as 'Pending Verification' and a human sees it before it counts.",
+    "note": "The threshold is the punch-in radius on purpose. Below it nothing breaks; above it the shop stops being punchable from where it actually stands, which is the failure this exists to prevent."
+  },
+
+  "limit_metres": 2000,
+
+  "cases": [
+    {
+      "why": "the first capture of a place has no earlier pin to move, so there is nothing it can break",
+      "existing": null,
+      "captured": { "lat": 9.0544, "lng": 76.5344 },
+      "self_verifying": true,
+      "expect_allowed": true
+    },
+    {
+      "why": "a pin that was never captured reads back as (0, 0) - open ocean, not a location, and moving away from it is not moving anything",
+      "existing": { "lat": 0, "lng": 0 },
+      "captured": { "lat": 9.0544, "lng": 76.5344 },
+      "self_verifying": true,
+      "expect_allowed": true
+    },
+    {
+      "why": "correcting GPS drift is the ordinary case - a few tens of metres, the same shop",
+      "existing": { "lat": 9.0544, "lng": 76.5344 },
+      "captured": { "lat": 9.05476, "lng": 76.5344 },
+      "self_verifying": true,
+      "expect_allowed": true
+    },
+    {
+      "why": "just inside the limit still passes: a large yard, or a pin dropped at the gate rather than the counter",
+      "existing": { "lat": 9.0544, "lng": 76.5344 },
+      "captured": { "lat": 9.07159, "lng": 76.5344 },
+      "self_verifying": true,
+      "expect_allowed": true
+    },
+    {
+      "why": "the S.N Agencies failure exactly: a self-verifying capture 15.8 km from the shop, which is what a manager pressing 'capture' at the office produces. It made the shop unpunchable and there was no queue entry for anyone to catch it.",
+      "existing": { "lat": 9.0544, "lng": 76.5344 },
+      "captured": { "lat": 9.19733, "lng": 76.5344 },
+      "self_verifying": true,
+      "expect_allowed": false
+    },
+    {
+      "why": "a rep's capture is never refused on distance. It is queued for a human, and refusing it is precisely what left a wrong pin with no way back - the rep standing at the shop is the one person who can fix it.",
+      "existing": { "lat": 9.0544, "lng": 76.5344 },
+      "captured": { "lat": 9.19733, "lng": 76.5344 },
+      "self_verifying": false,
+      "expect_allowed": true
+    },
+    {
+      "why": "distance is measured, not latitude difference - a move due east breaks a shop just as thoroughly as one due north",
+      "existing": { "lat": 9.0544, "lng": 76.5344 },
+      "captured": { "lat": 9.0544, "lng": 76.6791 },
+      "self_verifying": true,
+      "expect_allowed": false
+    }
+  ]
+}

@@ -44,6 +44,9 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
   void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(m), duration: const Duration(seconds: 4)));
 
+  static double _num(dynamic v) =>
+      (v is num) ? v.toDouble() : double.tryParse('${v ?? ''}') ?? 0;
+
   String get _locStatus =>
       (_l['custom_location_status'] ?? 'Not Captured').toString();
   bool get _submitted => _locStatus == 'Pending Verification';
@@ -103,13 +106,20 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
   /// A rep photographs the place and their capture waits for the manager to
   /// confirm the coordinates belong to it. A manager's own capture skips both
   /// -- they are the person who would be checking it.
-  Future<void> _capture() async {
+  ///
+  /// [recapture] is the rep correcting a pin that is in the wrong place, which
+  /// is otherwise a dead end: a wrong pin puts the lead outside the punch-in
+  /// radius for good. Confirmed first — taken from the road, it would move the
+  /// place to the road.
+  Future<void> _capture({bool recapture = false}) async {
     final rep = Session.I.salesPerson;
     if (rep == null) return _snack('No rep linked to this login.');
+    if (recapture && !await _confirmRecapture()) return;
+    if (!mounted) return;
     setState(() => _busy = true);
     _snack('Getting GPS...');
     try {
-      final pos = await getCurrentLocation();
+      final pos = await getCurrentLocation(requireAccurate: true);
       if (!mounted) return;
       // The lead being captured sits at zero metres from itself, so it is
       // excluded — otherwise the first capture would always block.
@@ -136,6 +146,9 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
         salesPerson: rep,
         lat: pos.latitude,
         lng: pos.longitude,
+        recapture: recapture,
+        existingLat: _num(_l['custom_verified_latitude']),
+        existingLng: _num(_l['custom_verified_longitude']),
       );
       if (img != null) {
         await Api.uploadPhoto(
@@ -155,17 +168,51 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
         if (selfVerified) {
           _l['custom_verified_latitude'] = pos.latitude;
           _l['custom_verified_longitude'] = pos.longitude;
+        } else if (recapture) {
+          // Mirrors what the write just cleared on the server, so the punch
+          // card measures against the new pin without a reload.
+          _l['custom_verified_latitude'] = null;
+          _l['custom_verified_longitude'] = null;
         }
       });
       _snack(selfVerified
           ? 'Location captured ✓'
-          : 'Captured — sent for manager verification.');
+          : recapture
+              ? 'Location corrected — you can punch in now.'
+              : 'Captured — sent for manager verification.');
     } catch (e) {
       _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  /// Confirms a re-capture, naming the one thing that makes it wrong: the rep
+  /// must be at the place. Everything else is recoverable — the manager still
+  /// verifies it — but a pin taken from the road replaces a good location with
+  /// a worse one, and nothing downstream can tell.
+  Future<bool> _confirmRecapture() async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Correct this location?'),
+          content: const Text(
+            'This replaces the saved location with where you are standing '
+            'right now, and sends it to your manager to verify.\n\n'
+            'Only do this if you are at the place.',
+            style: TextStyle(fontSize: 13.5, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('I am at the place')),
+          ],
+        ),
+      ) ??
+      false;
 
   Future<void> _edit() async {
     final updated = await Navigator.push<Map<String, dynamic>>(context,
@@ -343,13 +390,26 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                           ),
                         ),
                       ),
+                      // The way back from a pin in the wrong place. Without
+                      // it the button above stays disabled for good and the
+                      // lead can never be punched in at.
+                      if (_submitted || _verified)
+                        TextButton.icon(
+                          onPressed: _busy
+                              ? null
+                              : () => _capture(recapture: true),
+                          icon: const Icon(Icons.edit_location_alt_outlined,
+                              size: 18),
+                          label: const Text('Location wrong? Re-capture'),
+                        ),
                     ]),
               ),
             ),
             const SizedBox(height: 12),
             VisitPunchCard(
                 lead: l['name'] as String,
-                locationCaptured: _locationCaptured),
+                locationCaptured: _locationCaptured,
+                onLocationWrong: () => _capture(recapture: true)),
             const SizedBox(height: 12),
             SizedBox(
                 width: double.infinity,

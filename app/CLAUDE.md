@@ -212,6 +212,14 @@ return "Insufficient Permission". Read them through the parent document.
 **Unset Link fields read back three different ways**: `null`, `''`, and the
 string `'null'` from naive interpolation. Check all three, everywhere.
 
+**The `custom_` prefix belongs to standard doctypes only.** A custom field
+added to `Customer` or `Lead` is `custom_latitude`; a field on a doctype we
+created ourselves — `Customer Site`, `Lead Order`, the stock doctypes — is just
+`latitude`. Writing the prefixed name to a custom doctype does not error, it
+simply writes nothing, and the read that follows finds nothing wrong. The
+dashboard approved sites into `custom_verified_latitude` for weeks that way and
+no site ever became punchable.
+
 **`validateStatus: (s) => s != null && s < 500`** in the Dio client is
 deliberate — Frappe puts the useful message in the body of a 403 or 417.
 

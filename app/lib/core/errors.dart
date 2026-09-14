@@ -110,7 +110,9 @@ String _fromResponse(Response? r) {
 /// import every feature that defines one.
 String? _ownMessage(Object e) {
   final t = e.runtimeType.toString();
-  if (t == 'StockUnavailable') {
+  if (t == 'StockUnavailable' ||
+      t == 'CoarseFixException' ||
+      t == 'CaptureRefused') {
     final s = '$e'.trim();
     if (s.isNotEmpty) return s;
   }

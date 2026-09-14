@@ -78,9 +78,17 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   /// to confirm the coordinates belong to it. A manager's own capture skips
   /// both — they are the person who would be checking it, and the photo exists
   /// only for that check.
-  Future<void> _capture() async {
+  ///
+  /// [recapture] is the rep saying the pin already on record is in the wrong
+  /// place. It is confirmed first: it overwrites a location the office may
+  /// have relied on for months, and a rep who taps it from the road rather
+  /// than from the counter would move the shop to the road.
+  Future<void> _capture({bool recapture = false}) async {
     final rep = Session.I.salesPerson;
     if (rep == null) return _snack('No rep linked to this login.');
+
+    if (recapture && !await _confirmRecapture()) return;
+    if (!mounted) return;
 
     XFile? img;
     if (Api.locationPhotoRequired) {
@@ -91,12 +99,15 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     setState(() => _busy = true);
     _snack('Getting GPS...');
     try {
-      final pos = await getCurrentLocation();
+      final pos = await getCurrentLocation(requireAccurate: true);
       await Api.captureCustomerLocation(
         customer: c['name'],
         salesPerson: rep,
         lat: pos.latitude,
         lng: pos.longitude,
+        recapture: recapture,
+        existingLat: _num(c['custom_verified_latitude']),
+        existingLng: _num(c['custom_verified_longitude']),
       );
       if (img != null) {
         await Api.uploadPhoto(
@@ -116,17 +127,52 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         if (selfVerified) {
           c['custom_verified_latitude'] = pos.latitude;
           c['custom_verified_longitude'] = pos.longitude;
+        } else if (recapture) {
+          // Mirrors what the write just cleared on the server, so the punch
+          // card measures against the new pin without a reload.
+          c['custom_verified_latitude'] = null;
+          c['custom_verified_longitude'] = null;
         }
       });
       _snack(selfVerified
           ? 'Location captured ✓'
-          : 'Captured — sent for manager verification.');
+          : recapture
+              ? 'Location corrected — you can punch in now.'
+              : 'Captured — sent for manager verification.');
     } catch (e) {
       _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  /// Confirms a re-capture, naming the one thing that makes it wrong.
+  ///
+  /// The rep must be at the shop. Everything else about this is recoverable —
+  /// the manager still verifies it — but a pin taken from the road replaces a
+  /// good location with a worse one, and nothing downstream can tell.
+  Future<bool> _confirmRecapture() async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Correct this shop\'s location?'),
+          content: const Text(
+            'This replaces the saved location with where you are standing '
+            'right now, and sends it to your manager to verify.\n\n'
+            'Only do this if you are at the shop.',
+            style: TextStyle(fontSize: 13.5, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('I am at the shop')),
+          ],
+        ),
+      ) ??
+      false;
 
   static double _num(dynamic v) =>
       (v is num) ? v.toDouble() : double.tryParse('${v ?? ''}') ?? 0;
@@ -322,9 +368,14 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     ]);
   }
 
-  /// One-time shop location capture, independent of visits. Once submitted the
-  /// rep cannot recapture — the button only reports where the location sits in
-  /// the manager's verification queue.
+  /// Shop location capture, independent of visits. Once submitted the main
+  /// button only reports where the location sits in the manager's queue —
+  /// but a wrong pin can still be corrected underneath it.
+  ///
+  /// That correction is not a convenience. A pin captured from the wrong place
+  /// puts the shop outside the punch-in radius for good, and until this button
+  /// existed there was no way back: the rep's capture was disabled, and the
+  /// manager's queue only ever lists captures already awaiting verification.
   Widget _locationSection() {
     final s = _status;
     final submitted = s == 'Pending Verification';
@@ -346,21 +397,29 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             ? 'Captured'
             : 'Capture Location';
 
-    return SizedBox(
-      width: double.infinity,
-      child: FilledButton.icon(
-        style: FilledButton.styleFrom(
-          backgroundColor:
-              verified || submitted ? col.withValues(alpha: 0.12) : null,
-          foregroundColor: verified || submitted ? col : null,
-          disabledBackgroundColor: col.withValues(alpha: 0.12),
-          disabledForegroundColor: col,
+    return Column(children: [
+      SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor:
+                verified || submitted ? col.withValues(alpha: 0.12) : null,
+            foregroundColor: verified || submitted ? col : null,
+            disabledBackgroundColor: col.withValues(alpha: 0.12),
+            disabledForegroundColor: col,
+          ),
+          onPressed: (_busy || verified || submitted) ? null : _capture,
+          icon: Icon(ic),
+          label: Padding(padding: const EdgeInsets.all(12), child: Text(label)),
         ),
-        onPressed: (_busy || verified || submitted) ? null : _capture,
-        icon: Icon(ic),
-        label: Padding(padding: const EdgeInsets.all(12), child: Text(label)),
       ),
-    );
+      if (verified || submitted)
+        TextButton.icon(
+          onPressed: _busy ? null : () => _capture(recapture: true),
+          icon: const Icon(Icons.edit_location_alt_outlined, size: 18),
+          label: const Text('Location wrong? Re-capture'),
+        ),
+    ]);
   }
 
   @override
@@ -422,7 +481,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           const SizedBox(height: 16),
           VisitPunchCard(
               customer: c['name'] as String,
-              locationCaptured: _locationCaptured),
+              locationCaptured: _locationCaptured,
+              onLocationWrong: () => _capture(recapture: true)),
           const SizedBox(height: 16),
           SitesSection(customer: c['name'] as String),
           const SizedBox(height: 16),

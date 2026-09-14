@@ -492,6 +492,36 @@ export const LEAD_FIELD = {
   bannerPhoto: 'custom_banner_photo',
 } as const;
 
+/**
+ * `Customer Site` — a second shop, yard or godown belonging to a customer or
+ * a lead. Each one is a separate drop, and each is a place a rep may punch in.
+ *
+ * **Its fields are NOT `custom_`-prefixed, unlike Customer and Lead.** That
+ * prefix belongs to custom fields bolted onto *standard* doctypes; `Customer
+ * Site` is a custom doctype of our own, so its fields are named plainly. Every
+ * row in the system was created by the phone app, which writes and reads these
+ * names — see `createCustomerSite` and `getCustomerSites` in
+ * `app/lib/services/api.dart`.
+ *
+ * This dashboard used to write `custom_verified_latitude` and
+ * `custom_location_status` here, borrowed from `LEAD_FIELD`. Those fields do
+ * not exist on this doctype: approving a site wrote nothing that the phone
+ * could read, so the site never became punchable and never left the queue.
+ */
+export const CUSTOMER_SITE_FIELD = {
+  siteName: 'site_name',
+  customer: 'customer',
+  lead: 'lead',
+  route: 'route',
+  locationStatus: 'location_status',
+  latitude: 'latitude',
+  longitude: 'longitude',
+  verifiedLatitude: 'verified_latitude',
+  verifiedLongitude: 'verified_longitude',
+  capturedBy: 'captured_by',
+  bannerPhoto: 'banner_photo',
+} as const;
+
 /** `Sales Route` — named `<Rep> - <Place>`, and owned by one rep. */
 export const SALES_ROUTE_FIELD = {
   routeName: 'route_name',

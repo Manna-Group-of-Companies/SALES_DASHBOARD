@@ -100,7 +100,7 @@ class _SitesSectionState extends State<SitesSection> {
     setState(() => _busy = true);
     _snack('Getting GPS…');
     try {
-      final pos = await getCurrentLocation();
+      final pos = await getCurrentLocation(requireAccurate: true);
       final created = await Api.createCustomerSite(
         customer: widget.customer,
         lead: widget.lead,

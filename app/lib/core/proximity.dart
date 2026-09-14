@@ -28,6 +28,24 @@ const double kDuplicateRadiusMetres = 250;
 /// every honest visit and still refuses a punch from the next town.
 const double kPunchInRadiusMetres = 2000;
 
+/// Whether a punch [metres] from the nearest pin must be refused, given a fix
+/// the phone believes is good to within [accuracyMetres].
+///
+/// The accuracy is subtracted before the comparison rather than ignored. A
+/// phone that answers from a cell tower reports being kilometres out and is
+/// telling the truth about it; refusing the rep on that figure and then
+/// blaming the shop's saved pin — which is what happened before this existed —
+/// sends them chasing a correction they do not need.
+///
+/// [allowance] caps how much that widens the circle. Past it the honest answer
+/// is that the fix is not usable, not that anywhere within a district counts.
+bool punchIsTooFar(double metres, double accuracyMetres,
+    {double allowance = 500}) {
+  final credit =
+      accuracyMetres.isFinite && accuracyMetres > 0 ? accuracyMetres : 0.0;
+  return metres - math.min(credit, allowance) > kPunchInRadiusMetres;
+}
+
 /// A place a visit can legitimately be punched at: the party's own registered
 /// position, or one of its sites.
 class RegisteredPlace {

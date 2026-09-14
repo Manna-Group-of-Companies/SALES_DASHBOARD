@@ -593,3 +593,43 @@ The tests state the rules more plainly than the code:
 `test/item_naming_test.dart`, `test/gm_rules_test.dart`,
 `test/production_stages_test.dart`, `test/widget_test.dart`,
 `test/discount_test.dart`.
+
+---
+
+## 11. Shop locations: capturing, correcting, and the punch-in radius
+
+Added 7 September 2026, after S.N Agencies Karunagapally was found carrying a
+verified pin **15.8 km** from the shop. The rep standing at the counter was
+refused every visit, and there was no way back — see below.
+
+**The radius is 2 km, not 100 m.** Several comments and two pieces of screen
+text said 100 m; they were wrong and have been corrected. The figure lives in
+`app/lib/core/proximity.dart` (`kPunchInRadiusMetres`).
+
+**`Customer Site` fields are NOT `custom_`-prefixed.** Customer and Lead are
+standard doctypes carrying custom additions, so theirs are. `Customer Site` is
+a custom doctype of our own and its fields are named plainly: `latitude`,
+`verified_latitude`, `location_status`, `captured_by`, `banner_photo`. The
+dashboard was writing the prefixed names when approving a site, which wrote
+fields that do not exist — the approval landed nowhere and the site never
+became punchable. Use `CUSTOMER_SITE_FIELD`.
+
+**A self-verifying capture may correct a pin but may not relocate one.** Any
+capture that writes the verified pair with nobody checking it — a manager on
+the phone, anything on the dashboard — is refused if it would move an existing
+pin further than the punch-in radius. Below that nothing breaks; above it the
+shop stops being punchable from where it actually stands.
+
+Pinned by `shared/fixtures/capture.json`, implemented in
+`app/lib/core/capture_rules.dart` and `client/src/domain/capture.ts`. **Change
+the fixture and both files together.**
+
+**A rep's capture is never refused on distance.** It lands as
+`Pending Verification` and a human sees it before it counts. Refusing it is
+exactly what made the original bug permanent: the rep's capture button is
+disabled once a location is on record, and the manager's queue only lists
+captures already awaiting a decision, so a `Verified` record with a wrong pin
+appeared to nobody and could be corrected by no one. The phone now offers
+"Location wrong? Re-capture" on the customer and lead screens and inside the
+"too far to punch in" dialog; it clears the stale verified pair, without which
+the correction would change nothing.

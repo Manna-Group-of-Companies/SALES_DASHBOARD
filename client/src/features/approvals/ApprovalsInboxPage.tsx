@@ -265,7 +265,7 @@ export function ApprovalsInboxPage() {
       {!loading && rows.length > 0 && (
         <p className="note" style={{ marginTop: 12 }}>
           Verifying a location copies the captured coordinates into the verified fields — those are
-          what the 100 m punch-in check measures against. Sending one back returns it to “Not
+          what the 2 km punch-in check measures against. Sending one back returns it to “Not
           Captured” so the rep captures again, rather than leaving a rejected reading that still
           looks like a location.
         </p>

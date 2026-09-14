@@ -106,6 +106,7 @@ import {
   nextConditionStatus,
   type ConditionAction,
 } from '@/domain/creditCondition';
+import { checkCapture } from '@/domain/capture';
 import { DISPATCHED, rollUp } from '@/domain/production';
 import { isFullyDispatched, remainingToDispatch } from '@/domain/dispatch';
 import { planCombinedOrders, type CombinableOrder } from '@/domain/combinedOrders';
@@ -161,6 +162,7 @@ import {
   ATTENDANCE_LOG_FIELD,
   LEAVE_FIELD,
   LEAD_FIELD,
+  CUSTOMER_SITE_FIELD,
   SALES_CUSTOMER_FIELD,
   SALES_ROUTE_FIELD,
   SALES_ORDER_FIELD,
@@ -3116,7 +3118,7 @@ async function assignOwner(input: {
  * Decide a captured location.
  *
  * Approving copies the captured coordinates into the **verified** fields —
- * those are what the 100 m punch-in check runs against, so a location that is
+ * those are what the 2 km punch-in check runs against, so a location that is
  * approved but not copied verifies nobody. Rejecting returns it to
  * `Not Captured` so the rep is asked to capture it again, rather than leaving
  * a rejected reading that looks like a location.
@@ -3129,9 +3131,12 @@ async function decideLocation(input: {
   longitude: number;
 }): Promise<void> {
   /*
-   * All three carry the same `custom_location_*` field names — the Site
-   * doctype was built to match Customer and Lead — so the only thing that
-   * varies is which doctype to write to.
+   * The three do NOT share field names. Customer and Lead are standard
+   * doctypes carrying `custom_`-prefixed additions; `Customer Site` is a
+   * custom doctype of our own and its fields are named plainly. Writing the
+   * prefixed names to a site wrote fields that do not exist — the approval
+   * landed nowhere, the phone never saw the site as verified, and it stayed
+   * in the queue for ever.
    */
   const doctype =
     input.kind === 'customer'
@@ -3139,7 +3144,12 @@ async function decideLocation(input: {
       : input.kind === 'lead'
         ? DOCTYPE.lead
         : DOCTYPE.customerSite;
-  const f = input.kind === 'customer' ? SALES_CUSTOMER_FIELD : LEAD_FIELD;
+  const f =
+    input.kind === 'customer'
+      ? SALES_CUSTOMER_FIELD
+      : input.kind === 'lead'
+        ? LEAD_FIELD
+        : CUSTOMER_SITE_FIELD;
 
   const body: Record<string, unknown> = input.approve
     ? {
@@ -4358,14 +4368,17 @@ async function decideInboxItem(input: {
   }
 
   // Approving copies the captured coordinates into the verified fields. Those
-  // are what the 100 m punch-in check measures against; verifying without
+  // are what the 2 km punch-in check measures against; verifying without
   // copying them verifies nobody.
+  //
+  // Plain field names, not `custom_`-prefixed: `Customer Site` is a custom
+  // doctype, so it has no prefix. See `CUSTOMER_SITE_FIELD`.
   await updateDoc(DOCTYPE.customerSite, input.id, {
-    custom_location_status: input.approve ? 'Verified' : 'Not Captured',
+    [CUSTOMER_SITE_FIELD.locationStatus]: input.approve ? 'Verified' : 'Not Captured',
     ...(input.approve
       ? {
-          custom_verified_latitude: input.latitude,
-          custom_verified_longitude: input.longitude,
+          [CUSTOMER_SITE_FIELD.verifiedLatitude]: input.latitude,
+          [CUSTOMER_SITE_FIELD.verifiedLongitude]: input.longitude,
         }
       : {}),
   });
@@ -4377,6 +4390,13 @@ async function decideInboxItem(input: {
  * One write, and the captured coordinates go straight into the verified fields
  * because there is no longer anything to check them against. No photo, no
  * queue, no approval.
+ *
+ * Which is exactly why it is guarded. The coordinates come from the *browser*,
+ * and a manager's browser is at the office — pressing this on a shop 15 km away
+ * used to write the office as that shop's verified position, silently making it
+ * unpunchable for the rep standing in its doorway. `existingLatitude` /
+ * `existingLongitude` let the rule see what is about to be overwritten; pass
+ * them whenever the record already has a pin. See `domain/capture.ts`.
  */
 async function captureLocation(input: {
   kind: 'customer' | 'lead';
@@ -4384,7 +4404,18 @@ async function captureLocation(input: {
   latitude: number;
   longitude: number;
   capturedBy?: string;
+  existingLatitude?: number | null;
+  existingLongitude?: number | null;
 }): Promise<void> {
+  const verdict = checkCapture({
+    selfVerifying: true,
+    latitude: input.latitude,
+    longitude: input.longitude,
+    existingLatitude: input.existingLatitude,
+    existingLongitude: input.existingLongitude,
+  });
+  if (!verdict.allowed) throw new Error(verdict.message);
+
   const body = {
     custom_latitude: input.latitude,
     custom_longitude: input.longitude,
@@ -5456,7 +5487,7 @@ async function getTrip(tripId: string): Promise<Trip> {
  * trail and is not: TRP-00250 claims 179 km and holds one point.
  *
  * Coordinates come from the **verified** fields first. Those are what a
- * manager signed off and what the 100 m punch-in check measures against; the
+ * manager signed off and what the 2 km punch-in check measures against; the
  * captured pair is whatever the phone reported and may never have been looked
  * at.
  */
