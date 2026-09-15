@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
@@ -12,6 +11,7 @@ import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/map_service.dart';
 import 'package:manna_field_sales/services/trip_tracker.dart';
+import 'package:manna_field_sales/widgets/odometer_photo_upload.dart';
 import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
 
 class TripDetailScreen extends StatefulWidget {
@@ -233,7 +233,9 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     final dist = TextEditingController();
     final claimed = TextEditingController();
     final remarks = TextEditingController();
-    String? startPhoto;
+    // Uploaded while the dialog is open — see widgets/odometer_photo_upload.dart.
+    String? startUrl;
+    var startUploading = false;
     bool isOdoMode(String m) =>
         m == 'Own Vehicle' ||
             m == 'Bike' ||
@@ -245,13 +247,6 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         builder: (ctx, setL) {
           final odoMode = isOdoMode(mode);
           final isMixed = mode == 'Mixed';
-          Future<void> shoot() async {
-            final s = await ImagePicker()
-                .pickImage(source: ImageSource.camera, imageQuality: 60);
-            if (s != null) {
-              setL(() => startPhoto = s.path);
-            }
-          }
           return AlertDialog(
             title: const Text('Start vehicle leg'),
             content: SingleChildScrollView(
@@ -286,20 +281,30 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(
                           labelText: 'Start odometer')),
-                  const SizedBox(height: 8),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: shoot,
-                    icon: Icon(
-                        startPhoto == null
-                            ? Icons.camera_alt
-                            : Icons.check_circle,
-                        size: 18),
-                    label: Text(startPhoto == null
-                        ? 'Start odometer photo'
-                        : 'Start photo ✓'),
-                  ),
                 ],
+                // Kept alive when the mode flips away and back, so a photo
+                // that uploaded is not shown as missing — or worse, saved
+                // while the screen offers to take it again.
+                Visibility(
+                  key: const ValueKey('start-odometer-photo'),
+                  visible: odoMode,
+                  maintainState: true,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 16),
+                    child: OdometerPhotoUpload(
+                      label: 'Start odometer photo',
+                      shortLabel: 'Start photo',
+                      upload: (path) => Api.uploadFileGetUrl(
+                          filePath: path,
+                          doctype: 'Trip',
+                          docname: widget.tripName,
+                          filename: 'start_odo.jpg'),
+                      onUrl: (u) => startUrl = u,
+                      onStatus: (s) => setL(() => startUploading =
+                          s == OdometerPhotoStatus.uploading),
+                    ),
+                  ),
+                ),
                 if (isMixed)
                   TextField(
                       controller: claimed,
@@ -325,7 +330,11 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                   onPressed: () => Navigator.pop(ctx, false),
                   child: const Text('Cancel')),
               FilledButton(
-                  onPressed: () => Navigator.pop(ctx, true),
+                  // Held only while a photo is on its way. Starting then would
+                  // save the leg a second before the url arrived.
+                  onPressed: startUploading
+                      ? null
+                      : () => Navigator.pop(ctx, true),
                   child: const Text('Start')),
             ],
           );
@@ -334,16 +343,6 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     );
     if (ok != true) return;
     final odoMode = isOdoMode(mode);
-    String? startUrl;
-    if (startPhoto != null) {
-      try {
-        startUrl = await Api.uploadFileGetUrl(
-            filePath: startPhoto!,
-            doctype: 'Trip',
-            docname: widget.tripName,
-            filename: 'start_odo.jpg');
-      } catch (_) {}
-    }
     final leg = <String, dynamic>{
       'mode': mode,
       'vehicle_no': vehicleNo.text.trim(),
@@ -352,7 +351,9 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       'end_odometer': 0,
       'leg_distance_km': double.tryParse(dist.text.trim()) ?? 0,
       'claimed_amount': double.tryParse(claimed.text.trim()) ?? 0,
-      'start_odometer_photo': startUrl,
+      // A bus or taxi leg has no odometer; a photo taken before the mode was
+      // changed is not evidence of anything on it.
+      'start_odometer_photo': odoMode ? startUrl : null,
       'end_odometer_photo': null,
       'remarks': remarks.text.trim(),
     };
@@ -380,7 +381,9 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     final l = _legs[idx];
     final startO = _num(l['start_odometer']);
     final endOdo = TextEditingController();
-    String? endPhoto;
+    // Uploaded while the dialog is open — see widgets/odometer_photo_upload.dart.
+    String? endUrl;
+    var endUploading = false;
     // Per-km rate for this leg's mode, so the rep sees the claim as they type.
     double rate = 0;
     try {
@@ -390,11 +393,6 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(builder: (ctx, setL) {
-        Future<void> shoot() async {
-          final s = await ImagePicker()
-              .pickImage(source: ImageSource.camera, imageQuality: 60);
-          if (s != null) setL(() => endPhoto = s.path);
-        }
         final typed = double.tryParse(endOdo.text.trim()) ?? 0;
         final valid = typed > startO;
         final km = valid ? typed - startO : 0.0;
@@ -412,14 +410,18 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                 onChanged: (_) => setL(() {}),
                 decoration:
                 const InputDecoration(labelText: 'End odometer')),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: shoot,
-              icon: Icon(
-                  endPhoto == null ? Icons.camera_alt : Icons.check_circle,
-                  size: 18),
-              label: Text(
-                  endPhoto == null ? 'End odometer photo' : 'End photo ✓'),
+            const SizedBox(height: 12),
+            OdometerPhotoUpload(
+              label: 'End odometer photo',
+              shortLabel: 'End photo',
+              upload: (path) => Api.uploadFileGetUrl(
+                  filePath: path,
+                  doctype: 'Trip',
+                  docname: widget.tripName,
+                  filename: 'end_odo.jpg'),
+              onUrl: (u) => endUrl = u,
+              onStatus: (s) => setL(
+                  () => endUploading = s == OdometerPhotoStatus.uploading),
             ),
             const SizedBox(height: 12),
             Container(
@@ -453,7 +455,9 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                 onPressed: () => Navigator.pop(ctx, false),
                 child: const Text('Cancel')),
             FilledButton(
-                onPressed: valid ? () => Navigator.pop(ctx, true) : null,
+                onPressed: valid && !endUploading
+                    ? () => Navigator.pop(ctx, true)
+                    : null,
                 child: const Text('End leg')),
           ],
         );
@@ -468,16 +472,6 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                 'End odometer must be greater than start (${startO.toStringAsFixed(0)}).')));
       }
       return;
-    }
-    String? endUrl;
-    if (endPhoto != null) {
-      try {
-        endUrl = await Api.uploadFileGetUrl(
-            filePath: endPhoto!,
-            doctype: 'Trip',
-            docname: widget.tripName,
-            filename: 'end_odo.jpg');
-      } catch (_) {}
     }
     final list = List<Map<String, dynamic>>.from(_legs);
     // Stamp the moment the leg was actually closed, not when it is next saved.
@@ -521,22 +515,14 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
             : _num(l['claimed_amount']).toStringAsFixed(0));
     final vehicleNo = TextEditingController(text: '${l['vehicle_no'] ?? ''}');
     final remarks = TextEditingController(text: '${l['remarks'] ?? ''}');
-    String? newStartPhoto, newEndPhoto;
+    // Replacement photos, uploaded while the dialog is open — see
+    // widgets/odometer_photo_upload.dart. Null leaves the leg's photo as it is.
+    String? startUrl, endUrl;
+    var startUploading = false, endUploading = false;
+    String photoOf(String field) => '${l[field] ?? ''}'.trim();
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(builder: (ctx, setL) {
-        // Camera OR gallery. Re-photographing an odometer during an edit
-        // usually means the reading was already photographed at the time and
-        // the shot is sitting in the phone's roll — the van may be parked up
-        // or gone by the time anyone notices the leg needs correcting, so
-        // camera-only made the correction impossible rather than careful.
-        Future<void> shoot(bool start) async {
-          final s = await pickPhoto(ctx,
-              title: start ? 'Start odometer photo' : 'End odometer photo');
-          if (s != null) {
-            setL(() => start ? newStartPhoto = s.path : newEndPhoto = s.path);
-          }
-        }
         return AlertDialog(
           title: Text('Edit $mode leg'),
           content: SingleChildScrollView(
@@ -577,33 +563,42 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                             decoration:
                             const InputDecoration(labelText: 'End odo'))),
                   ]),
+                  const SizedBox(height: 12),
+                  // Camera OR gallery. Re-photographing an odometer during an
+                  // edit usually means the reading was already photographed at
+                  // the time and the shot is sitting in the phone's roll — the
+                  // van may be parked up or gone by the time anyone notices the
+                  // leg needs correcting, so camera-only made the correction
+                  // impossible rather than careful.
+                  OdometerPhotoUpload(
+                    label: 'Start odometer photo',
+                    shortLabel: 'Start photo',
+                    allowGallery: true,
+                    hasExisting: photoOf('start_odometer_photo').isNotEmpty,
+                    upload: (path) => Api.uploadFileGetUrl(
+                        filePath: path,
+                        doctype: 'Trip',
+                        docname: widget.tripName,
+                        filename: 'start_odo.jpg'),
+                    onUrl: (u) => startUrl = u,
+                    onStatus: (s) => setL(() =>
+                        startUploading = s == OdometerPhotoStatus.uploading),
+                  ),
                   const SizedBox(height: 8),
-                  Row(children: [
-                    Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => shoot(true),
-                          icon: Icon(
-                              newStartPhoto == null
-                                  ? Icons.camera_alt
-                                  : Icons.check_circle,
-                              size: 18),
-                          label: Text(
-                              newStartPhoto == null ? 'Retake start' : 'Start ✓',
-                              overflow: TextOverflow.ellipsis),
-                        )),
-                    const SizedBox(width: 8),
-                    Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => shoot(false),
-                          icon: Icon(
-                              newEndPhoto == null
-                                  ? Icons.camera_alt
-                                  : Icons.check_circle,
-                              size: 18),
-                          label: Text(newEndPhoto == null ? 'Retake end' : 'End ✓',
-                              overflow: TextOverflow.ellipsis),
-                        )),
-                  ]),
+                  OdometerPhotoUpload(
+                    label: 'End odometer photo',
+                    shortLabel: 'End photo',
+                    allowGallery: true,
+                    hasExisting: photoOf('end_odometer_photo').isNotEmpty,
+                    upload: (path) => Api.uploadFileGetUrl(
+                        filePath: path,
+                        doctype: 'Trip',
+                        docname: widget.tripName,
+                        filename: 'end_odo.jpg'),
+                    onUrl: (u) => endUrl = u,
+                    onStatus: (s) => setL(() =>
+                        endUploading = s == OdometerPhotoStatus.uploading),
+                  ),
                 ],
                 TextField(
                     controller: remarks,
@@ -614,32 +609,15 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                 onPressed: () => Navigator.pop(ctx, false),
                 child: const Text('Cancel')),
             FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
+                onPressed: startUploading || endUploading
+                    ? null
+                    : () => Navigator.pop(ctx, true),
                 child: const Text('Save')),
           ],
         );
       }),
     );
     if (ok != true) return;
-    String? startUrl, endUrl;
-    if (newStartPhoto != null) {
-      try {
-        startUrl = await Api.uploadFileGetUrl(
-            filePath: newStartPhoto!,
-            doctype: 'Trip',
-            docname: widget.tripName,
-            filename: 'start_odo.jpg');
-      } catch (_) {}
-    }
-    if (newEndPhoto != null) {
-      try {
-        endUrl = await Api.uploadFileGetUrl(
-            filePath: newEndPhoto!,
-            doctype: 'Trip',
-            docname: widget.tripName,
-            filename: 'end_odo.jpg');
-      } catch (_) {}
-    }
     final so = double.tryParse(startOdo.text.trim()) ?? 0;
     final eo = double.tryParse(endOdo.text.trim()) ?? 0;
     final list = List<Map<String, dynamic>>.from(_legs);
