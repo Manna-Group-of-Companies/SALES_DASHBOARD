@@ -12,7 +12,7 @@
 
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { SalesVisit, Trip, TripExpense, TripRates, TripTrack } from '@/domain/types';
+import type { SalesVisit, Trip, TripExpense, TripLeg, TripRates, TripTrack } from '@/domain/types';
 import {
   awaitingCorrection,
   billedExpenses,
@@ -40,6 +40,7 @@ import { Alert, Badge, Button, Card, Empty } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
+import { ChangeVehicleModal } from './ChangeVehicleModal';
 import '@/components/layout/layout.css';
 import './attendance.css';
 import '@/features/approvals/approvals.css';
@@ -80,6 +81,8 @@ export function TripDetailPage() {
   }, [bill]);
 
   const [trip, setTrip] = useState<Trip | null>(null);
+  /** The leg whose vehicle is being changed, or null. */
+  const [changingLeg, setChangingLeg] = useState<TripLeg | null>(null);
   const [visits, setVisits] = useState<SalesVisit[]>([]);
   const [rates, setRates] = useState<TripRates | null>(null);
   const [track, setTrack] = useState<TripTrack | null>(null);
@@ -484,6 +487,7 @@ export function TripDetailPage() {
                       <th className="right">Rate</th>
                       <th className="right">Claim</th>
                       <th>Verification</th>
+                      <th />
                     </tr>
                   </thead>
                   <tbody>
@@ -513,6 +517,11 @@ export function TripDetailPage() {
                               <Badge tone="neutral">as entered</Badge>
                             )}
                           </td>
+                          <td className="right">
+                            <Button size="sm" variant="ghost" onClick={() => setChangingLeg(leg)}>
+                              Change vehicle
+                            </Button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -521,6 +530,16 @@ export function TripDetailPage() {
               </div>
             )}
           </Card>
+
+          {changingLeg && (
+            <ChangeVehicleModal
+              trip={trip}
+              leg={changingLeg}
+              rates={rates}
+              onSaved={setTrip}
+              onClose={() => setChangingLeg(null)}
+            />
+          )}
 
           <Card title="Shop visits" flush className="mt-16">
             {visits.length === 0 ? (

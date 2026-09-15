@@ -272,6 +272,71 @@ export function tripTotalsFromLegs(legs: TripLeg[], rates: TripRates): TripTotal
   };
 }
 
+// ------------------------------------------------------ changing vehicle ---
+
+/**
+ * The modes a leg can be recorded as — the phone's "Start vehicle leg" list,
+ * in its order and with its labels, so HR and the rep pick from the same
+ * words. See `_startLeg` in `app/lib/screens/trips/trip_detail_screen.dart`.
+ */
+export const LEG_MODES: ReadonlyArray<{ value: TravelMode; label: string }> = [
+  { value: 'Own Vehicle', label: 'Own Vehicle (car)' },
+  { value: 'Bike', label: 'Bike (own)' },
+  { value: 'Company Vehicle (Car)', label: 'Company Vehicle (Car)' },
+  { value: 'Company Vehicle (Bike)', label: 'Company Vehicle (Bike)' },
+  { value: 'Bus', label: 'Bus / Train' },
+  { value: 'Taxi', label: 'Taxi' },
+  { value: 'Mixed', label: 'Mixed' },
+];
+
+/**
+ * Whether a mode is read off an odometer. The phone's `isOdoMode`, which is
+ * what sets `has_odometer` when a leg is started — a bus, a taxi or a mixed
+ * journey has no dial to photograph.
+ */
+export function modeHasOdometer(mode: TravelMode): boolean {
+  return (
+    mode === 'Own Vehicle' ||
+    mode === 'Bike' ||
+    mode === 'Company Vehicle (Car)' ||
+    mode === 'Company Vehicle (Bike)'
+  );
+}
+
+export interface VehicleChange {
+  mode: TravelMode;
+  vehicleNo: string;
+}
+
+/**
+ * A leg as it reads once HR has changed its vehicle.
+ *
+ * Changing the vehicle changes the RATE, not the journey. A rep recorded as
+ * "Own Vehicle" who was on a motorbike drove the same kilometres either way —
+ * TRP-00311 is exactly that — so the distance is carried across:
+ *
+ * - Into a mode with no odometer, `distanceKm` takes the leg's distance as it
+ *   stood, including any reading HR corrected. Left alone, it would fall back
+ *   to the stored `leg_distance_km`, which a correction never rewrites, and
+ *   the corrected kilometres would quietly be undone by a mode change.
+ * - Into an odometer mode, the readings still govern, exactly as for a leg the
+ *   rep started that way.
+ *
+ * Readings, photos, the HR check, the claimed fare and the approval are left
+ * as they are. A Mixed fare is ignored on other modes by `legClaim` rather
+ * than deleted, so changing a leg to Bike and back does not lose the ticket.
+ */
+export function withVehicle(leg: TripLeg, change: VehicleChange): TripLeg {
+  const hasOdometer = modeHasOdometer(change.mode);
+  return {
+    ...leg,
+    mode: change.mode,
+    vehicleNo: change.vehicleNo.trim() || undefined,
+    hasOdometer,
+    distanceKm: hasOdometer ? leg.distanceKm : legDistance(leg),
+  };
+}
+
 /** Distance money for a whole trip — every leg at its own mode's rate. */
 export function travelClaim(trip: Trip, rates: TripRates): number {
   return round2(trip.legs.reduce((sum, l) => sum + legClaim(l, rates), 0));

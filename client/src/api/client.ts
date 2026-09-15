@@ -94,7 +94,10 @@ import {
   expenseOwner,
   parseTagged,
   tripTotalsFromLegs,
+  withVehicle,
+  LEG_MODES,
   RATE_FALLBACK,
+  type VehicleChange,
 } from '@/domain/trips';
 import { allItemsReady, firstStage, isTerminalStage, stageLabel } from '@/domain/processStages';
 import { availableQty, isBelowThreshold } from '@/domain/stockLevels';
@@ -5688,22 +5691,31 @@ async function verifyLeg(input: VerifyLegInput): Promise<Trip> {
     };
   });
 
-  /*
-   * The trip's own figures are rewritten with the legs, never left behind.
-   *
-   * Correcting an odometer changes what a leg earned, and `estimated_cost`,
-   * `total_distance_km` and `primary_mode` are summaries of the legs that
-   * nothing else recomputes — there are no server scripts here. Writing only
-   * `legs` is what left TRP-00311 claiming ₹371 against ₹185.50 after its
-   * leg was changed from Own Vehicle to Bike.
-   *
-   * The rule is shared with the phone, which does the same on its own saves —
-   * see shared/fixtures/trip_totals.json.
-   */
-  const rates = await getTripRates().catch(() => RATE_FALLBACK);
+  return saveLegsWithTotals(input.tripId, next);
+}
+
+/**
+ * Write a trip's `legs` together with the figures derived from them.
+ *
+ * The trip's own figures are rewritten with the legs, never left behind.
+ * Correcting an odometer or changing a vehicle changes what a leg earned, and
+ * `estimated_cost`, `total_distance_km` and `primary_mode` are summaries of the
+ * legs that nothing else recomputes. Writing only `legs` is what left
+ * TRP-00311 claiming ₹371 against ₹185.50 after its leg was changed from Own
+ * Vehicle to Bike.
+ *
+ * The rule is shared with the phone, which does the same on its own saves —
+ * see shared/fixtures/trip_totals.json.
+ */
+async function saveLegsWithTotals(
+  tripId: string,
+  next: Record<string, unknown>[],
+  knownRates?: TripRates,
+): Promise<Trip> {
+  const rates = knownRates ?? (await getTripRates().catch(() => RATE_FALLBACK));
   const totals = tripTotalsFromLegs(next.map(toLeg), rates);
 
-  const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.trip, input.tripId, {
+  const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.trip, tripId, {
     legs: next,
     [TRIP_FIELD.distanceKm]: totals.totalKm,
     [TRIP_FIELD.odometerDistanceKm]: totals.odometerKm,
@@ -5714,6 +5726,57 @@ async function verifyLeg(input: VerifyLegInput): Promise<Trip> {
     ...(totals.primaryMode ? { [TRIP_FIELD.primaryMode]: totals.primaryMode } : {}),
   });
   return toTrip(saved);
+}
+
+export interface ChangeLegVehicleInput extends VehicleChange {
+  tripId: string;
+  legId: string;
+}
+
+/**
+ * HR changing the vehicle a leg was recorded on — its mode and number.
+ *
+ * The usual case is a rep on their own motorbike who picked "Own Vehicle",
+ * which pays the car rate: twice what they earned. The leg row is amended the
+ * way `withVehicle` in domain/trips.ts describes, then saved with the trip's
+ * totals recomputed, through the same read-then-re-send as `verifyLeg`.
+ *
+ * Unlike `verifyLeg`, the rates must actually be read. The fallback rates are
+ * all zero, and a vehicle change written with them would store the trip as
+ * earning nothing — better to refuse and say so than to save that.
+ *
+ * Frappe records the change to the child row in the Trip's version history,
+ * with who made it, so there is an audit trail without a remark being added.
+ */
+async function changeLegVehicle(input: ChangeLegVehicleInput): Promise<Trip> {
+  if (!LEG_MODES.some((m) => m.value === input.mode)) {
+    throw new Error(`"${input.mode}" is not a mode a leg can be recorded as.`);
+  }
+  const rates = await getTripRates().catch(() => {
+    throw new Error(
+      'Could not read the per-km rates from ERPNext, so the new claim cannot be worked out. Nothing was changed.',
+    );
+  });
+
+  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.trip, input.tripId);
+  const legs = Array.isArray(doc.legs) ? (doc.legs as Record<string, unknown>[]) : [];
+  if (!legs.some((l) => String(l.name) === input.legId)) {
+    throw new Error('That leg is no longer on this trip. Refresh and try again.');
+  }
+
+  const next = legs.map((l) => {
+    if (String(l.name) !== input.legId) return l;
+    const changed = withVehicle(toLeg(l), input);
+    return {
+      ...l,
+      [TRIP_LEG_FIELD.mode]: changed.mode,
+      [TRIP_LEG_FIELD.vehicleNo]: changed.vehicleNo ?? '',
+      [TRIP_LEG_FIELD.hasOdometer]: changed.hasOdometer ? 1 : 0,
+      [TRIP_LEG_FIELD.distanceKm]: changed.distanceKm,
+    };
+  });
+
+  return saveLegsWithTotals(input.tripId, next, rates);
 }
 
 export interface UploadLegPhotoInput {
@@ -6547,6 +6610,7 @@ export const Api = {
     getTrack: getTripTrack,
     listVisits: listSalesVisits,
     verifyLeg,
+    changeLegVehicle,
     uploadLegPhoto,
     removeLegPhoto,
   },

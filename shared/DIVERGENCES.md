@@ -488,3 +488,32 @@ it is its own piece of work: the post-approval edit flow must move to
 cancel-and-amend or lock line edits, and submit runs India Compliance / GST /
 credit validations a draft skips. Do it deliberately, in both apps plus the
 fixture, not as a side effect.
+
+---
+
+## HR changes a leg's vehicle on the dashboard only — **decided 15 Sep 2026**
+
+| | `app/` (Flutter) | `client/` (React) |
+|---|---|---|
+| Rep edits a leg | vehicle number, readings, photos — **not the mode** | — |
+| HR changes the mode | **nothing** | **Change vehicle**, on Odometer Check and on a trip |
+| Totals after the change | recomputed on the rep's next save | recomputed in the same write |
+
+**Deliberately one-sided. Do not give the rep a way to change a leg's mode.**
+The mode is the rate: a rep who could move their own leg from Bike to Own
+Vehicle could double their claim on it. HR is who corrects that, and HR works
+on the dashboard.
+
+What must still agree, and does:
+
+- **The totals.** The write goes through the same recompute as `verifyLeg`,
+  which is `fixtures/trip_totals.json` — the rule both apps already test.
+- **The list of modes, and which have an odometer.** `LEG_MODES` and
+  `modeHasOdometer` in `client/src/domain/trips.ts` are the phone's "Start
+  vehicle leg" list and its `isOdoMode`. Add a mode to one and add it to the
+  other, or a leg HR sets will read as having no odometer on the phone.
+
+The distance is carried across the change, not recomputed: a change of vehicle
+is a change of rate, not of journey. A leg moved to a mode with no odometer
+keeps the kilometres it had, including a reading HR had corrected. The approved
+amount is left alone and the dialog says so. See `withVehicle`.

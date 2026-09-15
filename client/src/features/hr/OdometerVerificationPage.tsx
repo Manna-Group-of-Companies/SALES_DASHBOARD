@@ -45,6 +45,7 @@ import {
 } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { RefreshButton } from '@/components/common/RefreshButton';
+import { ChangeVehicleModal } from './ChangeVehicleModal';
 import './attendance.css';
 
 /** How far back the queue looks. Older claims are settled, not pending. */
@@ -274,6 +275,8 @@ function LegCard({
     }
   };
 
+  const [changingVehicle, setChangingVehicle] = useState(false);
+
   /** The slot whose delete is awaiting confirmation, or null. */
   const [confirmingDelete, setConfirmingDelete] = useState<'start' | 'end' | null>(null);
 
@@ -349,6 +352,16 @@ function LegCard({
           {isImplausible(leg) && <Badge tone="danger">impossible distance</Badge>}
           {awaitingCorrection(leg) && <Badge tone="warn">awaiting reading</Badge>}
           {state === 'verified' && <Badge tone="ok">verified</Badge>}
+          <Button
+            size="sm"
+            variant="ghost"
+            // Rewrites the same `legs` array as a photo upload or a check;
+            // overlapping them would let one re-send the other's row stale.
+            disabled={uploading !== null || saving}
+            onClick={() => setChangingVehicle(true)}
+          >
+            Change vehicle
+          </Button>
         </span>
       }
     >
@@ -371,6 +384,16 @@ function LegCard({
             onDelete={() => setConfirmingDelete('end')}
           />
         </div>
+
+        {changingVehicle && (
+          <ChangeVehicleModal
+            trip={trip}
+            leg={leg}
+            rates={rates}
+            onSaved={onSaved}
+            onClose={() => setChangingVehicle(false)}
+          />
+        )}
 
         {confirmingDelete && (
           <Modal
