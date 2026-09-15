@@ -47,4 +47,4 @@
 
 /* An expense tagged to one person on a shared trip, as opposed to the common
    pot. Blue rather than a warning colour: it is an attribution, not a problem. */
-.exp__owned { color: #1c5fa8; font-weight: 600; }
+.exp__owned { color: var(--hue-blue-2); font-weight: 600; }

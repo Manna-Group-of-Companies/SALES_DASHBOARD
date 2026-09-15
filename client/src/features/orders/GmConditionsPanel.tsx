@@ -149,7 +149,7 @@ export function GmConditionsPanel() {
                 style={{
                   margin: '8px 0',
                   padding: '6px 10px',
-                  borderLeft: '3px solid var(--line, #ddd)',
+                  borderLeft: '3px solid var(--border)',
                 }}
               >
                 <span className="small">The rep answered</span>

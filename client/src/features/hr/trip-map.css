@@ -49,11 +49,10 @@
 .tm__when { color: #666; font-size: 11px; }
 
 /*
- * Leaflet ships its own light-themed tiles and controls, which is now simply
- * what we want: the dashboard was pinned to the light palette on 21 August
- * 2026, so the dark-mode overrides that stopped the attribution and zoom
- * buttons going white-on-white are no longer reachable and have been removed.
- * See styles/global.css.
+ * Leaflet's tiles, controls and popups stay light in both themes, and so do the
+ * literal colours above that sit on them (.tm__when is inside a white popup).
+ * Dark zoom buttons over light street tiles were what the pre-21 August
+ * overrides produced, and they read worse than leaving the map alone.
  */
 
 /* Trip row expanded to show its map. */

@@ -198,6 +198,8 @@
 .tl-item__meta { font-size: 11px; color: var(--text-3); margin-top: 2px; }
 
 /* ---------------------------------------------------------- proforma --- */
+/* Paper, in either theme: this is the document that is printed and sent to the
+   customer, and on screen it should look like what they will receive. */
 .proforma {
   background: #fff;
   color: #111;
@@ -429,8 +431,8 @@
   font-weight: 600;
   margin: 4px 0 12px;
 }
-.orders__count.warn { color: #8a6100; }
-.orders__count.ok { color: #1b7f3b; }
+.orders__count.warn { color: var(--hue-amber); }
+.orders__count.ok { color: var(--hue-green); }
 
 .orders__list {
   display: flex;
@@ -484,11 +486,11 @@
   align-items: center;
   gap: 6px;
 }
-.ordrow__prod.done { color: #1b7f3b; font-weight: 600; }
+.ordrow__prod.done { color: var(--hue-green); font-weight: 600; }
 
 .ordrow__comb {
   font-size: 12px;
-  color: #7a4b1e;
+  color: var(--hue-brown);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -506,18 +508,18 @@
 .stockpos { font-size: 11.5px; line-height: 1.5; border-collapse: collapse; }
 .stockpos td { padding: 0 8px 0 0; white-space: nowrap; }
 .stockpos td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
-.stockpos tr.ok td { color: #1b7f3b; }
-.stockpos tr.warn td { color: #8a6100; font-weight: 600; }
+.stockpos tr.ok td { color: var(--hue-green); }
+.stockpos tr.warn td { color: var(--hue-amber); font-weight: 600; }
 .stockpos tr.dim td { color: var(--text-3); }
 /* Uncovered but free on the shelf — a booking away, not a production run away.
    Blue rather than amber on purpose: nothing is wrong, nobody has claimed it. */
-.stockpos tr.info td { color: #1c5fa8; font-weight: 600; }
+.stockpos tr.info td { color: var(--hue-blue-2); font-weight: 600; }
 
 /* A run is coming but is not stock. Its own line, never beside a sellable figure. */
 .run__note {
   margin-top: 4px;
   font-size: 11px;
-  color: #7a4b1e;
+  color: var(--hue-brown);
   white-space: nowrap;
 }
 
@@ -531,20 +533,20 @@
   border: 1px solid transparent;
 }
 .served--stock {
-  color: #1a56a8;
-  background: color-mix(in srgb, #1a56a8 10%, transparent);
-  border-color: color-mix(in srgb, #1a56a8 28%, transparent);
+  color: var(--hue-blue);
+  background: color-mix(in srgb, var(--hue-blue) 10%, transparent);
+  border-color: color-mix(in srgb, var(--hue-blue) 28%, transparent);
 }
 .served--run {
-  color: #1a56a8;
-  background: color-mix(in srgb, #1a56a8 6%, transparent);
-  border-color: color-mix(in srgb, #1a56a8 20%, transparent);
+  color: var(--hue-blue);
+  background: color-mix(in srgb, var(--hue-blue) 6%, transparent);
+  border-color: color-mix(in srgb, var(--hue-blue) 20%, transparent);
   border-style: dashed;
 }
 .served--make {
-  color: #5b2a86;
-  background: color-mix(in srgb, #5b2a86 10%, transparent);
-  border-color: color-mix(in srgb, #5b2a86 28%, transparent);
+  color: var(--hue-purple);
+  background: color-mix(in srgb, var(--hue-purple) 10%, transparent);
+  border-color: color-mix(in srgb, var(--hue-purple) 28%, transparent);
 }
 
 .gm__over {
@@ -552,8 +554,8 @@
   padding: 6px 10px;
   border-radius: 6px;
   font-weight: 700;
-  color: #b3261e;
-  background: color-mix(in srgb, #b3261e 10%, transparent);
+  color: var(--hue-red);
+  background: color-mix(in srgb, var(--hue-red) 10%, transparent);
 }
 
 /* Two stage tracks on a split line. */
@@ -568,13 +570,13 @@
   font-weight: 600;
   margin-bottom: 6px;
 }
-.track--stock .track__title { color: #1a56a8; }
-.track--make .track__title { color: #5b2a86; }
+.track--stock .track__title { color: var(--hue-blue); }
+.track--make .track__title { color: var(--hue-purple); }
 
 .prod__split {
   font-size: 12.5px;
   font-weight: 600;
-  color: #7a4b1e;
+  color: var(--hue-brown);
   margin-bottom: 8px;
 }
 
@@ -598,11 +600,11 @@
   color: var(--text-3);
   font-size: 11.5px;
 }
-.ok-text { color: #1b7f3b; }
+.ok-text { color: var(--hue-green); }
 
 .order__totals { display: flex; flex-direction: column; gap: 2px; }
 .order__total--was span:last-child { text-decoration: line-through; color: var(--text-3); }
-.order__total--off span { color: #1b7f3b; }
+.order__total--off span { color: var(--hue-green); }
 .order__total--was, .order__total--off { font-size: 12.5px; font-weight: 400; }
 
 /* --- The discount dialog: one line at a time, the way the phone does it --- */
@@ -617,7 +619,7 @@
 }
 .disc__scrim > .card { width: min(420px, 100%); }
 /* Green, and stated rather than offered: the decision has been made. */
-.disc__final { color: #1b5e20; font-weight: 600; }
+.disc__final { color: var(--hue-green-deep); font-weight: 600; }
 
 /* Two groups in the stock column: what is on the shelf, then what this order
    needs. The heading is what stops "on the shelf" being read as "available". */
@@ -631,7 +633,7 @@
 }
 .stockpos tbody tr:first-child .stockpos__head td,
 .stockpos__head:first-child td { padding-top: 0; }
-.stockpos tr.info td { color: #1c5fa8; font-weight: 600; }
+.stockpos tr.info td { color: var(--hue-blue-2); font-weight: 600; }
 
 /* The plain sentence under the columns, for the reading that looks like a bug
    and is not one. */
@@ -640,7 +642,7 @@
   max-width: 260px;
   font-size: 11px;
   line-height: 1.4;
-  color: #8a6100;
+  color: var(--hue-amber);
 }
 
 /* --- What production moved since the reader last looked --- */
@@ -660,14 +662,14 @@
 .stagecell > div + div { margin-top: 4px; }
 /* A line production touched since the last look. Blue, not amber: something
    happened, nothing is wrong. */
-.stagecell.is-moved b { color: #1c5fa8; }
+.stagecell.is-moved b { color: var(--hue-blue-2); }
 .stagecell__flag {
   display: inline-block;
   margin-top: 3px;
   padding: 1px 5px;
   border-radius: var(--r-full);
-  background: #e3edf9;
-  color: #1c5fa8;
+  background: var(--hue-blue-soft);
+  color: var(--hue-blue-2);
   font-size: 9.5px;
   font-weight: 700;
   text-transform: uppercase;

@@ -28,7 +28,7 @@
   width: 27px; height: 27px;
   border-radius: var(--r-sm);
   background: var(--accent);
-  color: #fff;
+  color: var(--text-inverse);
   display: grid;
   place-items: center;
   font-weight: 700;
@@ -76,7 +76,7 @@
   padding: 0 5px;
   border-radius: var(--r-full);
   background: var(--danger);
-  color: #fff;
+  color: var(--text-inverse);
   font-size: 10px;
   font-weight: 700;
   display: inline-flex;
@@ -183,7 +183,7 @@
   padding: 0 4px;
   border-radius: var(--r-full);
   background: var(--danger);
-  color: #fff;
+  color: var(--text-inverse);
   font-size: 10px;
   font-weight: 700;
   display: grid;

@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Manna Treads — Sales</title>
+    <!-- The user's light/dark choice, applied before first paint so a dark page
+         does not flash white. Key and logic mirror src/app/theme.ts. -->
+    <script>
+      try {
+        if (localStorage.getItem('manna.theme') === 'dark') {
+          document.documentElement.dataset.theme = 'dark';
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

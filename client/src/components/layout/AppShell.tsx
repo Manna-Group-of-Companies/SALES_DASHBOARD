@@ -35,6 +35,7 @@ import { signOut } from '@/store/slices/authSlice';
 import { onDbChange } from '@/api/mock/db';
 import { Button } from '@/components/ui';
 import { initials } from '@/components/common/format';
+import { useTheme } from '@/app/theme';
 import { NotificationPanel } from '@/features/notifications/NotificationPanel';
 import { ToastHost } from '@/features/notifications/ToastHost';
 import './layout.css';
@@ -74,6 +75,7 @@ export function AppShell() {
   const pendingLeave = useAppSelector(selectPendingLeave);
 
   const [navOpen, setNavOpen] = useState(false);
+  const [theme, toggleTheme] = useTheme();
 
   // HR works on an entirely different set of records — loading the product
   // catalogue and the order book for them would be pure waste.
@@ -254,6 +256,15 @@ export function AppShell() {
               </div>
             )}
           </div>
+
+          <button
+            className="bell"
+            onClick={toggleTheme}
+            aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
+          >
+            {theme === 'dark' ? '☀' : '☾'}
+          </button>
 
           <button
             className={`bell ${pendingAcks.length ? 'bell--urgent' : ''}`}

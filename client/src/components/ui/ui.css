@@ -25,14 +25,14 @@
 .btn--primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--text-inverse);
 }
 .btn--primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 
 .btn--danger {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--text-inverse);
 }
 .btn--danger:hover:not(:disabled) { filter: brightness(1.08); }
 

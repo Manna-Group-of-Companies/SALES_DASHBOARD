@@ -16,24 +16,22 @@
   border: 1px solid transparent;
 }
 .spill--ok {
-  color: #1b7f3b;
-  background: color-mix(in srgb, #1b7f3b 12%, transparent);
-  border-color: color-mix(in srgb, #1b7f3b 30%, transparent);
+  color: var(--hue-green);
+  background: color-mix(in srgb, var(--hue-green) 12%, transparent);
+  border-color: color-mix(in srgb, var(--hue-green) 30%, transparent);
 }
 .spill--warn {
-  color: #8a6100;
-  background: color-mix(in srgb, #8a6100 12%, transparent);
-  border-color: color-mix(in srgb, #8a6100 30%, transparent);
+  color: var(--hue-amber);
+  background: color-mix(in srgb, var(--hue-amber) 12%, transparent);
+  border-color: color-mix(in srgb, var(--hue-amber) 30%, transparent);
 }
 .spill--danger {
-  color: #b3261e;
-  background: color-mix(in srgb, #b3261e 12%, transparent);
-  border-color: color-mix(in srgb, #b3261e 30%, transparent);
+  color: var(--hue-red);
+  background: color-mix(in srgb, var(--hue-red) 12%, transparent);
+  border-color: color-mix(in srgb, var(--hue-red) 30%, transparent);
 }
-/*
- * Lighter spill colours for dark mode stood here until 21 August 2026, when
- * the dashboard was pinned to the light palette. See styles/global.css.
- */
+/* The dark-theme shades of these live with the --hue-* tokens in
+   styles/global.css. */
 
 .tick {
   display: inline-flex;
@@ -42,8 +40,8 @@
   font-size: 12px;
   white-space: nowrap;
 }
-.tick--complete { color: #1b7f3b; font-weight: 600; }
-.tick--ready { color: #8a6100; }
+.tick--complete { color: var(--hue-green); font-weight: 600; }
+.tick--ready { color: var(--hue-amber); }
 .tick--in_production,
 .tick--not_started { color: var(--text-3); }
 
@@ -56,8 +54,8 @@
   line-height: 1.35;
   white-space: nowrap;
 }
-.line__stockpos .ok { color: #1b7f3b; }
-.line__stockpos .warn { color: #8a6100; }
+.line__stockpos .ok { color: var(--hue-green); }
+.line__stockpos .warn { color: var(--hue-amber); }
 
 .line__locked {
   display: flex;
@@ -82,4 +80,4 @@
 
 .right { text-align: right; }
 
-.line__stockpos .danger { color: #b3261e; font-weight: 600; }
+.line__stockpos .danger { color: var(--hue-red); font-weight: 600; }
