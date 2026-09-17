@@ -138,9 +138,6 @@ import {
   ITEM_CATEGORIES,
   ITEM_CATEGORY_TO_LINE,
   LINE_CATEGORY_TO_ITEM,
-  PRODUCTION_ORDER_FIELD,
-  PRODUCTION_ORDER_PURPOSE,
-  PRODUCTION_ORDER_STATUS,
   DISPATCH_FIELD,
   DISPATCH_ITEM_FIELD,
   DISPATCH_STATUS,
@@ -4237,10 +4234,6 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
     bySalesOrder.set(l.salesOrder, bucket);
   }
 
-  // Item codes that became fully dispatched, per order — the best-effort
-  // Manna Production Order flip reads this after the Sales Order is saved.
-  const fullyDoneByOrder = new Map<string, string[]>();
-
   // Every order this van touched, with the two facts the grouping rule turns
   // on. It decides which of them combine; see `combineDispatchedOrders`.
   const touched: CombinableOrder[] = [];
@@ -4253,7 +4246,6 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
       );
     }
     const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
-    const fullyDone: string[] = [];
 
     const nextItems = items.map((row) => {
       const line = lines.find((l) => l.salesOrderItem === String(row.name));
@@ -4276,7 +4268,6 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
         [SALES_ORDER_ITEM_FIELD.dispatchedRolls]: newDispatchedRolls,
         [SALES_ORDER_ITEM_FIELD.dispatchedLooseBelts]: newDispatchedBelts,
       });
-      if (done) fullyDone.push(line.itemCode);
 
       const next: Record<string, unknown> = {
         ...row,
@@ -4306,7 +4297,6 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
       items: nextItems,
       [SALES_ORDER_FIELD.productionStatus]: status,
     });
-    if (fullyDone.length) fullyDoneByOrder.set(orderId, fullyDone);
 
     /*
      * `rollUp` returns Dispatched only when every line on the order has
@@ -4323,36 +4313,17 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
     });
   }
 
-  // Best-effort: a Manna Production Order raised for a now-fully-dispatched
-  // line (Flow B) should not sit stale. Zero matches is expected and fine —
-  // a line served wholly from the shelf never had one.
-  for (const [orderId, itemCodes] of fullyDoneByOrder) {
-    for (const itemCode of itemCodes) {
-      try {
-        const rows = await listDocs<Record<string, unknown>>(DOCTYPE.productionOrder, {
-          fields: ['name', PRODUCTION_ORDER_FIELD.status],
-          filters: [
-            [PRODUCTION_ORDER_FIELD.purpose, '=', PRODUCTION_ORDER_PURPOSE.order],
-            [PRODUCTION_ORDER_FIELD.salesOrder, '=', orderId],
-            [PRODUCTION_ORDER_FIELD.itemCode, '=', itemCode],
-          ],
-          limit: 0,
-        });
-        for (const r of rows) {
-          const current = str(r[PRODUCTION_ORDER_FIELD.status]);
-          if (current === PRODUCTION_ORDER_STATUS.dispatched || current === PRODUCTION_ORDER_STATUS.cancelled) {
-            continue;
-          }
-          await updateDoc(DOCTYPE.productionOrder, String(r.name), {
-            [PRODUCTION_ORDER_FIELD.status]: PRODUCTION_ORDER_STATUS.dispatched,
-          });
-        }
-      } catch {
-        // Best-effort courtesy write — the Sales Order side is already saved
-        // and is the record that matters.
-      }
-    }
-  }
+  /*
+   * A best-effort flip of the matching `Manna Production Order` to Dispatched
+   * ran here — flow B of shared/PRODUCTION_FLOWS.md, so a run raised against
+   * one order did not sit stale once the goods went out.
+   *
+   * Removed 17 September 2026 with the doctype. It had been a no-op in
+   * practice — zero rows on the live site — and production against an order is
+   * tracked on the order's own line now, from the SAP production order the
+   * sync pulls back.
+   */
+
 
   // Lock the Manna Dispatch itself: capture what actually went per line.
   const dispatchDoc = await getDoc<Record<string, unknown>>(DOCTYPE.dispatch, input.id);
