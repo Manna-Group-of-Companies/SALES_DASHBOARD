@@ -9,7 +9,6 @@ import 'package:manna_field_sales/core/attendance_rules.dart';
 import 'package:manna_field_sales/core/auth_store.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/credit.dart';
-import 'package:manna_field_sales/core/discount.dart';
 import 'package:manna_field_sales/core/expenses.dart';
 import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
@@ -862,25 +861,19 @@ class Api {
       // the same per-family breakdown as `Sales Order Item`, so a converted
       // order reaches production knowing it is 12 rolls and 3 loose belts —
       // not just a quantity of 12.75.
-      // A discount the manager gave on the lead order comes across too, and
-      // changes fields on the way: the lead's custom pair becomes the standard
-      // ERPNext pair. Dropped here, the customer would be invoiced the full
-      // rate the discount was supposed to have replaced — and the discount
-      // would disappear at the exact moment it started to mean money.
-      final row = r.cast<String, dynamic>();
-      final pct = discountPercentOf(row);
-      final before = rateBeforeDiscount(row);
-
+      // A discount the manager gave on the lead order used to come across
+      // here, changing fields on the way — the lead's custom pair became the
+      // standard ERPNext pair — because dropping it would have invoiced the
+      // customer the full rate the discount had replaced. The discount feature
+      // was removed on 17 September 2026 and the rep's rate is already net, so
+      // there is one figure to carry and the standard fields are written flat.
       items.add({
         'item_code': code,
         'qty': qty,
         'rate': (r['rate'] as num?)?.toDouble() ?? 0,
-        if (pct > 0) ...{
-          'price_list_rate': before,
-          'discount_percentage': pct,
-          'discount_amount':
-              roundMoney(before - ((r['rate'] as num?)?.toDouble() ?? 0)),
-        },
+        'price_list_rate': (r['rate'] as num?)?.toDouble() ?? 0,
+        'discount_percentage': 0,
+        'discount_amount': 0,
         'custom_product_category': r['custom_product_category'],
         'custom_rolls': r['custom_rolls'],
         'custom_loose_belts': r['custom_loose_belts'],
@@ -1007,62 +1000,24 @@ class Api {
     await _put(ref.doctype, orderName, {'items': items});
   }
 
-  /// Puts a discount on one line of an order, or takes it off with zero.
-  ///
-  /// The whole `items` array goes back, because a Frappe child table is
-  /// replaced rather than merged — sending only the changed row would delete
-  /// every other line on the order. Each row is copied through untouched
-  /// except the one being discounted, which is the same shape
-  /// `approveSalesOrderPO` uses for the very same reason.
-  ///
-  /// Refuses once the rates are approved. That is the rule the manager was
-  /// told at approval — "nobody, including you, can change them afterwards" —
-  /// and a discount is a change to the rate whatever it is called. The check
-  /// is here as well as on the screen because this is the only door: the
-  /// screen can be got around, and on this site there is no Server Script
-  /// behind it to say no.
-  static Future<void> setLineDiscount({
-    required String orderName,
-    required String itemRowName,
-    required double percent,
-    bool isLead = false,
-  }) async {
-    final refusal = discountRefusal(percent);
-    if (refusal != null) throw Exception(refusal);
-
-    final doctype = isLead ? 'Lead Order' : 'Sales Order';
-    final order = await (isLead ? getLeadOrder(orderName) : getOrder(orderName));
-
-    if (orderSignedOff(order, isLead: isLead)) {
-      throw Exception(
-          'This order is approved — its discounts and rates are final.');
-    }
-
-    final rows = (order['items'] as List?) ?? const [];
-    var found = false;
-    final items = <Map<String, dynamic>>[];
-    for (final raw in rows) {
-      final row = (raw as Map).cast<String, dynamic>();
-      if ('${row['name']}' != itemRowName) {
-        items.add(row);
-        continue;
-      }
-      found = true;
-      items.add({
-        ...row,
-        ...discountFields(item: row, percent: percent, isLead: isLead),
-      });
-    }
-    // A row that is no longer there means the order moved under the manager —
-    // a rep editing it at the same moment. Writing the array back anyway would
-    // save a discount onto nothing while reporting success.
-    if (!found) {
-      throw Exception(
-          'That line is no longer on the order. Reopen it and try again.');
-    }
-
-    await _put(doctype, orderName, {'items': items});
-  }
+  /*
+   * `setLineDiscount` stood here until 17 September 2026.
+   *
+   * The sales manager could put a percentage off any line, or take it off with
+   * zero, and it was written the moment it was confirmed rather than held
+   * until approval. It refused once the rates were approved — the rule the
+   * manager was told at approval, "nobody, including you, can change them
+   * afterwards", and a discount is a change to the rate whatever it is called.
+   *
+   * The whole feature is gone from both apps. The sales team types the rate
+   * AFTER discount, so a line carries one figure instead of three, and that is
+   * what reaches SAP: `Sync-SapOrders.ps1` sends `amount / custom_total_weight`
+   * with DiscountPercent always 0.
+   *
+   * Lines saved before that keep whatever `discount_percentage` they were
+   * written with. Nothing displays or re-applies it, and their `amount` was
+   * always the net figure, so they still price correctly.
+   */
 
   static Future<void> approveSalesOrderPO(String name, bool approve) async {
     final body = <String, dynamic>{
@@ -2043,55 +1998,18 @@ class Api {
   /// as something to decide rather than as already approved. The **per-line**
   /// ones mean "this price is final", are carried through untouched, and are
   /// what keep an approved rate locked while the order goes round again.
-  /// Re-applies the discounts already on an order to the lines about to
-  /// replace them.
-  ///
-  /// A Frappe child table is replaced, not merged, and the rep's editor knows
-  /// nothing about discounts — it builds each line from the rate per kg the
-  /// rep typed. So without this, a rep opening a pending order to fix a
-  /// quantity would silently take back a discount their manager had already
-  /// given, and the manager would approve a full-price order believing the
-  /// discount was still on it.
-  ///
-  /// The percentage is what survives, not the discounted rate: if the rep has
-  /// changed what they quoted, 10% off the new rate is what the manager
-  /// agreed to, where the old net rate would be a number nobody chose.
-  ///
-  /// Failing to read the order is not allowed to block the save. The rep's
-  /// edit is the thing that must not be lost, and the manager re-checks the
-  /// order in either case — it is back in their queue.
-  static Future<List<Map<String, dynamic>>> _keepDiscounts(
-    String orderName,
-    List<Map<String, dynamic>> items, {
-    required bool isLead,
-  }) async {
-    final Map<String, dynamic> order;
-    try {
-      order = await (isLead ? getLeadOrder(orderName) : getOrder(orderName));
-    } catch (_) {
-      return items;
-    }
-
-    final pctByCode = <String, double>{};
-    for (final raw in (order['items'] as List?) ?? const []) {
-      if (raw is! Map) continue;
-      final row = raw.cast<String, dynamic>();
-      final pct = discountPercentOf(row);
-      if (pct > 0) pctByCode['${row['item_code']}'] = pct;
-    }
-    if (pctByCode.isEmpty) return items;
-
-    return [
-      for (final it in items)
-        if (pctByCode['${it['item_code']}'] case final pct?)
-          {
-            ...it,
-            ...discountFields(item: it, percent: pct, isLead: isLead),
-          }
-        else
-          it
-    ];
-  }
+  /*
+   * `_keepDiscounts` stood here until 17 September 2026.
+   *
+   * A Frappe child table is replaced rather than merged, and the rep's editor
+   * knew nothing about discounts — it built each line from the rate per kg the
+   * rep typed. So without it, a rep opening a pending order to fix a quantity
+   * silently took back a discount their manager had already given, and the
+   * manager approved a full-price order believing it was still on.
+   *
+   * There are no discounts to carry now: the rep types the rate after
+   * discount, so the figure their editor builds is already the whole price.
+   */
 
   static Future<void> updateOrderLines({
     required String orderName,
@@ -2103,7 +2021,7 @@ class Api {
     final ref = OrderRef(orderName, isLead: isLead);
 
     final body = <String, dynamic>{
-      'items': await _keepDiscounts(orderName, items, isLead: isLead),
+      'items': items,
     };
     if (deliveryDate != null) body['delivery_date'] = deliveryDate;
     if (returnForApproval) {

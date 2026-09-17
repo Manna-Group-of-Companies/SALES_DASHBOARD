@@ -402,20 +402,6 @@ export interface OrderLine {
   packingNote?: string;
   /** Per-line: "this price is final". Survives an edit that reopens the order. */
   rateApproved: boolean;
-  /**
-   * The manager's concession on this line, 0–100. Locked by the same approval
-   * that locks the rate — a discount is a price.
-   */
-  discountPercent: number;
-  /**
-   * Per unit, before the discount. `rate` is always the figure AFTER it, so
-   * these are equal on a line nobody has discounted.
-   */
-  priceListRate: number;
-  /** The line at the rep's quoted rate: qty x priceListRate. */
-  amountBeforeDiscount: number;
-  /** What the customer is invoiced. Prefers the stored `amount`. */
-  amountAfterDiscount: number;
   fulfilmentMode?: string;
   /** Free text (`Data`) — the stage of the portion being MADE. */
   productionStage?: string;
@@ -483,15 +469,6 @@ export interface LeadOrderLine {
   /** Per unit, AFTER any discount — what the lead will be invoiced. */
   rate: number;
   amount: number;
-  /**
-   * `Lead Order Item` has no standard pricing fields, so the discount lives in
-   * `custom_discount_percentage` / `custom_price_list_rate`. Same two numbers
-   * as a Sales Order, different spelling; `domain/discount.ts` is the only
-   * place that knows which.
-   */
-  discountPercent: number;
-  priceListRate: number;
-  amountBeforeDiscount: number;
 }
 
 /**

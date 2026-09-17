@@ -135,10 +135,6 @@ describe('what a line is reported as being served from', () => {
     rolls: 8,
     looseBelts: 2,
     rateApproved: true,
-    discountPercent: 0,
-    priceListRate: 630,
-    amountBeforeDiscount: 5249.79,
-    amountAfterDiscount: 5249.79,
     fulfilmentMode: LIVE_00106.custom_fulfilment_mode, // ''
     productionStage: 'Not Started',
   };

@@ -569,3 +569,60 @@ screens render the refusal as "weights not set", never as "none left". This is
 a holding position while the weights are uploaded. **Revisit it once they are**;
 if it outlives the upload it becomes a permanent blind spot over two thirds of
 the catalogue.
+
+---
+
+## Discounts removed; the rep types the net rate — **decided 17 September 2026**
+
+**Removed from both apps in one commit,** so this is not a divergence. It is
+recorded here because items 1–3 at the top of this file — the founding
+disagreement that caused the two repositories to be merged — were all about
+discounts, and `fixtures/discount.json` is gone with them.
+
+### What went
+
+`domain/discount.ts`, `core/discount.dart`, both test suites, the fixture, the
+per-line Discount control and its modal on the dashboard and the phone, the
+before/after order totals, `setLineDiscount` on both sides, `_keepDiscounts`,
+and the discount carry-over when a lead order converts.
+
+### Why
+
+The rate the rep quotes is now **the rate after discount**, typed at order
+confirmation. One number on a line instead of three.
+
+The trigger was SAP. The sync had to start sending the approved price (see the
+entry above this one), and `custom_rate_per_kg` turned out to be the rate
+*before* the discount — `SAL-ORD-2026-00135` carries 25/kg against a 10%
+discount and a real 22.50/kg. Rather than teach a second system about a
+three-number pricing model, the model was reduced to one number.
+
+### What reaches SAP
+
+`UnitPrice = amount / custom_total_weight`, `DiscountPercent` always **0**.
+Derived from the line amount rather than the rate, which also prices the legacy
+discounted lines correctly without knowing anything about discounts — the
+amount was always the net figure. `Sync-SapOrders.ps1`, `New-SapOrderLine`.
+
+### The data that already exists
+
+Nothing was migrated. One order on the site carries a discount
+(`SAL-ORD-2026-00135`, both lines at 10%) and zero lead orders do. Those lines
+keep their stored `discount_percentage`; nothing displays or re-applies it, and
+their `amount` was always net, so every figure derived from them stays right.
+
+New writes zero `price_list_rate` to the rate and `discount_percentage` /
+`discount_amount` to 0 **explicitly**, rather than leaving them alone, so
+ERPNext's own pricing cannot derive a phantom discount from a stale price-list
+rate left on a row.
+
+### What is weaker
+
+**Nothing records that a concession was given.** The business could previously
+see what it had given away — per line, per order, and in a "3 of 5 lines
+discounted" summary. A net rate typed by a rep looks identical to a full-price
+rate typed by a rep. If someone later asks "how much are we discounting", the
+answer is no longer in the system, and reconstructing it would mean comparing
+every line against a price list that covers 29% of the catalogue.
+
+That was accepted deliberately. Revisit it if margin reporting is ever wanted.

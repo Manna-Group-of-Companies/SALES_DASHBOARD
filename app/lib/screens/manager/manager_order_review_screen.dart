@@ -20,7 +20,6 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/credit.dart';
-import 'package:manna_field_sales/core/discount.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
@@ -99,17 +98,22 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
 
   double get _outstanding => _num(_customer['custom_outstanding_balance']);
   double get _limit => _num(_customer['custom_credit_limit']);
-  /// What a line is worth, after any discount on it. See `core/discount.dart`
-  /// for why `amount` is preferred and what it falls back to.
-  static double _lineAmount(Map<String, dynamic> it) => lineAfterDiscount(it);
-
-  DiscountTotals get _totals => discountTotals(_items);
+  /// What a line is worth.
+  ///
+  /// It went through `lineAfterDiscount` until 17 September 2026, which
+  /// preferred the stored `amount` and fell back to qty x rate. The same
+  /// fallback applies, and for the same reason — `amount` is not always
+  /// written on a custom child table — but there is no discount to apply.
+  static double _lineAmount(Map<String, dynamic> it) {
+    final amount = _num(it['amount']);
+    if (amount > 0) return amount;
+    return _num(it['qty']) * _num(it['rate']);
+  }
 
   /// What the customer will be invoiced. The credit limit is checked against
-  /// this and not the full price — a discount the manager just gave is money
-  /// the customer will never owe, and escalating on it would send orders to
-  /// the GM over a figure nobody is going to be billed.
-  double get _orderTotal => _totals.afterDiscount;
+  /// this, and the rep's rate is already the rate after discount.
+  double get _orderTotal =>
+      _items.fold<double>(0, (sum, it) => sum + _lineAmount(it));
 
   /// What the customer would owe if this order shipped. The limit question is
   /// not "do they owe too much now" but "will they after this".
@@ -174,98 +178,17 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   // still the only correct way to move a line between the two pools, should a
   // reason to do that deliberately ever appear.
 
-  /// Asks for a discount on one line and writes it.
-  ///
-  /// The percentage is what is entered, not the rate. A manager negotiating
-  /// says "give them five percent", and making them work out 6,976.80 from
-  /// 7,344 by hand is how the wrong number gets typed.
-  Future<void> _editDiscount(Map<String, dynamic> it) async {
-    if (_approved) return;
-    final current = discountPercentOf(it);
-    final base = rateBeforeDiscount(it);
-    final qty = _num(it['qty']);
-    final controller =
-        TextEditingController(text: current > 0 ? trimQty(current) : '');
-
-    final entered = await showDialog<double>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
-        final typed = double.tryParse(controller.text.trim()) ?? 0;
-        final preview = discountedRate(base, typed);
-        final valid = discountRefusal(typed) == null;
-        return AlertDialog(
-          title: const Text('Discount'),
-          content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('${it['item_name'] ?? it['item_code']}',
-                    style: const TextStyle(fontSize: 12.5)),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: controller,
-                  autofocus: true,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(
-                    labelText: 'Discount %',
-                    hintText: '0',
-                    border: OutlineInputBorder(),
-                  ),
-                  onChanged: (_) => setInner(() {}),
-                ),
-                const SizedBox(height: 12),
-                // Shown as it is typed. The manager is agreeing a rate with a
-                // customer on the phone, and the number they care about is the
-                // one the customer will hear.
-                _kv('Rate now', 'Rs ${trimQty(base)}'),
-                _kv(typed > 0 ? 'Rate after $typed%' : 'Rate after',
-                    'Rs ${trimQty(preview)}'),
-                _kv('Line total', 'Rs ${roundMoney(qty * preview)
-                    .toStringAsFixed(2)}'),
-                if (!valid) ...[
-                  const SizedBox(height: 8),
-                  Text(discountRefusal(typed)!,
-                      style: const TextStyle(
-                          fontSize: 11.5, color: Color(0xFFB3261E))),
-                ],
-              ]),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            // Offered only when there is one to remove, so the button does not
-            // sit there inviting a manager to undo nothing.
-            if (current > 0)
-              TextButton(
-                  onPressed: () => Navigator.pop(ctx, 0.0),
-                  child: const Text('Remove')),
-            FilledButton(
-                onPressed: valid ? () => Navigator.pop(ctx, typed) : null,
-                child: const Text('Apply')),
-          ],
-        );
-      }),
-    );
-    if (entered == null || !mounted) return;
-
-    setState(() => _busy = true);
-    try {
-      await Api.setLineDiscount(
-        orderName: widget.orderName,
-        itemRowName: '${it['name']}',
-        percent: entered,
-        isLead: _isLead,
-      );
-      _snack(entered > 0
-          ? 'Discount of ${trimQty(entered)}% applied.'
-          : 'Discount removed.');
-      if (mounted) setState(() => _init = _load());
-    } catch (e) {
-      _snack(humanError(e));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
+  /*
+   * `_editDiscount` stood here until 17 September 2026.
+   *
+   * It asked for a percentage rather than a rate — a manager negotiating says
+   * "give them five percent", and making them work out 6,976.80 from 7,344 by
+   * hand is how the wrong number gets typed — and wrote it straight away.
+   *
+   * The feature is gone from both apps. The rep types the rate AFTER discount,
+   * so the rate on the line is the whole price and a manager who wants to move
+   * it edits the rate.
+   */
 
   Future<void> _decide(bool approve) async {
     // A lead that cannot be invoiced cannot be approved. Refused here rather
@@ -287,12 +210,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                 'it.',
           if (_overLimit)
             'This takes the customer past their credit limit.',
-          if (_totals.hasDiscount)
-            'It carries Rs ${_totals.discount.toStringAsFixed(0)} of discount '
-                '(${trimQty(_totals.discountPercent)}%), across '
-                '${_totals.discountedLines} '
-                '${_totals.discountedLines == 1 ? 'line' : 'lines'}.',
-          'Approving fixes every rate and discount on this order permanently. '
+          'Approving fixes every rate on this order permanently. '
               'Nobody, including you, can change them afterwards.',
         ].join('\n\n'),
       );
@@ -516,19 +434,12 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
         ]),
         const SizedBox(height: 6),
         _kv('Owes now', 'Rs ${_outstanding.toStringAsFixed(0)}'),
-        // Both totals, never one. The manager is deciding two things at once —
-        // whether the customer can carry this, and what the business is giving
-        // away to win it — and a single figure answers only the first.
-        if (_totals.hasDiscount) ...[
-          _kv('Order before discount',
-              'Rs ${_totals.beforeDiscount.toStringAsFixed(0)}'),
-          _kv('Discount',
-              '- Rs ${_totals.discount.toStringAsFixed(0)}  '
-                  '(${trimQty(_totals.discountPercent)}%)'),
-          _kv('Order after discount',
-              'Rs ${_totals.afterDiscount.toStringAsFixed(0)}'),
-        ] else
-          _kv('This order', 'Rs ${_orderTotal.toStringAsFixed(0)}'),
+        // One figure. It was a before-and-after pair where the order carried a
+        // discount, because the manager was deciding two things at once —
+        // whether the customer could carry it, and what was being given away
+        // to win it. The discount feature went on 17 September 2026 and the
+        // rep's rate is already net, so there is only the first question.
+        _kv('This order', 'Rs ${_orderTotal.toStringAsFixed(0)}'),
         _kv('Would owe', 'Rs ${_projected.toStringAsFixed(0)}'),
         _kv('Credit limit',
             _limit > 0 ? 'Rs ${_limit.toStringAsFixed(0)}' : 'none set'),
@@ -628,23 +539,11 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                 child: Text('${it['item_name'] ?? code}',
                     style: const TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w600))),
-            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              // The full price stays visible beside the discounted one. A
-              // manager approving needs to see what was given away, not just
-              // what is left, and so does anybody reading the order later.
-              if (isDiscounted(it))
-                Text('Rs ${lineBeforeDiscount(it).toStringAsFixed(2)}',
-                    style: const TextStyle(
-                        fontSize: 11,
-                        color: Colors.black45,
-                        decoration: TextDecoration.lineThrough)),
-              Text('Rs ${_lineAmount(it).toStringAsFixed(2)}',
-                  style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: isDiscounted(it)
-                          ? const Color(0xFF1B5E20)
-                          : null)),
-            ]),
+            // One figure. The full price used to sit struck through above the
+            // discounted one, so a manager could see what was given away — but
+            // the rate the rep types is already the rate after discount.
+            Text('Rs ${_lineAmount(it).toStringAsFixed(2)}',
+                style: const TextStyle(fontWeight: FontWeight.w600)),
           ]),
           const SizedBox(height: 2),
           Text(
@@ -661,7 +560,6 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                     style: TextStyle(fontSize: 11, color: Colors.black45)),
               ]),
             ),
-          _discountRow(it),
           if (s == null)
             const Padding(
               padding: EdgeInsets.only(top: 8),
@@ -682,137 +580,28 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
     );
   }
 
-  /// The order's totals under its lines.
+  /// The order total.
   ///
-  /// When nothing is discounted this is the single figure it always was.
-  /// Once something is, the two totals are shown apart and the discount
-  /// between them, because "what it was worth" and "what it is worth now" are
-  /// different questions and the manager is answerable for both.
-  Widget _totalsBlock() {
-    final t = _totals;
-    if (!t.hasDiscount) {
-      return Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+  /// It was a green panel with a before/after/percentage breakdown whenever
+  /// any line carried a discount — "3 of 5 lines discounted" and all. The
+  /// discount feature went on 17 September 2026 and the rep's rate is already
+  /// net, so there is one figure.
+  Widget _totalsBlock() =>
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         const Text('Order total',
             style: TextStyle(fontWeight: FontWeight.bold)),
-        Text('Rs ${t.afterDiscount.toStringAsFixed(2)}',
+        Text('Rs ${_orderTotal.toStringAsFixed(2)}',
             style: const TextStyle(fontWeight: FontWeight.bold)),
       ]);
-    }
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-          color: const Color(0xFFF1F8E9),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFFC8E6C9))),
-      child: Column(children: [
-        _totalRow('Before discount', t.beforeDiscount,
-            colour: Colors.black54, strike: true),
-        _totalRow('Discount (${trimQty(t.discountPercent)}%)', -t.discount,
-            colour: const Color(0xFF1B5E20)),
-        const Divider(height: 14),
-        _totalRow('Order total', t.afterDiscount, bold: true),
-        const SizedBox(height: 4),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Text(
-              '${t.discountedLines} of ${_items.length} '
-              '${_items.length == 1 ? 'line' : 'lines'} discounted.',
-              style: const TextStyle(fontSize: 11, color: Colors.black54)),
-        ),
-      ]),
-    );
-  }
 
-  Widget _totalRow(String label, double value,
-          {bool bold = false, bool strike = false, Color? colour}) =>
-      Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child:
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text(label,
-              style: TextStyle(
-                  fontSize: bold ? 14 : 12,
-                  fontWeight: bold ? FontWeight.bold : FontWeight.normal,
-                  color: colour)),
-          Text(
-              '${value < 0 ? '- ' : ''}Rs '
-              '${value.abs().toStringAsFixed(2)}',
-              style: TextStyle(
-                  fontSize: bold ? 14 : 12,
-                  fontWeight: bold ? FontWeight.bold : FontWeight.w600,
-                  color: colour,
-                  decoration:
-                      strike ? TextDecoration.lineThrough : TextDecoration.none)),
-        ]),
-      );
+  /*
+   * `_totalRow` and `_discountRow` stood here.
+   *
+   * `_discountRow` showed the concession on a line and the way to change it,
+   * becoming a plain "10% off — Rs 875 to Rs 787.50. Final." once the order
+   * was approved. Both went with the feature on 17 September 2026.
+   */
 
-  /// The discount on a line, and the way to change it.
-  ///
-  /// Once the order is approved this becomes a plain statement of what was
-  /// given, with no way in. A line that never had a discount says nothing at
-  /// all after approval — an order with no discounts should not be covered in
-  /// notices about discounts.
-  Widget _discountRow(Map<String, dynamic> it) {
-    final pct = discountPercentOf(it);
-    final has = pct > 0;
-
-    if (_approved) {
-      if (!has) return const SizedBox.shrink();
-      return Padding(
-        padding: const EdgeInsets.only(top: 6),
-        child: Row(children: [
-          const Icon(Icons.sell_outlined, size: 14, color: Color(0xFF1B5E20)),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-                '${trimQty(pct)}% off — Rs ${trimQty(rateBeforeDiscount(it))} '
-                'to Rs ${trimQty(rateAfterDiscount(it))}. Final.',
-                style: const TextStyle(
-                    fontSize: 11.5,
-                    color: Color(0xFF1B5E20),
-                    fontWeight: FontWeight.w600)),
-          ),
-        ]),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 6),
-      child: Row(children: [
-        if (has) ...[
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-                color: const Color(0xFFC8E6C9),
-                borderRadius: BorderRadius.circular(4)),
-            child: Text('${trimQty(pct)}% off',
-                style: const TextStyle(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF1B5E20))),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-                'Rs ${trimQty(rateBeforeDiscount(it))} → '
-                'Rs ${trimQty(rateAfterDiscount(it))}',
-                style: const TextStyle(fontSize: 11, color: Colors.black54)),
-          ),
-        ] else
-          const Expanded(child: SizedBox.shrink()),
-        TextButton.icon(
-          onPressed: _busy ? null : () => _editDiscount(it),
-          icon: Icon(has ? Icons.edit : Icons.sell_outlined, size: 15),
-          label: Text(has ? 'Change' : 'Discount',
-              style: const TextStyle(fontSize: 12)),
-          style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(0, 32),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-        ),
-      ]),
-    );
-  }
 
   /// What was asked for against what SAP has.
   ///

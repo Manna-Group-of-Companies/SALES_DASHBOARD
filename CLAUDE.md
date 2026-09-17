@@ -13,7 +13,9 @@ They were separate repositories until 13 August 2026. They are one repository
 now for a single reason: **the same business rule is written twice, in two
 languages, and the copies drift.** Within a day of each other both sides
 implemented per-line discounts and disagreed about the discount ceiling — see
-`shared/DIVERGENCES.md`.
+`shared/DIVERGENCES.md`. (Discounts were removed from both apps on
+17 September 2026; the example is kept because the lesson is why this
+repository is shaped the way it is.)
 
 Each directory has its own briefing with everything specific to it:
 `app/CLAUDE.md` and `client/DEPLOY.md`. Read the one you are working in. This
@@ -48,8 +50,8 @@ So a rule is only as good as its weakest implementation. A check that exists in
 
 ## Before you change a shared rule
 
-Anything about **money, approval, or stock** is shared. Prices, discounts,
-credit escalation, what stock may be promised, who may approve what.
+Anything about **money, approval, or stock** is shared. Prices, credit
+escalation, what stock may be promised, who may approve what.
 
 1. Look in `shared/fixtures/` for a case that already pins it.
 2. Change the fixture and **both** implementations in the same commit.
