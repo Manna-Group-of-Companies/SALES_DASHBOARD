@@ -10,8 +10,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { orderLineValues } from '../productRules';
-import { servedFrom, splitOf, findDrift, trueReserved } from '../minimumStock';
-import type { MinStockLine, OrderLine, Product, StockReservationRow } from '../types';
+import { servedFrom, splitOf } from '../minimumStock';
+import type { OrderLine, Product } from '../types';
 
 // ---------------------------------------------------------------- fixtures ---
 
@@ -109,8 +109,20 @@ describe('an edited line is byte-identical to one the app wrote', () => {
     }
   });
 });
-
-describe('the app does not write custom_fulfilment_mode', () => {
+describe('what a line is reported as being served from', () => {
+  /*
+   * This block was called "the app does not write custom_fulfilment_mode", and
+   * that was its point: on SAL-ORD-2026-00106 the field was empty while
+   * MSR-00027 held 4 rolls and 2 belts against the line, so trusting the field
+   * reported a stocked line as "Made to order" and told the floor to build
+   * goods that were already on the shelf. `servedFrom` therefore read the
+   * reservation rows first and the field only as a fallback.
+   *
+   * There are no reservation rows since 17 September 2026, so the field is the
+   * only record there is and the fallback is the whole rule. What this now
+   * pins is the other half of that decision: an unlabelled line reads as made
+   * to order rather than as "undecided", because nobody owes a decision.
+   */
   const line: OrderLine = {
     id: 'ajan2f4vlh',
     itemCode: MG134.code,
@@ -131,101 +143,48 @@ describe('the app does not write custom_fulfilment_mode', () => {
     productionStage: 'Not Started',
   };
 
-  /** MSR-00027, exactly as stored. */
-  const msr27: StockReservationRow = {
-    id: 'MSR-00027',
-    itemCode: MG134.code,
-    rolls: 4,
-    looseBelts: 2,
-    salesOrder: 'SAL-ORD-2026-00106',
-    salesPerson: 'Sirajudheen Kasim',
-    status: 'Active',
-    source: 'Shelf',
-  };
-
-  it('would report a stocked line as "made to order" if the field were trusted', () => {
-    // The bug this guards: the field is empty, but 4 rolls + 2 belts ARE held.
+  it('reads an unlabelled line as made to order, not undecided', () => {
     expect(line.fulfilmentMode).toBe('');
-    expect(servedFrom(line, [msr27], 'SAL-ORD-2026-00106')).toBe('minimum_stock');
+    expect(servedFrom(line)).toBe('new_production');
   });
 
-  it('reports made-to-order only when nothing is actually held', () => {
-    expect(servedFrom(line, [], 'SAL-ORD-2026-00106')).toBe('new_production');
+  it('reads the label the manager set', () => {
+    expect(servedFrom({ ...line, fulfilmentMode: 'From Minimum Stock' })).toBe('minimum_stock');
+    expect(servedFrom({ ...line, fulfilmentMode: 'New Production' })).toBe('new_production');
   });
 
-  it('reports a run claim from the reservation source', () => {
-    const claim = { ...msr27, source: 'Production Run' };
-    expect(servedFrom(line, [claim], 'SAL-ORD-2026-00106')).toBe('production_run');
-  });
-
-  it('falls back to the stored field when the rows could not be read', () => {
-    const labelled = { ...line, fulfilmentMode: 'From Minimum Stock' };
-    expect(servedFrom(labelled, [], 'SAL-ORD-2026-00106', false)).toBe('minimum_stock');
-  });
-
-  it('splits SAL-ORD-2026-00106 as 8+2 ordered, 4+2 stocked, 4 to make', () => {
-    const s = splitOf(line, [msr27], 'SAL-ORD-2026-00106');
+  it('splits SAL-ORD-2026-00106 against what SAP has', () => {
+    /*
+     * The same 8 rolls + 2 belts. It used to split by what MSR-00027 held —
+     * 4 + 2 stocked, 4 to make. The split is measured against SAP's available
+     * figure now, so six free rolls cover six of the eight and the belts are
+     * cut from a seventh.
+     */
+    const s = splitOf(line, { rolls: 6, belts: 0 }, MG134.beltsPerRoll);
     expect(s.ordered).toEqual({ rolls: 8, belts: 2 });
-    expect(s.reserved).toEqual({ rolls: 4, belts: 2 });
-    expect(s.toMake).toEqual({ rolls: 4, belts: 0 });
+    expect(s.fromStock).toEqual({ rolls: 6, belts: 0 });
+    expect(s.toMake).toEqual({ rolls: 2, belts: 2 });
     expect(s.isSplit).toBe(true);
   });
-});
 
-describe('drift across the whole live pool', () => {
-  /** Every reservation on the site, verbatim. */
-  const reservations: StockReservationRow[] = [
-    { id: 'MSR-00021', itemCode: 'EAGLE134', rolls: 0, looseBelts: 0, salesOrder: 'SAL-ORD-2026-00096', status: 'Released', source: 'Shelf' },
-    { id: 'MSR-00022', itemCode: 'EAGLE134', rolls: 2, looseBelts: 0, salesOrder: 'SAL-ORD-2026-00096', status: 'Active', source: 'Shelf' },
-    { id: 'MSR-00023', itemCode: 'EA60', rolls: 0, looseBelts: 0, salesOrder: 'SAL-ORD-2026-00105', status: 'Released', source: 'Shelf' },
-    { id: 'MSR-00024', itemCode: 'IR66', rolls: 0, looseBelts: 0, salesOrder: 'SAL-ORD-2026-00105', status: 'Released', source: 'Shelf' },
-    { id: 'MSR-00025', itemCode: 'EA60', rolls: 0, looseBelts: 0, salesOrder: 'SAL-ORD-2026-00105', status: 'Released', source: 'Shelf' },
-    { id: 'MSR-00026', itemCode: 'IR66', rolls: 2, looseBelts: 2, salesOrder: 'SAL-ORD-2026-00105', status: 'Active', source: 'Shelf' },
-    { id: 'MSR-00027', itemCode: 'MG134', rolls: 4, looseBelts: 2, salesOrder: 'SAL-ORD-2026-00106', status: 'Active', source: 'Shelf' },
-  ];
-
-  /** Every pool with a non-zero reserved counter, verbatim. */
-  const pools: MinStockLine[] = (
-    [
-      ['AJAX69', 2, 3, 2],
-      ['IR66', 8, 2, 2],
-      ['EAGLE134', 5, 2, 0],
-      ['MG134', 8, 4, 2],
-      ['RTS99', 10, 1, 0],
-    ] as const
-  ).map(([itemCode, minimumRolls, reservedRolls, reservedBelts]) => ({
-    itemCode,
-    minimumRolls,
-    minimumBelts: 0,
-    shelfRolls: 0,
-    shelfBelts: 0,
-    reservedRolls,
-    reservedBelts,
-    inProductionRolls: 0,
-    inProductionBelts: 0,
-    reservedInProductionRolls: 0,
-    reservedInProductionBelts: 0,
-  }));
-
-  it('finds exactly the two orphaned counters and no false positives', () => {
-    const drift = findDrift(pools, reservations);
-    expect(drift.map((d) => d.itemCode).sort()).toEqual(['AJAX69', 'RTS99']);
-  });
-
-  it('confirms the three genuine bookings reconcile', () => {
-    expect(trueReserved(reservations, 'IR66')).toEqual({ rolls: 2, belts: 2 });
-    expect(trueReserved(reservations, 'EAGLE134')).toEqual({ rolls: 2, belts: 0 });
-    expect(trueReserved(reservations, 'MG134')).toEqual({ rolls: 4, belts: 2 });
-  });
-
-  it('reports the phantom quantities the user spotted', () => {
-    const ajax = findDrift(pools, reservations).find((d) => d.itemCode === 'AJAX69')!;
-    expect([ajax.storedRolls, ajax.storedBelts]).toEqual([3, 2]);
-    expect([ajax.actualRolls, ajax.actualBelts]).toEqual([0, 0]);
-  });
-
-  it('ignores Released rows, which the app zeroes on release', () => {
-    // MSR-00023/24/25 are all Released with qty 0.
-    expect(trueReserved(reservations, 'EA60')).toEqual({ rolls: 0, belts: 0 });
+  it('calls a line the shelf covers entirely no split at all', () => {
+    const s = splitOf(line, { rolls: 20, belts: 10 }, MG134.beltsPerRoll);
+    expect(s.toMake).toEqual({ rolls: 0, belts: 0 });
+    expect(s.isSplit).toBe(false);
+    expect(s.allMadeToOrder).toBe(false);
   });
 });
+
+/*
+ * A "drift across the whole live pool" block stood here.
+ *
+ * It replayed every `Manna Stock Reservation` row on the site against every
+ * pool with a non-zero reserved counter, and asserted that `findDrift` caught
+ * exactly the two counters left orphaned when Sales Orders were deleted in the
+ * Desk — AJAX69 claiming 3 rolls and 2 belts booked with nothing behind them,
+ * and RTS99 claiming one. That was real: the counters were a hand-maintained
+ * cache with no Server Script keeping them honest.
+ *
+ * Both the counter and the rows are gone. SAP reports one figure and nothing
+ * in ERPNext caches it, so there is no second copy to drift from.
+ */

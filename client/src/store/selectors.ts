@@ -4,8 +4,8 @@
  */
 
 import { createSelector } from '@reduxjs/toolkit';
-import type { MinStockItem, Order } from '@/domain/types';
-import { availableQty } from '@/domain/stockLevels';
+import type { MinStockLine, Order } from '@/domain/types';
+import { shelfAvailable } from '@/domain/minimumStock';
 import {
   activeEmployees,
   headcountByDepartment,
@@ -21,23 +21,31 @@ export const selectProducts = (s: RootState) => s.catalog.products;
 export const selectCustomers = (s: RootState) => s.catalog.customers;
 export const selectOrders = (s: RootState) => s.orders.list;
 export const selectMinStockItems = (s: RootState) => s.minStock.items;
-export const selectReservations = (s: RootState) => s.minStock.reservations;
 export const selectNotificationFeed = (s: RootState) => s.notifications.feed;
 
-/** Item code → min-stock row, for O(1) lookups while rendering the product grid. */
+/** Item code → what SAP has, for O(1) lookups while rendering the product grid. */
 export const selectMinStockByCode = createSelector(
   selectMinStockItems,
-  (items): Map<string, MinStockItem> => new Map(items.map((i) => [i.itemCode, i])),
+  (items): Map<string, MinStockLine> => new Map(items.map((i) => [i.itemCode, i])),
 );
 
-/** Free-to-sell quantity per item code, after everyone's holds (1.2). */
+/** Rolls free to promise per item code. Belts are read off the row itself. */
 export const selectAvailableByCode = createSelector(
   selectMinStockItems,
-  (items): Map<string, number> => new Map(items.map((i) => [i.itemCode, availableQty(i)])),
+  (items): Map<string, number> =>
+    new Map(items.map((i) => [i.itemCode, shelfAvailable(i).rolls])),
 );
 
-export const selectLowStockItems = createSelector(selectMinStockItems, (items) =>
-  items.filter((i) => i.onHand < i.threshold),
+/**
+ * Items SAP has none of.
+ *
+ * This was "below the minimum management set" until 17 September 2026. There
+ * are no minimums — every pool row on the site held zero — so the only honest
+ * version of "needs attention" left is having run out. Items whose weights are
+ * not set are excluded: nobody knows whether those are short.
+ */
+export const selectOutOfStockItems = createSelector(selectMinStockItems, (items) =>
+  items.filter((i) => i.weightsKnown && i.availableRolls <= 0 && i.availableBelts <= 0),
 );
 
 /** Orders the signed-in user is allowed to see at all. */

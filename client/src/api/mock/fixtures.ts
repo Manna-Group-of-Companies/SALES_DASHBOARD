@@ -13,10 +13,8 @@ import type {
   Customer,
   Employee,
   LeaveRequest,
-  MinStockItem,
   Order,
   Product,
-  ProductionOrder,
   User,
 } from '@/domain/types';
 import { toIsoDate } from '@/domain/orderRules';
@@ -187,108 +185,17 @@ export const CUSTOMERS: Customer[] = [
   },
 ];
 
-// ---------------------------------------------------------- minimum stock ---
-
-/**
- * Only some items are kept as minimum stock. Anything absent from this list
- * shows "No minimum stock" on the order row (1.2).
+/*
+ * A `MIN_STOCK` ledger and a `PRODUCTION_ORDERS` list stood here.
  *
- * `PCTR-160-09` is deliberately seeded split across an old and a fresh batch so
- * the "8/10 from an older date, 2 newly restocked" case from 1.6 is visible on
- * first load. `PCTR-220-13` sits below its threshold to exercise the low-stock
- * alert (3.5).
+ * They seeded the mock minimum-stock pool: per-item thresholds, on-hand
+ * figures, dated batches (one item deliberately split across an old and a
+ * fresh batch, one seeded below its threshold to fire the low-stock alert),
+ * and an open replenishment order to receive. Removed 17 September 2026 with
+ * the doctypes they stood in for — SAP owns the stock and the booking now, and
+ * a fixture for something that no longer exists is an invitation to wire it
+ * back.
  */
-export const MIN_STOCK: MinStockItem[] = [
-  {
-    itemCode: 'PCTR-140-08',
-    itemName: 'Precured Tread 140mm x 8mm',
-    category: 'PCTR',
-    uom: 'Kg',
-    threshold: 900,
-    onHand: 1_140,
-    reserved: 0,
-    lastRestockedOn: daysAgo(12),
-    batches: [
-      { id: 'B-1401', stockedOn: daysAgo(95), remaining: 425, original: 600 },
-      { id: 'B-1402', stockedOn: daysAgo(12), remaining: 715, original: 715 },
-    ],
-  },
-  {
-    itemCode: 'PCTR-160-09',
-    itemName: 'Precured Tread 160mm x 9mm',
-    category: 'PCTR',
-    uom: 'Kg',
-    threshold: 342,
-    onHand: 342,
-    reserved: 0,
-    lastRestockedOn: daysAgo(4),
-    batches: [
-      // 8 rolls' worth from the old lot, 2 rolls newly restocked.
-      { id: 'B-1601', stockedOn: daysAgo(138), remaining: 273.6, original: 342 },
-      { id: 'B-1602', stockedOn: daysAgo(4), remaining: 68.4, original: 68.4 },
-    ],
-  },
-  {
-    itemCode: 'PCTR-180-10', itemName: 'Precured Tread 180mm x 10mm',
-    category: 'PCTR', uom: 'Kg', threshold: 800, onHand: 968, reserved: 0,
-    lastRestockedOn: daysAgo(30),
-    batches: [
-      { id: 'B-1801', stockedOn: daysAgo(72), remaining: 326, original: 500 },
-      { id: 'B-1802', stockedOn: daysAgo(30), remaining: 642, original: 642 },
-    ],
-  },
-  {
-    itemCode: 'PCTR-220-13', itemName: 'Precured Tread 220mm x 13mm',
-    category: 'PCTR', uom: 'Kg', threshold: 640, onHand: 384, reserved: 0,
-    lastRestockedOn: daysAgo(61),
-    batches: [{ id: 'B-2201', stockedOn: daysAgo(61), remaining: 384, original: 640 }],
-  },
-  {
-    itemCode: 'CTR-08-400', itemName: 'Conventional Tread 8mm x 400mm',
-    category: 'CTR', uom: 'Kg', threshold: 600, onHand: 750, reserved: 0,
-    lastRestockedOn: daysAgo(18),
-    batches: [
-      { id: 'B-C0801', stockedOn: daysAgo(110), remaining: 210, original: 450 },
-      { id: 'B-C0802', stockedOn: daysAgo(18), remaining: 540, original: 540 },
-    ],
-  },
-  {
-    itemCode: 'CTR-10-450', itemName: 'Conventional Tread 10mm x 450mm',
-    category: 'CTR', uom: 'Kg', threshold: 400, onHand: 440, reserved: 0,
-    lastRestockedOn: daysAgo(9),
-    batches: [{ id: 'B-C1001', stockedOn: daysAgo(9), remaining: 440, original: 440 }],
-  },
-  {
-    itemCode: 'BG-STD', itemName: 'Bonding Gum — Standard',
-    category: 'BG', uom: 'Kg', threshold: 300, onHand: 260, reserved: 0,
-    lastRestockedOn: daysAgo(45),
-    batches: [
-      { id: 'B-BG01', stockedOn: daysAgo(128), remaining: 80, original: 200 },
-      { id: 'B-BG02', stockedOn: daysAgo(45), remaining: 180, original: 180 },
-    ],
-  },
-  {
-    itemCode: 'VS-10L', itemName: 'Vulcanizing Solution — 10L Tin',
-    category: 'VS', uom: 'L', threshold: 500, onHand: 620, reserved: 0,
-    lastRestockedOn: daysAgo(21),
-    batches: [{ id: 'B-VS01', stockedOn: daysAgo(21), remaining: 620, original: 700 }],
-  },
-];
-
-// ------------------------------------------------------- production orders ---
-
-export const PRODUCTION_ORDERS: ProductionOrder[] = [
-  {
-    id: 'PROD-0001',
-    itemCode: 'PCTR-220-13',
-    itemName: 'Precured Tread 220mm x 13mm',
-    qty: 256,
-    raisedAt: hoursAgoIso(30),
-    raisedBy: 'Anil Kumar',
-    status: 'open',
-    purpose: 'stock',
-  },
-];
 
 // ---------------------------------------------------------------- orders ---
 

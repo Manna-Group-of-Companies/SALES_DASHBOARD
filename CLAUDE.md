@@ -49,7 +49,7 @@ So a rule is only as good as its weakest implementation. A check that exists in
 ## Before you change a shared rule
 
 Anything about **money, approval, or stock** is shared. Prices, discounts,
-credit escalation, the booking protocol, who may approve what.
+credit escalation, what stock may be promised, who may approve what.
 
 1. Look in `shared/fixtures/` for a case that already pins it.
 2. Change the fixture and **both** implementations in the same commit.

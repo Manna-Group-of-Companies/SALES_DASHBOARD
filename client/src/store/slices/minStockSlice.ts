@@ -1,112 +1,48 @@
+/**
+ * What the shelf has, for the screens that render it while an order is typed.
+ *
+ * This held three lists and five thunks: a minimum-stock ledger, the live
+ * reservation rows, open replenishment orders, and the actions to reserve,
+ * release, raise a replenishment and receive one. All of it went on
+ * 17 September 2026 with the doctypes behind it — and most of it had never
+ * worked against the live site anyway, because `Manna Minimum Stock Item` has
+ * no `onHand` or `threshold` field for `MinStockItem` to read.
+ *
+ * One list now, from SAP, and one thunk to re-read it. There is nothing to
+ * reserve: SAP commits stock against its own sales orders, and the figure here
+ * is already net of every one of them.
+ */
+
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
-import type { MinStockItem, ProductionOrder, StockReservation, User } from '@/domain/types';
-import { joinProductionOrders } from '@/domain/stockLevels';
+import type { MinStockLine } from '@/domain/types';
 import { Api, toApiError } from '@/api/client';
 
 interface MinStockState {
-  items: MinStockItem[];
-  reservations: StockReservation[];
-  productionOrders: ProductionOrder[];
+  items: MinStockLine[];
   status: 'idle' | 'loading' | 'ready' | 'failed';
   error: string | null;
-  /** Set when a reserve attempt loses a race with another rep. */
-  lastConflict: string | null;
   lastSyncedAt: string | null;
 }
 
 const initialState: MinStockState = {
   items: [],
-  reservations: [],
-  productionOrders: [],
   status: 'idle',
   error: null,
-  lastConflict: null,
   lastSyncedAt: null,
 };
 
 /**
- * Re-read the shared ledger. Polled on a timer while an order is being taken so
- * one rep sees another rep's bookings appear (1.2).
+ * Re-read what is available. Polled on a timer while an order is being taken,
+ * so a rep sees stock go as other orders reach SAP.
+ *
+ * The figure is only as fresh as the five-minute SAP stock sync behind it, so
+ * polling faster than that buys nothing but load.
  */
 export const refreshMinStock = createAsyncThunk(
   'minStock/refresh',
   async (_: void, { rejectWithValue }) => {
     try {
-      const [items, reservations, productionOrders] = await Promise.all([
-        Api.stock.listMinStock(),
-        Api.stock.listReservations(),
-        Api.stock.listProductionOrders(),
-      ]);
-      return { items, reservations, productionOrders };
-    } catch (e) {
-      return rejectWithValue(toApiError(e).message);
-    }
-  },
-);
-
-export const reserveStock = createAsyncThunk(
-  'minStock/reserve',
-  async (
-    input: { itemCode: string; qty: number; user: User; orderId?: string | null },
-    { dispatch, rejectWithValue },
-  ) => {
-    try {
-      const row = await Api.stock.reserve(input);
-      // Pull the ledger straight back so the row's availability is truthful.
-      void dispatch(refreshMinStock());
-      return row;
-    } catch (e) {
-      return rejectWithValue(toApiError(e).message);
-    }
-  },
-);
-
-export const releaseHolds = createAsyncThunk(
-  'minStock/release',
-  async (input: { user: User; orderId?: string | null }, { dispatch }) => {
-    await Api.stock.releaseDraftHolds(input.user, input.orderId ?? null);
-    void dispatch(refreshMinStock());
-  },
-);
-
-export const raiseReplenishment = createAsyncThunk(
-  'minStock/replenish',
-  async (
-    input: { item: MinStockItem; qty: number; user: User },
-    { dispatch, rejectWithValue },
-  ) => {
-    try {
-      const order = await Api.stock.raiseReplenishment(input.item, input.qty, input.user);
-      void dispatch(refreshMinStock());
-      return order;
-    } catch (e) {
-      return rejectWithValue(toApiError(e).message);
-    }
-  },
-);
-
-export const recordReplenishment = createAsyncThunk(
-  'minStock/record',
-  async (
-    input: {
-      itemCode: string;
-      qty: number;
-      user: User;
-      productionOrderId?: string;
-      looseBelts?: number;
-    },
-    { dispatch, rejectWithValue },
-  ) => {
-    try {
-      const item = await Api.stock.recordReplenishment(
-        input.itemCode,
-        input.qty,
-        input.user,
-        input.productionOrderId,
-        input.looseBelts,
-      );
-      void dispatch(refreshMinStock());
-      return item;
+      return await Api.sales.listMinimumStock();
     } catch (e) {
       return rejectWithValue(toApiError(e).message);
     }
@@ -116,11 +52,7 @@ export const recordReplenishment = createAsyncThunk(
 const minStockSlice = createSlice({
   name: 'minStock',
   initialState,
-  reducers: {
-    clearConflict(state) {
-      state.lastConflict = null;
-    },
-  },
+  reducers: {},
   extraReducers: (builder) => {
     builder
       .addCase(refreshMinStock.pending, (state) => {
@@ -128,25 +60,15 @@ const minStockSlice = createSlice({
         if (state.status === 'idle') state.status = 'loading';
       })
       .addCase(refreshMinStock.fulfilled, (state, action) => {
-        const joined = joinProductionOrders(action.payload.items, action.payload.productionOrders);
         state.status = 'ready';
-        state.items = joined.items;
-        state.reservations = action.payload.reservations;
-        state.productionOrders = joined.orders;
+        state.items = action.payload;
         state.lastSyncedAt = new Date().toISOString();
       })
       .addCase(refreshMinStock.rejected, (state, action) => {
         state.status = 'failed';
-        state.error = (action.payload as string) ?? 'Could not read the stock ledger.';
-      })
-      .addCase(reserveStock.rejected, (state, action) => {
-        state.lastConflict = (action.payload as string) ?? 'That quantity is no longer available.';
-      })
-      .addCase(reserveStock.fulfilled, (state) => {
-        state.lastConflict = null;
+        state.error = (action.payload as string) ?? 'Could not read what is in stock.';
       });
   },
 });
 
-export const { clearConflict } = minStockSlice.actions;
 export default minStockSlice.reducer;

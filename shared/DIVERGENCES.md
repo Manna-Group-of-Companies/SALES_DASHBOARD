@@ -488,3 +488,84 @@ it is its own piece of work: the post-approval edit flow must move to
 cancel-and-amend or lock line edits, and submit runs India Compliance / GST /
 credit validations a draft skips. Do it deliberately, in both apps plus the
 fixture, not as a side effect.
+
+---
+
+## SAP owns the booking; the minimum-stock pool is gone — **decided 17 September 2026**
+
+**Removed from both sides in one commit**, so nothing below is a divergence —
+it is recorded here because it deletes rules that several fixtures and both
+`CLAUDE.md` files still pointed at, and somebody will want to know why.
+
+### What went
+
+`Manna Minimum Stock Item`, `Manna Minimum Stock Batch`, `Manna Stock
+Reservation` and `Manna Production Order`, and with them:
+
+- the **booking protocol** — the client-side compare-and-swap on the pool's
+  `modified` that stood in for the row lock a Server Script would have given
+  us (`app/lib/services/stock_service.dart`, `holdFromShelf` in
+  `client/src/api/client.ts`);
+- **minimums** and everything measured against one: below-minimum, shortfall,
+  dead stock, replenishment urgency, the fill meters, the low-stock nav badge;
+- the **production run** as a second pool with its own claim counter;
+- **Flow A** of `shared/PRODUCTION_FLOWS.md`, replenishment;
+- the **split of a line into two halves** — the part a reservation covered and
+  the part being made — each with its own stage, its own sequence and its own
+  field (`custom_stock_stage` is now written by nothing);
+- four screens: the production manager's Minimum Stock, the stock manager's
+  Ledger and Replenishment, and the Flutter replenishment-receiving screen.
+
+### Why, in three findings against the live site
+
+1. **No item had a minimum.** All 129 `Manna Minimum Stock Item` rows carried
+   `qty = 0`, so every alarm built on the minimum was comparing against zero
+   and could never fire. The dashboard's older `MinStockItem` path was worse:
+   the doctype has no `onHand` or `threshold` field at all, so both read
+   `undefined`.
+2. **The batches were beating SAP.** The 129 batch rows were a hand-typed
+   snapshot dated 10 September 2026, and `StockService.load()` skipped the
+   warehouse fill for any item that had a pool row — so those items showed a
+   week-old hand count instead of live stock.
+3. **The deduction was happening twice.** SAP commits its own sales orders'
+   lines when they are placed, and `Sync-HitechStockToTreads.ps1` writes back
+   *available to promise* — on hand less committed. Subtracting an ERPNext
+   reservation on top took the same roll off again.
+
+### What replaced it
+
+One figure per item, from `Bin.actual_qty` in `Finished Goods - MT`, converted
+out of kilograms by `stockFromKg` and refreshed by the five-minute SAP stock
+sync. `MinStock` on the phone and `MinStockLine` on the dashboard carry it, and
+neither app writes anything.
+
+### What is weaker, and was accepted
+
+**The window.** The apps see SAP on a five-minute delay, so two reps can be
+shown the same eight rolls inside one cycle. Nothing closes that: the order is
+accepted, pushed to SAP, and SAP refuses or short-ships it. That is a worse
+experience than the old local refusal and a better answer, because the old one
+was confidently wrong about stock it could not see — it knew nothing of orders
+placed in SAP directly.
+
+### What deliberately survives
+
+- **`custom_fulfilment_mode`** ("From Minimum Stock" / "From Production Run" /
+  "New Production"). It is a note for the floor and moves no stock; it still
+  picks the shorter three-step cycle for a line served off the shelf, and
+  `fixtures/production_order.json` still keys the cancel-after-production
+  diversion off it.
+- **`allocateFromPool`** and `fixtures/belt_from_roll.json`. A belt still comes
+  out of a roll; the rule now governs a *display* — how much of a line the
+  shelf covers — rather than what gets reserved.
+- **Oldest-batch-first allocation** is not affected: it never needed the pool.
+
+### The open one
+
+**Items with no weights report nothing available**, on instruction — 250 of 369
+stocked items today. `fixtures/stock_from_kg.json` carries both halves of that
+decision: the conversion still refuses to guess (`unknown_not_zero`), and the
+screens render the refusal as "weights not set", never as "none left". This is
+a holding position while the weights are uploaded. **Revisit it once they are**;
+if it outlives the upload it becomes a permanent blind spot over two thirds of
+the catalogue.

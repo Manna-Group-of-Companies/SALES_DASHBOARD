@@ -18,7 +18,6 @@ import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import {
   selectActiveEmployees,
   selectFreezingSoon,
-  selectLowStockItems,
   selectPendingAcks,
   selectPendingApproval,
   selectPendingLeave,
@@ -68,7 +67,6 @@ export function AppShell() {
 
   const myOrders = useAppSelector(selectVisibleOrders);
   const awaitingApproval = useAppSelector(selectPendingApproval);
-  const lowStock = useAppSelector(selectLowStockItems);
   const freezingSoon = useAppSelector(selectFreezingSoon);
   const headcount = useAppSelector(selectActiveEmployees).length;
   const pendingLeave = useAppSelector(selectPendingLeave);
@@ -140,12 +138,25 @@ export function AppShell() {
     { to: '/combined', label: 'Combined Orders', icon: '⑃', roles: ['sales_manager'], screen: 'combined', group: 'Sales' },
 
     { to: '/production', label: 'Production Queue', icon: '⚙', roles: ['production_manager'], group: 'Production' },
-    { to: '/production/stock', label: 'Minimum Stock', icon: '📦', roles: ['production_manager'], group: 'Production' },
     { to: '/production/dispatch', label: 'Dispatch Planning', icon: '🚚', roles: ['production_manager'], group: 'Production' },
 
-    { to: '/stock', label: 'Minimum Stock', icon: '📦', roles: ['sales_manager', 'general_manager'], screen: 'stock', group: 'Sales' },
-    { to: '/stock/ledger', label: 'Stock Ledger', icon: '📦', roles: ['stock_manager'], count: lowStock.length, urgent: lowStock.length > 0, group: 'Stock' },
-    { to: '/stock/replenish', label: 'Replenishment', icon: '↻', roles: ['stock_manager'], group: 'Stock' },
+    /*
+      One stock screen now, reached two ways. There were four entries —
+      production's Minimum Stock, sales' Minimum Stock, the stock manager's
+      Ledger and their Replenishment — and all but this one read the
+      minimum-stock doctypes, removed 17 September 2026. The Ledger's urgent
+      count came from `selectLowStockItems`, which measured every item against
+      a minimum that was zero on all 129 rows, so it could never have fired.
+
+      Two entries because the gates differ and cannot be expressed in one.
+      Sales-side access is by managed team (`screen`), which is what keeps a
+      manager running party records only out of the order pipeline. The other
+      two roles have no managed team at all, so they are gated on the role —
+      and without that a stock manager would be locked out of the only stock
+      page left in the app. Exactly one of the two shows for any login.
+    */
+    { to: '/stock', label: 'Stock', icon: '📦', roles: ['sales_manager', 'general_manager'], screen: 'stock', group: 'Sales' },
+    { to: '/stock', label: 'Stock', icon: '📦', roles: ['production_manager', 'stock_manager'], group: 'Stock' },
 
     { to: '/hr/employees', label: 'Employees', icon: '🧑', roles: ['hr'], count: headcount, group: 'People' },
     { to: '/hr/leave', label: 'Leave Requests', icon: '🗓', roles: ['hr'], count: pendingLeave.length, urgent: pendingLeave.length > 0, group: 'People' },

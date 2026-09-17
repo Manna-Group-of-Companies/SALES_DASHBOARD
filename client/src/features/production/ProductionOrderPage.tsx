@@ -32,8 +32,7 @@ import {
   workTotal,
   type StagedLine,
 } from '@/domain/production';
-import { modeLabel, modeTone, servedFrom, splitOf } from '@/domain/minimumStock';
-import type { StockReservationRow } from '@/domain/types';
+import { modeLabel, modeTone, servedFrom } from '@/domain/minimumStock';
 import { formatDate } from '@/domain/orderRules';
 import { Api } from '@/api/client';
 import { Alert, Badge, Button, Card, Empty, Input, Select } from '@/components/ui';
@@ -51,9 +50,6 @@ export function ProductionOrderPage() {
   const { orderId = '' } = useParams();
 
   const [order, setOrder] = useState<Order | null>(null);
-  const [reservations, setReservations] = useState<StockReservationRow[]>([]);
-  /* False when the reservation lookup failed: show ONE track, not two invented ones. */
-  const [splitKnown, setSplitKnown] = useState(true);
   const [moving, setMoving] = useState(false);
   const [newDate, setNewDate] = useState('');
   const [tick, setTick] = useState(0);
@@ -70,23 +66,17 @@ export function ProductionOrderPage() {
     setError(null);
     Api.production
       .getOrder(orderId)
-      .then(async (o) => {
+      .then((o) => {
         if (!live) return;
         setOrder(o);
         setNewDate(o.deliveryDate ?? '');
         /*
-         * The split is not on the order line — a reservation is a separate
-         * record — so it is derived. If this lookup fails, show no split at
-         * all rather than losing the order.
+         * A second read went out here for the live reservations, because the
+         * shelf/production split was not on the order line — a reservation was
+         * a separate record — and the floor needed it to know how much of an
+         * eight-roll line was actually to be made. There are no reservations,
+         * so the whole ordered quantity is what the floor is asked for.
          */
-        try {
-          const res = await Api.sales.listReservations();
-          if (!live) return;
-          setReservations(res);
-          setSplitKnown(true);
-        } catch {
-          if (live) setSplitKnown(false);
-        }
       })
       .catch((e: unknown) => {
         if (live) setError(e instanceof Error ? e.message : 'Could not read this order.');
@@ -286,20 +276,13 @@ export function ProductionOrderPage() {
 
           <div className="prod__lines">
             {order.lines.map((l) => {
-              const split = splitOf(l, reservations, order.id);
               const staged: StagedLine = {
                 category: l.category,
                 fulfilmentMode: l.fulfilmentMode,
                 productionStage: l.productionStage,
-                stockStage: l.stockStage,
-                reservedRolls: split.reserved.rolls,
-                reservedBelts: split.reserved.belts,
-                toMakeRolls: split.toMake.rolls,
-                toMakeBelts: split.toMake.belts,
-                splitKnown,
               };
               const tracks = tracksFor(staged);
-              const mode = servedFrom(l, reservations, order.id, splitKnown);
+              const mode = servedFrom(l);
               return (
                 <Card key={l.id} title={l.itemName}>
                   <div className="prod__linetop">
@@ -318,22 +301,17 @@ export function ProductionOrderPage() {
                   </div>
 
                   {/*
-                    The floor's own summary. Without it this line read "8 rolls"
-                    while four already sat in the plant, and a run raised off
-                    that number would have been for double.
+                    A "to make: 4 of 8 ordered, 4 already in stock" summary sat
+                    here, worked out from what a shelf reservation covered.
+                    There are no reservations to work it out from, and the
+                    quantity above is the whole ask.
                   */}
-                  {splitKnown && split.isSplit && (
-                    <div className="prod__split">
-                      ⑂ To make: {split.toMake.rolls} · {split.ordered.rolls} ordered,{' '}
-                      {split.reserved.rolls} already in stock
-                    </div>
-                  )}
 
                   {/*
-                    One track per half. A split line is two pieces of work that
-                    finish separately: the shelf half is picked and packed, the
-                    made half runs the family cycle. Showing the shelf half
-                    against Curing described work nobody was doing.
+                    One track. There were two when a line was split between the
+                    shelf and the plant — the shelf half only picked and packed,
+                    the made half running the family cycle — and the list shape
+                    survives that.
                   */}
                   {tracks.map((t) => {
                     /*

@@ -10,6 +10,8 @@
 import { describe, expect, it } from 'vitest';
 import cases from '../../../../shared/fixtures/sap_order_state.json';
 import {
+  lineStatusFromSap,
+  orderStatusFromLines,
   productionStatusFromSap,
   reachedSap,
   sapStale,
@@ -28,6 +30,64 @@ describe('SAP stage to production status', () => {
       ).toBe(c.expect);
     });
   }
+});
+
+describe('one line of an order', () => {
+  for (const c of cases.line_stage_to_status) {
+    it(c.why, () => {
+      expect(
+        lineStatusFromSap({
+          productionStage: c.line_stage,
+          deliveryOrder: c.line_delivery,
+        }),
+      ).toBe(c.expect);
+    });
+  }
+});
+
+describe('an order rolls up from its lines', () => {
+  for (const c of cases.order_rolls_up_from_lines) {
+    it(c.why, () => {
+      const lines = c.line_stages.map((s) => ({
+        productionOrder: s ? 'PO-1' : '',
+        productionStage: s,
+      }));
+      expect(orderStatusFromLines(lines, { salesOrder: 'SO-1001' })).toBe(c.expect);
+    });
+  }
+
+  for (const c of cases.order_rolls_up_from_deliveries) {
+    it(c.why, () => {
+      const lines = c.line_stages.map((s, i) => ({
+        productionOrder: 'PO-1',
+        productionStage: s,
+        deliveryOrder: c.line_deliveries[i],
+      }));
+      expect(orderStatusFromLines(lines, { salesOrder: 'SO-1001' })).toBe(c.expect);
+    });
+  }
+
+  it('a line SAP has not touched does not drag the order back', () => {
+    // Lines carrying nothing fall back to the order's own stage, rather than
+    // reporting Not Started over the top of a real one.
+    expect(
+      orderStatusFromLines([{}], { salesOrder: 'SO-1', productionStage: 'Curing' }),
+    ).toBe('In Production');
+  });
+
+  it('an order-level delivery no longer overrides an unshipped line', () => {
+    // The bug this replaced: order 381 had a delivery, so every line read
+    // Dispatched - including the one deliberately left off it.
+    expect(
+      orderStatusFromLines(
+        [
+          { productionOrder: 'PO-1', productionStage: 'Closed', deliveryOrder: 'DN-1' },
+          { productionOrder: 'PO-2', productionStage: 'Planned', deliveryOrder: '' },
+        ],
+        { salesOrder: 'SO-1', deliveryOrder: 'DN-1' },
+      ),
+    ).toBe('Not Started');
+  });
 });
 
 describe('the mistakes this mapping exists to prevent', () => {

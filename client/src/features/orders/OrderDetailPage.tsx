@@ -33,7 +33,6 @@ import type {
   OrderDetail,
   OrderLine,
   SalesCustomer,
-  StockReservationRow,
 } from '@/domain/types';
 import {
   isApproved,
@@ -45,7 +44,6 @@ import {
   PO_STATUS,
 } from '@/domain/orderStatus';
 import {
-  coverFor,
   describeSplit,
   modeLabel,
   modeTone,
@@ -77,10 +75,11 @@ import {
   rateBeforeDiscount,
   type PricedRow,
 } from '@/domain/discount';
+import { lineStatusFromSap } from '@/domain/sapOrderState';
 import { pastCutoff, shortDate } from '@/domain/weeks';
 import { serverNow } from '@/domain/serverClock';
 import { formatDate } from '@/domain/orderRules';
-import { Api, type OrderLineWrite } from '@/api/client';
+import { Api, type OrderLineWrite, type OrderSyncState } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import { Alert, Button, Card, Empty, Input } from '@/components/ui';
@@ -130,7 +129,6 @@ export function OrderDetailPage() {
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [customer, setCustomer] = useState<SalesCustomer | null>(null);
   const [pool, setPool] = useState<MinStockLine[]>([]);
-  const [reservations, setReservations] = useState<StockReservationRow[]>([]);
   const [items, setItems] = useState<ItemOption[]>([]);
   const [itemsLoading, setItemsLoading] = useState(false);
   const [rateEdits, setRateEdits] = useState<Record<string, number>>({});
@@ -153,7 +151,51 @@ export function OrderDetailPage() {
    */
   const [stageNews, setStageNews] = useState<ReturnType<typeof changesSince>>([]);
 
-  const reload = useCallback(() => setTick((t) => t + 1), []);
+  /** Where the SAP order sync has got to, so the manager knows how old this is. */
+  const [syncState, setSyncState] = useState<OrderSyncState | null>(null);
+  const [syncNote, setSyncNote] = useState<string | null>(null);
+
+  /**
+   * Refresh means two things, and the manager should get both.
+   *
+   * Re-reading ERPNext is instant and always happens. Re-reading SAP cannot:
+   * Frappe Cloud has no route to the SAP LAN, so the request is a flag an
+   * on-prem watcher picks up within about half a minute. The page therefore
+   * reloads immediately with what ERPNext has now, and says separately when
+   * the floor was last read and whether a fresh read is on its way.
+   *
+   * A refused request is a normal answer — inside the cooldown the script
+   * declines — so it is reported, never thrown.
+   */
+  const reload = useCallback(() => {
+    setTick((t) => t + 1);
+    Api.sales
+      .requestOrderSync()
+      .then((s) => {
+        setSyncState(s);
+        setSyncNote(
+          s.accepted
+            ? 'Asked SAP for the latest. Refresh again in a moment to see it.'
+            : `SAP was read very recently — next refresh available ${s.cooldownUntil ?? 'shortly'}.`,
+        );
+      })
+      .catch(() => {
+        // Never block the ERPNext reload on this: the order is still worth
+        // showing when the SAP side cannot be asked.
+        setSyncNote(null);
+      });
+  }, []);
+
+  useEffect(() => {
+    let live = true;
+    Api.sales
+      .getOrderSyncState()
+      .then((s) => live && setSyncState(s))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [tick]);
 
   useEffect(() => {
     let live = true;
@@ -170,23 +212,24 @@ export function OrderDetailPage() {
 
         // Diff before the snapshot is overwritten, then record what is now on
         // screen. Keyed on the child row name, which survives an edit.
+        // The made portion's movement now comes from SAP, so that is what the
+        // "moved since you last looked" notice reports. Fed in under the old key
+        // so the watcher itself is unchanged — only the source of truth moved.
         const rows = o.lines.map((l) => ({
           name: l.id,
           item_name: l.itemName,
-          custom_production_stage: l.productionStage,
+          custom_production_stage: l.sapProductionStage,
           custom_stock_stage: l.stockStage,
         }));
         setStageNews(changesSince(loadSeen(o.id), rows));
         saveSeen(o.id, snapshotOf(rows));
-        const [parties, stock, res] = await Promise.all([
+        const [parties, stock] = await Promise.all([
           Api.sales.listCustomers().catch(() => []),
           Api.sales.listMinimumStock().catch(() => [] as MinStockLine[]),
-          Api.sales.listReservations().catch(() => [] as StockReservationRow[]),
         ]);
         if (!live) return;
         setCustomer(parties.find((c) => c.id === o.customer) ?? null);
         setPool(stock);
-        setReservations(res);
       })
       .catch((e: unknown) => {
         if (live) setError(e instanceof Error ? e.message : 'Could not read this order.');
@@ -523,7 +566,27 @@ export function OrderDetailPage() {
               <>
                 Raised by {order.rep} · delivery{' '}
                 {order.deliveryDate ? formatDate(order.deliveryDate) : 'not set'} ·{' '}
-                <span className="mono">{order.id}</span>
+                {/*
+                  Once SAP has the order, SAP's number is the one everyone
+                  quotes — the factory, the delivery note, the invoice all
+                  carry it. The ERPNext name stays visible but small: it is an
+                  internal id, and support still needs to find the document by
+                  it.
+
+                  They are NOT interchangeable and must never be merged. SAP
+                  restarts DocNum per series and per year — 399 has been issued
+                  four times in this company, twice in 2024 alone — so it is
+                  only unique alongside its series and date, while an ERPNext
+                  name must be unique forever.
+                */}
+                {order.sapSalesOrder ? (
+                  <>
+                    <b className="mono">SAP order {order.sapSalesOrder}</b>{' '}
+                    <span className="tiny dim">({order.id} in ERPNext)</span>
+                  </>
+                ) : (
+                  <span className="mono">{order.id}</span>
+                )}
               </>
             ) : (
               orderId
@@ -538,6 +601,26 @@ export function OrderDetailPage() {
           </Link>
         </div>
       </div>
+
+      {/*
+        How old the SAP half of this page is.
+        Refresh re-reads ERPNext instantly but can only *ask* for SAP, so the
+        manager is told when the floor was actually last read rather than being
+        left to assume the figures are live. Silent until SAP has run at least
+        once, so an order that never reached SAP says nothing here.
+      */}
+      {syncState?.lastSyncAt && (
+        <p className="tiny dim" style={{ marginTop: 0 }}>
+          Factory floor last read from SAP: <b>{syncState.lastSyncAt}</b>
+          {syncState.status === 'Running'
+            ? ' · reading now…'
+            : syncState.queued
+              ? ' · a fresh read is on its way'
+              : ''}
+          {syncState.status === 'Failed' && ' · last attempt failed'}
+          {syncNote && ` — ${syncNote}`}
+        </p>
+      )}
 
       {error && (
         <Alert tone="danger" title="Could not read or save">
@@ -667,15 +750,10 @@ export function OrderDetailPage() {
                         discount_percentage: l.discountPercent,
                       };
                       const lineDiscount = l.discountPercent;
-                      const pos = positionFor(l.itemCode, stock, reservations, order.id);
-                      const split = splitOf(l, reservations, order.id);
-                      // Measured against the UNBOOKED shelf, so it never offers
-                      // a roll another order is already holding.
-                      const cover = coverFor(split, pos.freeForOthers);
-                      const mode = servedFrom(l, reservations, order.id);
-                      const heldElsewhere = pos.heldByOthers.rolls > 0 || pos.heldByOthers.belts > 0;
-                      const freeOnShelf = pos.freeForOthers.rolls > 0 || pos.freeForOthers.belts > 0;
-                      const heldHere = cover.reserved.rolls > 0 || cover.reserved.belts > 0;
+                      const pos = positionFor(l.itemCode, stock);
+                      const split = splitOf(l, pos.available, stock.get(l.itemCode)?.beltsPerRoll ?? 0);
+                      const mode = servedFrom(l);
+                      const freeOnShelf = pos.available.rolls > 0 || pos.available.belts > 0;
                       const movedHere = movedLines.has(l.id);
                       return (
                         <tr key={l.id}>
@@ -767,28 +845,69 @@ export function OrderDetailPage() {
                           </td>
                           <td className="small">
                             {/*
-                              Both halves, each on its own line. A split line's
-                              made and shelf portions finish separately, and one
-                              combined stage would be a fiction on every order
-                              that is part stock and part production.
+                              SAP owns the floor, so the made portion's stage is
+                              read from SAP below and nowhere else.
+
+                              The "Being made" line that used to sit here showed
+                              `custom_production_stage`, set by hand on the
+                              production board. It was removed on 16 Sep 2026:
+                              once SAP raises a production order per item, two
+                              stages appear side by side on the same line and the
+                              hand-set one is the stale one. Showing both is worse
+                              than showing neither — a manager cannot tell which
+                              to believe.
+
+                              A "From stock" portion used to appear below with
+                              its own stage, because stock served off the
+                              minimum-stock pool never reached a SAP production
+                              order. The pool is gone; every line is made
+                              against a SAP production order or it is not
+                              started.
                             */}
                             <div className={movedHere ? 'stagecell is-moved' : 'stagecell'}>
-                              {(cover.needsProduction || l.productionStage) && (
-                                <div>
-                                  <span className="stagecell__part">Being made</span>
-                                  <b>{stageText(l.productionStage ?? '')}</b>
-                                </div>
-                              )}
-                              {(heldHere || l.stockStage) && (
+                              {l.stockStage && (
                                 <div>
                                   <span className="stagecell__part">From stock</span>
                                   <b>{stageText(l.stockStage ?? '')}</b>
                                 </div>
                               )}
-                              {!cover.needsProduction &&
-                                !l.productionStage &&
-                                !heldHere &&
-                                !l.stockStage && <span className="dim">—</span>}
+                              {/*
+                                What SAP says about THIS line. SAP raises one
+                                production order per item, so this is the only
+                                place that can say which item is holding the
+                                order back — the order-level stage is a roll-up
+                                of the least advanced line and hides that.
+
+                                The status is derived, never string-matched
+                                here: the stage list belongs to the factory and
+                                changes without a release.
+                              */}
+                              {(l.sapProductionOrder || l.sapProductionStage || l.sapDeliveryOrder) && (
+                                <div className="stagecell__sap">
+                                  <span className="stagecell__part">SAP</span>
+                                  <b>
+                                    {lineStatusFromSap({
+                                      productionOrder: l.sapProductionOrder,
+                                      productionStage: l.sapProductionStage,
+                                      deliveryOrder: l.sapDeliveryOrder,
+                                    })}
+                                  </b>
+                                  <div className="tiny dim">
+                                    {[
+                                      l.sapDeliveryOrder && `Delivery ${l.sapDeliveryOrder}`,
+                                      l.sapDeliveryOrder && l.sapDeliveryDate && `leaves ${l.sapDeliveryDate}`,
+                                      !l.sapDeliveryOrder && l.sapProductionStage,
+                                      l.sapProductionOrder && `PO ${l.sapProductionOrder}`,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(' · ')}
+                                  </div>
+                                </div>
+                              )}
+                              {!l.stockStage &&
+                                !l.sapProductionOrder &&
+                                !l.sapProductionStage &&
+                                !l.sapDeliveryOrder && <span className="dim">—</span>}
                               {movedHere && <div className="stagecell__flag">moved</div>}
                               {/*
                                 Dispatch is separate from stage: a line can sit
@@ -808,124 +927,75 @@ export function OrderDetailPage() {
                             </div>
                           </td>
                           <td className="small">
-                            {!pos.pooled ? (
+                            {/*
+                              Two figures, from five.
+
+                              The five were "on the shelf", "booked by other
+                              orders", "free — nobody has booked it", "minimum
+                              to hold" and what this order held, because four
+                              of them had once been collapsed into "booked by
+                              this order: 4 rolls + 2 belts" and nothing said
+                              the order was for eight or that four had to be
+                              made.
+
+                              Four of the five no longer exist. SAP reports
+                              available to promise, already net of every open
+                              order including this one; there is no separate
+                              shelf figure, no attribution of who holds what,
+                              and no minimum (all 129 pool rows held zero).
+                              What is left is what the manager decides on.
+                            */}
+                            {!pos.stocked ? (
                               <span className="dim tiny">not stocked</span>
+                            ) : !pos.weightsKnown ? (
+                              <span
+                                className="dim tiny"
+                                title="SAP holds this in kilograms and the item master has no weight per roll, so how many rolls that is cannot be worked out."
+                              >
+                                weights not set
+                              </span>
                             ) : (
-                              /*
-                               * Five separate figures, because four of them
-                               * were once collapsed into "booked by this
-                               * order: 4 rolls + 2 belts" and nothing said the
-                               * order was for eight or that four had to be
-                               * made. Production then read "8 rolls" with four
-                               * already in the plant, and a run raised off that
-                               * screen would have been for double.
-                               */
                               <table className="stockpos">
                                 <tbody>
-                                  {/*
-                                    Two questions, asked in order and kept
-                                    apart: what is on the shelf and who has it,
-                                    then what this order needs.
-
-                                    "Booked by other orders" is the row that
-                                    was missing. Without it a shelf of 2 sat
-                                    above "must be made: 4" with two dashes in
-                                    between, and the only way to work out that
-                                    somebody else held both rolls was to notice
-                                    that nothing was free. A manager should not
-                                    have to do arithmetic to find out why an
-                                    order is going to production.
-                                  */}
-                                  <tr className="stockpos__head">
-                                    <td colSpan={2}>The shelf</td>
-                                  </tr>
-                                  <tr>
-                                    <td>On the shelf now</td>
-                                    <td className="num">{qty({ rolls: pos.shelf, belts: 0 })}</td>
-                                  </tr>
-                                  <tr className={heldElsewhere ? 'warn' : 'dim'}>
-                                    <td>Booked by other orders</td>
-                                    <td className="num">{qty(pos.heldByOthers)}</td>
-                                  </tr>
-                                  <tr className={freeOnShelf ? 'ok' : 'dim'}>
-                                    <td>Free — nobody has booked it</td>
-                                    <td className="num">{qty(pos.freeForOthers)}</td>
-                                  </tr>
-                                  <tr className="dim">
-                                    {/* The target, not the stock. Two different
-                                        numbers that happen to match on some
-                                        items, which made the coincidence look
-                                        like the rule. */}
-                                    <td>Minimum to hold</td>
-                                    <td className="num">{pos.minimum}</td>
-                                  </tr>
-
-                                  <tr className="stockpos__head">
-                                    <td colSpan={2}>This order</td>
-                                  </tr>
                                   <tr>
                                     <td>Ordered</td>
                                     <td className="num">{qty(split.ordered)}</td>
                                   </tr>
-                                  <tr className={heldHere ? 'ok' : 'dim'}>
-                                    <td>Held for this order</td>
-                                    <td className="num">{qty(cover.reserved)}</td>
+                                  <tr className={freeOnShelf ? 'ok' : 'dim'}>
+                                    <td>Available in SAP</td>
+                                    <td className="num">{qty(pos.available)}</td>
                                   </tr>
-                                  {(cover.availableNow.rolls > 0 || cover.availableNow.belts > 0) && (
-                                    /*
-                                      Uncovered, but the shelf has it free.
-                                      Saving the order takes it; until then it
-                                      is nobody's.
-                                    */
-                                    <tr className="info">
-                                      <td>Not yet booked — free to take</td>
-                                      <td className="num">{qty(cover.availableNow)}</td>
-                                    </tr>
-                                  )}
-                                  <tr className={cover.needsProduction ? 'warn' : 'dim'}>
+                                  <tr
+                                    className={
+                                      split.toMake.rolls > 0 || split.toMake.belts > 0
+                                        ? 'warn'
+                                        : 'dim'
+                                    }
+                                  >
                                     <td>Must be made</td>
-                                    <td className="num">{qty(cover.toMake)}</td>
+                                    <td className="num">{qty(split.toMake)}</td>
                                   </tr>
                                 </tbody>
                               </table>
                             )}
 
                             {/*
-                              The sentence, for the case the columns make a
-                              manager work out. Only shown when something has
-                              to be made even though stock exists — which is
-                              exactly the reading that looks like a bug and is
-                              not one.
+                              One thing that still catches a reader out, said
+                              plainly: once this order has reached SAP, its own
+                              lines are inside the deduction above. A line can
+                              therefore read as short by exactly what it
+                              ordered, and that is correct — the rolls are
+                              spoken for, by this order.
                             */}
-                            {pos.pooled && cover.needsProduction && pos.shelf > 0 && (
-                              <div className="stockpos__why">
-                                {heldElsewhere && !freeOnShelf
-                                  ? `All ${qty(pos.heldByOthers)} on the shelf ${
-                                      pos.heldByOthers.rolls === 1 ? 'is' : 'are'
-                                    } booked by other orders, so nothing here can come off it.`
-                                  : `The shelf has ${qty(pos.freeForOthers)} free, which is less than this line needs.`}
-                              </div>
-                            )}
-                            {pos.pooled && pos.inProduction.rolls > 0 && (
-                              /* Its own line, never folded in beside a
-                                 sellable figure. Two numbers in one sentence,
-                                 one sellable and one not, is how a rep
-                                 promises stock nobody has made. */
-                              <div className="run__note">
-                                🏭 {pos.inProduction.rolls} rolls being made — not on the shelf yet
-                              </div>
-                            )}
-                            {pos.drift > 0 && (
-                              <div
-                                className="danger tiny"
-                                title={`ERPNext still counts ${pos.drift} roll(s)${
-                                  pos.driftBelts > 0 ? ` and ${pos.driftBelts} belt(s)` : ''
-                                } as booked with no reservation behind them — usually a Sales Order deleted directly in ERPNext. The figures above ignore it.`}
-                              >
-                                ⚠ {pos.drift} phantom booking
-                                {pos.drift === 1 ? '' : 's'} ignored
-                              </div>
-                            )}
+                            {pos.stocked &&
+                              pos.weightsKnown &&
+                              !freeOnShelf &&
+                              order.sapSalesOrder && (
+                                <div className="stockpos__why">
+                                  This order is in SAP, so the rolls it asked for are already
+                                  committed to it and are not counted as available here.
+                                </div>
+                              )}
                           </td>
                           <td>
                             {/*

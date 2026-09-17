@@ -142,52 +142,19 @@ export interface Product {
 }
 
 // -------------------------------------------------------- minimum stock ---
+//
+// `StockBatch`, `MinStockItem` and `StockReservation` stood here: a dated
+// intake of an item, a pool with a threshold and an on-hand figure, and a soft
+// hold written the moment a rep keyed a quantity. All three went on
+// 17 September 2026 with the doctypes they described.
+//
+// Worth knowing if anyone reaches for them again: `MinStockItem` never worked
+// against the live site. `Manna Minimum Stock Item` has no `onHand` or
+// `threshold` field, so both read `undefined`, and every fill meter and
+// low-stock alert built on them was comparing nothing to nothing.
+//
+// What is available now is `MinStockLine`, further down, straight from SAP.
 
-/**
- * One dated intake of an item. Aging (1.6) is tracked per batch so a rep can be
- * told "8 of these are from the older lot, clear those first".
- */
-export interface StockBatch {
-  id: string;
-  /** ISO date the batch was stocked in. */
-  stockedOn: string;
-  /** Quantity still on the shelf from this batch, in the item's stock UOM. */
-  remaining: number;
-  /** Quantity this batch was stocked with. */
-  original: number;
-}
-
-export interface MinStockItem {
-  itemCode: string;
-  itemName: string;
-  category: ProductCategory;
-  uom: string;
-  /** The threshold the Production Manager must keep this item above (3.5). */
-  threshold: number;
-  /** Physically on the shelf, across every batch. */
-  onHand: number;
-  /**
-   * Held by draft/unapproved orders. Subtracted from `onHand` to give the
-   * quantity another rep may still sell (1.2).
-   */
-  reserved: number;
-  batches: StockBatch[];
-  /** Set while a replenishment production order is open (3.5). */
-  replenishmentRaised?: boolean;
-  lastRestockedOn?: string;
-}
-
-/** A live hold placed by a rep the moment they key a quantity (1.2). */
-export interface StockReservation {
-  id: string;
-  itemCode: string;
-  qty: number;
-  orderId: string | null;
-  repId: string;
-  repName: string;
-  /** ISO timestamp. Soft holds on unsaved drafts expire; see minStock.service. */
-  heldAt: string;
-}
 
 // ----------------------------------------------------- field attendance ---
 
@@ -327,6 +294,15 @@ export interface TeamOrder {
   /** Set once the week is closed and the order folded into a group. */
   combinedOrder?: string;
   ratesApproved: boolean;
+  /**
+   * SAP's own order number, once SAP has taken it.
+   *
+   * The number everyone quotes from that point — the factory, the delivery
+   * note and the invoice all carry it. NOT a replacement for `id`: SAP
+   * restarts DocNum per series and per year, so it is unique only alongside
+   * those, while `id` must be unique forever.
+   */
+  sapSalesOrder?: string;
   route?: string;
 }
 
@@ -457,29 +433,27 @@ export interface OrderLine {
   dispatchedLooseBelts?: number;
   /** The *current outstanding* shortfall reason — blank once fully caught up. */
   dispatchShortReason?: string;
-}
 
-/**
- * One row of `Manna Stock Reservation` — a claim on pooled stock.
- *
- * Live and maintained by the field-sales app. The pool's `custom_reserved_qty`
- * is the denormalised sum of the Active rows here, and the two are kept in
- * step by whoever writes them; nothing on the server enforces it.
- */
-export interface StockReservationRow {
-  id: string;
-  itemCode: string;
-  rolls: number;
-  looseBelts: number;
-  salesOrder?: string;
-  leadOrder?: string;
-  salesPerson?: string;
-  batch?: string;
-  reservedOn?: string;
-  /** `Active` | `Released`. Only Active rows hold anything. */
-  status: string;
-  /** `Shelf` | `Production Run` — which of the two pools this claim came from. */
-  source?: string;
+  /**
+   * What SAP says about THIS line: the production order covering it and where
+   * that order is on the floor.
+   *
+   * SAP raises one production order per item, so the order-level stage is only
+   * a roll-up and cannot say which item is holding an order back. Free text —
+   * the stage list belongs to the factory. Turn it into behaviour only through
+   * `domain/sapOrderState.ts`, never by comparing strings on a screen.
+   */
+  sapProductionOrder?: string;
+  sapProductionStage?: string;
+  /**
+   * The delivery that carried THIS line, and when it ships.
+   *
+   * Blank means this line has not gone — even when the order carries a
+   * delivery number. A delivery can be raised for part of an order, which is
+   * how the floor ships what is ready and leaves the rest open.
+   */
+  sapDeliveryOrder?: string;
+  sapDeliveryDate?: string;
 }
 
 /** A lead order — the pre-customer equivalent of a Sales Order. */
@@ -626,6 +600,23 @@ export interface OrderDetail extends TeamOrder {
   proformaStatus?: string;
   changedAfterApproval: boolean;
   placedAt?: string;
+
+  /**
+   * What SAP says about the order as a whole. The per-line detail is on
+   * `OrderLine`; these are the order-level facts a line cannot carry.
+   *
+   * `sapDeliveryOrder` matters beyond display: SAP delivers an ORDER, not a
+   * line, so a delivery means every line on it has gone — which is why
+   * `lineStatusFromSap` takes the order as well as the line.
+   */
+  sapSalesOrder?: string;
+  sapSalesOrderStatus?: string;
+  sapProductionOrder?: string;
+  sapProductionStage?: string;
+  sapDeliveryOrder?: string;
+  sapDeliveryDate?: string;
+  sapSyncedAt?: string;
+  sapSyncError?: string;
 }
 
 /**
@@ -635,30 +626,36 @@ export interface OrderDetail extends TeamOrder {
  * have already claimed; only the difference can be promised. See
  * `domain/minimumStock.ts` for why the two are never collapsed into one figure.
  */
+/**
+ * What SAP says is available for one item, in rolls and belts.
+ *
+ * This modelled a *pool* until 17 September 2026: a minimum to hold, dated
+ * batches making up the shelf, reservation counters for what reps had booked,
+ * and a second set of counters for a production run and claims against it.
+ * Every one of those is gone. All 129 pool rows on the site carried a minimum
+ * of zero, the batches were a hand-typed snapshot that beat SAP's live figure,
+ * and subtracting an ERPNext reservation from a SAP figure that had already
+ * netted off the same order deducted the roll twice.
+ *
+ * One figure now, from `Bin.actual_qty` in the finished-goods warehouse,
+ * converted out of kilograms.
+ */
 export interface MinStockLine {
-  /** The row's own name on the site, which is the item code itself. */
   itemCode: string;
-  /** The level to hold — `Manna Minimum Stock Item.qty`, NOT the shelf. */
-  minimumRolls: number;
-  minimumBelts: number;
-  /** What physically exists — from the matching `Manna Minimum Stock Batch`. */
-  shelfRolls: number;
-  shelfBelts: number;
-  /** Booked off the shelf by reps. */
-  reservedRolls: number;
-  reservedBelts: number;
-  /** A run raised in SAP to refill this pool. Intent, never availability. */
-  inProductionRolls: number;
-  inProductionBelts: number;
-  /** Of that run, what reps have already claimed — a second, separate pool. */
-  reservedInProductionRolls: number;
-  reservedInProductionBelts: number;
-  runStage?: string;
-  runUpdatedOn?: string;
-  runUpdatedBy?: string;
-  lastSoldOn?: string;
-  /** Oldest batch date, for the stock-age note. */
-  batchDate?: string;
+  /**
+   * Available to promise. SAP has already taken off every quantity committed
+   * to an open sales order, whoever raised it. Nothing subtracts further.
+   */
+  availableRolls: number;
+  availableBelts: number;
+  /** From the item master. Zero when the item is not sold in belts. */
+  beltsPerRoll: number;
+  /**
+   * False when the master has no weight-per-roll or belts-per-roll, so the
+   * kilograms could not be converted. Those items report nothing available
+   * and say so; see `shelfAvailable`.
+   */
+  weightsKnown: boolean;
 }
 
 /**
@@ -1024,33 +1021,17 @@ export interface Customer {
 }
 
 // -------------------------------------------------- production orders ---
+//
+// `ProductionOrder` stood here — the `Manna Production Order` doctype, with
+// the two flows in `shared/PRODUCTION_FLOWS.md`: a replenishment raised
+// against a minimum-stock pool and received onto the shelf, or a run raised
+// against one sales order.
+//
+// Removed 17 September 2026. The doctype held zero rows on the live site, its
+// receive path wrote a `Manna Minimum Stock Batch`, and production against a
+// specific order is tracked on the order's own lines from the SAP production
+// order that the sync pulls back.
 
-/**
- * `Manna Production Order` — the two flows in `shared/PRODUCTION_FLOWS.md`.
- *
- * `itemName` is not stored on the doctype — joined from the product catalogue
- * or the minimum-stock ledger by `itemCode` at display time, the same way a
- * `StockBatch` has no item name of its own.
- */
-export interface ProductionOrder {
-  id: string;
-  itemCode: string;
-  itemName: string;
-  qty: number;
-  looseBelts?: number;
-  raisedAt: string;
-  raisedBy: string;
-  /** `Open` → `In Production` → `Made` → `Received` (flow A) or `Dispatched` (flow B). */
-  status: 'open' | 'in_production' | 'made' | 'received' | 'dispatched' | 'cancelled';
-  /** Set once at creation, never edited afterwards — see PRODUCTION_FLOWS.md. */
-  purpose: 'stock' | 'order';
-  /** Required when `purpose` is `'order'`, empty when `'stock'`. */
-  salesOrderId?: string;
-  receivedAt?: string;
-  receivedBy?: string;
-  /** The batch receiving created, so the trail is followable. */
-  batchId?: string;
-}
 
 // ------------------------------------------------------------------- hr ---
 

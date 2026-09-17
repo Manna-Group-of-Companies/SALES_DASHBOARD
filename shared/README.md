@@ -39,7 +39,7 @@ becomes a build failure rather than something a customer finds.
 - **Every case carries a `why`.** A case named `case_7` teaches nothing when it
   fails at midnight; the sentence is the point.
 - **Cover the money first.** Discounts, approval gates, credit escalation,
-  split arithmetic, the booking protocol. Cosmetic differences between the two
+  split arithmetic, what stock may be promised. Cosmetic differences between the two
   apps are fine and always will be — these are not.
 - **Changing a fixture is changing the rule.** It needs the same thought as
   changing the code, and both apps updated in the same pull request.

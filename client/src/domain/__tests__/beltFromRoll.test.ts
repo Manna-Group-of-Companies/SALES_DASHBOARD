@@ -13,7 +13,7 @@
 
 import { describe, expect, it } from 'vitest';
 import cases from '../../../../shared/fixtures/belt_from_roll.json';
-import { allocateFromPool, holdPlan } from '../minimumStock';
+import { allocateFromPool, splitOf } from '../minimumStock';
 
 interface AllocateCase {
   why: string;
@@ -90,30 +90,25 @@ describe('serving loose belts by opening a roll', () => {
   });
 });
 
-describe('the hold that gets written, for the reported case', () => {
-  it('books the belt off the shelf instead of sending it to production', () => {
-    // 48 rolls, nothing loose, nobody else holding any of it.
-    const plan = holdPlan({
-      ordered: { rolls: 5, belts: 1 },
-      held: { rolls: 0, belts: 0 },
-      shelf: { rolls: 48, belts: 0 },
-      reservedTotal: { rolls: 0, belts: 0 },
-      beltsPerRoll: 6,
-    });
+describe('the split shown for the reported case', () => {
+  /*
+   * This asserted `holdPlan` — the write plan that decided what reservation to
+   * put on the shelf. There is no reservation to write any more, and the same
+   * rule now governs a *display*: how much of the line the shelf covers, and
+   * how much the floor is asked for.
+   */
+  it('covers the belt off the shelf instead of sending it to production', () => {
+    // 48 rolls available, nothing loose.
+    const split = splitOf({ rolls: 5, looseBelts: 1 }, { rolls: 48, belts: 0 }, 6);
 
-    expect(plan.target).toEqual({ rolls: 5, belts: 1 });
-    // `short` is what production is raised for, and it must be nothing here.
-    expect(plan.short).toEqual({ rolls: 0, belts: 0 });
+    expect(split.fromStock).toEqual({ rolls: 5, belts: 1 });
+    // `toMake` is what production is raised for, and it must be nothing here.
+    expect(split.toMake).toEqual({ rolls: 0, belts: 0 });
   });
 
   it('still refuses to cut an item with no belts-per-roll on its master', () => {
-    const plan = holdPlan({
-      ordered: { rolls: 0, belts: 1 },
-      held: { rolls: 0, belts: 0 },
-      shelf: { rolls: 48, belts: 0 },
-      reservedTotal: { rolls: 0, belts: 0 },
-    });
-    expect(plan.target.belts).toBe(0);
-    expect(plan.short.belts).toBe(1);
+    const split = splitOf({ rolls: 0, looseBelts: 1 }, { rolls: 48, belts: 0 });
+    expect(split.fromStock.belts).toBe(0);
+    expect(split.toMake.belts).toBe(1);
   });
 });

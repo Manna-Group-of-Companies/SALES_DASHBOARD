@@ -380,6 +380,28 @@ export const SALES_ORDER_ITEM_FIELD = {
   /** Link to `Manna Minimum Stock Batch` when filled from aged stock. */
   agedBatch: 'custom_aged_batch',
 
+  /*
+   * What SAP says about THIS line, created 15 Sep 2026.
+   *
+   * SAP raises one production order per item, so a four-item order has four
+   * stages. The order-level `custom_sap_production_stage` is only the roll-up
+   * and cannot say which item is holding the order back.
+   *
+   * Written by the SAP order sync and nothing else — `read_only` in Desk,
+   * `allow_on_submit` so it keeps working if orders are ever submitted.
+   * Distinct from `productionStage` above, which is the pre-SAP floor field.
+   */
+  sapProductionOrder: 'custom_sap_production_order',
+  sapProductionStage: 'custom_sap_production_stage',
+  /*
+   * The delivery that carried THIS line. Blank means this line has not gone,
+   * even when the order carries a delivery number — a delivery can be raised
+   * for part of an order, which is how the floor ships what is ready and
+   * leaves the rest open.
+   */
+  sapDeliveryOrder: 'custom_sap_delivery_order',
+  sapDeliveryDate: 'custom_sap_delivery_date',
+
   /**
    * Cumulative across every `Manna Dispatch` that has ever touched this line
    * — never one dispatch's own amount. Created 19 Aug 2026, `allow_on_submit`
