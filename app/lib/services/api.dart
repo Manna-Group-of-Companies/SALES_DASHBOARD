@@ -2020,6 +2020,24 @@ class Api {
   }) async {
     final ref = OrderRef(orderName, isLead: isLead);
 
+    /*
+     * Checked against the order AS STORED, not against what the screen loaded.
+     *
+     * This had no gate at all until 17 September 2026 — the screen was the
+     * only thing standing between a rep and a write, and on this site there is
+     * no Server Script behind it to say no. A rep sitting on an order screen
+     * while their manager approves it could save straight over the approval.
+     *
+     * An approved order belongs to SAP. Nothing here can reach it — the sync
+     * only ever creates a SAP order, never updates one — so a write accepted
+     * at this point would change the ERPNext document, show the rep a new
+     * quantity, and leave the factory building the old one.
+     */
+    if (!isLead) {
+      final stored = await getOrder(orderName);
+      if (orderApproved(stored)) throw Exception(orderLockReason(stored));
+    }
+
     final body = <String, dynamic>{
       'items': items,
     };

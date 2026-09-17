@@ -116,6 +116,7 @@ import {
   PRODUCTION_STATUS,
   PO_STATUS,
   LEAD_ORDER_STATUS,
+  isApproved,
   isSet as isLinkSet,
   rateEditable,
 } from '@/domain/orderStatus';
@@ -3224,6 +3225,25 @@ async function saveOrderLines(input: {
   lines: OrderLineWrite[];
 }): Promise<OrderDetail> {
   const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.orderId);
+
+  /*
+   * Checked against the order AS STORED, not against what the page loaded —
+   * a manager can approve while somebody else sits on the edit screen.
+   *
+   * An approved order belongs to SAP from then on, and nothing here can reach
+   * it: the sync only ever CREATES a SAP order, never updates one. A write
+   * accepted at this point would change the ERPNext document, show a new
+   * quantity, and leave the factory building the old one.
+   */
+  if (isApproved(str(doc[SALES_ORDER_FIELD.poStatus]))) {
+    const sap = str(doc[SALES_ORDER_FIELD.sapSalesOrder]);
+    throw new Error(
+      'This order is approved and is with the factory, so it cannot be changed here' +
+        (sap ? ` — quote SAP order ${sap}` : '') +
+        '. Ring the manufacturing team to drop or reduce an item.',
+    );
+  }
+
   const existing = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
   const byName = new Map(existing.map((l) => [String(l.name), l]));
 

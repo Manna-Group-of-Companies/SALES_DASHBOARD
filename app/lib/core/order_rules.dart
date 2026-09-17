@@ -42,11 +42,29 @@ bool orderEditWindowOpen(dynamic deliveryDate) {
 /// needs it because a customer who rings the office to change an order should
 /// not have to wait for their rep to come back into signal.
 bool canEditOrder(Map<String, dynamic> order) {
-  // The general manager is not bound by the deadline, by ownership, or by the
-  // rate lock. Everything below exists to stop an order changing under the
-  // people acting on it; the GM is the person those rules escalate *to*, and
-  // an escalation that arrives with no power to change anything is a rubber
-  // stamp. See [ratesLocked] for the price half of the same exemption.
+  /*
+   * APPROVAL IS THE END OF EDITING, FOR EVERYONE. Decided 17 September 2026.
+   *
+   * An approved order is pushed to SAP, and SAP is where it lives from then
+   * on. Changes go through the manufacturing team: they reduce or drop a line
+   * that has not been made, and where it has been made they ship what exists
+   * and leave the rest of the order open. The app then follows SAP.
+   *
+   * This is not a new restriction so much as an honest one. `Sync-SapOrders`
+   * has only ever CREATED a SAP order — there is no code path anywhere that
+   * updates one — so an edit made here after approval never reached the
+   * factory. It changed the ERPNext document, showed the rep a new quantity,
+   * and left SAP building the old one. Refusing the edit is strictly better
+   * than pretending it landed.
+   *
+   * The GM exemption below stops here too. It exists because escalations
+   * arrive at the GM and an escalation with no power to act is a rubber stamp
+   * — but that is about approving, not about editing an order the factory is
+   * already working to. There is no seniority that makes an app edit reach
+   * SAP.
+   */
+  if (orderApproved(order)) return false;
+
   if (Session.I.isGM) return true;
 
   if (!orderEditWindowOpen(order['delivery_date'])) return false;
@@ -114,6 +132,18 @@ bool canDeleteOrder(Map<String, dynamic> order) {
 /// Why editing is closed, for the rep who is looking at a locked order. Empty
 /// when it is open.
 String orderLockReason(Map<String, dynamic> order) {
+  // Checked first, because it is the reason that will apply to nearly every
+  // locked order and it tells the rep what to actually do about it. The
+  // SAP number is named when there is one: it is what the manufacturing team
+  // will ask for on the phone.
+  if (orderApproved(order)) {
+    final sap = '${order['custom_sap_sales_order'] ?? ''}'.trim();
+    final ref = (sap.isEmpty || sap == 'null') ? '' : ' Quote SAP order $sap.';
+    return 'This order is approved and is with the factory. It cannot be '
+        'changed here.$ref To drop or reduce an item, ring the manufacturing '
+        'team — anything already made will be delivered and the rest of the '
+        'order stays open.';
+  }
   if (!orderEditWindowOpen(order['delivery_date'])) {
     final d = orderEditDeadline(order['delivery_date']);
     if (d == null) return 'This order can no longer be changed.';

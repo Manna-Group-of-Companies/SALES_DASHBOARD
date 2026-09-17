@@ -271,11 +271,22 @@ export function OrderDetailPage() {
   /**
    * Whether the line-up may still be changed.
    *
-   * An order freezes at 13:00 on its delivery date. No delivery date means
-   * **permanently open**, not shut — an order without a date is a data problem
-   * and refusing to let anyone fix it makes it worse.
+   * **Approval ends editing, for everyone.** An approved order is pushed to
+   * SAP and lives there from then on; changes go through the manufacturing
+   * team, who reduce or drop a line that has not been made and ship what has.
+   *
+   * That is also the only honest answer. `Sync-SapOrders` has only ever
+   * CREATED a SAP order — nothing anywhere updates one — so an edit saved here
+   * after approval changed the ERPNext document, showed a new quantity, and
+   * left the factory building the old one.
+   *
+   * Failing that, an order freezes at 13:00 on its delivery date. No delivery
+   * date means **permanently open**, not shut — an order without a date is a
+   * data problem and refusing to let anyone fix it makes it worse.
    */
-  const editClosed = order ? pastCutoff(order.deliveryDate, now) && boundByCutoff(user?.role) : false;
+  const frozenByCutoff = order
+    ? pastCutoff(order.deliveryDate, now) && boundByCutoff(user?.role)
+    : false;
 
   /**
    * The order total as it stands on screen.
@@ -927,7 +938,14 @@ export function OrderDetailPage() {
           {/* ------------------------------------- Block 6 — edit line-up --- */}
           {!editing && (
             <div className="line__edit-bar">
-              {editClosed ? (
+              {approved ? (
+                <span className="note">
+                  This order is approved and is with the factory. It cannot be changed here
+                  {order.sapSalesOrder ? ` — quote SAP order ${order.sapSalesOrder}` : ''}. To drop
+                  or reduce an item, ring the manufacturing team: anything already made is
+                  delivered and the rest of the order stays open.
+                </span>
+              ) : frozenByCutoff ? (
                 <span className="note">
                   Changes closed at 1 pm on {shortDate(order.deliveryDate)}, the required delivery
                   date.
