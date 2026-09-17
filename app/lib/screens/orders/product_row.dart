@@ -209,16 +209,13 @@ class _ProductRowState extends State<ProductRow> {
 
   int get _wouldBookBelts => line.reserveBelts;
 
-  /// The rep's own existing booking is already inside the reserved figures, so
-  /// it has to be added back before comparing, or editing a line would look
-  /// like an overdraw of itself.
-  /// A line claimed from the run is measured against the run, not the shelf.
-  /// Measuring it against the shelf would refuse a claim on an empty shelf,
-  /// which is the exact case the run exists to serve.
+  /// What SAP says is free to promise. Nothing is added back for this rep's
+  /// own line: there is no hold to add back, and an order still being edited
+  /// has not reached SAP to be counted against.
   double get _headroom {
     final s = widget.stock;
     if (s == null) return 0;
-    return s.availableQty + s.myReservedQty;
+    return s.availableQty;
   }
 
   /// Loose belts free to this line, BEFORE any roll is opened for it.
@@ -229,7 +226,7 @@ class _ProductRowState extends State<ProductRow> {
   int get _beltHeadroom {
     final s = widget.stock;
     if (s == null) return 0;
-    return s.availableLooseBelts + s.myReservedLooseBelts;
+    return s.availableLooseBelts;
   }
 
   /// How this line divides between the pool and production.
@@ -432,6 +429,23 @@ class _ProductRowState extends State<ProductRow> {
               color: Colors.black45,
               fontStyle: FontStyle.italic));
     }
+    // No weight-per-roll or belts-per-roll on the item master, so SAP's
+    // kilograms cannot be turned into rolls. Said plainly rather than shown as
+    // a zero: "we have not set this item up" and "we are out" want different
+    // things doing about them, and only one of them is the office's problem.
+    if (!s.weightsKnown) {
+      return const Row(children: [
+        Icon(Icons.help_outline, size: 14, color: Colors.black45),
+        SizedBox(width: 4),
+        Expanded(
+          child: Text('Stock not set up for this item',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.black45,
+                  fontStyle: FontStyle.italic)),
+        ),
+      ]);
+    }
     final avail = s.availableQty;
     final belts = s.availableLooseBelts;
     final unit = p.category.stockUnit;
@@ -444,19 +458,10 @@ class _ProductRowState extends State<ProductRow> {
     // solution the counter is always zero and saying so would be noise.
     final beltSuffix = belts > 0 ? ' + $belts loose belt${belts == 1 ? '' : 's'}' : '';
 
-    /*
-     * What other reps are holding, rolls AND belts.
-     *
-     * The belts were missing until 21 August 2026: this read the roll counter
-     * alone, so a pool with twelve rolls and twelve belts booked against it
-     * told the rep "12 booked". Twelve of what, and twelve belts unaccounted
-     * for — the figure exists precisely to explain why what is available is
-     * lower than what is on the shelf, and it could not explain the belts.
-     */
-    final bookedBelts = s.reservedLooseBelts;
-    final booked = (s.reservedQty > 0 || bookedBelts > 0)
-        ? '  ·  ${s.describe(s.reservedQty, bookedBelts, unit)} booked'
-        : '';
+    // Nothing is shown about what other reps are holding. There is no such
+    // figure any more: SAP has already taken every open order off this number,
+    // so "12 booked" would be describing a deduction that has already
+    // happened and inviting the rep to subtract it twice.
     return Row(children: [
       Icon(Icons.inventory_2_outlined, size: 14, color: colour),
       const SizedBox(width: 4),
@@ -464,11 +469,7 @@ class _ProductRowState extends State<ProductRow> {
         child: Text(
           (avail <= 0 && belts <= 0)
               ? 'None left'
-              // What the rep can sell, and what is already spoken for. The
-              // minimum held back is management's figure and is not theirs to
-              // quote; what other reps have booked is, because it is why the
-              // number in front of them moved.
-              : '${trimQty(avail)} $unit$beltSuffix available$booked',
+              : '${trimQty(avail)} $unit$beltSuffix available',
           style: TextStyle(
               fontSize: 12, color: colour, fontWeight: FontWeight.w500),
         ),

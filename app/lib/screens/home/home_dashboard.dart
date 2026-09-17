@@ -27,9 +27,7 @@ import 'package:manna_field_sales/screens/manager/manager_dashboard_screen.dart'
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/screens/map/map_screen.dart';
 import 'package:manna_field_sales/screens/orders/min_stock_screen.dart';
-import 'package:manna_field_sales/screens/production/production_stock_screen.dart';
 import 'package:manna_field_sales/screens/production/production_dashboard_screen.dart';
-import 'package:manna_field_sales/screens/production/replenishment_receiving_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_orders_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_proforma_list_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_ready_tyres_screen.dart';
@@ -645,45 +643,7 @@ class _HomeDashboardState extends State<HomeDashboard>
                   onTap: () => _go(const ProductionDashboardScreen()),
                 ),
               ),
-            // The pool the floor has to keep filled. A separate entry from the
-            // order queue because it answers a different question — not "what
-            // has been ordered" but "what is about to run out", which is the
-            // one nobody is prompted about by an order arriving.
-            if (Session.I.isProductionManager)
-              Card(
-                color: const Color(0xFF5B21B6),
-                margin: const EdgeInsets.only(top: 8),
-                child: ListTile(
-                  leading: const Icon(Icons.inventory_2, color: Colors.white),
-                  title: const Text('Minimum Stock',
-                      style: TextStyle(
-                          color: Colors.white, fontWeight: FontWeight.bold)),
-                  subtitle: const Text(
-                      'What is short, and what is fully booked',
-                      style: TextStyle(color: Colors.white70)),
-                  trailing:
-                      const Icon(Icons.chevron_right, color: Colors.white),
-                  onTap: () => _go(const ProductionStockScreen()),
-                ),
-              ),
             if (Session.I.isProductionManager) const SizedBox(height: 16),
-            if (Session.I.isStockManager)
-              Card(
-                color: const Color(0xFF166534),
-                child: ListTile(
-                  leading: const Icon(Icons.inventory, color: Colors.white),
-                  title: const Text('Stock Manager',
-                      style: TextStyle(
-                          color: Colors.white, fontWeight: FontWeight.bold)),
-                  subtitle: const Text(
-                      'Receive replenishment runs onto the shelf',
-                      style: TextStyle(color: Colors.white70)),
-                  trailing:
-                      const Icon(Icons.chevron_right, color: Colors.white),
-                  onTap: () => _go(const ReplenishmentReceivingScreen()),
-                ),
-              ),
-            if (Session.I.isStockManager) const SizedBox(height: 16),
             if (Session.I.isHR)
               Card(
                 color: const Color(0xFF0F766E),

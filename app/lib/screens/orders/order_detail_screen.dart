@@ -6,6 +6,7 @@ import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/stage_watch.dart';
 import 'package:manna_field_sales/core/app_bus.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
+import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/pdf/proforma_pdf.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
@@ -373,10 +374,89 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     ]),
   );
 
+  /// Production, as SAP reports it — the order, then each item.
+  ///
+  /// Once SAP has the order the floor is SAP's to describe, so the stored
+  /// `custom_production_status` is only read for orders raised before the
+  /// changeover. Reading it afterwards showed "Not Started" against an order
+  /// the list screen was already calling In Production.
+  ///
+  /// The per-item rows matter because SAP raises one production order per
+  /// item: a four-item order has four stages, and one figure for the order
+  /// cannot say which item is holding it up.
+  List<Widget> _productionRows() {
+    final sap = SapOrderState.fromOrder(_order);
+    final lines = (_order['items'] as List? ?? const [])
+        .cast<Map<String, dynamic>>();
+    final lineStates = lines.map(SapLineState.fromLine).toList();
+
+    final finish = '${_order['custom_production_finish_date'] ?? ''}';
+    final est = (finish.isNotEmpty && finish != 'null')
+        ? '  ·  est. finish $finish'
+        : '';
+
+    final overall = reachedSap(sap)
+        ? orderStatusFromLines(lineStates, sap)
+        : '${_order['custom_production_status'] ?? 'Not Started'}';
+
+    final rows = <Widget>[_statusRow('Production', '$overall$est')];
+
+    // Only worth listing when SAP has actually said something per item;
+    // otherwise every line would repeat the order's own status.
+    if (lineStates.any((l) => l.hasSap)) {
+      for (var i = 0; i < lines.length; i++) {
+        final name = '${lines[i]['item_name'] ?? lines[i]['item_code'] ?? ''}';
+        rows.add(Padding(
+          padding: const EdgeInsets.only(left: 12, top: 2, bottom: 2),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(name,
+                    style: const TextStyle(fontSize: 12, color: Colors.black54),
+                    overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(width: 8),
+              Text(lineStatusFromSap(lineStates[i]),
+                  style: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ));
+      }
+    }
+    return rows;
+  }
+
+  /// The number to put in front of a rep.
+  ///
+  /// Once SAP has the order, SAP's number is the one everyone quotes — the
+  /// factory, the delivery note and the invoice all carry it, and it is what a
+  /// customer will be asked about. The ERPNext name goes underneath, small,
+  /// because support still needs to find the document by it.
+  ///
+  /// They are never merged. SAP restarts DocNum per series and per year — 399
+  /// has been issued four times in this company, twice in 2024 alone — so it is
+  /// unique only alongside those, while the ERPNext name must be unique for
+  /// ever.
+  Widget _title() {
+    final sap = '${_order['custom_sap_sales_order'] ?? ''}'.trim();
+    if (sap.isEmpty || sap == 'null') return Text('Order ${widget.orderName}');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('SAP order $sap'),
+        Text(widget.orderName,
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.normal)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Order ${widget.orderName}')),
+      appBar: AppBar(title: _title()),
       body: FutureBuilder<void>(
         future: _init,
         builder: (context, snap) {
@@ -444,11 +524,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                   ),
                 ]),
               ),
-            if (po == 'PO Approved - Ready for SAP')
-              _statusRow(
-                  'Production',
-                  '${_order['custom_production_status'] ?? 'Not Started'}'
-                      '${('${_order['custom_production_finish_date'] ?? ''}'.isNotEmpty && '${_order['custom_production_finish_date']}' != 'null') ? '  ·  est. finish ${_order['custom_production_finish_date']}' : ''}'),
+            if (po == 'PO Approved - Ready for SAP') ..._productionRows(),
             const Divider(height: 28),
             if (_isOwner) ...[
               const Text('1 · Proforma',

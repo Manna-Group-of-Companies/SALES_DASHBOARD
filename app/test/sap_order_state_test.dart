@@ -29,6 +29,91 @@ void main() {
     }
   });
 
+  group('one line of an order', () {
+    for (final c in (fixture['line_stage_to_status'] as List).cast<Map<String, dynamic>>()) {
+      test(c['why'] as String, () {
+        expect(
+          lineStatusFromSap(SapLineState(
+            productionStage: c['line_stage'] as String,
+            deliveryOrder: c['line_delivery'] as String,
+          )),
+          c['expect'],
+        );
+      });
+    }
+  });
+
+  group('an order rolls up from its lines', () {
+    for (final c in (fixture['order_rolls_up_from_lines'] as List).cast<Map<String, dynamic>>()) {
+      test(c['why'] as String, () {
+        final lines = (c['line_stages'] as List)
+            .cast<String>()
+            .map((s) => SapLineState(productionOrder: s.isEmpty ? '' : 'PO-1', productionStage: s))
+            .toList();
+        expect(
+          orderStatusFromLines(lines, const SapOrderState(salesOrder: 'SO-1001')),
+          c['expect'],
+        );
+      });
+    }
+
+    test('a line SAP has not touched does not drag the order back', () {
+      // An order whose lines carry nothing falls back to the order's own stage,
+      // rather than reporting Not Started over the top of a real stage.
+      expect(
+        orderStatusFromLines(
+          const [SapLineState()],
+          const SapOrderState(salesOrder: 'SO-1', productionStage: 'Curing'),
+        ),
+        'In Production',
+      );
+    });
+
+    for (final c in (fixture['order_rolls_up_from_deliveries'] as List).cast<Map<String, dynamic>>()) {
+      test(c['why'] as String, () {
+        final stages = (c['line_stages'] as List).cast<String>();
+        final dels = (c['line_deliveries'] as List).cast<String>();
+        final lines = <SapLineState>[];
+        for (var i = 0; i < stages.length; i++) {
+          lines.add(SapLineState(
+              productionOrder: 'PO-1',
+              productionStage: stages[i],
+              deliveryOrder: dels[i]));
+        }
+        expect(
+          orderStatusFromLines(lines, const SapOrderState(salesOrder: 'SO-1001')),
+          c['expect'],
+        );
+      });
+    }
+
+    test('an order-level delivery no longer overrides an unshipped line', () {
+      // The bug this replaced: order 381 had a delivery, so every line read
+      // Dispatched - including the one deliberately left off it.
+      expect(
+        orderStatusFromLines(
+          const [
+            SapLineState(productionOrder: 'PO-1', productionStage: 'Closed', deliveryOrder: 'DN-1'),
+            SapLineState(productionOrder: 'PO-2', productionStage: 'Planned'),
+          ],
+          const SapOrderState(salesOrder: 'SO-1', deliveryOrder: 'DN-1'),
+        ),
+        'Not Started',
+      );
+    });
+
+    test('reading line state off an items row', () {
+      final l = SapLineState.fromLine({
+        'item_code': 'I-14637',
+        'custom_sap_production_order': '4228',
+        'custom_sap_production_stage': 'In Production',
+      });
+      expect(l.productionOrder, '4228');
+      expect(l.hasSap, isTrue);
+      expect(SapLineState.fromLine({'item_code': 'I-1'}).hasSap, isFalse);
+    });
+  });
+
   group('the mistakes this mapping exists to prevent', () {
     test('an unmapped stage is never Ready', () {
       // Ready tells a rep the order is made.

@@ -57,6 +57,37 @@ class SapOrderState {
       );
 }
 
+/// What SAP has told us about one LINE of an order.
+class SapLineState {
+  final String? productionOrder;
+  final String? productionStage;
+
+  /// The delivery that carried THIS line. Blank means this line has not gone.
+  final String? deliveryOrder;
+  final String? deliveryDate;
+
+  const SapLineState({
+    this.productionOrder,
+    this.productionStage,
+    this.deliveryOrder,
+    this.deliveryDate,
+  });
+
+  /// Straight off a row of the order's `items` table.
+  factory SapLineState.fromLine(Map<String, dynamic> l) => SapLineState(
+        productionOrder: l['custom_sap_production_order'] as String?,
+        productionStage: l['custom_sap_production_stage'] as String?,
+        deliveryOrder: l['custom_sap_delivery_order'] as String?,
+        deliveryDate: l['custom_sap_delivery_date'] as String?,
+      );
+
+  /// Whether SAP has said anything about this line yet.
+  bool get hasSap =>
+      _clean(productionOrder).isNotEmpty ||
+      _clean(productionStage).isNotEmpty ||
+      _clean(deliveryOrder).isNotEmpty;
+}
+
 String _clean(String? v) {
   final s = (v ?? '').trim();
   // Frappe reads an unset Link back as the string 'null' when it was written
@@ -87,6 +118,53 @@ String productionStatusFromSap(SapOrderState s) {
 
 /// Whether SAP has taken the order at all.
 bool reachedSap(SapOrderState s) => _clean(s.salesOrder).isNotEmpty;
+
+/// One line's status.
+///
+/// SAP raises a production order per item, so a four-item order has four
+/// stages and an order-level stage hides which item is holding it up.
+///
+/// THE DELIVERY IS THE LINE'S OWN, NOT THE ORDER'S
+///
+/// A delivery need not carry the whole order: dropping a row from it is how the
+/// floor ships what is ready and leaves the rest open, which is exactly what
+/// happened to SAP order 381 on 16 Sep 2026 — three lines shipped, one stayed
+/// open. Reading the order's delivery here would mark that fourth line
+/// Dispatched while it sat unmade in the factory, the same lie as calling an
+/// unmapped stage Ready.
+///
+/// Everything else defers to [productionStatusFromSap], so a line and an order
+/// cannot drift apart on the rules they share.
+String lineStatusFromSap(SapLineState line) =>
+    productionStatusFromSap(SapOrderState(
+      productionStage: line.productionStage,
+      deliveryOrder: line.deliveryOrder,
+    ));
+
+const Map<String, int> _rank = {
+  'Not Started': 0,
+  'In Production': 1,
+  'Ready': 2,
+  'Dispatched': 3,
+};
+
+/// The order's status, rolled up from its lines: the least advanced one wins.
+///
+/// An order is Ready only when every line is. Rounding the other way would tell
+/// a rep an order is made while one item is still in a press — the same error
+/// the unknown-stage rule exists to prevent.
+///
+/// With no line carrying SAP state at all, falls back to the order's own.
+/// Not short-circuited on the order's delivery: a partly-delivered order is
+/// still open, and saying Dispatched would close it in a rep's mind while a
+/// line is outstanding. It reaches Dispatched only when every line has.
+String orderStatusFromLines(List<SapLineState> lines, SapOrderState order) {
+  final known = lines.where((l) => l.hasSap).toList();
+  if (known.isEmpty) return productionStatusFromSap(order);
+  return known
+      .map(lineStatusFromSap)
+      .reduce((worst, s) => (_rank[s] ?? 1) < (_rank[worst] ?? 1) ? s : worst);
+}
 
 /// True when SAP has the order but nothing has reconciled it recently.
 bool sapStale(SapOrderState s, DateTime now, {int hours = 24}) {

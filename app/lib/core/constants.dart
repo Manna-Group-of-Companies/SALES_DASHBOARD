@@ -83,9 +83,13 @@ const double kBgKgPerRoll = 5;
 // Order as `custom_fulfilment_mode`.
 //
 // The choice is a priority call, not a logistics one: an important customer is
-// served out of minimum stock and gets their order quickly, while everyone else
-// waits for a production run. Picking new production also releases whatever the
-// order was holding, so the pool goes back to whoever needs it sooner.
+// served off the shelf and gets their order quickly, while everyone else waits
+// for a production run.
+//
+// It is a note for the floor and nothing else. Until 17 September 2026 picking
+// new production also released whatever the order was holding, so the label
+// moved stock; SAP commits stock against its own sales order now, and no label
+// in this app moves a roll.
 const String kFulfilMinimumStock = 'From Minimum Stock';
 const String kFulfilNewProduction = 'New Production';
 
@@ -98,24 +102,11 @@ const String kFulfilNewProduction = 'New Production';
 // that do not exist yet.
 const String kFulfilProductionRun = 'From Production Run';
 
-// Which pool a reservation drew on, stored on `Manna Stock Reservation` as
-// `custom_source`. Kept apart from the fulfilment mode above: the mode is what
-// the sales side decided, this is what the stock system actually did.
-const String kSourceShelf = 'Shelf';
-const String kSourceProductionRun = 'Production Run';
-
-// Dead-stock thresholds.
-//
-// Everything on the minimum-stock list is there because management expects it
-// to move. These two numbers are how the app notices when one of them has
-// stopped: a fast-moving item that has not sold in a quarter is not fast-moving
-// any more, whatever the list says, and is on its way to being written off.
-const int kSlowMovingDays = 60;
-const int kDeadStockDays = 120;
-
-/// How often the order screen re-reads booked quantities while it is open.
-/// Minimum stock is shared across every rep in the field, so a row that says
-/// "3 available" has to stop saying that within seconds of someone else
-/// taking them.
+/// How often the order screen re-reads what is available while it is open.
+///
+/// The shelf is shared with every other rep, and with everyone raising orders
+/// in SAP directly, so a row that says "3 available" has to stop saying that
+/// once they have gone. Ten seconds is the app's side of it; the figure itself
+/// is only as fresh as the five-minute SAP stock sync behind it.
 const Duration kStockRefreshInterval = Duration(seconds: 10);
 // ================================================================================

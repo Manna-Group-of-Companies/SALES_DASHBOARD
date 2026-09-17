@@ -38,11 +38,6 @@ bool isOffline(Object? e) {
 String humanError(Object? e) {
   if (e == null) return 'Something went wrong.';
 
-  // Anything that already writes for a rep is left alone. StockUnavailable is
-  // the main one: "Only 2 rolls left of X — another rep booked the rest."
-  final own = _ownMessage(e);
-  if (own != null) return own;
-
   if (e is! DioException) {
     final s = _clean('$e');
     return s.isEmpty ? 'Something went wrong.' : s;
@@ -102,19 +97,6 @@ String _fromResponse(Response? r) {
         'the office if it keeps happening.';
   }
   return backend ?? 'Something went wrong. Try again.';
-}
-
-/// Exceptions that carry a message already written for a rep.
-///
-/// Recognised by shape rather than by type, so this file does not have to
-/// import every feature that defines one.
-String? _ownMessage(Object e) {
-  final t = e.runtimeType.toString();
-  if (t == 'StockUnavailable') {
-    final s = '$e'.trim();
-    if (s.isNotEmpty) return s;
-  }
-  return null;
 }
 
 /// Digs the human part out of a Frappe error body.

@@ -2,8 +2,8 @@
 //
 // A draft here is explicitly *not* an order. Nothing is reserved, no customer
 // has been promised anything, and the rep is told so in those words. That
-// honesty is the whole design: minimum stock is only really held once the
-// server says so, and pretending otherwise at the counter is how a customer
+// honesty is the whole design: stock is only really committed once SAP
+// has the order, and pretending otherwise at the counter is how a customer
 // gets promised rolls that another rep has already taken.
 //
 // So the deal offered to a rep with no bars is "type it now, send it when you
@@ -27,7 +27,6 @@ class PendingOrder {
   final String customerName;
   final String deliveryDate;
   final List<Map<String, dynamic>> items;
-  final List<Map<String, dynamic>> reservations;
   final String salesPerson;
   final DateTime savedAt;
 
@@ -44,7 +43,6 @@ class PendingOrder {
     required this.customerName,
     required this.deliveryDate,
     required this.items,
-    required this.reservations,
     required this.salesPerson,
     required this.savedAt,
     this.isLead = false,
@@ -58,9 +56,6 @@ class PendingOrder {
           ((i['qty'] as num?)?.toDouble() ?? 0) *
               ((i['rate'] as num?)?.toDouble() ?? 0));
 
-  /// True when this draft asks for minimum stock — the reason it cannot be
-  /// treated as confirmed until the server has seen it.
-  bool get needsStock => reservations.isNotEmpty;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -68,7 +63,6 @@ class PendingOrder {
         'customer_name': customerName,
         'delivery_date': deliveryDate,
         'items': items,
-        'reservations': reservations,
         'sales_person': salesPerson,
         'saved_at': savedAt.toIso8601String(),
         if (isLead) 'is_lead': true,
@@ -85,7 +79,6 @@ class PendingOrder {
       customerName: '${json['customer_name'] ?? ''}',
       deliveryDate: '${json['delivery_date'] ?? ''}',
       items: _rows(json['items']),
-      reservations: _rows(json['reservations']),
       salesPerson: '${json['sales_person'] ?? ''}',
       savedAt: DateTime.tryParse('${json['saved_at'] ?? ''}') ?? serverNow(),
       isLead: json['is_lead'] == true,
@@ -99,7 +92,6 @@ class PendingOrder {
         customerName: customerName,
         deliveryDate: deliveryDate,
         items: items,
-        reservations: reservations,
         salesPerson: salesPerson,
         savedAt: savedAt,
         isLead: isLead,
@@ -159,7 +151,6 @@ class PendingOrders {
     required String customerName,
     required String deliveryDate,
     required List<Map<String, dynamic>> items,
-    required List<Map<String, dynamic>> reservations,
     bool isLead = false,
   }) async {
     final now = serverNow();
@@ -180,7 +171,6 @@ class PendingOrders {
       customerName: customerName,
       deliveryDate: deliveryDate,
       items: items,
-      reservations: reservations,
       salesPerson: Session.I.salesPerson ?? '',
       savedAt: now,
       isLead: isLead,

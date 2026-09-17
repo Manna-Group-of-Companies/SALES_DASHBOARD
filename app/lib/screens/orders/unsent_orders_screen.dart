@@ -54,7 +54,6 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
             lead: draft.customer,
             items: draft.items,
             deliveryDate: draft.deliveryDate,
-            reservations: draft.reservations,
             total: draft.total,
           );
         }
@@ -64,7 +63,6 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
           company: company,
           items: draft.items,
           deliveryDate: draft.deliveryDate,
-          reservations: draft.reservations,
         );
       },
       describe: humanError,
@@ -238,15 +236,11 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
               'typed ${age == 0 ? 'today' : '$age day${age == 1 ? '' : 's'} ago'}',
               style: const TextStyle(fontSize: 12.5, color: Colors.black54),
             ),
-            if (d.needsStock) ...[
-              const SizedBox(height: 8),
-              const Text(
-                'Draws on minimum stock — not held until sent',
-                style: TextStyle(
-                    fontSize: 12, color: Color(0xFFB35309),
-                    fontWeight: FontWeight.w600),
-              ),
-            ],
+            // No per-card stock warning. There used to be one on drafts that
+            // booked minimum stock, because those were the only ones holding
+            // anything. No draft holds anything now — stock is committed in
+            // SAP, which no draft has reached — and the banner above says so
+            // once for the whole screen.
             if (d.lastError != null) ...[
               const SizedBox(height: 8),
               Container(

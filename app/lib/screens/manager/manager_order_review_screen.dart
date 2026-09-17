@@ -135,47 +135,17 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   static int _int(dynamic v) =>
       v is num ? v.toInt() : (int.tryParse('${v ?? ''}') ?? 0);
 
-  // -------------------------------------------------- booking attribution ---
-
-  /// What *this* order is holding of an item. Without splitting this out the
-  /// manager reads "1 booked" and has no way to tell whether it is somebody
-  /// else competing for the stock or the very order in front of them.
-  double _heldHere(MinStock s) => s.bookings
-      .where((b) => b.salesOrder == widget.orderName)
-      .fold<double>(0, (t, b) => t + b.qty);
-
-  int _beltsHeldHere(MinStock s) => s.bookings
-      .where((b) => b.salesOrder == widget.orderName)
-      .fold<int>(0, (t, b) => t + b.looseBelts);
-
-  double _heldElsewhere(MinStock s) {
-    final other = s.reservedQty - _heldHere(s);
-    return other < 0 ? 0 : other;
-  }
-
-  /// Belts held by every OTHER order.
+  /// The mode a line is on.
   ///
-  /// This did not exist until 21 August 2026, and its absence was the bug:
-  /// "Booked by other orders" was rendered with a hard-coded zero belts, so a
-  /// pool with twelve rolls and twelve belts booked against it read as twelve
-  /// rolls. A manager deciding whether to give this order the stock could not
-  /// see half of what was already spoken for.
-  int _beltsHeldElsewhere(MinStock s) {
-    final other = s.reservedLooseBelts - _beltsHeldHere(s);
-    return other < 0 ? 0 : other;
-  }
-
-  /// The mode a line is on. Nothing recorded means the rep's own booking is the
-  /// status quo — a line the rep booked is being served from minimum stock
-  /// until the manager says otherwise, and a line with no booking is not.
+  /// It used to be inferred from the rep's own booking where nothing was
+  /// recorded — a line the rep had booked was being served from stock until
+  /// the manager said otherwise. There are no bookings to read now, so an
+  /// unrecorded line is treated as made to order, which is the answer that
+  /// cannot promise stock nobody has checked.
   String _modeOf(Map<String, dynamic> it) {
     final stored = '${it['custom_fulfilment_mode'] ?? ''}';
     if (stored.isNotEmpty && stored != 'null') return stored;
-    final s = _stock['${it['item_code']}'];
-    if (s == null) return kFulfilNewProduction;
-    return (_heldHere(s) > 0 || _beltsHeldHere(s) > 0)
-        ? kFulfilMinimumStock
-        : kFulfilNewProduction;
+    return kFulfilNewProduction;
   }
 
   // ------------------------------------------------------------ actions ---
@@ -844,55 +814,36 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
     );
   }
 
-  /// Who is holding what. The line that matters is the middle one — a manager
-  /// looking at "1 booked" needs to know that the one is this very order, or
-  /// they will think somebody else is competing for stock they already have.
+  /// What was asked for against what SAP has.
+  ///
+  /// This used to attribute bookings — how much of the pool this very order
+  /// was holding, and how much every other order was. There are no bookings
+  /// left to attribute: SAP commits stock against its own sales orders, and
+  /// the figure below already has every one of them taken off it. The manager
+  /// is shown the two numbers the decision actually turns on.
   Widget _stockBreakdown(MinStock s, String unit,
       [Map<String, dynamic>? item]) {
-    final here = _heldHere(s);
-    final hereBelts = _beltsHeldHere(s);
-    final elsewhere = _heldElsewhere(s);
-    final elsewhereBelts = _beltsHeldElsewhere(s);
-
-    // What the customer actually asked for, against what the pool could cover.
-    //
-    // The booking alone was misleading: an order for eight rolls that could
-    // only be covered for four showed "booked by this order: 4", and a manager
-    // reading that had no way to know four more still had to be made. The
-    // order was for eight either way.
     final orderedRolls = item == null ? 0.0 : _num(item['custom_rolls']);
     final orderedBelts = item == null ? 0 : _int(item['custom_loose_belts']);
-    final toMake = orderedRolls - here;
-    final beltsToMake = orderedBelts - hereBelts;
-    final splits = item != null && (toMake > 0.0001 || beltsToMake > 0);
+    final short = orderedRolls - s.availableQty;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _dot('Minimum stock held',
-          s.describe(s.minimumQty, s.minimumLooseBelts, unit), Colors.black87),
-      if (splits)
+      if (item != null)
         _dot('Ordered', s.describe(orderedRolls, orderedBelts, unit),
             Colors.black87,
             bold: true),
-      if (here > 0 || hereBelts > 0)
-        _dot(splits ? 'Of that, from stock' : 'Booked by THIS order',
-            s.describe(here, hereBelts, unit), Colors.blue.shade700,
+      if (!s.weightsKnown)
+        _dot('In stock', 'not set up for this item', Colors.black45)
+      else
+        _dot('Available in SAP',
+            s.describe(s.availableQty, s.availableLooseBelts, unit),
+            s.availableQty <= 0 ? Colors.red : Colors.green),
+      // Only when the order is bigger than the shelf. Below that the manager
+      // needs no prompting, and a "0 to be made" row on every covered line is
+      // noise on a screen that is already dense.
+      if (item != null && s.weightsKnown && short > 0.0001)
+        _dot('Short by', s.describe(short, 0, unit), Colors.deepPurple,
             bold: true),
-      if (splits)
-        _dot(
-            'To be made',
-            s.describe(toMake < 0 ? 0 : toMake,
-                beltsToMake < 0 ? 0 : beltsToMake, unit),
-            Colors.deepPurple,
-            bold: true),
-      // Belts count as "booked by somebody else" exactly as rolls do. The row
-      // appears when EITHER is held, not just when rolls are: a pool with only
-      // belts booked against it used to show nothing here at all.
-      if (elsewhere > 0 || elsewhereBelts > 0)
-        _dot('Booked by other orders',
-            s.describe(elsewhere, elsewhereBelts, unit), Colors.black54),
-      _dot('Free for anyone else',
-          s.describe(s.availableQty, s.availableLooseBelts, unit),
-          s.availableQty <= 0 ? Colors.red : Colors.green),
       // A "last sold" line, reddened when the item was drifting towards dead
       // stock, stood here until 21 August 2026. Removed with the rest of the
       // dead-stock feature; approving an order is not the moment to weigh how
