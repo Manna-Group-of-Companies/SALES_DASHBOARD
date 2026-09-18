@@ -189,3 +189,150 @@ each time, totals agreeing to the rupee → second line closed without a deliver
 → ERPNext row removed, order left at ₹3,600 on one line → re-run planned
 nothing, so the reconcile is idempotent. Test data removed afterwards: the
 ERPNext order deleted, SAP 2890 cancelled.
+
+---
+
+## The rep is tagged on the SAP order — added 18 September 2026
+
+The SAP order now carries the rep who raised it, as **SalesPersonCode**. Before
+this it carried nothing: the sync had a single `sap.sales_person_code` setting
+in its config, it was `null`, and every order arrived at the factory with no
+sales employee at all.
+
+**The join is the name.** There is no id the two systems share, so PASS A reads
+`custom_sales_person` off the Sales Order and looks it up among SAP's active
+sales employees by name — case-insensitive, surrounding blanks ignored, nothing
+else forgiven. Every SAP sales employee was created with exactly the ERPNext
+`Sales Person` spelling for this reason.
+
+| ERPNext `Sales Person` | SAP `SalesEmployeeCode` |
+|---|---|
+| Pareeth Kb | 10 |
+| Jaimon D | 11 |
+| Sirajudheen Kasim | 12 |
+| Amjad Pr | 13 |
+| Prashanth | 14 |
+| Test Rep | 15 |
+
+Those are the six `Sales Person` records whose `custom_company` is **Manna
+Treads**, which is every rep whose orders reach this SAP company. The other
+twelve belong to Manna Tyre Retreads and Manna Tyres UAE and have no SAP
+counterpart.
+
+**Add a rep on one side and you must add them on the other.** A near-match is
+deliberately not accepted — tagging "Test Reps" as "Test Rep" would file one
+person's work under another's, which is worse than leaving it blank.
+
+### An unknown rep is a warning, never a failure
+
+The order is still created, with `sap.sales_person_code` if one is configured
+and otherwise with no sales employee. An order stuck outside SAP because nobody
+added an employee record stops the factory; an order inside it with the
+employee blank is a field to fill in. The log names the rep and says where to
+add them, and the run summary counts it as `rep unmatched: N`.
+
+Inactive employees are not matched, and neither is SAP's own
+`-No Sales Employee-` placeholder (code -1).
+
+### It does not leak the customer
+
+This is the only thing in the payload that names a person, and it names one of
+**ours**. The end customer stays invisible: CardCode is always the fixed
+inter-company code, and there is still no address, contact, territory or
+comment on the order.
+
+### Verified end to end, 18 September 2026
+
+ERPNext `SAL-ORD-2026-00143`, raised by Test Rep → SAP DocNum **407**
+(DocEntry 2892), read back carrying `SalesPersonCode: 15` and
+`DocTotal 16000.0`, which is the approved price to the rupee (40 kg + 24 kg at
+₹250). `Test-SalesPerson.ps1` holds the mapping offline in 27 assertions.
+
+---
+
+## A production order linked by hand — fixed 18 September 2026
+
+**The symptom.** SAP order 406 had a **Released** production order against its
+I-14637 line. The PWA showed the order as Not Started. The sync was not
+mis-reporting the stage — it had never seen the production order at all.
+
+**The cause.** SAP records the sales-order link on a production order in two
+different places depending on how it was made:
+
+| How the production order was made | `OriginEntry` (DocEntry) | `OriginNumber` (DocNum) |
+|---|---|---|
+| Procurement Confirmation Wizard | set | set |
+| Raised by hand, order number typed into the **Sales Order** field | **null** | set |
+
+The sync joined on `ProductionOrderOriginEntry` only, and a comment in it
+claimed SAP filled that field for both styles. It does not. Every hand-linked
+production order was invisible.
+
+Measured on the live database: of 32,590 production orders, 9 carried
+`OriginAbs` (all wizard-made) and exactly 1 carried `OriginNumber` with no
+`OriginAbs` — the hand-linked one that exposed this.
+
+**The fix.** The prefetch now scans on both fields, and a number-only link is
+resolved back to a DocEntry by `Resolve-SoEntryByDocNumAndItem`.
+
+### Why the number alone is not enough
+
+`DocNum` is not unique in this database. **DocNum 406 is four different sales
+orders** — DocEntry 406 (Jan 2024), 1013 (Aug 2024), 2041 (Sep 2025) and 2891
+(Sep 2026). A production order saying "sales order 406" does not say which.
+
+**The item is the tie-breaker.** A production order makes one item, and that
+item has to be on the order it is for. I-14637 appears on only DocEntry 2891 of
+the four, so the link resolves cleanly.
+
+The resolver returns a DocEntry **only** when exactly one candidate carries the
+item. Zero candidates, two or more candidates, or a production order naming no
+item are all **refused with a warning** and attached to nothing. Guessing would
+report a stranger's order as being made; refusing leaves the line Not Started,
+which is wrong but visibly wrong.
+
+### What this means for the floor
+
+Typing the sales order number into a production order's **Sales Order** field
+now works — the sync will find it. That is the cheap path, and it needs no
+change to how the floor works beyond filling that one field in.
+
+It is still worth knowing that **no real production order in this database
+carries either link today**. Every one the floor has raised is
+`bopooManual` with both fields null, so until that field gets filled in, real
+orders will report Not Started however healthy the sync is.
+
+### Verified 18 September 2026
+
+`SAL-ORD-2026-00142` / SAP 406: line I-14636 → PO 4421, line I-14637 → PO
+**4429**, both **In Production**. The cancelled PO 4422 on that same line was
+correctly ignored — `Select-LeastAdvancedPo` skips cancelled orders, so the
+live one wins rather than the line reading Not Started.
+`Test-PoLinking.ps1` holds the resolver offline in 14 assertions.
+
+### Which production order covers a line, when there are several
+
+`Select-LeastAdvancedPo` reports the **least advanced of the non-cancelled**
+ones. Not "the open one" — the distinction matters. Verified behaviour:
+
+| Production orders on the line | Reported | The apps show |
+|---|---|---|
+| Cancelled + Released | the Released one | In Production |
+| Cancelled only | none | Not Started |
+| All cancelled | none | Not Started |
+| Released + Closed | the Released one | In Production |
+| **Planned + Released** | **the Planned one** | **Not Started** |
+| **Cancelled + a replacement still Planned** | **the Planned one** | **Not Started** |
+| An unmapped status + Closed | the unmapped one | In Production |
+
+The last three are the surprising ones, and they are deliberate. Two live
+production orders usually mean the quantity was split — part started, part not
+— and the line is not in production until the planned part starts. Reporting
+the most advanced would tell a rep an order is being made while some of it has
+not been touched.
+
+**The practical consequence:** cancel a production order, raise a replacement,
+and the line reads **Not Started until somebody Releases it**. That looks
+exactly like the hand-linking bug above but is not the same thing — check the
+replacement's status before suspecting the sync. `Test-PoLinking.ps1` pins all
+seven rows.
