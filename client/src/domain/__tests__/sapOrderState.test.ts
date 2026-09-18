@@ -11,7 +11,9 @@ import { describe, expect, it } from 'vitest';
 import cases from '../../../../shared/fixtures/sap_order_state.json';
 import {
   cancelledInSap,
+  orderBucket,
   orderPill,
+  ORDER_BUCKET_LABEL,
   lineStatusFromSap,
   orderStatusFromLines,
   productionStatusFromSap,
@@ -209,6 +211,83 @@ describe('an order SAP has cancelled', () => {
     expect(orderPill('PO Approved - Ready for SAP', { salesOrderStatus: 'bost_Close' }).text).toBe(
       'APPROVED',
     );
+  });
+});
+
+describe('the four buckets a manager filters their team orders by', () => {
+  it('an order waiting on the manager is To approve', () => {
+    expect(orderBucket({ approved: false, poStatus: 'Pending Approval' })).toBe('to_approve');
+  });
+
+  it('one escalated to the GM is still To approve — somebody owes a decision', () => {
+    expect(orderBucket({ approved: false, poStatus: 'Pending GM Approval' })).toBe('to_approve');
+  });
+
+  it('an approved order is Approved', () => {
+    expect(
+      orderBucket({ approved: true, poStatus: 'PO Approved - Ready for SAP' }),
+    ).toBe('approved');
+  });
+
+  it('a rejected order is Rejected, not To approve', () => {
+    // awaitingManager() counts Rejected as still owing a decision, which is
+    // right for the header count and wrong for this filter: a manager picking
+    // "To approve" wants what they can act on now.
+    expect(orderBucket({ approved: false, poStatus: 'Rejected' })).toBe('rejected');
+  });
+
+  /*
+   * The trap this function exists for. A cancelled order still carries
+   * custom_po_status = 'PO Approved - Ready for SAP', so testing approval
+   * first files it under Approved while its own pill reads CANCELLED IN SAP —
+   * two answers to the same question on one screen.
+   */
+  it('cancellation outranks approval, exactly as the pill does', () => {
+    const cancelled = {
+      approved: true,
+      poStatus: 'PO Approved - Ready for SAP',
+      salesOrderStatus: 'bost_Cancelled',
+    };
+    expect(orderBucket(cancelled)).toBe('cancelled');
+    expect(orderPill(cancelled.poStatus, { salesOrderStatus: cancelled.salesOrderStatus }).text).toBe(
+      'CANCELLED IN SAP',
+    );
+  });
+
+  it('cancellation outranks rejection too', () => {
+    expect(
+      orderBucket({ approved: false, poStatus: 'Rejected', salesOrderStatus: 'bost_Cancelled' }),
+    ).toBe('cancelled');
+  });
+
+  it('closed is finished, not cancelled — it stays Approved', () => {
+    expect(
+      orderBucket({
+        approved: true,
+        poStatus: 'PO Approved - Ready for SAP',
+        salesOrderStatus: 'bost_Close',
+      }),
+    ).toBe('approved');
+  });
+
+  it('an order SAP has not seen is bucketed on its approval status alone', () => {
+    expect(orderBucket({ approved: true, poStatus: 'PO Approved - Ready for SAP' })).toBe(
+      'approved',
+    );
+    expect(orderBucket({ approved: false })).toBe('to_approve');
+  });
+
+  it("a lead order counting as approved lands in Approved, though isApproved would refuse it", () => {
+    // Lead Order.status = 'Approved' is not PO_STATUS.approved. The caller
+    // resolves that with leadOrderApproved and passes the answer in.
+    expect(orderBucket({ approved: true, poStatus: 'Approved' })).toBe('approved');
+    expect(orderBucket({ approved: true, poStatus: 'Converted' })).toBe('approved');
+  });
+
+  it('every bucket has a label, so a filter can never render undefined', () => {
+    for (const b of ['to_approve', 'approved', 'rejected', 'cancelled'] as const) {
+      expect(ORDER_BUCKET_LABEL[b]).toBeTruthy();
+    }
   });
 });
 

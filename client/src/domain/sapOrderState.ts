@@ -23,7 +23,7 @@
  * Pinned by `shared/fixtures/sap_order_state.json`; the Dart twin is
  * `app/lib/core/sap_order_state.dart`.
  */
-import { statusPill, type StatusTone } from './orderStatus';
+import { PO_STATUS, statusPill, type StatusTone } from './orderStatus';
 
 export type ProductionStatus = 'Not Started' | 'In Production' | 'Ready' | 'Dispatched';
 
@@ -232,4 +232,50 @@ export function orderPill(
 ): { text: string; tone: StatusTone } {
   if (cancelledInSap(sap)) return { text: 'CANCELLED IN SAP', tone: 'danger' };
   return statusPill(poStatus);
+}
+
+/** The four states a manager sorts their team's orders into. */
+export type OrderBucket = 'to_approve' | 'approved' | 'rejected' | 'cancelled';
+
+export const ORDER_BUCKET_LABEL: Record<OrderBucket, string> = {
+  to_approve: 'To approve',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  cancelled: 'Cancelled in SAP',
+};
+
+/** Filter order: what a manager owes a decision on first, terminal states last. */
+export const ORDER_BUCKETS: OrderBucket[] = ['to_approve', 'approved', 'rejected', 'cancelled'];
+
+/**
+ * Which bucket an order falls in, for filtering a manager's list.
+ *
+ * **The precedence is `orderPill`'s, deliberately.** Filter on Approved and
+ * every row must show APPROVED; a cancelled order still carries
+ * `custom_po_status = "PO Approved - Ready for SAP"`, so testing the approval
+ * status first would file it under Approved while its own pill read CANCELLED
+ * IN SAP. Two answers to the same question on one screen.
+ *
+ * `approved` is passed in rather than derived because the two doctypes do not
+ * agree on what approved means: a Sales Order has the single
+ * `PO Approved - Ready for SAP`, while a Lead Order also counts `Approved` and
+ * `Converted` (see `leadOrderApproved`). The caller already knows which it is
+ * holding.
+ *
+ * Note `to_approve` is NOT `awaitingManager`. That predicate counts rejected
+ * as still owing a decision — correct for the header count, since the rep will
+ * resubmit — but a manager filtering "To approve" wants the ones they can act
+ * on now, and Rejected is its own bucket here.
+ */
+export function orderBucket(input: {
+  approved: boolean;
+  poStatus?: string | null;
+  salesOrderStatus?: string | null;
+}): OrderBucket {
+  if (cancelledInSap({ salesOrderStatus: input.salesOrderStatus })) return 'cancelled';
+  // Both doctypes spell rejection the same way: PO_STATUS.rejected and
+  // LEAD_ORDER_STATUS.rejected are both the string 'Rejected'.
+  if (clean(input.poStatus) === PO_STATUS.rejected) return 'rejected';
+  if (input.approved) return 'approved';
+  return 'to_approve';
 }

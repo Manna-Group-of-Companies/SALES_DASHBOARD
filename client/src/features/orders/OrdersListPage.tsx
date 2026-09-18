@@ -28,6 +28,12 @@ import {
   productionLine,
   isSet,
 } from '@/domain/orderStatus';
+import {
+  orderBucket,
+  ORDER_BUCKETS,
+  ORDER_BUCKET_LABEL,
+  type OrderBucket,
+} from '@/domain/sapOrderState';
 import { recentWeeks, type Week } from '@/domain/weeks';
 import { serverNow } from '@/domain/serverClock';
 import { formatDate } from '@/domain/orderRules';
@@ -61,6 +67,8 @@ interface Row {
   sapSalesOrder?: string;
   /** SAP's own status, so a cancelled order stops reading as approved. */
   sapSalesOrderStatus?: string;
+  /** Which of the four filter buckets this row is in. See `orderBucket`. */
+  bucket: OrderBucket;
 }
 
 export function OrdersListPage() {
@@ -73,6 +81,8 @@ export function OrdersListPage() {
   const [weeks, setWeeks] = useState<Week[]>([]);
   const [weekStart, setWeekStart] = useState('');
   const [rep, setRep] = useState('');
+  /** '' is every bucket. See `orderBucket`. */
+  const [bucket, setBucket] = useState<'' | OrderBucket>('');
   const [query, setQuery] = useState('');
   const [tick, setTick] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -166,6 +176,13 @@ export function OrdersListPage() {
         undecided: awaitingManager(o.poStatus),
         sapSalesOrder: o.sapSalesOrder,
         sapSalesOrderStatus: o.sapSalesOrderStatus,
+        // The two doctypes disagree on what approved means, so each passes its
+        // own answer — see `orderBucket`.
+        bucket: orderBucket({
+          approved: isApproved(o.poStatus),
+          poStatus: o.poStatus,
+          salesOrderStatus: o.sapSalesOrderStatus,
+        }),
       }));
 
     const leads: Row[] = leadOrders.map((l) => ({
@@ -177,12 +194,21 @@ export function OrdersListPage() {
       total: l.total,
       status: l.status,
       undecided: !leadOrderApproved(l.status),
+      // A lead order is not a Sales Order and never reaches SAP, so it can
+      // never be the cancelled bucket.
+      bucket: orderBucket({ approved: leadOrderApproved(l.status), poStatus: l.status }),
     }));
 
     return [...sales, ...leads].sort((a, b) => b.date.localeCompare(a.date));
   }, [orders, leadOrders, week]);
 
-  const rows = useMemo(() => {
+  /*
+   * Everything except the bucket filter. The per-bucket counts are taken from
+   * here, so they describe the week, rep and search the manager is actually
+   * looking at — counts computed after the bucket filter would read
+   * "Approved (4)" while showing 4 of 4, which tells them nothing.
+   */
+  const scoped = useMemo(() => {
     let list = rep ? allRows.filter((r) => r.rep === rep) : allRows;
     const q = query.trim().toLowerCase();
     if (q) {
@@ -195,6 +221,22 @@ export function OrdersListPage() {
     }
     return list;
   }, [allRows, rep, query]);
+
+  const counts = useMemo(() => {
+    const c: Record<OrderBucket, number> = {
+      to_approve: 0,
+      approved: 0,
+      rejected: 0,
+      cancelled: 0,
+    };
+    for (const r of scoped) c[r.bucket]++;
+    return c;
+  }, [scoped]);
+
+  const rows = useMemo(
+    () => (bucket ? scoped.filter((r) => r.bucket === bucket) : scoped),
+    [scoped, bucket],
+  );
 
   const waiting = useMemo(() => rows.filter((r) => r.undecided).length, [rows]);
 
@@ -225,6 +267,7 @@ export function OrdersListPage() {
                 Date: r.date,
                 Total: r.total,
                 Approval: r.status,
+                State: ORDER_BUCKET_LABEL[r.bucket],
                 Production: r.productionStatus ?? '',
                 'Combined order': r.combinedOrder ?? '',
               }))
@@ -260,6 +303,23 @@ export function OrdersListPage() {
             </option>
           ))}
         </Select>
+        {/*
+          The counts are on the options themselves: a manager wants to know
+          there are three to approve before deciding to look at them, and
+          putting it here means one glance instead of four selections.
+        */}
+        <Select
+          value={bucket}
+          onChange={(e) => setBucket(e.target.value as '' | OrderBucket)}
+          aria-label="Approval state"
+        >
+          <option value="">All states ({scoped.length})</option>
+          {ORDER_BUCKETS.map((b) => (
+            <option key={b} value={b}>
+              {ORDER_BUCKET_LABEL[b]} ({counts[b]})
+            </option>
+          ))}
+        </Select>
         <Input
           placeholder="Search order, party or rep…"
           value={query}
@@ -277,8 +337,19 @@ export function OrdersListPage() {
       {loading && <Empty icon="◔" title="Reading orders…" />}
 
       {!loading && !error && rows.length === 0 && (
-        <Empty icon="—" title="No orders in this week">
-          Pick another week above, or clear the search.
+        <Empty
+          icon="—"
+          title={
+            bucket
+              ? `Nothing to show under ${ORDER_BUCKET_LABEL[bucket].toLowerCase()}`
+              : 'No orders in this week'
+          }
+        >
+          {/* Name the filter that is hiding things, or an empty list reads as
+              "no orders exist" and a manager goes looking in the wrong place. */}
+          {bucket
+            ? `${scoped.length} order${scoped.length === 1 ? '' : 's'} in this week — choose All states to see them.`
+            : 'Pick another week above, or clear the search.'}
         </Empty>
       )}
 

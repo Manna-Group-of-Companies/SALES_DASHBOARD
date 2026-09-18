@@ -653,3 +653,34 @@ answer is no longer in the system, and reconstructing it would mean comparing
 every line against a price list that covers 29% of the catalogue.
 
 That was accepted deliberately. Revisit it if margin reporting is ever wanted.
+
+## The team-orders filter is dashboard-only — **18 September 2026**
+
+`orderBucket` and `ORDER_BUCKETS` exist in `client/src/domain/sapOrderState.ts`
+and have **no Dart twin**. That is deliberate and is not a rule divergence.
+
+The rule it composes — **cancellation outranks the approval status** — is
+already implemented on both sides, as `orderPill` in the dashboard and
+`orderApprovalLabel` in the phone, and the two agree. `orderBucket` only sorts
+orders into the four piles a *sales manager* filters by, on a list screen the
+phone does not have. A filter control is the cosmetic kind of difference this
+file's header says is fine.
+
+**If you ever add that filter to the phone**, do not write the precedence
+again. Take it from `orderApprovalLabel`, which already has it, and keep this
+order:
+
+1. cancelled in SAP
+2. rejected
+3. approved
+4. everything else, which is what the manager owes a decision on
+
+Getting 3 before 1 is the trap: a cancelled order still carries
+`custom_po_status = "PO Approved - Ready for SAP"`, so testing approval first
+files it under Approved while its own pill reads CANCELLED IN SAP — two answers
+to the same question on one screen. `sapOrderState.test.ts` pins it.
+
+Also note `to_approve` is **not** `awaitingManager`. That predicate counts
+`Rejected` as still owing a decision, which is right for the header count
+because the rep will resubmit, and wrong for a filter a manager uses to find
+what they can act on now.
