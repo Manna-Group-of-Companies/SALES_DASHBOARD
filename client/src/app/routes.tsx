@@ -13,7 +13,7 @@
 import { lazy, Suspense, type ReactElement } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import type { Role } from '@/domain/types';
-import { canOpen, type ManagerScreen } from '@/domain/sales';
+import { canOpen, canOpenAs, type ManagerScreen } from '@/domain/sales';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import { AppShell } from '@/components/layout/AppShell';
@@ -73,7 +73,7 @@ function RoleRoute({ allow, children }: { allow: Role[]; children: ReactElement 
 function TeamRoute({ screen, children }: { screen: ManagerScreen; children: ReactElement }) {
   const user = useAppSelector(selectUser);
   if (!user) return <Navigate to="/login" replace />;
-  if (!canOpen(user.managedTeam, screen)) return <Navigate to="/" replace />;
+  if (!canOpenAs(user.role, user.managedTeam, screen)) return <Navigate to="/" replace />;
   return children;
 }
 
@@ -112,7 +112,7 @@ function RoleHome() {
    * summarise, so the sales dashboard would open on a page of empty tiles.
    * Send them to the customer list, which is the work.
    */
-  if (user.managedTeam && !canOpen(user.managedTeam, 'orders')) {
+  if (user.managedTeam && !canOpenAs(user.role, user.managedTeam, 'orders')) {
     return <Navigate to="/customers" replace />;
   }
 

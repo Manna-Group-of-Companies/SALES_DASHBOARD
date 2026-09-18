@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import type { Role } from '@/domain/types';
 import { ROLE_LABEL } from '@/domain/types';
-import { canOpen, type ManagerScreen } from '@/domain/sales';
+import { canOpenAs, type ManagerScreen } from '@/domain/sales';
 import { USE_MOCK, MIN_STOCK_POLL_MS } from '@/api/config';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import {
@@ -181,7 +181,13 @@ export function AppShell() {
    * and without this he would have no route to his own reps.
    */
   const visible = items.filter((i) => {
-    if (i.screen) return canOpen(user.managedTeam, i.screen);
+    /*
+     * It runs the other way too. The GM manages no team, so a team-only test
+     * hid every screen their own `roles` already name — Customers, Team
+     * Orders, Stock and Combined all list `general_manager` and none of them
+     * appeared.
+     */
+    if (i.screen) return canOpenAs(user.role, user.managedTeam, i.screen);
     return i.roles.includes(user.role);
   });
   const groups = [...new Set(visible.map((i) => i.group))];
