@@ -111,3 +111,81 @@ towards "in progress" and never towards "done".
 **You can add stages in SAP freely.** A new one shows up verbatim on the rep's
 screen and counts as In Production without an app release. Only stages that
 should read as *finished* or *not begun* need a line adding to the fixture.
+
+---
+
+## SAP corrects the order; ERPNext follows — added 18 September 2026
+
+Approval locks an order in both apps (`shared/fixtures/order_locked_after_approval.json`).
+Changes go through the manufacturing team in SAP instead, so PASS B now reads
+SAP's lines and makes ERPNext match. `order_sync.reconcile_lines_from_sap`,
+default **on** — an app that cannot be edited and does not follow would just be
+stale.
+
+`Get-ErpLineCorrections` plans; `Test-LineReconcile.ps1` proves it against the
+real function without touching either system.
+
+### What it does
+
+Quantities are compared in **kilos**: SAP's `Quantity` against ERPNext's
+`custom_total_weight`, which is what the sync sends in the first place.
+
+- **Reduced** → the ERPNext line is scaled. `custom_total_weight` takes SAP's
+  figure exactly; `qty`, `custom_rolls`, `custom_loose_belts` and `amount`
+  scale with it; `rate` and `custom_rate_per_kg` do not move, because the price
+  per roll has not changed. The packing note is rebuilt.
+- **Dropped** → the ERPNext row is deleted.
+- **Unchanged** → nothing is written.
+
+Child rows go through `frappe.client.set_value` and `frappe.client.delete`. Both
+leave the parent's totals correct — verified live: 5,800 → 4,600 on a reduce,
+and again on a delete.
+
+### Closed is ambiguous, and the delivery note is the tie-breaker
+
+A SAP order line reads `bost_Close` with `RemainingOpenQuantity 0` in two
+unrelated situations: **it shipped**, or **somebody closed the row to drop it**.
+There is no `DeliveredQuantity` on a Service Layer order line to separate them —
+checked against the live DB, the quantity fields are `Quantity`,
+`RemainingOpenQuantity` and `LineStatus`, and that is all.
+
+So the reconcile takes the item codes a delivery note actually carried, which
+PASS B already has in `$dnByEntryItem`. Closed **with** a delivery is finished
+and left alone. Closed **without** one is the factory dropping an item, and the
+ERPNext row goes.
+
+Getting this backwards deletes the lines the customer has already been sent.
+
+### Five things it refuses to do
+
+Each of these plans nothing and says why, because a wrong correction silently
+rewrites a customer's order:
+
+1. **SAP returned no lines.** That is a failed read, not an emptied order.
+2. **No delivery information at all** on an order whose lines are closed —
+   the all-gone guard catches it rather than deleting a shipped order.
+3. **The same item on two lines**, either side. Matching is by item code.
+4. **Every line absent from SAP.** Frappe refuses the last row anyway
+   (`MandatoryError: items`); an order that has lost everything wants a human.
+5. **A family whose packing note cannot be rebuilt** — anything but PCTR and
+   CTR. Corrected figures beside a stale note are worse than an untouched line,
+   and reproducing the BG/VS packing breakdown here would be that rule's third
+   implementation.
+
+### A bug this uncovered
+
+`Invoke-ErpApi` sent its JSON body as a **string**. PS 5.1's `ConvertTo-Json`
+emits non-ASCII literally rather than as `\uXXXX`, and `Invoke-RestMethod` then
+encoded it with the default codepage — so ERPNext stored `3 rolls ? 144.00 kg`
+where the middle dot belonged. The body is now UTF-8 **bytes** with an explicit
+charset. Every non-ASCII character this script could ever have written was
+affected; it had simply never written one before.
+
+### Verified end to end, 18 September 2026
+
+ERPNext order → SAP (DocEntry 2890, ₹10,128 at 30/kg and 28/kg, matching
+exactly) → line reduced in SAP twice (192 → 144 → 120 kg) → ERPNext corrected
+each time, totals agreeing to the rupee → second line closed without a delivery
+→ ERPNext row removed, order left at ₹3,600 on one line → re-run planned
+nothing, so the reconcile is idempotent. Test data removed afterwards: the
+ERPNext order deleted, SAP 2890 cancelled.
