@@ -419,7 +419,8 @@ function New-SapOrderLine {
         [Parameter(Mandatory = $true)] $Item,
         [bool]   $SendUnitPrice = $false,
         [string] $OrderName = '',
-        [int]    $Index = 0
+        [int]    $Index = 0,
+        [string] $Warehouse = ''
     )
 
     $ic = "$(Get-JsonProp $Item 'item_code')".Trim()
@@ -428,6 +429,13 @@ function New-SapOrderLine {
     if ($wt -le 0)  { return @{ Line = $null; Error = "line $Index (item $ic): custom_total_weight is missing or zero - refusing to guess the SAP quantity." } }
 
     $line = @{ ItemCode = $ic; Quantity = [double]$wt }
+    # Name the warehouse, or SAP falls back to its own default and commits the
+    # line somewhere the goods are not. Found 18 September 2026: every order
+    # this sync had created committed stock to warehouse 01 while all the
+    # finished goods sat in 07, so 07 read as free and 01 read as oversold.
+    # Company-wide totals netted out, which is why the stock figures looked
+    # right while the per-warehouse ones were wrong in both directions.
+    if ("$Warehouse".Trim() -ne '') { $line.WarehouseCode = "$Warehouse".Trim() }
     if (-not $SendUnitPrice) { return @{ Line = $line; Error = $null } }
 
     $amount = ConvertTo-Number (Get-JsonProp $Item 'amount')
@@ -1060,6 +1068,10 @@ try {
     # the manufacturing team reduce or drop a line there instead. ON by default
     # because an app that cannot edit and does not follow would just be stale.
     $reconcileLines = Get-OptionalBool  $os 'reconcile_lines_from_sap' $true
+    # The warehouse each order line names. Empty = let SAP pick its default,
+    # which is how every order up to 18 Sep 2026 ended up committing stock to
+    # warehouse 01 while the finished goods sat in 07.
+    $lineWarehouse = Get-OptionalString $os 'line_warehouse' ''
     $stageSource   = Get-OptionalString $os 'stage_source' 'routing_stages'
     $stampField    = Get-OptionalString $os 'stamp_erpnext_name_in' 'NumAtCard'   # NumAtCard | U_FreeText | none
     $shipDateFrom  = Get-OptionalString $os 'delivery_ship_date_from' 'DocDueDate' # DocDate | DocDueDate
@@ -1095,8 +1107,8 @@ try {
     } catch { }
 
     $script:Result.company = $companyName
-    Write-Log INFO ("==== run start ==== company='{0}' db='{1}' DryRun={2} Limit={3} gate='{4}' cardCode={5} sendUnitPrice={6} stageSource={7} stamp={8} shipDate={9} PS={10}" -f `
-        $companyName, $companyDb, [bool]$DryRun, $Limit, $poGate, $fixedCardCode, $sendUnitPrice, $stageSource, $stampField, $shipDateFrom, $PSVersionTable.PSVersion)
+    Write-Log INFO ("==== run start ==== company='{0}' db='{1}' DryRun={2} Limit={3} gate='{4}' cardCode={5} sendUnitPrice={6} warehouse={11} stageSource={7} stamp={8} shipDate={9} PS={10}" -f `
+        $companyName, $companyDb, [bool]$DryRun, $Limit, $poGate, $fixedCardCode, $sendUnitPrice, $stageSource, $stampField, $shipDateFrom, $PSVersionTable.PSVersion, $(if ($lineWarehouse -eq '') { "<SAP default>" } else { $lineWarehouse }))
 
     # ---- TLS / cert ----
     # The Service Layer answers any POST carrying 'Expect: 100-continue' with an
@@ -1398,7 +1410,7 @@ try {
                     $lineErr = $null
                     $idx = 0
                     foreach ($it in $items) {
-                        $built = New-SapOrderLine -Item $it -SendUnitPrice $sendUnitPrice -OrderName $name -Index $idx
+                        $built = New-SapOrderLine -Item $it -SendUnitPrice $sendUnitPrice -OrderName $name -Index $idx -Warehouse $lineWarehouse
                         if ($built.Error) { $lineErr = $built.Error; break }
                         [void]$lines.Add($built.Line)
                         $idx++

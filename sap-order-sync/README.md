@@ -143,6 +143,7 @@ stage + delivery), and `custom_sap_delivery_date` from anything but a delivery.
     "po_status_gate": "PO Approved - Ready for SAP",      // the ONLY in-scope custom_po_status
     "fixed_card_code": "20416",                           // REQUIRED. Every SO uses this CardCode — no lookup
     "send_line_unit_price":    true,                       // true = send the approved net rate as UnitPrice
+    "line_warehouse":          "07",                     // the warehouse each order line names; "" = SAP default (see Warehouse below)
     "status_source": "document_status",                   // (reserved) how custom_sap_sales_order_status is filled
     "stage_source": "routing_stages",                     // routing_stages | production_status
     "stamp_erpnext_name_in": "NumAtCard",                 // NumAtCard | U_FreeText | none
@@ -241,5 +242,6 @@ Settled:
 ### Minor decisions (left as-is; revisit if needed)
 
 * **Line price** — `send_line_unit_price` is **true**, changed 17 September 2026 on the instruction that "the sales order should have the pricing same as what the app gave it". The SAP order carries the **approved net rate per kilo**, computed as `amount / custom_total_weight` with `DiscountPercent` forced to 0. It is deliberately NOT `custom_rate_per_kg`: that field is the *pre*-discount quote, and on SAL-ORD-2026-00135 (25/kg less 10%) it would have overcharged the factory document by the discount. Discounts were then removed from both apps entirely — the rep types the rate after discount — so on a current order the two agree, and a gap between them only means a legacy `discount_percentage` the computed figure has already absorbed. The sync logs that case and sends the computed figure, which is what was approved.
+* **Warehouse** — `line_warehouse` is **"07"**, set 18 September 2026. Every order line names it explicitly. Leave it `""` and SAP falls back to its own default, which was **01**: the finished goods all sit in **07**, so SAP committed each order against a warehouse holding nothing while 07 looked entirely free. `I-14636` read `on hand 0 / committed 120` in 01 and `on hand 100 / committed 0` in 07 at the same moment. The company-wide figures netted out correctly — 100 on hand, 120 committed — which is exactly why it went unnoticed: the stock sync reads `Items`, not `ItemWarehouseInfoCollection`, so its numbers were right all along. Anything that asks about availability **per warehouse** would have been wrong in both directions. Orders 406 and 407 were moved to 07 by hand; `Test-OrderLinePricing.ps1` asserts the key is present, absent when unset, and survives the price-off early return.
 * **Split deliveries** — if one SO ships on more than one Hi-Tech delivery, the job writes the **earliest** delivery's DocNum + `DocDueDate`.
 * **Delivered orders** — drop out of PASS B once `custom_sap_delivery_order` is set; `custom_sap_synced_at` stops moving. Widen PASS B if the app flags such orders as stale.

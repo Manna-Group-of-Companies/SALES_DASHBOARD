@@ -49,6 +49,39 @@ if (-not (Get-Command Write-Log -ErrorAction SilentlyContinue)) {
     function Write-Log { param($Level, $Message) Write-Host ("    [{0}] {1}" -f $Level, $Message) -ForegroundColor DarkYellow }
 }
 
+# ---- offline: the warehouse on a line -------------------------------------
+# Added 18 September 2026. Every SAP order this sync had created named no
+# warehouse, so SAP committed the line to its own default (01) while all the
+# finished goods sat in 07: warehouse 07 read as free and 01 as oversold,
+# while the company-wide totals netted out and looked correct. A missing
+# hashtable key is invisible, so it is asserted rather than eyeballed.
+$whFail = 0
+function WhCheck {
+    param([string] $What, [bool] $Ok, [string] $Got = '')
+    if ($Ok) { Write-Host ("  PASS  " + $What) -ForegroundColor Green }
+    else     { $script:whFail++; Write-Host ("  FAIL  " + $What + $(if ($Got) { "  ->  $Got" } else { '' })) -ForegroundColor Red }
+}
+Write-Host "`nNew-SapOrderLine - the warehouse" -ForegroundColor Cyan
+$whItem = [pscustomobject]@{ item_code = 'I-1'; custom_total_weight = 80; amount = 20000; custom_rate_per_kg = 250 }
+
+$w = (New-SapOrderLine -Item $whItem -SendUnitPrice $true -Warehouse '07').Line
+WhCheck "a named warehouse reaches the line"        ($w.WarehouseCode -eq '07') "$($w.WarehouseCode)"
+WhCheck "  and does not disturb the price"          ($w.UnitPrice -eq 250)      "$($w.UnitPrice)"
+
+# Empty must stay ABSENT, not blank: sending WarehouseCode = '' would be a
+# different bug, and leaving the key off is what preserves old behaviour.
+$w = (New-SapOrderLine -Item $whItem -SendUnitPrice $true).Line
+WhCheck "no warehouse configured leaves the key off" (-not $w.ContainsKey('WarehouseCode')) 'key present'
+
+# The price-off path returns early, so the warehouse has to be set before it.
+$w = (New-SapOrderLine -Item $whItem -SendUnitPrice $false -Warehouse '07').Line
+WhCheck "the warehouse survives the price-off early return" ($w.WarehouseCode -eq '07') "$($w.WarehouseCode)"
+
+$w = (New-SapOrderLine -Item $whItem -SendUnitPrice $true -Warehouse '  07  ').Line
+WhCheck "surrounding blanks are trimmed"            ($w.WarehouseCode -eq '07') "'$($w.WarehouseCode)'"
+
+if ($whFail) { Write-Host "$whFail warehouse assertion(s) failed." -ForegroundColor Red; exit 1 }
+
 $cfg  = Get-Content $ConfigPath -Raw | ConvertFrom-Json
 $erp  = $cfg.erpnext
 $send = $true

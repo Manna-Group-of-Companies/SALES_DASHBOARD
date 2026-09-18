@@ -27,6 +27,7 @@
 
     "fixed_card_code":         "20416",
     "send_line_unit_price":    false,
+    "line_warehouse":          "07",
 
     "status_source":           "document_status",
     "stage_source":            "routing_stages",
