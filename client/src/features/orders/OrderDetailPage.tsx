@@ -125,7 +125,15 @@ export function OrderDetailPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState<string | null>(null);
+  /**
+   * The banner after a decision or a save.
+   *
+   * It carries its own tone. Until 18 September 2026 this was a bare string
+   * rendered as `tone="ok"` whatever had happened, so rejecting an order
+   * announced it in green under a tick — the one outcome on this screen that
+   * is not an approval, dressed as one.
+   */
+  const [done, setDone] = useState<{ text: string; tone: 'ok' | 'danger' } | null>(null);
 
   /**
    * What production moved since this browser last opened the order.
@@ -266,6 +274,13 @@ export function OrderDetailPage() {
   // allowed, and a user controls their own clock.
   const now = useMemo(() => serverNow(), [tick, order]);
   const approved = order ? isApproved(order.poStatus) : false;
+  /*
+   * Read off the stored status, like `approved` above it. A rejection is the
+   * one decision that leaves the order still awaiting a manager — see
+   * `awaitingManager` — so without this the decision block cannot tell an
+   * order nobody has looked at from one that has already been turned down.
+   */
+  const rejected = (order?.poStatus ?? '').trim() === PO_STATUS.rejected;
   const editing = drafts !== null;
 
   /**
@@ -330,13 +345,35 @@ export function OrderDetailPage() {
       setRateEdits({});
       setDone(
         decision === 'approve'
-          ? 'Approved. Every rate on this order is now final.'
+          ? { text: 'Approved. Every rate on this order is now final.', tone: 'ok' }
           : decision === 'reject'
-            ? 'Rejected. The rep can correct the prices and resubmit.'
-            : 'Sent to the General Manager.',
+            ? { text: 'Rejected. The rep can correct the prices and resubmit.', tone: 'danger' }
+            : { text: 'Sent to the General Manager.', tone: 'ok' },
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save the decision.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * Take back a rejection, so the order can be decided again.
+   *
+   * This is a correction, not a second opinion: nothing on the lines moved
+   * when the order was rejected, so nothing is restored here beyond the
+   * status. What the manager gets back is the Approve/Reject pair.
+   */
+  const undoRejection = async () => {
+    if (!order) return;
+    setBusy('undo');
+    setError(null);
+    try {
+      const saved = await Api.sales.undoOrderRejection(order.id);
+      setOrder(saved);
+      setDone({ text: 'Rejection undone. This order is waiting for a decision again.', tone: 'ok' });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not undo the rejection.');
     } finally {
       setBusy(null);
     }
@@ -419,9 +456,10 @@ export function OrderDetailPage() {
       });
       await Api.sales.saveOrderLines({ orderId: order.id, lines });
       setDrafts(null);
-      setDone(
-        'Lines saved, and the stock re-held to match. Anything on the shelf has been booked to this order; only what the shelf has not got is left for production. The order went back for approval and every rate reopened, because the money changed.',
-      );
+      setDone({
+        text: 'Lines saved, and the stock re-held to match. Anything on the shelf has been booked to this order; only what the shelf has not got is left for production. The order went back for approval and every rate reopened, because the money changed.',
+        tone: 'ok',
+      });
       // A full reload, not the saved document. Saving also moves the holds, and
       // the returned order carries none of that — the stock column would keep
       // showing the position from before the edit.
@@ -531,14 +569,13 @@ export function OrderDetailPage() {
           </div>
         </div>
         <div className="cal__nav">
-          {order && <StatusPill status={order.poStatus} />}
+          {order && <StatusPill status={order.poStatus} sapStatus={order.sapSalesOrderStatus} />}
           <RefreshButton onClick={reload} loading={loading} />
           <Link to="/orders" className="btn btn--ghost btn--sm">
             ← Team orders
           </Link>
         </div>
       </div>
-
       {/*
         How old the SAP half of this page is.
         Refresh re-reads ERPNext instantly but can only *ask* for SAP, so the
@@ -566,7 +603,11 @@ export function OrderDetailPage() {
       )}
       {done && !error && (
         <div style={{ marginBottom: 14 }}>
-          <Alert tone="ok" title={done} />
+          <Alert
+            tone={done.tone}
+            icon={done.tone === 'danger' ? '✕' : undefined}
+            title={done.text}
+          />
         </div>
       )}
       {loading && !error && <Empty icon="◔" title="Reading order…" />}
@@ -1151,6 +1192,37 @@ export function OrderDetailPage() {
           {approved ? (
             <div className="mt-16">
               <Alert tone="ok" title="✓ Approved. Rates on this order are final." />
+            </div>
+          ) : rejected ? (
+            /*
+             * A rejected order shows its answer rather than the buttons that
+             * produced it. Offering Approve and Reject again under the word
+             * "Rejected" invites a second decision on an order the rep is
+             * already correcting.
+             *
+             * Undo is the way back from this screen. The other is the rep's
+             * own edit in the field app, which returns the order to Pending on
+             * its own — so this state ends either when the manager changes
+             * their mind or when the order itself changes, and not otherwise.
+             */
+            <div className="mt-16">
+              <Alert
+                tone="danger"
+                icon="✕"
+                title="Rejected"
+                actions={
+                  <Button
+                    variant="ghost"
+                    onClick={undoRejection}
+                    loading={busy === 'undo'}
+                    disabled={!!busy || editing}
+                  >
+                    Undo
+                  </Button>
+                }
+              >
+                The rep can correct the prices and resubmit. Undo to decide this order again.
+              </Alert>
             </div>
           ) : (
             <Card title="Decision" className="mt-16">

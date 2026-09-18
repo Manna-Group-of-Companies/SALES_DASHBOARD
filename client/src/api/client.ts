@@ -2808,6 +2808,7 @@ function toTeamOrder(r: Record<string, unknown>): TeamOrder {
     combinedOrder: str(r[SALES_ORDER_FIELD.combinedOrder]),
     ratesApproved: Number(r[SALES_ORDER_FIELD.ratesApproved]) === 1,
     sapSalesOrder: str(r[SALES_ORDER_FIELD.sapSalesOrder]),
+    sapSalesOrderStatus: str(r[SALES_ORDER_FIELD.sapSalesOrderStatus]),
   };
 }
 
@@ -2994,6 +2995,28 @@ async function decideSalesOrder(input: {
     void requestOrderSync().catch(() => undefined);
   }
 
+  return toOrderDetail(saved);
+}
+
+/**
+ * Take back a rejection.
+ *
+ * Writes the status and nothing else. A rejection never locked a rate — only
+ * an approval stamps `rateApproved`, see `decideSalesOrder` — so there is
+ * nothing on the lines to undo, and rewriting them here would re-derive
+ * prices the manager never touched.
+ *
+ * The order goes back to `Pending Approval`, the same state a rep's edit
+ * leaves it in (`saveOrderLines`). Restoring whatever status it carried
+ * *before* the rejection would need somewhere to have stored it and there is
+ * no field for that; one "waiting on you" state beats a second one meaning
+ * the same thing.
+ */
+async function undoOrderRejection(orderId: string): Promise<OrderDetail> {
+  const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.salesOrder, orderId, {
+    [SALES_ORDER_FIELD.poStatus]: 'Pending Approval',
+    [SALES_ORDER_FIELD.ratesApproved]: 0,
+  });
   return toOrderDetail(saved);
 }
 
@@ -5455,6 +5478,7 @@ export const Api = {
     listOrders: listTeamOrders,
     getOrder: getSalesOrder,
     decideOrder: decideSalesOrder,
+    undoOrderRejection,
     listMinimumStock,
     listItemOptions,
     setFulfilmentMode,

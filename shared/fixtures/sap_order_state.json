@@ -1,8 +1,6 @@
 {
   "about": "What an order's SAP identifiers and dates mean to the apps, and how SAP's production stage maps onto the four-value custom_production_status the screens already act on.",
-
   "why": "From 11 September 2026 the manufacturing floor moves to SAP. An approved order becomes a SAP Sales Order, SAP links it to a production order and moves it through stages, and a SAP Delivery Order eventually carries several orders out together. The apps stop owning any of that and report it instead.",
-
   "the_shape": {
     "custom_sap_sales_order": "SAP's DocNum for the order. The rep's proof it reached the factory.",
     "custom_sap_sales_order_status": "SAP's own words. Shown verbatim, never parsed.",
@@ -13,68 +11,308 @@
     "custom_sap_synced_at": "When the sync last reconciled this order.",
     "custom_sap_sync_error": "Why the last push or pull failed."
   },
-
   "rules": {
     "stage_is_free_text": "The stage list lives in SAP and must change without an app release, so it is never an enum here. Screens print it; only the mapping below turns it into behaviour.",
     "unknown_stage_is_in_production": "A stage nobody has mapped means the floor has started and we do not know how far. In Production, never Ready - calling an unknown stage Ready would ship an order that is not made.",
     "delivery_implies_dispatched": "A delivery order number means it has left, whatever the stage says. The delivery is the later fact.",
     "no_sap_order_is_not_a_failure": "An order with no SAP number has not been picked up yet. Only custom_sap_sync_error means something went wrong, and the two must never be shown the same way.",
     "dates_come_only_from_sap": "custom_sap_delivery_date is a promise a rep repeats to a customer. Nothing in either app may write it.",
-    "stale_is_worth_saying": "custom_sap_synced_at going quiet means the floor has moved and nobody here knows. Older than a day is worth showing."
+    "stale_is_worth_saying": "custom_sap_synced_at going quiet means the floor has moved and nobody here knows. Older than a day is worth showing.",
+    "cancelled_is_the_one_mapped_status": "custom_sap_sales_order_status is shown verbatim and never parsed, with exactly ONE exception: bost_Cancelled. A cancelled order is not a shade of progress, it is the order not happening, and an app that goes on calling it Approved tells a rep to expect goods nobody is making. bost_Cancelled is a SAP enum, not a stage name, so it is stable in a way the stage list deliberately is not - and the sync folds SAPs separate Cancelled=tYES flag into the same value (Resolve-SoStatus), so one check covers both ways SAP says it. Found 18 Sep 2026: SAP order 399 had been cancelled and ERPNext had recorded it correctly for days, but nothing read it.",
+    "cancelled_outranks_approval": "Cancellation beats the approval status wherever the two are shown together, because it is the later fact and the terminal one - the same reasoning that puts a delivery above a stage.",
+    "no_live_production_order_is_not_started": "A line whose production order has been cancelled has nothing being made for it, so it reads Not Started - the same as a line that never had one. Until 18 Sep 2026 the sync wrote nothing when it found no live production order, so a line whose PO was cancelled after release read In Production for ever, with no press anywhere near it. The sync now clears custom_sap_production_order and custom_sap_production_stage instead."
   },
-
   "the_shape_per_line": {
     "custom_sap_production_order": "On Sales Order Item: the SAP production order covering THIS line.",
     "custom_sap_production_stage": "On Sales Order Item: where THIS line is on the floor.",
     "why": "One order becomes one production order per item. Reporting a single stage for the whole order tells a rep nothing about which item is holding it up."
   },
-
   "line_rules": {
     "same_derivation": "A line's status is derived exactly as an order's is. There is no second set of rules to drift.",
     "delivery_is_per_line": "A delivery need not carry the whole order - dropping a row from it is how the floor ships what is ready and leaves the rest open. So a line is Dispatched only when THAT line was on a delivery. Reading the order's delivery would mark an unshipped line Dispatched while it sat unmade, the same lie as calling an unmapped stage Ready. Proved on SAP order 381, 16 Sep 2026: three lines shipped on DN 1, the fourth stayed open.",
     "order_is_the_least_advanced_line": "The order rolls up to its least advanced line. An order is Ready only when every line is, and Dispatched only when every line has gone. Rounding the other way would tell a rep an order is made while one item is still in a press.",
     "a_line_without_sap_is_not_a_failure": "A line with no production order has not been raised yet. It reads Not Started, exactly like an order SAP has not picked up."
   },
-
   "line_stage_to_status": [
-    { "why": "no production order raised for this line yet", "line_stage": "", "line_delivery": "", "expect": "Not Started" },
-    { "why": "planned is not started, for a line as for an order", "line_stage": "Planned", "line_delivery": "", "expect": "Not Started" },
-    { "why": "this line is on the floor", "line_stage": "Released", "line_delivery": "", "expect": "In Production" },
-    { "why": "a named floor stage on one line", "line_stage": "Curing", "line_delivery": "", "expect": "In Production" },
-    { "why": "unmapped on a line rounds the same safe way", "line_stage": "Zzz Unmapped", "line_delivery": "", "expect": "In Production" },
-    { "why": "this line is finished but has not gone", "line_stage": "Closed", "line_delivery": "", "expect": "Ready" },
-    { "why": "this line went out, whatever its stage said", "line_stage": "Curing", "line_delivery": "DN-500", "expect": "Dispatched" },
-    { "why": "a line delivered straight from stock, never produced", "line_stage": "", "line_delivery": "DN-500", "expect": "Dispatched" },
-    { "why": "left off a partial delivery - unshipped, however far the others got", "line_stage": "Planned", "line_delivery": "", "expect": "Not Started" }
+    {
+      "why": "no production order raised for this line yet",
+      "line_stage": "",
+      "line_delivery": "",
+      "expect": "Not Started"
+    },
+    {
+      "why": "planned is not started, for a line as for an order",
+      "line_stage": "Planned",
+      "line_delivery": "",
+      "expect": "Not Started"
+    },
+    {
+      "why": "this line is on the floor",
+      "line_stage": "Released",
+      "line_delivery": "",
+      "expect": "In Production"
+    },
+    {
+      "why": "a named floor stage on one line",
+      "line_stage": "Curing",
+      "line_delivery": "",
+      "expect": "In Production"
+    },
+    {
+      "why": "unmapped on a line rounds the same safe way",
+      "line_stage": "Zzz Unmapped",
+      "line_delivery": "",
+      "expect": "In Production"
+    },
+    {
+      "why": "this line is finished but has not gone",
+      "line_stage": "Closed",
+      "line_delivery": "",
+      "expect": "Ready"
+    },
+    {
+      "why": "this line went out, whatever its stage said",
+      "line_stage": "Curing",
+      "line_delivery": "DN-500",
+      "expect": "Dispatched"
+    },
+    {
+      "why": "a line delivered straight from stock, never produced",
+      "line_stage": "",
+      "line_delivery": "DN-500",
+      "expect": "Dispatched"
+    },
+    {
+      "why": "left off a partial delivery - unshipped, however far the others got",
+      "line_stage": "Planned",
+      "line_delivery": "",
+      "expect": "Not Started"
+    },
+    {
+      "why": "a production order cancelled after release leaves nothing being made, so the line goes back to Not Started",
+      "line_stage": "",
+      "line_delivery": "",
+      "expect": "Not Started",
+      "note": "the sync clears the stage when no live production order covers the line"
+    }
   ],
-
   "order_rolls_up_from_lines": [
-    { "why": "one line still queued holds the order back", "line_stages": ["Released", "Planned"], "expect": "Not Started" },
-    { "why": "all lines on the floor", "line_stages": ["Released", "Curing"], "expect": "In Production" },
-    { "why": "one line finished, one still going", "line_stages": ["Closed", "Curing"], "expect": "In Production" },
-    { "why": "every line finished", "line_stages": ["Closed", "Finished"], "expect": "Ready" },
-    { "why": "no lines carry a stage at all", "line_stages": ["", ""], "expect": "Not Started" }
+    {
+      "why": "one line still queued holds the order back",
+      "line_stages": [
+        "Released",
+        "Planned"
+      ],
+      "expect": "Not Started"
+    },
+    {
+      "why": "all lines on the floor",
+      "line_stages": [
+        "Released",
+        "Curing"
+      ],
+      "expect": "In Production"
+    },
+    {
+      "why": "one line finished, one still going",
+      "line_stages": [
+        "Closed",
+        "Curing"
+      ],
+      "expect": "In Production"
+    },
+    {
+      "why": "every line finished",
+      "line_stages": [
+        "Closed",
+        "Finished"
+      ],
+      "expect": "Ready"
+    },
+    {
+      "why": "no lines carry a stage at all",
+      "line_stages": [
+        "",
+        ""
+      ],
+      "expect": "Not Started"
+    }
   ],
-
   "order_rolls_up_from_deliveries": [
-    { "why": "every line gone - the order has gone", "line_stages": ["Closed", "Closed"], "line_deliveries": ["DN-1", "DN-1"], "expect": "Dispatched" },
-    { "why": "a partial delivery is NOT a dispatched order - order 381's real shape", "line_stages": ["Closed", "Planned"], "line_deliveries": ["DN-1", ""], "expect": "Not Started" },
-    { "why": "one gone, one still being made", "line_stages": ["Closed", "Curing"], "line_deliveries": ["DN-1", ""], "expect": "In Production" },
-    { "why": "one gone, one made and waiting", "line_stages": ["Closed", "Closed"], "line_deliveries": ["DN-1", ""], "expect": "Ready" }
+    {
+      "why": "every line gone - the order has gone",
+      "line_stages": [
+        "Closed",
+        "Closed"
+      ],
+      "line_deliveries": [
+        "DN-1",
+        "DN-1"
+      ],
+      "expect": "Dispatched"
+    },
+    {
+      "why": "a partial delivery is NOT a dispatched order - order 381's real shape",
+      "line_stages": [
+        "Closed",
+        "Planned"
+      ],
+      "line_deliveries": [
+        "DN-1",
+        ""
+      ],
+      "expect": "Not Started"
+    },
+    {
+      "why": "one gone, one still being made",
+      "line_stages": [
+        "Closed",
+        "Curing"
+      ],
+      "line_deliveries": [
+        "DN-1",
+        ""
+      ],
+      "expect": "In Production"
+    },
+    {
+      "why": "one gone, one made and waiting",
+      "line_stages": [
+        "Closed",
+        "Closed"
+      ],
+      "line_deliveries": [
+        "DN-1",
+        ""
+      ],
+      "expect": "Ready"
+    }
   ],
-
   "stage_to_status": [
-    { "why": "nothing has reached SAP yet", "sap_stage": "", "sap_order": "", "delivery": "", "expect": "Not Started" },
-    { "why": "SAP has the order but the floor has not begun", "sap_stage": "", "sap_order": "SO-1001", "delivery": "", "expect": "Not Started" },
-    { "why": "planned is not started", "sap_stage": "Planned", "sap_order": "SO-1001", "delivery": "", "expect": "Not Started" },
-    { "why": "released to the floor", "sap_stage": "Released", "sap_order": "SO-1001", "delivery": "", "expect": "In Production" },
-    { "why": "a named floor stage", "sap_stage": "Buffing", "sap_order": "SO-1001", "delivery": "", "expect": "In Production" },
-    { "why": "another named floor stage", "sap_stage": "Curing", "sap_order": "SO-1001", "delivery": "", "expect": "In Production" },
-    { "why": "a stage nobody has mapped - started, distance unknown, and never Ready", "sap_stage": "Zzz Unmapped", "sap_order": "SO-1001", "delivery": "", "expect": "In Production" },
-    { "why": "finished on the floor, not yet gone", "sap_stage": "Finished", "sap_order": "SO-1001", "delivery": "", "expect": "Ready" },
-    { "why": "closed is finished by another name", "sap_stage": "Closed", "sap_order": "SO-1001", "delivery": "", "expect": "Ready" },
-    { "why": "a delivery order means it has left, whatever the stage says", "sap_stage": "Curing", "sap_order": "SO-1001", "delivery": "DN-500", "expect": "Dispatched" },
-    { "why": "delivered with no stage at all still means gone", "sap_stage": "", "sap_order": "SO-1001", "delivery": "DN-500", "expect": "Dispatched" },
-    { "why": "case and padding are SAP's, not ours", "sap_stage": "  cURING  ", "sap_order": "SO-1001", "delivery": "", "expect": "In Production" }
+    {
+      "why": "nothing has reached SAP yet",
+      "sap_stage": "",
+      "sap_order": "",
+      "delivery": "",
+      "expect": "Not Started"
+    },
+    {
+      "why": "SAP has the order but the floor has not begun",
+      "sap_stage": "",
+      "sap_order": "SO-1001",
+      "delivery": "",
+      "expect": "Not Started"
+    },
+    {
+      "why": "planned is not started",
+      "sap_stage": "Planned",
+      "sap_order": "SO-1001",
+      "delivery": "",
+      "expect": "Not Started"
+    },
+    {
+      "why": "released to the floor",
+      "sap_stage": "Released",
+      "sap_order": "SO-1001",
+      "delivery": "",
+      "expect": "In Production"
+    },
+    {
+      "why": "a named floor stage",
+      "sap_stage": "Buffing",
+      "sap_order": "SO-1001",
+      "delivery": "",
+      "expect": "In Production"
+    },
+    {
+      "why": "another named floor stage",
+      "sap_stage": "Curing",
+      "sap_order": "SO-1001",
+      "delivery": "",
+      "expect": "In Production"
+    },
+    {
+      "why": "a stage nobody has mapped - started, distance unknown, and never Ready",
+      "sap_stage": "Zzz Unmapped",
+      "sap_order": "SO-1001",
+      "delivery": "",
+      "expect": "In Production"
+    },
+    {
+      "why": "finished on the floor, not yet gone",
+      "sap_stage": "Finished",
+      "sap_order": "SO-1001",
+      "delivery": "",
+      "expect": "Ready"
+    },
+    {
+      "why": "closed is finished by another name",
+      "sap_stage": "Closed",
+      "sap_order": "SO-1001",
+      "delivery": "",
+      "expect": "Ready"
+    },
+    {
+      "why": "a delivery order means it has left, whatever the stage says",
+      "sap_stage": "Curing",
+      "sap_order": "SO-1001",
+      "delivery": "DN-500",
+      "expect": "Dispatched"
+    },
+    {
+      "why": "delivered with no stage at all still means gone",
+      "sap_stage": "",
+      "sap_order": "SO-1001",
+      "delivery": "DN-500",
+      "expect": "Dispatched"
+    },
+    {
+      "why": "case and padding are SAP's, not ours",
+      "sap_stage": "  cURING  ",
+      "sap_order": "SO-1001",
+      "delivery": "",
+      "expect": "In Production"
+    }
+  ],
+  "cancelled_orders": [
+    {
+      "why": "SAP cancelled it, so the pill says so however the approval status reads",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_sap_sales_order": "399",
+        "custom_sap_sales_order_status": "bost_Cancelled"
+      },
+      "expect_cancelled": true
+    },
+    {
+      "why": "an open SAP order is not cancelled",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_sap_sales_order": "381",
+        "custom_sap_sales_order_status": "bost_Open"
+      },
+      "expect_cancelled": false
+    },
+    {
+      "why": "closed is finished, not cancelled - the two must never be conflated",
+      "order": {
+        "custom_sap_sales_order_status": "bost_Close"
+      },
+      "expect_cancelled": false
+    },
+    {
+      "why": "an order SAP has not taken yet cannot be cancelled",
+      "order": {
+        "custom_po_status": "Pending Approval"
+      },
+      "expect_cancelled": false
+    },
+    {
+      "why": "case is SAPs, not ours",
+      "order": {
+        "custom_sap_sales_order_status": "BOST_CANCELLED"
+      },
+      "expect_cancelled": true
+    }
   ]
 }

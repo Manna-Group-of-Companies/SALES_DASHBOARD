@@ -21,6 +21,7 @@
 //
 // Pinned by `shared/fixtures/sap_order_state.json`; the TypeScript twin is
 // `client/src/domain/sapOrderState.ts`.
+import 'package:manna_field_sales/core/order_rules.dart';
 
 /// What SAP has told us about one order. All of it optional; none of it ours.
 class SapOrderState {
@@ -196,3 +197,39 @@ String? sapSummary(SapOrderState s) {
   if (so.isNotEmpty) bits.add('SAP $so');
   return bits.isEmpty ? null : bits.join(' · ');
 }
+
+// --------------------------------------------------------------- cancelled ---
+
+/// SAP's own enum value. Not free text, and the only one mapped to behaviour.
+const String _kSapCancelled = 'bost_cancelled';
+
+/// Whether SAP has cancelled this order.
+///
+/// `custom_sap_sales_order_status` is otherwise **shown verbatim, never
+/// parsed** — the rest of SAP's vocabulary belongs to SAP and must change
+/// without an app release. This is the single exception, and it earns it: a
+/// cancelled order is not a shade of progress, it is the order not happening,
+/// and an app that goes on calling it Approved is telling a rep to expect goods
+/// nobody is making.
+///
+/// `bost_Cancelled` is a SAP enum, not a stage name, so it is stable in a way
+/// the stage list deliberately is not. The sync folds SAP's separate
+/// `Cancelled = tYES` flag into the same value — see `Resolve-SoStatus` in
+/// `Sync-SapOrders.ps1` — so this one check covers both ways SAP says it.
+///
+/// Found on 18 September 2026: SAP order 399 had been cancelled and ERPNext had
+/// recorded it correctly for days. Nothing read it, so the order still showed
+/// as approved.
+///
+/// The TypeScript twin is `cancelledInSap` in `client/src/domain/sapOrderState.ts`.
+bool cancelledInSap(SapOrderState s) =>
+    _clean(s.salesOrderStatus).toLowerCase() == _kSapCancelled;
+
+/// The approval line an order shows, once SAP has had its say.
+///
+/// One function rather than the same check on every screen, which is how the
+/// two apps drift. Cancellation outranks the approval status because it is the
+/// later fact and the terminal one — the same reasoning that puts a delivery
+/// above a stage in [productionStatusFromSap].
+String orderApprovalLabel(dynamic rawPoStatus, SapOrderState sap) =>
+    cancelledInSap(sap) ? 'Cancelled in SAP' : approvalLabel(rawPoStatus);

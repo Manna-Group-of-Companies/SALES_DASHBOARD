@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
+import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/screens/manager/manager_order_review_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -255,7 +256,9 @@ class _ManagerOrdersScreenState extends State<ManagerOrdersScreen> {
                 decoration: BoxDecoration(
                     color: colour.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(4)),
-                child: Text(approvalLabel(status).toUpperCase(),
+                child: Text(
+                    orderApprovalLabel(status, SapOrderState.fromOrder(r))
+                        .toUpperCase(),
                     style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.bold,

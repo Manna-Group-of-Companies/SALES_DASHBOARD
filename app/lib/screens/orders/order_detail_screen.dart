@@ -496,7 +496,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             _itemsCard(items),
             _statusRow('Order placed', _placedAt),
             _statusRow('Proforma', pf),
-            _statusRow('Approval', approvalLabel(po)),
+            _statusRow('Approval',
+                orderApprovalLabel(po, SapOrderState.fromOrder(_order))),
             if (ratesLocked(_order)) _statusRow('Rates', 'Locked by manager'),
             if ('${_order['delivery_date'] ?? ''}'.isNotEmpty &&
                 '${_order['delivery_date']}' != 'null')

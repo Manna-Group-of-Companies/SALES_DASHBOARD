@@ -303,6 +303,11 @@ export interface TeamOrder {
    * those, while `id` must be unique forever.
    */
   sapSalesOrder?: string;
+  /**
+   * SAP's own status for the order, verbatim. Only `bost_Cancelled` is mapped
+   * to behaviour - see `cancelledInSap`.
+   */
+  sapSalesOrderStatus?: string;
   route?: string;
 }
 

@@ -59,6 +59,8 @@ interface Row {
   undecided: boolean;
   /** SAP's order number once it has one. Lead orders never have one. */
   sapSalesOrder?: string;
+  /** SAP's own status, so a cancelled order stops reading as approved. */
+  sapSalesOrderStatus?: string;
 }
 
 export function OrdersListPage() {
@@ -163,6 +165,7 @@ export function OrdersListPage() {
         combinedOrder: o.combinedOrder,
         undecided: awaitingManager(o.poStatus),
         sapSalesOrder: o.sapSalesOrder,
+        sapSalesOrderStatus: o.sapSalesOrderStatus,
       }));
 
     const leads: Row[] = leadOrders.map((l) => ({
@@ -338,7 +341,7 @@ export function OrdersListPage() {
                 </div>
 
                 <div className="ordrow__status">
-                  <StatusPill status={r.status} />
+                  <StatusPill status={r.status} sapStatus={r.sapSalesOrderStatus} />
                   {r.undecided && <span className="tiny dim">Tap to review</span>}
                   {/* Never a tick on a lead order: it is not a Sales Order yet
                       and has no production status, so an empty box would read

@@ -22,6 +22,7 @@ import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
+import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
@@ -303,7 +304,8 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
             Text(
                 _isLead
                     ? '${_order['status'] ?? ''}'
-                    : approvalLabel(_order['custom_po_status']),
+                    : orderApprovalLabel(_order['custom_po_status'],
+                        SapOrderState.fromOrder(_order)),
                 style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,

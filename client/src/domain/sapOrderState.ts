@@ -23,6 +23,7 @@
  * Pinned by `shared/fixtures/sap_order_state.json`; the Dart twin is
  * `app/lib/core/sap_order_state.dart`.
  */
+import { statusPill, type StatusTone } from './orderStatus';
 
 export type ProductionStatus = 'Not Started' | 'In Production' | 'Ready' | 'Dispatched';
 
@@ -187,4 +188,48 @@ export function sapSummary(s: SapOrderState): string | null {
   const so = clean(s.salesOrder);
   if (so) bits.push(`SAP ${so}`);
   return bits.length ? bits.join(' · ') : null;
+}
+
+// ------------------------------------------------------------ cancelled ---
+
+/** SAP's own enum value. Not free text, and the only one mapped to behaviour. */
+const SAP_CANCELLED = 'bost_cancelled';
+
+/**
+ * Whether SAP has cancelled this order.
+ *
+ * `custom_sap_sales_order_status` is otherwise **shown verbatim, never
+ * parsed** — the rest of SAP's vocabulary belongs to SAP and must change
+ * without an app release. This is the single exception, and it earns it: a
+ * cancelled order is not a shade of progress, it is the order not happening,
+ * and an app that goes on calling it Approved is telling a manager to expect
+ * goods nobody is making.
+ *
+ * `bost_Cancelled` is a SAP enum, not a stage name, so it is stable in a way
+ * the stage list deliberately is not. The sync folds SAP's separate
+ * `Cancelled = tYES` flag into the same value — see `Resolve-SoStatus` — so
+ * this one check covers both ways SAP says it.
+ *
+ * Found on 18 September 2026: SAP order 399 (DocEntry 2884) had been cancelled
+ * and ERPNext had recorded it correctly for days. Nothing read it, so the
+ * sales manager's board still showed the order approved.
+ */
+export function cancelledInSap(s: SapOrderState): boolean {
+  return clean(s.salesOrderStatus).toLowerCase() === SAP_CANCELLED;
+}
+
+/**
+ * The pill an order shows, once SAP has had its say.
+ *
+ * One function rather than the same two-line check on four screens, which is
+ * how the two apps drift. Cancellation outranks the approval status because it
+ * is the later fact and the terminal one — the same reasoning that puts a
+ * delivery above a stage in `productionStatusFromSap`.
+ */
+export function orderPill(
+  poStatus: string | undefined | null,
+  sap: SapOrderState,
+): { text: string; tone: StatusTone } {
+  if (cancelledInSap(sap)) return { text: 'CANCELLED IN SAP', tone: 'danger' };
+  return statusPill(poStatus);
 }

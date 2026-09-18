@@ -12,13 +12,29 @@
  *     which of the two they are chasing.
  */
 
-import { statusPill, tickState, TICK_LABEL, type TickState } from '@/domain/orderStatus';
+import { tickState, TICK_LABEL, type TickState } from '@/domain/orderStatus';
+import { cancelledInSap, orderPill } from '@/domain/sapOrderState';
 import './status.css';
 
-export function StatusPill({ status }: { status?: string | null }) {
-  const { text, tone } = statusPill(status);
+/**
+ * `sapStatus` is `custom_sap_sales_order_status`. Passing it lets the pill say
+ * CANCELLED IN SAP, which outranks the approval status because it is the later
+ * fact and the terminal one — see `orderPill`. Screens that have no SAP state
+ * to hand simply leave it off and get the approval status as before.
+ */
+export function StatusPill({
+  status,
+  sapStatus,
+}: {
+  status?: string | null;
+  sapStatus?: string | null;
+}) {
+  const { text, tone } = orderPill(status, { salesOrderStatus: sapStatus });
+  const why = cancelledInSap({ salesOrderStatus: sapStatus })
+    ? `Cancelled in SAP (${sapStatus})`
+    : status || 'no status stored';
   return (
-    <span className={`spill spill--${tone}`} title={status || 'no status stored'}>
+    <span className={`spill spill--${tone}`} title={why}>
       {text}
     </span>
   );

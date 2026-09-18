@@ -191,4 +191,63 @@ void main() {
           isFalse);
     });
   });
+
+  group('An order SAP has cancelled', () {
+    // The failure this closes, found 18 September 2026: SAP order 399 had been
+    // cancelled and the sync had recorded bost_Cancelled on the ERPNext order
+    // correctly, for days. Nothing read it, so it still showed as approved.
+    SapOrderState sap(String? status) => SapOrderState(salesOrderStatus: status);
+
+    test('is cancelled however the approval status reads', () {
+      expect(cancelledInSap(sap('bost_Cancelled')), isTrue);
+      expect(orderApprovalLabel('PO Approved - Ready for SAP', sap('bost_Cancelled')),
+          'Cancelled in SAP');
+    });
+
+    test('an open SAP order is not cancelled', () {
+      expect(cancelledInSap(sap('bost_Open')), isFalse);
+      expect(orderApprovalLabel('PO Approved - Ready for SAP', sap('bost_Open')),
+          'Approved');
+    });
+
+    test('closed is finished, not cancelled - never conflate the two', () {
+      // Conflating them would retire a delivered order as though it had been
+      // called off.
+      expect(cancelledInSap(sap('bost_Close')), isFalse);
+    });
+
+    test('an order SAP has not taken yet cannot be cancelled', () {
+      expect(cancelledInSap(sap(null)), isFalse);
+      expect(cancelledInSap(sap('')), isFalse);
+    });
+
+    test('the case is SAPs, not ours', () {
+      expect(cancelledInSap(sap('BOST_CANCELLED')), isTrue);
+    });
+  });
+
+  group('A line whose production order was cancelled', () {
+    // Select-LeastAdvancedPo skips cancelled production orders, so a line whose
+    // only PO was cancelled has nothing covering it. The sync clears the stage;
+    // these assert that a cleared stage is what Not Started looks like.
+    test('reads Not Started once the sync has cleared its stage', () {
+      expect(
+          lineStatusFromSap(
+              const SapLineState(productionStage: '', productionOrder: '')),
+          'Not Started');
+    });
+
+    test('is indistinguishable from a line that never had one', () {
+      expect(lineStatusFromSap(const SapLineState()), 'Not Started');
+    });
+
+    test('but a delivered line stays Dispatched, cleared stage or not', () {
+      // A cancelled production order after the goods have gone must not reopen
+      // the line; the delivery is the later fact.
+      expect(
+          lineStatusFromSap(
+              const SapLineState(productionStage: '', deliveryOrder: 'DN-9')),
+          'Dispatched');
+    });
+  });
 }
