@@ -1,0 +1,21 @@
+Windows Registry Editor Version 5.00
+
+; Minimal repair of the machine-level SAP Business One configuration that the
+; Service Layer's DI core reads at Login. Values taken verbatim from SAP's own
+; template at:
+;   C:\Program Files\SAP\SAP Business One ServerTools\ServiceLayer\Conf\b1-local-machine.xml
+;
+; Restores ONLY what the Service Layer Login path needs. Deliberately omits
+; BAAllowedFileType and the EDF/Backend values, which affect B1 client
+; behaviour -- the clients are currently working, so leave them alone.
+;
+; Backup of the pre-change state: SAP_Manage_BACKUP_before_fix.reg
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\SAP\SAP Manage\SAP Business One]
+"LicenseServer"="localhost:40000"
+"LicenseServerProtocol"="HTTPS"
+"SLDAddress"="https://SERVER:40000"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\SAP\SAP Manage\LicenseManager]
+"Machine"="localhost"
+"Port"="40000"

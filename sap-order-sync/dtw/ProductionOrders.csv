@@ -1,0 +1,6 @@
+RecordKey,ItemCode,Warehouse,PlannedQuantity,ProductionOrderType,ProductionOrderStatus,DueDate,ProductionOrderOrigin,ProductionOrderOriginEntry
+RecordKey,ItemCode,Warehouse,PlannedQuantity,ProductionOrderType,ProductionOrderStatus,DueDate,ProductionOrderOrigin,ProductionOrderOriginEntry
+0,I-14637,07,168,bopotStandard,boposPlanned,2026-09-17,bopooSalesOrder,2866
+1,I-14638,07,162.4,bopotStandard,boposPlanned,2026-09-17,bopooSalesOrder,2866
+2,I-14639,07,128,bopotStandard,boposPlanned,2026-09-17,bopooSalesOrder,2866
+3,I-14640,07,108,bopotStandard,boposPlanned,2026-09-17,bopooSalesOrder,2866

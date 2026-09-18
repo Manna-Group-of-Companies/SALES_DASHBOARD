@@ -1,0 +1,19 @@
+# real config holds SAP + ERPNext credentials - never commit
+config.json
+poller.config.json
+login.json
+*.local.json
+config.*.json
+!config.example.json
+!poller.config.example.json
+
+# run logs and per-run artefacts
+logs/
+*.log
+last-result.json
+poller.lock
+
+# SAP Service Layer / SLD config backups. These carry DPAPI-encrypted
+# Service Layer credentials in b1s.conf and b1s-sld.xml, and are
+# machine-bound server state, not source. Keep them on the server.
+sl-registry-fix/conf-backup-*/

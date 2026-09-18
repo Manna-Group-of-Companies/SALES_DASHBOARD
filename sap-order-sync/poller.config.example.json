@@ -1,0 +1,18 @@
+{
+  "erpnext_site":          "https://mannarubber.m.frappe.cloud",
+  "bot_api_key":           "PUT_BOT_API_KEY_HERE",
+  "bot_api_secret":        "PUT_BOT_API_SECRET_HERE",
+
+  "control_doctype":       "SAP Order Sync Control",
+
+  "sync_script":           "C:\\Users\\eldhose\\sap-order-sync\\Sync-SapOrders.ps1",
+  "sync_config":           "C:\\Users\\eldhose\\sap-order-sync\\config.json",
+
+  "result_json":           "C:\\Users\\eldhose\\sap-order-sync\\logs\\last-result.json",
+  "lock_file":             "C:\\Users\\eldhose\\sap-order-sync\\logs\\order-poller.lock",
+  "log_dir":               "C:\\Users\\eldhose\\sap-order-sync\\logs",
+
+  "running_stale_minutes":    20,
+  "sync_timeout_seconds":     900,
+  "default_cooldown_minutes":  5
+}

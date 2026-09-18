@@ -1,0 +1,3 @@
+ItemCode,ItemName,ItemsGroupCode,ItemType,InventoryItem,SalesItem,PurchaseItem,InventoryUOM
+ItemCode,ItemName,ItemsGroupCode,ItemType,InventoryItem,SalesItem,PurchaseItem,InventoryUOM
+I-14646,DUMMY COMPONENT - SYNC TEST - DO NOT USE,100,itItems,tYES,tNO,tYES,KGS

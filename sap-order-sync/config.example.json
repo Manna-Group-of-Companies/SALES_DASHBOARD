@@ -1,0 +1,48 @@
+{
+  "erpnext": {
+    "site":       "https://mannarubber.m.frappe.cloud",
+    "api_key":    "PUT_ERPNEXT_API_KEY_HERE",
+    "api_secret": "PUT_ERPNEXT_API_SECRET_HERE",
+    "_note":      "the sapsync@mannarubber.com account key"
+  },
+
+  "sap": {
+    "url":        "https://192.168.100.200:50000/b1s/v1",
+    "username":   "PUT_SAP_USERNAME_HERE",
+    "password":   "PUT_SAP_PASSWORD_HERE",
+    "verify_ssl": false,
+    "page_size":  200,
+
+    "company": {
+      "name":       "Hi-Tech Rubber Industries",
+      "company_db": "HITECH_PRETREADS_LIVE"
+    },
+
+    "series":            null,
+    "sales_person_code": null
+  },
+
+  "order_sync": {
+    "po_status_gate":          "PO Approved - Ready for SAP",
+
+    "fixed_card_code":         "20416",
+    "send_line_unit_price":    false,
+
+    "status_source":           "document_status",
+    "stage_source":            "routing_stages",
+    "stamp_erpnext_name_in":   "NumAtCard",
+    "delivery_ship_date_from": "DocDueDate",
+    "production_scan_statuses": ["boposPlanned", "boposReleased", "boposClosed"],
+    "delivery_scan_days":       120,
+
+    "production_status_labels": {
+      "boposPlanned":   "Planned",
+      "boposReleased":  "In Production",
+      "boposClosed":    "Closed",
+      "boposCancelled": "Cancelled"
+    }
+  },
+
+  "log_dir":       "./logs",
+  "log_keep_days": 30
+}
