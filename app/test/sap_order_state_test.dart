@@ -29,6 +29,91 @@ void main() {
     }
   });
 
+  group('one line of an order', () {
+    for (final c in (fixture['line_stage_to_status'] as List).cast<Map<String, dynamic>>()) {
+      test(c['why'] as String, () {
+        expect(
+          lineStatusFromSap(SapLineState(
+            productionStage: c['line_stage'] as String,
+            deliveryOrder: c['line_delivery'] as String,
+          )),
+          c['expect'],
+        );
+      });
+    }
+  });
+
+  group('an order rolls up from its lines', () {
+    for (final c in (fixture['order_rolls_up_from_lines'] as List).cast<Map<String, dynamic>>()) {
+      test(c['why'] as String, () {
+        final lines = (c['line_stages'] as List)
+            .cast<String>()
+            .map((s) => SapLineState(productionOrder: s.isEmpty ? '' : 'PO-1', productionStage: s))
+            .toList();
+        expect(
+          orderStatusFromLines(lines, const SapOrderState(salesOrder: 'SO-1001')),
+          c['expect'],
+        );
+      });
+    }
+
+    test('a line SAP has not touched does not drag the order back', () {
+      // An order whose lines carry nothing falls back to the order's own stage,
+      // rather than reporting Not Started over the top of a real stage.
+      expect(
+        orderStatusFromLines(
+          const [SapLineState()],
+          const SapOrderState(salesOrder: 'SO-1', productionStage: 'Curing'),
+        ),
+        'In Production',
+      );
+    });
+
+    for (final c in (fixture['order_rolls_up_from_deliveries'] as List).cast<Map<String, dynamic>>()) {
+      test(c['why'] as String, () {
+        final stages = (c['line_stages'] as List).cast<String>();
+        final dels = (c['line_deliveries'] as List).cast<String>();
+        final lines = <SapLineState>[];
+        for (var i = 0; i < stages.length; i++) {
+          lines.add(SapLineState(
+              productionOrder: 'PO-1',
+              productionStage: stages[i],
+              deliveryOrder: dels[i]));
+        }
+        expect(
+          orderStatusFromLines(lines, const SapOrderState(salesOrder: 'SO-1001')),
+          c['expect'],
+        );
+      });
+    }
+
+    test('an order-level delivery no longer overrides an unshipped line', () {
+      // The bug this replaced: order 381 had a delivery, so every line read
+      // Dispatched - including the one deliberately left off it.
+      expect(
+        orderStatusFromLines(
+          const [
+            SapLineState(productionOrder: 'PO-1', productionStage: 'Closed', deliveryOrder: 'DN-1'),
+            SapLineState(productionOrder: 'PO-2', productionStage: 'Planned'),
+          ],
+          const SapOrderState(salesOrder: 'SO-1', deliveryOrder: 'DN-1'),
+        ),
+        'Not Started',
+      );
+    });
+
+    test('reading line state off an items row', () {
+      final l = SapLineState.fromLine({
+        'item_code': 'I-14637',
+        'custom_sap_production_order': '4228',
+        'custom_sap_production_stage': 'In Production',
+      });
+      expect(l.productionOrder, '4228');
+      expect(l.hasSap, isTrue);
+      expect(SapLineState.fromLine({'item_code': 'I-1'}).hasSap, isFalse);
+    });
+  });
+
   group('the mistakes this mapping exists to prevent', () {
     test('an unmapped stage is never Ready', () {
       // Ready tells a rep the order is made.
@@ -104,6 +189,65 @@ void main() {
                   salesOrder: 'SO-1', syncedAt: '2026-09-12T08:00:00'),
               now),
           isFalse);
+    });
+  });
+
+  group('An order SAP has cancelled', () {
+    // The failure this closes, found 18 September 2026: SAP order 399 had been
+    // cancelled and the sync had recorded bost_Cancelled on the ERPNext order
+    // correctly, for days. Nothing read it, so it still showed as approved.
+    SapOrderState sap(String? status) => SapOrderState(salesOrderStatus: status);
+
+    test('is cancelled however the approval status reads', () {
+      expect(cancelledInSap(sap('bost_Cancelled')), isTrue);
+      expect(orderApprovalLabel('PO Approved - Ready for SAP', sap('bost_Cancelled')),
+          'Cancelled in SAP');
+    });
+
+    test('an open SAP order is not cancelled', () {
+      expect(cancelledInSap(sap('bost_Open')), isFalse);
+      expect(orderApprovalLabel('PO Approved - Ready for SAP', sap('bost_Open')),
+          'Approved');
+    });
+
+    test('closed is finished, not cancelled - never conflate the two', () {
+      // Conflating them would retire a delivered order as though it had been
+      // called off.
+      expect(cancelledInSap(sap('bost_Close')), isFalse);
+    });
+
+    test('an order SAP has not taken yet cannot be cancelled', () {
+      expect(cancelledInSap(sap(null)), isFalse);
+      expect(cancelledInSap(sap('')), isFalse);
+    });
+
+    test('the case is SAPs, not ours', () {
+      expect(cancelledInSap(sap('BOST_CANCELLED')), isTrue);
+    });
+  });
+
+  group('A line whose production order was cancelled', () {
+    // Select-LeastAdvancedPo skips cancelled production orders, so a line whose
+    // only PO was cancelled has nothing covering it. The sync clears the stage;
+    // these assert that a cleared stage is what Not Started looks like.
+    test('reads Not Started once the sync has cleared its stage', () {
+      expect(
+          lineStatusFromSap(
+              const SapLineState(productionStage: '', productionOrder: '')),
+          'Not Started');
+    });
+
+    test('is indistinguishable from a line that never had one', () {
+      expect(lineStatusFromSap(const SapLineState()), 'Not Started');
+    });
+
+    test('but a delivered line stays Dispatched, cleared stage or not', () {
+      // A cancelled production order after the goods have gone must not reopen
+      // the line; the delivery is the later fact.
+      expect(
+          lineStatusFromSap(
+              const SapLineState(productionStage: '', deliveryOrder: 'DN-9')),
+          'Dispatched');
     });
   });
 }

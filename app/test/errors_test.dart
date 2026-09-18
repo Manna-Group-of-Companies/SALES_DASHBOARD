@@ -8,7 +8,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
-import 'package:manna_field_sales/services/stock_service.dart';
 
 DioException _dio(DioExceptionType type, {Response? response, Object? error}) =>
     DioException(
@@ -192,11 +191,10 @@ void main() {
   });
 
   group('Messages already written for a rep are left alone', () {
-    test('a stock refusal keeps its own wording', () {
-      final e = StockUnavailable(
-          'Only 2 rolls left of PCTR-100 — another rep booked the rest.');
-      expect(humanError(e), '$e');
-    });
+    // A StockUnavailable case stood here — "Only 2 rolls left of PCTR-100,
+    // another rep booked the rest" — and it has gone with the booking protocol
+    // that raised it. Nothing in the app refuses an order for want of stock
+    // any more; SAP decides that, after the order reaches it.
 
     test('a plain exception still comes out as a sentence', () {
       expect(humanError(Exception('Lead is missing GST number')),

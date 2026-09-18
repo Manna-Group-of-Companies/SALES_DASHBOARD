@@ -25,12 +25,12 @@
       "expect": false
     },
     {
-      "why": "a line served from the shelf belongs to the minimum-stock pool already - cancelling the order releases the reservation, it does not create a second batch",
+      "why": "a line the manager marked as served from the shelf was not made for this order, so cancelling it produces nothing to divert. (Until 17 Sep 2026 this also released a reservation; SAP owns the booking now, and the label is all that is read here.)",
       "line": { "docstatus": 2, "custom_fulfilment_mode": "From Minimum Stock", "custom_production_stage": "" },
       "expect": false
     },
     {
-      "why": "a line claimed off a replenishment run in progress is the run's stock, not this order's - it stays claimable by the next order rather than being diverted twice",
+      "why": "a line marked as claimed off a run is the run's stock, not this order's - it stays available to the next order rather than being diverted twice",
       "line": { "docstatus": 2, "custom_fulfilment_mode": "From Production Run", "custom_production_stage": "" },
       "expect": false
     },

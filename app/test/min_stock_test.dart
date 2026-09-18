@@ -1,10 +1,16 @@
-// Two rules that decide what a rep is shown, and that are easy to get backwards.
+// What a rep is shown about stock, and who is shown it at all.
 //
-//  - The minimum-stock list is a *fast-moving* list. Being on it is not a
-//    warning; having stopped selling while on it is.
-//  - A rep must never be shown another business unit's catalogue, but an item
-//    nobody has assigned a unit to yet has to stay visible, or the product list
-//    empties the day the field is added.
+// The dead-stock group that stood here is gone. It tested [MinStock] against a
+// *minimum-stock pool*: whether an item on the fast-moving list had stopped
+// selling, measured off a `last_sold_on` stamp the pool carried. That pool was
+// removed on 17 September 2026 — every one of its 129 rows held a minimum of
+// zero, so no alarm built on it had ever been able to fire — and the model
+// now carries one figure, straight from SAP.
+//
+// The unit rules below are untouched by any of that: a rep must never be shown
+// another business unit's catalogue, but an item nobody has assigned a unit to
+// yet has to stay visible, or the product list empties the day the field is
+// added.
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -13,96 +19,73 @@ import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/services/api.dart';
 
-String _daysAgo(int days) => DateTime.now()
-    .subtract(Duration(days: days))
-    .toIso8601String()
-    .substring(0, 10);
-
-MinStock _pool({required String lastSold, double qty = 10}) => MinStock(
-      itemCode: 'ITEM-1',
-      minimumQty: qty,
-      reservedQty: 0,
-      myReservedQty: 0,
-      lastSoldOn: lastSold,
-    );
-
 void main() {
-  group('Dead stock', () {
-    test('an item selling this week is just moving', () {
-      final s = _pool(lastSold: _daysAgo(3));
-      expect(s.daysSinceSold, 3);
-      expect(s.isSlowMoving, isFalse);
-      expect(s.isDeadStockRisk, isFalse);
-    });
-
-    test('a gap past the slow threshold is a nudge, not an alarm', () {
-      final s = _pool(lastSold: _daysAgo(kSlowMovingDays + 5));
-      expect(s.isSlowMoving, isTrue);
-      expect(s.isDeadStockRisk, isFalse);
-    });
-
-    test('a gap past the dead threshold is the alarm', () {
-      final s = _pool(lastSold: _daysAgo(kDeadStockDays + 1));
-      expect(s.isDeadStockRisk, isTrue);
-      // Only one badge should ever apply, or the UI shows two states at once.
-      expect(s.isSlowMoving, isFalse);
-    });
-
-    test('never sold is treated as the worst case, not the best', () {
-      final s = _pool(lastSold: '');
-      expect(s.daysSinceSold, -1);
-      expect(s.isDeadStockRisk, isTrue);
-    });
-
-    test('an item with no pool cannot be dead stock', () {
-      // Nothing is sitting on the shelf, so there is nothing to write off.
-      final s = _pool(lastSold: '', qty: 0);
-      expect(s.isDeadStockRisk, isFalse);
-    });
-
-    test('a null date from Frappe reads as never sold, not as 1970', () {
+  group('Availability', () {
+    test('what SAP sent is what is available, with nothing taken off it', () {
+      // The figure has already had every open SAP order deducted from it.
+      // Anything subtracted here would deduct the same roll twice.
       final s = MinStock.fromJson({
         'item_code': 'ITEM-1',
-        'minimum_qty': 5,
-        'reserved_qty': 0,
-        'my_reserved_qty': 0,
-        'last_sold_on': null,
+        'available_qty': 6,
+        'available_loose_belts': 5,
+        'belts_per_roll': 10,
       });
-      expect(s.lastSoldOn, '');
-      expect(s.daysSinceSold, -1);
+      expect(s.availableQty, 6);
+      expect(s.availableLooseBelts, 5);
+      expect(s.weightsKnown, isTrue);
+    });
+
+    test('an item with no weights set reports nothing available', () {
+      // Not a guess and not a conversion: SAP holds this in kilograms and
+      // nobody has said what a roll weighs. On instruction, it reads as
+      // nothing available until the weights are loaded.
+      final s = MinStock.fromJson({
+        'item_code': 'ITEM-1',
+        'available_qty': 756,
+        'available_loose_belts': 3,
+        'belts_per_roll': 0,
+        'weights_known': false,
+      });
+      expect(s.availableQty, 0);
+      expect(s.availableLooseBelts, 0);
+      expect(s.weightsKnown, isFalse);
+    });
+
+    test('the belt ceiling counts every belt, not just the loose ones', () {
+      // Ordering belts opens a roll: the belts asked for go out and the rest
+      // of that roll comes back as loose stock.
+      const s = MinStock(
+          itemCode: 'ITEM-1',
+          availableQty: 4,
+          availableLooseBelts: 2,
+          beltsPerRoll: 10);
+      expect(s.beltCeiling(10), 42);
+    });
+
+    test('an item not sold in belts offers only what is loose', () {
+      const s =
+          MinStock(itemCode: 'ITEM-1', availableQty: 4, availableLooseBelts: 0);
+      expect(s.beltCeiling(0), 0);
     });
   });
 
-  group('Availability', () {
-    test('what is left is the pool less everyone else booked', () {
-      final s = MinStock(
-        itemCode: 'ITEM-1',
-        minimumQty: 10,
-        reservedQty: 4,
-        myReservedQty: 1,
-        minimumLooseBelts: 8,
-        reservedLooseBelts: 3,
-      );
-      expect(s.availableQty, 6);
-      expect(s.availableLooseBelts, 5);
+  group('Opening rolls for belts', () {
+    test('belts already loose open nothing', () {
+      expect(MinStock.rollsToOpen(3, 5, 10), 0);
     });
 
-    test('an over-reserved pool reads as empty, never as negative', () {
-      final s = MinStock(
-        itemCode: 'ITEM-1',
-        minimumQty: 10,
-        reservedQty: 14,
-        myReservedQty: 0,
-        minimumLooseBelts: 2,
-        reservedLooseBelts: 9,
-      );
-      expect(s.availableQty, 0);
-      expect(s.availableLooseBelts, 0);
+    test('a shortfall rounds up to whole rolls', () {
+      expect(MinStock.rollsToOpen(12, 0, 10), 2);
+      expect(MinStock.rollsToOpen(11, 1, 10), 1);
+    });
+
+    test('an item that does not cut into belts opens nothing', () {
+      expect(MinStock.rollsToOpen(5, 0, 0), 0);
     });
   });
 
   group('How quantities read', () {
-    final s = _pool(lastSold: _daysAgo(1));
+    const s = MinStock(itemCode: 'ITEM-1', availableQty: 10);
 
     test('belts are only mentioned when there are some', () {
       // CTR, bonding gum and solution have no belts, and a permanent

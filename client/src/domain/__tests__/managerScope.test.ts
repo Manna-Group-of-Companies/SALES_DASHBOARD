@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { canOpen, screensFor, type ManagerScreen } from '../sales';
+import { canOpen, canOpenAs, screensFor, screensForUser, type ManagerScreen } from '../sales';
 
 const PARTY: ManagerScreen[] = ['customers', 'leads', 'locations', 'regularizations'];
 const ORDER_SIDE: ManagerScreen[] = ['orders', 'approvals', 'combined', 'stock'];
@@ -53,5 +53,40 @@ describe('the token is matched exactly', () => {
     // Deliberate: the token is a stored value, not free text, and a loose
     // match here would be a permission granted by a typo.
     expect(canOpen('pareeth', 'orders')).toBe(false);
+  });
+});
+
+/**
+ * The GM is scoped by role, not by team.
+ *
+ * Their escalation queue links straight to `/orders/:id`, and that route is
+ * behind `TeamRoute`. A GM runs no sales team of their own, so a team-only
+ * test gave them nothing and the link redirected to `/` — which on screen is
+ * a button that does nothing at all.
+ */
+describe('the General Manager', () => {
+  it('opens every screen without managing a team', () => {
+    for (const s of [...PARTY, ...ORDER_SIDE]) {
+      expect(canOpenAs('general_manager', undefined, s)).toBe(true);
+    }
+  });
+
+  it('reaches the order they were escalated, which is the whole point', () => {
+    expect(canOpenAs('general_manager', undefined, 'orders')).toBe(true);
+  });
+
+  it('is not narrowed by a team that would narrow a sales manager', () => {
+    // Saneesh's token gives a sales manager party records only. It must not
+    // take the order pipeline away from a GM who happens to carry one.
+    expect(canOpenAs('general_manager', 'Saneesh', 'orders')).toBe(true);
+    expect(canOpen('Saneesh', 'orders')).toBe(false);
+  });
+
+  it('changes nothing for anybody else', () => {
+    expect(screensForUser('sales_manager', 'Pareeth')).toEqual(screensFor('Pareeth'));
+    expect(screensForUser('sales_manager', 'Saneesh')).toEqual(screensFor('Saneesh'));
+    expect(screensForUser('production_manager', undefined)).toEqual([]);
+    expect(canOpenAs('stock_manager', undefined, 'orders')).toBe(false);
+    expect(canOpenAs(undefined, undefined, 'orders')).toBe(false);
   });
 });

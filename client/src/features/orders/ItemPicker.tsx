@@ -27,7 +27,7 @@ import { useMemo, useState } from 'react';
 import type { ItemOption, MinStockLine, Product, ProductCategory } from '@/domain/types';
 import { CATEGORY_LABEL } from '@/domain/types';
 import { isMisconfigured, rollWeight, beltWeight } from '@/domain/productRules';
-import { NONE, poolByItem, runAvailable, shelfAvailable, type Qty } from '@/domain/minimumStock';
+import { NONE, poolByItem, shelfAvailable, type Qty } from '@/domain/minimumStock';
 import { Badge, Empty, Input, Segmented, Select } from '@/components/ui';
 import './orders.css';
 
@@ -40,11 +40,6 @@ import './orders.css';
  */
 function freeOf(s: MinStockLine | undefined): Qty {
   return s ? shelfAvailable(s) : NONE;
-}
-
-/** Free on the current run — a separate pool with its own counter. */
-function runOf(s: MinStockLine | undefined): Qty {
-  return s ? runAvailable(s) : NONE;
 }
 
 const has = (q: Qty) => q.rolls > 0 || q.belts > 0;
@@ -86,7 +81,13 @@ function blockedReason(item: ItemOption): string | null {
  * "available" figure is how a customer gets promised same-day stock that is
  * still in the press.
  */
-type Stock = 'all' | 'pooled' | 'available' | 'run' | 'make';
+/**
+ * `pooled` and `run` were two of these until 17 September 2026 — "in the
+ * minimum-stock pool" and "on a production run", the run being a second pool
+ * with its own counter that a rep could claim against. Both pools are gone;
+ * an item is either stocked in SAP or it is made to order.
+ */
+type Stock = 'all' | 'stocked' | 'available' | 'make';
 
 /** Shown at once. High enough to browse a category, low enough not to stall. */
 const PAGE = 80;
@@ -121,17 +122,15 @@ export function ItemPicker({
   }, [items]);
 
   const counts = useMemo(() => {
-    let pooled = 0;
+    let stocked = 0;
     let available = 0;
-    let run = 0;
     for (const i of items) {
       const s = byItem.get(i.code);
       if (!s) continue;
-      pooled += 1;
+      stocked += 1;
       if (has(freeOf(s))) available += 1;
-      if (has(runOf(s))) run += 1;
     }
-    return { pooled, available, run, make: items.length - pooled };
+    return { stocked, available, make: items.length - stocked };
   }, [items, byItem]);
 
   const results = useMemo(() => {
@@ -145,7 +144,6 @@ export function ItemPicker({
         if (stock === 'make') return !s;
         if (!s) return false;
         if (stock === 'available') return has(freeOf(s));
-        if (stock === 'run') return has(runOf(s));
         return true;
       });
     }
@@ -215,9 +213,8 @@ export function ItemPicker({
             onChange={(v) => narrow(() => setStock(v))}
             options={[
               { value: 'all', label: `All (${items.length})` },
-              { value: 'available', label: `Free on shelf (${counts.available})` },
-              { value: 'pooled', label: `In minimum stock (${counts.pooled})` },
-              { value: 'run', label: `On a production run (${counts.run})` },
+              { value: 'available', label: `In stock (${counts.available})` },
+              { value: 'stocked', label: `Stocked in SAP (${counts.stocked})` },
               { value: 'make', label: `Made to order (${counts.make})` },
             ]}
           />
@@ -240,7 +237,6 @@ export function ItemPicker({
             const perBelt = beltWeight(asProduct(i));
             const s = byItem.get(i.code);
             const free = freeOf(s);
-            const run = runOf(s);
             return (
               <button
                 type="button"
@@ -263,17 +259,17 @@ export function ItemPicker({
                     or "next fortnight", so the manager should not have to open
                     the stock screen in another tab to find it.
 
-                    Read from the pool's stored counters. The line's own view,
-                    once the item is on the order, reconciles those counters
-                    against the live reservation rows — this is a browse, and a
-                    stored counter over-books at worst, never under-books.
+                    It read "shelf X · booked Y · minimum Z" off the pool's
+                    stored counters until 17 September 2026. There is no
+                    minimum and no booked figure any more: SAP has taken every
+                    open order off what it reports, so one number is the whole
+                    truth and a second would be double-counting it.
                   */}
                   {knowStock && s && (
                     <span className="tiny dim num pick__stock">
-                      shelf {qtyLabel({ rolls: s.shelfRolls, belts: s.shelfBelts })} · booked{' '}
-                      {qtyLabel({ rolls: s.reservedRolls, belts: s.reservedBelts })} · minimum{' '}
-                      {s.minimumRolls}
-                      {has(run) ? ` · on a run ${qtyLabel(run)}` : ''}
+                      {s.weightsKnown
+                        ? `in stock ${qtyLabel(free)}`
+                        : 'weights not set on the item master'}
                     </span>
                   )}
                 </span>
@@ -284,19 +280,19 @@ export function ItemPicker({
                   {knowStock &&
                     (s ? (
                       <Badge
-                        tone={has(free) ? 'ok' : has(run) ? 'info' : 'warn'}
+                        tone={!s.weightsKnown ? 'neutral' : has(free) ? 'ok' : 'warn'}
                         title={
-                          has(free)
-                            ? `${qtyLabel(free)} free on the shelf, ready to reserve now`
-                            : has(run)
-                              ? `Nothing free on the shelf. ${qtyLabel(run)} on the current production run — available when the run is received.`
-                              : 'In the minimum-stock pool, but every roll on the shelf is already booked'
+                          !s.weightsKnown
+                            ? 'SAP holds this in kilograms and the item master has no weight per roll, so how many rolls that is cannot be worked out.'
+                            : has(free)
+                              ? `${qtyLabel(free)} available to promise — SAP has already taken every open order off this figure.`
+                              : 'Stocked in SAP, but nothing is left to promise.'
                         }
                       >
-                        {has(free)
-                          ? `${qtyLabel(free)} free`
-                          : has(run)
-                            ? 'on a run'
+                        {!s.weightsKnown
+                          ? 'not set up'
+                          : has(free)
+                            ? `${qtyLabel(free)} free`
                             : 'none free'}
                       </Badge>
                     ) : (

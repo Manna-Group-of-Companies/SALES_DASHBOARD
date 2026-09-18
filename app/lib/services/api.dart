@@ -10,7 +10,6 @@ import 'package:manna_field_sales/core/auth_store.dart';
 import 'package:manna_field_sales/core/capture_rules.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/credit.dart';
-import 'package:manna_field_sales/core/discount.dart';
 import 'package:manna_field_sales/core/expenses.dart';
 import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
@@ -27,7 +26,6 @@ import 'package:manna_field_sales/core/visibility.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
-import 'package:manna_field_sales/models/production_order.dart' as prod_order;
 import 'package:manna_field_sales/services/offline_cache.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/services/stock_service.dart';
@@ -59,10 +57,10 @@ class CacheKeys {
   static String get leaveBalance => 'leaveBalance:$_me';
   static String get items => 'items';
 
-  /// Minimum stock is composed from three reads plus the item list, so it is
-  /// only as fresh as its stalest part.
+  /// Stock is composed from the warehouse read, the weights, and the item
+  /// list, so it is only as fresh as its stalest part.
   static List<String> get minimumStock =>
-      [kStockPoolsKey, kStockBatchesKey, kStockBookingsKey, items];
+      [kStockBinsKey, kStockWeightsKey, items];
 }
 
 /// Outcome of a silent authentication attempt.
@@ -865,25 +863,19 @@ class Api {
       // the same per-family breakdown as `Sales Order Item`, so a converted
       // order reaches production knowing it is 12 rolls and 3 loose belts —
       // not just a quantity of 12.75.
-      // A discount the manager gave on the lead order comes across too, and
-      // changes fields on the way: the lead's custom pair becomes the standard
-      // ERPNext pair. Dropped here, the customer would be invoiced the full
-      // rate the discount was supposed to have replaced — and the discount
-      // would disappear at the exact moment it started to mean money.
-      final row = r.cast<String, dynamic>();
-      final pct = discountPercentOf(row);
-      final before = rateBeforeDiscount(row);
-
+      // A discount the manager gave on the lead order used to come across
+      // here, changing fields on the way — the lead's custom pair became the
+      // standard ERPNext pair — because dropping it would have invoiced the
+      // customer the full rate the discount had replaced. The discount feature
+      // was removed on 17 September 2026 and the rep's rate is already net, so
+      // there is one figure to carry and the standard fields are written flat.
       items.add({
         'item_code': code,
         'qty': qty,
         'rate': (r['rate'] as num?)?.toDouble() ?? 0,
-        if (pct > 0) ...{
-          'price_list_rate': before,
-          'discount_percentage': pct,
-          'discount_amount':
-              roundMoney(before - ((r['rate'] as num?)?.toDouble() ?? 0)),
-        },
+        'price_list_rate': (r['rate'] as num?)?.toDouble() ?? 0,
+        'discount_percentage': 0,
+        'discount_amount': 0,
         'custom_product_category': r['custom_product_category'],
         'custom_rolls': r['custom_rolls'],
         'custom_loose_belts': r['custom_loose_belts'],
@@ -939,12 +931,6 @@ class Api {
     }
     final created = '${r.data['data']['name']}';
 
-    // The stock this order was already holding follows it, rather than being
-    // released and re-taken. Handing it back even momentarily would put it on
-    // offer, and a customer could lose at the instant of approval the rolls
-    // they were promised days ago.
-    await StockService.movePool(
-        OrderRef.lead('${leadOrder['name']}'), OrderRef(created));
 
     return created;
   }
@@ -967,16 +953,16 @@ class Api {
   /// How the sales manager decided one line will be served.
   ///
   /// The decision belongs to the line, not the order: an order can hold six
-  /// products that are all on the minimum-stock list, and the manager may want
-  /// two of them out of the pool now and the rest made to order.
+  /// products that are all in stock, and the manager may want two of them off
+  /// the shelf now and the rest made to order.
   ///
-  /// Both directions take effect immediately. The whole booking set for the
-  /// order is recomputed from the lines and handed to [StockService.rebook],
-  /// which works out the difference — so switching a line to production
-  /// releases exactly that line, and switching it back books exactly that line,
-  /// without disturbing the others.
-  /// Works for an order against a customer or against a lead — both draw on the
-  /// same pool, so the manager makes the same decision either way.
+  /// It is a **note for production**, and nothing more. It used to book and
+  /// release stock as it was switched; SAP commits stock against its own sales
+  /// order now, so the shelf moves when the order reaches SAP and not when the
+  /// manager labels a line.
+  ///
+  /// Works for an order against a customer or against a lead — the same
+  /// decision either way.
   static Future<void> setLineFulfilmentMode({
     required String orderName,
     required String itemCode,
@@ -990,11 +976,10 @@ class Api {
     // Approval is the lock: where a line is served from only matters when
     // production receives the order, and approval is that moment. The two
     // below it are backstops for states that should not be reachable without
-    // approval — each would otherwise release a reservation against goods the
-    // floor has already acted on.
+    // approval.
     //
-    // A lead order has no approval status of this kind and never carries
-    // minimum-stock bookings anyway, so the gate applies to Sales Orders.
+    // A lead order has no approval status of this kind, so the gate applies to
+    // Sales Orders.
     if (isOrderComplete(order)) {
       throw Exception('This order has been dispatched. Where its lines were '
           'served from can no longer be changed.');
@@ -1014,88 +999,27 @@ class Api {
       if ('${it['item_code']}' == itemCode) it['custom_fulfilment_mode'] = mode;
     }
 
-    // Only the lines the manager wants out of the pool should hold anything.
-    final wanted = <Map<String, dynamic>>[
-      for (final it in items)
-        if ('${it['custom_fulfilment_mode'] ?? ''}' == kFulfilMinimumStock)
-          {
-            'item_code': '${it['item_code']}',
-            'qty': _rollsOf(it),
-            'loose_belts': (it['custom_loose_belts'] as num?)?.toInt() ?? 0,
-            if (it['custom_aged_batch'] != null)
-              'batch': it['custom_aged_batch'],
-          }
-    ];
-
-    await StockService.rebook(ref, wanted);
     await _put(ref.doctype, orderName, {'items': items});
   }
 
-  /// What a line books against the pool: whole rolls for tread rubber, and the
-  /// stored quantity for everything else. The fractional roll that loose belts
-  /// create is not part of it — belts are booked on their own counter.
-  static double _rollsOf(Map<String, dynamic> item) {
-    final rolls = (item['custom_rolls'] as num?)?.toDouble() ?? 0;
-    if (rolls > 0) return rolls;
-    return (item['qty'] as num?)?.toDouble() ?? 0;
-  }
-
-  /// Puts a discount on one line of an order, or takes it off with zero.
-  ///
-  /// The whole `items` array goes back, because a Frappe child table is
-  /// replaced rather than merged — sending only the changed row would delete
-  /// every other line on the order. Each row is copied through untouched
-  /// except the one being discounted, which is the same shape
-  /// `approveSalesOrderPO` uses for the very same reason.
-  ///
-  /// Refuses once the rates are approved. That is the rule the manager was
-  /// told at approval — "nobody, including you, can change them afterwards" —
-  /// and a discount is a change to the rate whatever it is called. The check
-  /// is here as well as on the screen because this is the only door: the
-  /// screen can be got around, and on this site there is no Server Script
-  /// behind it to say no.
-  static Future<void> setLineDiscount({
-    required String orderName,
-    required String itemRowName,
-    required double percent,
-    bool isLead = false,
-  }) async {
-    final refusal = discountRefusal(percent);
-    if (refusal != null) throw Exception(refusal);
-
-    final doctype = isLead ? 'Lead Order' : 'Sales Order';
-    final order = await (isLead ? getLeadOrder(orderName) : getOrder(orderName));
-
-    if (orderSignedOff(order, isLead: isLead)) {
-      throw Exception(
-          'This order is approved — its discounts and rates are final.');
-    }
-
-    final rows = (order['items'] as List?) ?? const [];
-    var found = false;
-    final items = <Map<String, dynamic>>[];
-    for (final raw in rows) {
-      final row = (raw as Map).cast<String, dynamic>();
-      if ('${row['name']}' != itemRowName) {
-        items.add(row);
-        continue;
-      }
-      found = true;
-      items.add({
-        ...row,
-        ...discountFields(item: row, percent: percent, isLead: isLead),
-      });
-    }
-    // A row that is no longer there means the order moved under the manager —
-    // a rep editing it at the same moment. Writing the array back anyway would
-    // save a discount onto nothing while reporting success.
-    if (!found) {
-      throw Exception(
-          'That line is no longer on the order. Reopen it and try again.');
-    }
-
-    await _put(doctype, orderName, {'items': items});
-  }
+  /*
+   * `setLineDiscount` stood here until 17 September 2026.
+   *
+   * The sales manager could put a percentage off any line, or take it off with
+   * zero, and it was written the moment it was confirmed rather than held
+   * until approval. It refused once the rates were approved — the rule the
+   * manager was told at approval, "nobody, including you, can change them
+   * afterwards", and a discount is a change to the rate whatever it is called.
+   *
+   * The whole feature is gone from both apps. The sales team types the rate
+   * AFTER discount, so a line carries one figure instead of three, and that is
+   * what reaches SAP: `Sync-SapOrders.ps1` sends `amount / custom_total_weight`
+   * with DiscountPercent always 0.
+   *
+   * Lines saved before that keep whatever `discount_percentage` they were
+   * written with. Nothing displays or re-applies it, and their `amount` was
+   * always the net figure, so they still price correctly.
+   */
 
   static Future<void> approveSalesOrderPO(String name, bool approve) async {
     final body = <String, dynamic>{
@@ -1429,140 +1353,25 @@ class Api {
     return s.toLowerCase().contains('|${unit.trim().toLowerCase()}|');
   }
 
-  // ------------------------------------------------------ minimum stock ---
+  // ------------------------------------------------------------- stock ---
   //
-  // All of this used to go through Server Script APIs. The site's plan no
-  // longer runs server scripts, so it is plain resource-API work now, and the
-  // booking protocol that keeps two reps from overselling the same rolls lives
-  // in `services/stock_service.dart`. Read the note at the top of that file
-  // before changing anything here.
+  // Read-only. Booking used to live here — `reserveMinimumStock`,
+  // `releaseReservations`, the production-run counters — and every one of
+  // those wrote to doctypes this app no longer uses. SAP commits stock against
+  // its own sales orders and the stock sync brings back what is left, so there
+  // is nothing for the app to reserve and no counter for it to keep. See the
+  // note at the top of `services/stock_service.dart`.
 
-  /// Current minimum-stock position for every item on the list, including how
-  /// much of it other reps have already booked.
+  /// What every item has available to promise, straight from SAP.
   static Future<Map<String, MinStock>> getMinimumStock() =>
       StockService.load();
 
-  /// Books stock against an order that already exists.
-  static Future<void> reserveMinimumStock({
-    required String itemCode,
-    required double qty,
-    required String salesOrder,
-    int looseBelts = 0,
-    String? batch,
-  }) =>
-      StockService.book(
-          itemCode: itemCode,
-          qty: qty,
-          belts: looseBelts,
-          order: OrderRef(salesOrder),
-          batch: batch);
-
-  /// Hands back everything an order was holding. Called when an order fails to
-  /// save after some of its lines were already booked, so a half-written order
-  /// never strands stock that nobody can sell.
-  static Future<void> releaseReservations(String salesOrder) =>
-      StockService.release(OrderRef(salesOrder));
-
-  /// The minimum-stock list with each item's product record alongside it,
-  /// ordered by what most needs attention: items that have stopped selling
-  /// first, then the ones whose stock has sat longest.
+  /// The same figures with each item's product record alongside.
   ///
   /// The product join runs through [getItems], so the same unit filter applies
   /// — a rep is not shown another unit's stock position any more than they are
-  /// shown its catalogue. A pooled item with no matching product record is
+  /// shown its catalogue. A stocked item with no matching product record is
   /// dropped rather than rendered as a bare code.
-  /// Records how much of an item is on a production run to refill its pool.
-  ///
-  /// The run itself is raised in SAP, which this app cannot see. This is the
-  /// production manager telling everybody else what they have done, so a rep
-  /// looking at a short pool knows whether stock is coming or nobody has
-  /// noticed yet.
-  ///
-  /// Passing zero clears it — which is how a completed run is closed off once
-  /// the goods arrive and become a batch.
-  static Future<void> setInProduction({
-    required String itemCode,
-    required double qty,
-    int belts = 0,
-    String? by,
-  }) async {
-    final who =
-        (by ?? Session.I.salesPersonLabel ?? Session.I.email).toString().trim();
-    await _put('Manna Minimum Stock Item', itemCode, {
-      'custom_in_production_qty': qty < 0 ? 0 : qty,
-      'custom_in_production_belts': belts < 0 ? 0 : belts,
-      // Stamped from the server's clock for the same reason every other
-      // deadline is: a figure dated by the handset can be dated wrongly.
-      'custom_in_production_updated_on': nowStamp(),
-      'custom_in_production_updated_by': who,
-    });
-    // The pool list is cached for offline use, and a stale copy would keep
-    // telling reps nothing is on order.
-    await StockService.invalidate();
-  }
-
-  /// Moves the whole run to a stage, and every order line claimed out of it
-  /// with it.
-  ///
-  /// One batch is being made, not one job per order, so the stage belongs to
-  /// the run. Writing it down onto each line as well is what lets the rest of
-  /// the app carry on unchanged: the order roll-up, the rep's status and the
-  /// production screens all read the line, and none of them need to know that
-  /// this particular line's stage came from a run rather than from someone
-  /// advancing it directly.
-  static Future<int> setProductionRunStage({
-    required String itemCode,
-    required String stage,
-  }) async {
-    await _put('Manna Minimum Stock Item', itemCode,
-        {'custom_production_run_stage': stage});
-
-    final claims = await _list('Manna Stock Reservation',
-        fields: '["sales_order","lead_order"]',
-        filters: '[["item_code","=","$itemCode"],["status","=","Active"],'
-            '["custom_source","=","$kSourceProductionRun"]]');
-
-    final orders = <String>{
-      for (final c in claims)
-        if ('${c['sales_order'] ?? ''}'.trim().isNotEmpty &&
-            '${c['sales_order']}' != 'null')
-          '${c['sales_order']}'
-    };
-
-    var touched = 0;
-    for (final name in orders) {
-      try {
-        final order = await getOrder(name);
-        final items = ((order['items'] as List?) ?? [])
-            .map((e) => (e as Map).cast<String, dynamic>())
-            .toList();
-        var changed = false;
-        for (final it in items) {
-          if ('${it['item_code']}' == itemCode) {
-            it['custom_production_stage'] = stage;
-            changed = true;
-          }
-        }
-        if (!changed) continue;
-        await _put('Sales Order', name, {
-          'items': items,
-          'custom_production_status': _rollUpStage(items),
-        });
-        touched++;
-      } catch (_) {
-        // One order failing must not stop the rest of the run moving. The
-        // stage is on the pool either way, so nothing is lost that a repeat
-        // will not fix.
-      }
-    }
-    await OfflineCache.clear();
-    return touched;
-  }
-
-  /// The run has landed. Claims against it become ordinary bookings.
-  static Future<int> receiveProductionRun(String itemCode) =>
-      StockService.receiveRun(itemCode);
-
   static Future<List<MinStockDetail>> getMinimumStockDetailed() async {
     final results = await Future.wait([StockService.load(), getItems()]);
     final stock = results[0] as Map<String, MinStock>;
@@ -1582,75 +1391,6 @@ class Api {
     // nobody is shown.
     out.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return out;
-  }
-
-  // -------- Production orders (shared/PRODUCTION_FLOWS.md) --------
-  //
-  // Flow A only: replenishment orders (purpose Stock) the stock manager has
-  // not yet received onto the shelf. Flow B's production is tracked directly
-  // on the Sales Order line (`custom_production_stage`) and never reaches
-  // `Manna Production Order` except through the cancel-after-production
-  // exception, which this screen does not handle.
-
-  /// Open replenishment orders, joined with the item they name so the screen
-  /// can show a name and a unit rather than a bare code.
-  static Future<List<prod_order.ProductionOrderDetail>>
-      getOpenReplenishmentOrders() async {
-    final results = await Future.wait([
-      _list('Manna Production Order',
-          fields:
-              '["name","item_code","qty","loose_belts","status","raised_on","raised_by"]',
-          filters: '[["purpose","=","Stock"],'
-              '["status","not in",["Received","Cancelled"]]]',
-          orderBy: 'raised_on asc'),
-      getItems(),
-    ]);
-    final rows = results[0] as List<Map<String, dynamic>>;
-    final items = results[1] as List<Map<String, dynamic>>;
-    final byCode = {for (final d in items) '${d['name']}': d};
-
-    final out = <prod_order.ProductionOrderDetail>[];
-    for (final r in rows) {
-      final order = prod_order.ProductionOrder.fromJson(r);
-      final doc = byCode[order.itemCode];
-      if (doc == null) continue;
-      out.add(prod_order.ProductionOrderDetail(
-          order: order, product: Product(doc)));
-    }
-    return out;
-  }
-
-  /// Closes a replenishment order: one new dated batch, and the order marked
-  /// Received. **One batch per production order, never added to an existing
-  /// one** — see shared/PRODUCTION_FLOWS.md — which is what keeps the aging
-  /// bands seeing a real arrival date rather than one blended with older
-  /// stock.
-  static Future<void> receiveProductionOrder({
-    required String name,
-    required String itemCode,
-    required double qty,
-    int looseBelts = 0,
-  }) async {
-    final today = nowStamp().substring(0, 10);
-    final r = await Session.I.dio.post(_res('Manna Minimum Stock Batch'), data: {
-      'item_code': itemCode,
-      'qty': qty,
-      'loose_belts': looseBelts,
-      'original_qty': qty,
-      'original_loose_belts': looseBelts,
-      'batch_date': today,
-    });
-    if (r.statusCode != 200 && r.statusCode != 201) {
-      throw Exception(_frappeError(r));
-    }
-    final batchName = '${r.data['data']['name']}';
-
-    await _put('Manna Production Order', name, {
-      'status': 'Received',
-      'received_on': nowStamp(),
-      'received_by': Session.I.salesPersonLabel ?? Session.I.email,
-      'batch': batchName,
-    });
   }
 
   static Future<List<String>> getCustomerGroups() async {
@@ -2299,69 +2039,48 @@ class Api {
   /// as something to decide rather than as already approved. The **per-line**
   /// ones mean "this price is final", are carried through untouched, and are
   /// what keep an approved rate locked while the order goes round again.
-  /// Re-applies the discounts already on an order to the lines about to
-  /// replace them.
-  ///
-  /// A Frappe child table is replaced, not merged, and the rep's editor knows
-  /// nothing about discounts — it builds each line from the rate per kg the
-  /// rep typed. So without this, a rep opening a pending order to fix a
-  /// quantity would silently take back a discount their manager had already
-  /// given, and the manager would approve a full-price order believing the
-  /// discount was still on it.
-  ///
-  /// The percentage is what survives, not the discounted rate: if the rep has
-  /// changed what they quoted, 10% off the new rate is what the manager
-  /// agreed to, where the old net rate would be a number nobody chose.
-  ///
-  /// Failing to read the order is not allowed to block the save. The rep's
-  /// edit is the thing that must not be lost, and the manager re-checks the
-  /// order in either case — it is back in their queue.
-  static Future<List<Map<String, dynamic>>> _keepDiscounts(
-    String orderName,
-    List<Map<String, dynamic>> items, {
-    required bool isLead,
-  }) async {
-    final Map<String, dynamic> order;
-    try {
-      order = await (isLead ? getLeadOrder(orderName) : getOrder(orderName));
-    } catch (_) {
-      return items;
-    }
-
-    final pctByCode = <String, double>{};
-    for (final raw in (order['items'] as List?) ?? const []) {
-      if (raw is! Map) continue;
-      final row = raw.cast<String, dynamic>();
-      final pct = discountPercentOf(row);
-      if (pct > 0) pctByCode['${row['item_code']}'] = pct;
-    }
-    if (pctByCode.isEmpty) return items;
-
-    return [
-      for (final it in items)
-        if (pctByCode['${it['item_code']}'] case final pct?)
-          {
-            ...it,
-            ...discountFields(item: it, percent: pct, isLead: isLead),
-          }
-        else
-          it
-    ];
-  }
+  /*
+   * `_keepDiscounts` stood here until 17 September 2026.
+   *
+   * A Frappe child table is replaced rather than merged, and the rep's editor
+   * knew nothing about discounts — it built each line from the rate per kg the
+   * rep typed. So without it, a rep opening a pending order to fix a quantity
+   * silently took back a discount their manager had already given, and the
+   * manager approved a full-price order believing it was still on.
+   *
+   * There are no discounts to carry now: the rep types the rate after
+   * discount, so the figure their editor builds is already the whole price.
+   */
 
   static Future<void> updateOrderLines({
     required String orderName,
     required List<Map<String, dynamic>> items,
-    required List<Map<String, dynamic>> reservations,
     required bool returnForApproval,
     String? deliveryDate,
     bool isLead = false,
   }) async {
     final ref = OrderRef(orderName, isLead: isLead);
-    await StockService.rebook(ref, reservations);
+
+    /*
+     * Checked against the order AS STORED, not against what the screen loaded.
+     *
+     * This had no gate at all until 17 September 2026 — the screen was the
+     * only thing standing between a rep and a write, and on this site there is
+     * no Server Script behind it to say no. A rep sitting on an order screen
+     * while their manager approves it could save straight over the approval.
+     *
+     * An approved order belongs to SAP. Nothing here can reach it — the sync
+     * only ever creates a SAP order, never updates one — so a write accepted
+     * at this point would change the ERPNext document, show the rep a new
+     * quantity, and leave the factory building the old one.
+     */
+    if (!isLead) {
+      final stored = await getOrder(orderName);
+      if (orderApproved(stored)) throw Exception(orderLockReason(stored));
+    }
 
     final body = <String, dynamic>{
-      'items': await _keepDiscounts(orderName, items, isLead: isLead),
+      'items': items,
     };
     if (deliveryDate != null) body['delivery_date'] = deliveryDate;
     if (returnForApproval) {
@@ -2663,16 +2382,13 @@ class Api {
 
   /// Delete an order the rep raised and no longer wants.
   ///
-  /// **Stock is released first, always.** Deleting a Sales Order that still
-  /// holds a reservation leaves the pool permanently over-booked with phantom
-  /// bookings nothing in the app can clear — see CLAUDE.md section 4. If the
-  /// release fails, the delete does not happen: an order still holding stock is
-  /// far better than stock held by an order that no longer exists.
+  /// Nothing has to be released first any more. A draft order holds no stock:
+  /// it is not in SAP until it is approved, and it is SAP that commits stock
+  /// against an order. Deleting one leaves nothing behind.
   ///
   /// The caller decides who may do this; [canDeleteOrder] in core/order_rules
   /// is the rule.
   static Future<void> deleteOrder(String orderName) async {
-    await StockService.release(OrderRef(orderName));
     final r = await Session.I.dio.delete('${_res('Sales Order')}/$orderName');
     if (r.statusCode != 200 && r.statusCode != 202) {
       throw Exception(_frappeError(r));
@@ -3195,7 +2911,6 @@ class Api {
     required String company,
     required List<Map<String, dynamic>> items,
     required String deliveryDate,
-    required List<Map<String, dynamic>> reservations,
   }) async {
     await _requireRoute('Customer', customer);
     final name = await createSalesOrder(
@@ -3204,28 +2919,19 @@ class Api {
         items: items,
         deliveryDate: deliveryDate);
 
-    final placed = await _bookOrUnwind(OrderRef(name), reservations);
-
-    /*
-     * After booking, not before: the duplicate check reads the order back, and
-     * an order that was about to be unwound for want of stock is not one to
-     * warn anybody about. Best-effort — see refreshDuplicateFlag.
-     */
+    // Best-effort — see refreshDuplicateFlag.
     await refreshDuplicateFlag(name);
-    return placed;
+    return name;
   }
 
-  /// Raises an order against a lead and books its minimum-stock lines.
+  /// Raises an order against a lead.
   ///
-  /// Identical in every respect that matters to [placeOrder]: the same pool,
-  /// the same race against other reps, the same unwind if a booking is
-  /// refused. A lead is a customer who has not been invoiced yet, not a
-  /// different kind of order.
+  /// Identical in every respect that matters to [placeOrder]. A lead is a
+  /// customer who has not been invoiced yet, not a different kind of order.
   static Future<String> placeLeadOrder({
     required String lead,
     required List<Map<String, dynamic>> items,
     required String deliveryDate,
-    required List<Map<String, dynamic>> reservations,
     required double total,
   }) async {
     await _requireRoute('Lead', lead);
@@ -3245,49 +2951,7 @@ class Api {
     if (r.statusCode != 200 && r.statusCode != 201) {
       throw Exception(_frappeError(r));
     }
-    final name = r.data['data']['name'] as String;
-
-    return _bookOrUnwind(OrderRef.lead(name), reservations);
-  }
-
-  /// Books an order's minimum-stock lines, and takes the order back if any of
-  /// them is refused.
-  ///
-  /// Shared by both order types because the failure this handles is the same
-  /// one: half-booked stock against an order the rep now owns but cannot
-  /// supply. Better to refuse the whole thing and let them re-price against
-  /// what is actually left.
-  static Future<String> _bookOrUnwind(
-      OrderRef ref, List<Map<String, dynamic>> reservations) async {
-    if (reservations.isEmpty) return ref.name;
-
-    try {
-      for (final r in reservations) {
-        await StockService.book(
-          itemCode: '${r['item_code']}',
-          qty: (r['qty'] as num?)?.toDouble() ?? 0,
-          belts: (r['loose_belts'] as num?)?.toInt() ?? 0,
-          order: ref,
-          batch: r['batch'] as String?,
-        );
-      }
-      return ref.name;
-    } catch (_) {
-      await StockService.release(ref);
-      await _discardDraftOrder(ref);
-      rethrow;
-    }
-  }
-
-  /// Removes an order that could not get its stock. Only ever called on an
-  /// order this call just created, and only while it is still a draft.
-  static Future<void> _discardDraftOrder(OrderRef ref) async {
-    try {
-      await Session.I.dio.delete('${_res(ref.doctype)}/${ref.name}');
-    } catch (_) {
-      // If it will not delete, leaving a draft behind is the lesser problem —
-      // the stock is already released, which is the part that mattered.
-    }
+    return r.data['data']['name'] as String;
   }
 
   static Future<String> createComplaint({
@@ -4475,42 +4139,8 @@ class Api {
 
   /// One order for the production floor, with the customer stripped out the
   /// same way. Returns the raw document plus a `destination`.
-  /// Stamps each line with how much of it the shelf already covers.
-  ///
-  /// An order for eight rolls with four reserved needs four made, and nothing
-  /// on the line itself says so — the reservation is a separate record. Every
-  /// screen that has to split a line reads these two keys.
-  ///
-  /// Failing quietly is deliberate: without them a line shows no split, which
-  /// is what it did before. Losing the order over a failed lookup is worse.
-  static Future<void> _attachReservedSplit(String orderName, List items) async {
-    try {
-      final held = await _list('Manna Stock Reservation',
-          fields: '["item_code","qty","loose_belts"]',
-          filters:
-              '[["sales_order","=","$orderName"],["status","=","Active"]]');
-      final byItem = <String, ({double qty, int belts})>{};
-      for (final h in held) {
-        final code = '${h['item_code']}';
-        final cur = byItem[code] ?? (qty: 0.0, belts: 0);
-        byItem[code] = (
-          qty: cur.qty + ((h['qty'] as num?)?.toDouble() ?? 0),
-          belts: cur.belts + ((h['loose_belts'] as num?)?.toInt() ?? 0),
-        );
-      }
-      for (final it in items) {
-        if (it is! Map) continue;
-        final r = byItem['${it['item_code']}'] ?? (qty: 0.0, belts: 0);
-        it['reserved_rolls'] = r.qty;
-        it['reserved_belts'] = r.belts;
-      }
-    } catch (_) {}
-  }
-
   static Future<Map<String, dynamic>> getOrderForProduction(String name) async {
     final o = await getOrder(name);
-
-    await _attachReservedSplit(name, (o['items'] as List?) ?? []);
 
     // The customer's name is kept as of 19 Aug 2026 — see
     // `getApprovedPOsForProduction` for why it stopped being withheld. The
@@ -4586,17 +4216,14 @@ class Api {
   }
 
   /// Moves one line along its process cycle.
-  /// Moves one half of one line along its cycle.
   ///
-  /// [stockPart] picks which: the portion served off the shelf, or the portion
-  /// being made. They are separate because they are separate work — the shelf
-  /// half only has to be picked and packed, and showing it against Curing and
-  /// Extrusion described work nobody was doing.
+  /// A line used to be two halves — the portion served off a shelf
+  /// reservation, and the portion being made — each moving along its own
+  /// sequence. Reservations are gone, so there is one line and one stage.
   static Future<void> setItemStage({
     required String orderName,
     required String itemRowName,
     required String stage,
-    bool stockPart = false,
   }) async {
     final order = await getOrder(orderName);
     final items = ((order['items'] as List?) ?? [])
@@ -4604,12 +4231,8 @@ class Api {
         .toList();
     for (final it in items) {
       if ('${it['name']}' != itemRowName) continue;
-      it[stockPart ? 'custom_stock_stage' : 'custom_production_stage'] = stage;
+      it['custom_production_stage'] = stage;
     }
-    // The roll-up reads the split off the reservations, which a plain getOrder
-    // does not carry. Resolved here so an order is not judged done because the
-    // half nobody has touched was invisible.
-    await _attachReservedSplit(orderName, items);
     await _put('Sales Order', orderName, {
       'items': items,
       // Rolled up to the order so the sales side can see it. Production moves
@@ -4642,10 +4265,11 @@ class Api {
     var allPackedOrBetter = true;
     var anyStarted = false;
 
-    // A split line is two things being finished separately: the part off the
-    // shelf, which only has to be picked and packed, and the part being made,
-    // which runs the full cycle. Both must land before the line is done, so
-    // each is weighed on its own sequence and the order takes the slowest.
+    // A line used to be split in two — the part covered by a shelf
+    // reservation, which only had to be picked and packed, and the part being
+    // made, which ran the full cycle — and each half was weighed on its own
+    // sequence. Reservations are gone, so no line reports a shelf half any
+    // more and every line is weighed once, on its own product's sequence.
     void weigh(List<String> stages, String current) {
       // A stage no longer in the sequence counts as unknown rather than as
       // finished, so revising the stage list cannot make an order look done.
@@ -4658,27 +4282,8 @@ class Api {
       if (effective < stages.length - 2) allPackedOrBetter = false;
     }
 
-    double n(dynamic v) =>
-        v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
-
     for (final it in items) {
-      final stockPart = n(it['reserved_rolls']) > 0 ||
-          ((it['reserved_belts'] as num?)?.toInt() ?? 0) > 0;
-      final madePart = !stockPart ||
-          n(it['custom_rolls']) - n(it['reserved_rolls']) > 0.0001;
-
-      // Where the split is not known — an order read without its reservations
-      // resolved — this falls back to weighing the line once, exactly as it
-      // did before, rather than inventing a half that may not exist.
-      if (!stockPart) {
-        weigh(stagesForItem(it), '${it['custom_production_stage'] ?? ''}');
-        continue;
-      }
-      weigh(fromStockStages, '${it['custom_stock_stage'] ?? ''}');
-      if (madePart) {
-        weigh(stagesForLabel(it['custom_product_category']),
-            '${it['custom_production_stage'] ?? ''}');
-      }
+      weigh(stagesForItem(it), '${it['custom_production_stage'] ?? ''}');
     }
 
     if (allDispatched) return 'Dispatched';

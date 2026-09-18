@@ -1,54 +1,58 @@
 /**
- * The minimum-stock indicator that sits on every product row (1.2).
+ * The stock indicator that sits on every product row.
  *
- * The spec is explicit that a product *not* on the minimum-stock list must read
- * "No minimum stock" rather than a zero — a zero would be read as "out of
- * stock", which is a different and much more alarming thing.
+ * Three states, and keeping them apart is the whole job:
  *
- * `available` and `reservedByOthers` are passed in rather than derived from the
- * item, because on the order screen the number that matters is what is free to
- * *this* rep — which includes the quantity they are holding themselves.
+ *   - **No stock record.** SAP holds nothing under this code. Reads "No stock
+ *     record", never a zero — a zero would be read as "out of stock", which is
+ *     a different and much more alarming thing.
+ *   - **Weights not set.** SAP holds it in kilograms and the item master has
+ *     no weight-per-roll or belts-per-roll, so nobody can say how many rolls
+ *     that is. Reported as not set up, on instruction, while the weights are
+ *     loaded for the rest of the catalogue.
+ *   - **A figure.** What can be promised.
+ *
+ * `available` is passed in rather than derived when the caller has a better
+ * answer — on the order screen the number that matters is what is free to this
+ * line, which may differ from the row's own.
+ *
+ * A "booked by other reps" line sat under the chip until 17 September 2026. It
+ * came from ERPNext's own reservation counter, and it is gone with it: SAP has
+ * already taken every open order off the figure above, so naming a booked
+ * quantity beside it would invite the rep to subtract it twice.
  */
 
-import type { MinStockItem } from '@/domain/types';
-import { availableQty } from '@/domain/stockLevels';
+import type { MinStockLine } from '@/domain/types';
+import { shelfAvailable } from '@/domain/minimumStock';
 
 export function StockChip({
   item,
   available,
-  reservedByOthers,
+  uom = 'rolls',
 }: {
-  item?: MinStockItem;
+  item?: MinStockLine;
   available?: number;
-  reservedByOthers?: number;
+  uom?: string;
 }) {
   if (!item) {
-    return <span className="stock-chip stock-chip--none">No minimum stock</span>;
+    return <span className="stock-chip stock-chip--none">No stock record</span>;
   }
 
-  const free = available ?? availableQty(item);
-  const heldElsewhere = reservedByOthers ?? item.reserved;
-  const tone = free <= 0 ? 'out' : item.onHand < item.threshold ? 'low' : 'ok';
-  const label = free <= 0 ? 'Fully booked' : `${format(free)} ${item.uom} available`;
+  if (!item.weightsKnown) {
+    return (
+      <span className="stock-chip stock-chip--none" title="No weight per roll or belts per roll on the item master">
+        Stock not set up
+      </span>
+    );
+  }
 
-  /*
-   * The chip carried a dated-batch breakdown in its tooltip and an
-   * "Aged stock — clear first" badge beside it until 21 August 2026. Both
-   * went with the dead-stock feature. What is free to sell is the whole
-   * point of the chip and is unchanged.
-   */
+  const free = available ?? shelfAvailable(item).rolls;
+  const tone = free <= 0 ? 'out' : 'ok';
+  const label = free <= 0 ? 'None left' : `${format(free)} ${uom} available`;
+
   return (
     <span className="stack gap-1" style={{ alignItems: 'flex-start' }}>
-      <span className={`stock-chip stock-chip--${tone}`}>
-        {tone === 'low' && '⚠ '}
-        {label}
-      </span>
-
-      {heldElsewhere > 0 && (
-        <span className="reserved-note">
-          {format(heldElsewhere)} {item.uom} booked by other reps
-        </span>
-      )}
+      <span className={`stock-chip stock-chip--${tone}`}>{label}</span>
     </span>
   );
 }

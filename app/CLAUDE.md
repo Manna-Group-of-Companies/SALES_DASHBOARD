@@ -19,10 +19,12 @@ happily accept a write the app would have refused.
 Two consequences you must hold in mind:
 
 - **Anything safety-critical uses optimistic concurrency**, not a lock. Stock
-  booking reads the pool, keeps its `modified` timestamp, and writes back
-  conditionally; Frappe rejects a stale timestamp. Two reps racing for the last
-  rolls resolve to one winner. See the long comment at the top of
-  `lib/services/stock_service.dart` — read it before touching booking.
+  booking was the standing example: it read the pool, kept its `modified`
+  timestamp and wrote back conditionally, so two reps racing for the last rolls
+  resolved to one winner. **That is gone as of 17 September 2026** — SAP owns
+  the booking and `lib/services/stock_service.dart` has nothing that writes.
+  The technique still applies to anything that does; `shared/DIVERGENCES.md`
+  has why it was removed.
 - **Rules must be re-implemented anywhere else that writes.** The dashboard
   (`client/`, in this same repository since 13 August 2026) has its own copy of
   every one of them, in TypeScript. See §6 — and `shared/README.md`, which is
@@ -154,9 +156,10 @@ Custom doctypes worth knowing (all `custom = 1`, module `Selling` or `Custom`):
 
 | Doctype | What it holds |
 |---|---|
-| `Manna Minimum Stock Item` | one pool per item: threshold, reserved counters, in-production figures |
-| `Manna Minimum Stock Batch` | dated physical stock behind a pool |
-| `Manna Stock Reservation` | one booking, pointing at a Sales Order **or** a Lead Order |
+| ~~`Manna Minimum Stock Item`~~ | the pool. **Unused since 17 Sep 2026** — every row held a minimum of zero. Nothing reads or writes it |
+| ~~`Manna Minimum Stock Batch`~~ | dated physical stock behind a pool. **Unused since 17 Sep 2026**; SAP's warehouse figure replaced it |
+| ~~`Manna Stock Reservation`~~ | one booking. **Unused since 17 Sep 2026** — SAP commits stock against its own sales orders |
+| ~~`Manna Production Order`~~ | replenishment (flow A). **Unused since 17 Sep 2026**; held zero rows to the end |
 | `Lead Order` / `Lead Order Item` | an order against a lead, before it is a customer |
 | `Combined Order` | one customer's orders that went out on one dispatch, rolled up. Was a *week's* orders until 20 Aug 2026 — see `shared/DIVERGENCES.md`; the phone reads these but no longer makes them |
 | `Sales Visit`, `Trip`, `Trip Log` | field activity |
@@ -202,14 +205,14 @@ you add one, copy all the standard rows across in the same transaction. To
 undo: delete every `Custom DocPerm` for that doctype and the defaults return.
 
 **Deletion order matters.** Frappe refuses to delete a document another one
-links to. Reservations → visits → trips; Sales Orders → Combined Orders. A
-submitted document must be cancelled (`ERPNEXT_SAVE_DOCS` with
-`action: "Cancel"`) before it will delete.
+links to. Visits → trips; Sales Orders → Combined Orders. A submitted document
+must be cancelled (`ERPNEXT_SAVE_DOCS` with `action: "Cancel"`) before it will
+delete.
 
-**Releasing stock before deleting orders.** Deleting a Sales Order that holds an
-active reservation leaves the pool permanently over-booked, with phantom
-bookings nothing in the app can clear. Decrement `custom_reserved_qty` /
-`custom_reserved_loose_belts` first.
+**Deleting an order used to need its stock released first** — a Sales Order
+holding an active reservation left the pool permanently over-booked with
+phantom bookings nothing in the app could clear. No longer: a draft order holds
+nothing, because it is SAP that commits stock and a draft has not reached SAP.
 
 **Child tables cannot be listed directly** — `Trip Vehicle Leg` and friends
 return "Insufficient Permission". Read them through the parent document.

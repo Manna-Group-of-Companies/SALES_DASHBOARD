@@ -30,12 +30,14 @@ void main() {
     Session.I.salesPerson = 'Test Rep';
     Session.I.managedTeam = null;
     Session.I.teamReps = [];
+    Session.I.isGM = false;
   });
 
   tearDown(() {
     Session.I.salesPerson = null;
     Session.I.managedTeam = null;
     Session.I.teamReps = [];
+    Session.I.isGM = false;
   });
 
   group('The cutoff', () {
@@ -232,6 +234,75 @@ void main() {
     test('an empty status is not blank on screen', () {
       expect(approvalLabel(null), 'Not sent for approval');
       expect(approvalLabel(''), 'Not sent for approval');
+    });
+  });
+
+  /*
+   * Approval ends editing, for everyone. Pinned by
+   * `shared/fixtures/order_locked_after_approval.json`, which the dashboard's
+   * suite reads too.
+   *
+   * The reason it matters: `Sync-SapOrders.ps1` only ever CREATES a SAP order.
+   * Nothing updates one. So an edit saved after approval changed the ERPNext
+   * document and left the factory building the old quantities.
+   */
+  group('An approved order is locked', () {
+    final future = _iso(today.add(const Duration(days: 7)));
+
+    Map<String, dynamic> approved({String? sap}) => {
+          ..._order(deliveryDate: future, owner: 'Test Rep'),
+          'custom_po_status': 'PO Approved - Ready for SAP',
+          if (sap != null) 'custom_sap_sales_order': sap,
+        };
+
+    test('the owning rep cannot edit it, though they could a moment before',
+        () {
+      expect(canEditOrder(_order(deliveryDate: future, owner: 'Test Rep')),
+          isTrue);
+      expect(canEditOrder(approved()), isFalse);
+    });
+
+    test('neither can the manager whose team it is', () {
+      Session.I.managedTeam = 'Pareeth';
+      Session.I.teamReps = ['Test Rep'];
+      expect(canEditOrder(approved()), isFalse);
+    });
+
+    test('and neither can the GM, who is exempt from everything else', () {
+      // The exemption is about approving, not about editing an order the
+      // factory is already working to. No seniority makes an app edit reach
+      // SAP.
+      Session.I.isGM = true;
+      expect(canEditOrder(approved()), isFalse);
+      // Still exempt from the cutoff on an order that is NOT approved.
+      final past = _iso(today.subtract(const Duration(days: 2)));
+      expect(canEditOrder(_order(deliveryDate: past, owner: 'Amjad Pr')),
+          isTrue);
+      Session.I.isGM = false;
+    });
+
+    test('the reason names the SAP order, which is what the factory asks for',
+        () {
+      final r = orderLockReason(approved(sap: '404'));
+      expect(r, contains('approved'));
+      expect(r, contains('factory'));
+      expect(r, contains('SAP order 404'));
+      expect(r, contains('manufacturing team'));
+    });
+
+    test('and invents no number when the order has not reached SAP yet', () {
+      final r = orderLockReason(approved());
+      expect(r, contains('manufacturing team'));
+      expect(r, isNot(contains('SAP order ')));
+    });
+
+    test('an unapproved order in the window is not locked at all', () {
+      expect(orderLockReason(_order(deliveryDate: future, owner: 'Test Rep')),
+          isEmpty);
+    });
+
+    test('deleting stays refused, as it already was', () {
+      expect(canDeleteOrder(approved()), isFalse);
     });
   });
 }

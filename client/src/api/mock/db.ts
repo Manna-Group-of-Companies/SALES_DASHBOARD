@@ -14,11 +14,8 @@ import type {
   Customer,
   Employee,
   LeaveRequest,
-  MinStockItem,
   Order,
   Product,
-  ProductionOrder,
-  StockReservation,
   WeeklyGroup,
 } from '@/domain/types';
 import { MOCK_LATENCY_MS } from '../config';
@@ -27,9 +24,7 @@ import {
   CUSTOMERS,
   EMPLOYEES,
   LEAVE_REQUESTS,
-  MIN_STOCK,
   ORDERS,
-  PRODUCTION_ORDERS,
   PRODUCTS,
   USERS,
 } from './fixtures';
@@ -40,11 +35,8 @@ export interface MockDb {
   users: typeof USERS;
   products: Product[];
   customers: Customer[];
-  minStock: MinStockItem[];
-  reservations: StockReservation[];
   orders: Order[];
   weeklyGroups: WeeklyGroup[];
-  productionOrders: ProductionOrder[];
   notifications: AppNotification[];
   employees: Employee[];
   attendance: AttendanceRecord[];
@@ -57,11 +49,8 @@ function seed(): MockDb {
     users: USERS,
     products: structuredClone(PRODUCTS),
     customers: structuredClone(CUSTOMERS),
-    minStock: structuredClone(MIN_STOCK),
-    reservations: [],
     orders: structuredClone(ORDERS),
     weeklyGroups: [],
-    productionOrders: structuredClone(PRODUCTION_ORDERS),
     notifications: [],
     employees: structuredClone(EMPLOYEES),
     attendance: structuredClone(ATTENDANCE),

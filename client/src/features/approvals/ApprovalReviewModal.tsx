@@ -16,7 +16,7 @@ import { useMemo, useState } from 'react';
 import type { FulfilmentSource, Order } from '@/domain/types';
 import { effectiveDeliveryDate, formatDate } from '@/domain/orderRules';
 import { computeLine, rateUnitFor, round2 } from '@/domain/productRules';
-import { availableQty } from '@/domain/stockLevels';
+import { shelfAvailable } from '@/domain/minimumStock';
 import { checkCredit } from '@/api/client';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import {
@@ -62,11 +62,14 @@ export function ApprovalReviewModal({ order, onClose }: { order: Order; onClose:
   const [sources, setSources] = useState<Record<string, FulfilmentSource>>(() =>
     Object.fromEntries(
       order.items.map((i) => {
-        // Default to minimum stock only where the shelf can actually cover the
-        // line. `onHand`, not `availableQty` — the quantity this very order is
-        // holding is part of `reserved` and must not count against itself.
+        // Default to stock only where the shelf can actually cover the line.
+        // This used to read the gross on-hand rather than what was available,
+        // because the quantity this very order held was part of `reserved` and
+        // must not have counted against itself. SAP's figure is the only one
+        // now, and the same caveat applies in reverse: once the order has
+        // reached SAP its own lines are inside the deduction.
         const stock = minStockByCode.get(i.itemCode);
-        const canServe = Boolean(stock && stock.onHand >= i.quantity);
+        const canServe = Boolean(stock && shelfAvailable(stock).rolls >= i.quantity);
         return [i.id, i.source ?? (canServe ? 'min_stock' : 'new_production')];
       }),
     ),
@@ -371,10 +374,11 @@ export function ApprovalReviewModal({ order, onClose }: { order: Order; onClose:
                 <tbody>
                   {order.items.map((item) => {
                     const stock = minStockByCode.get(item.itemCode);
-                    // Free to *this* order: on hand, less holds other orders
-                    // have placed. Its own hold is already part of `reserved`.
-                    const free = stock ? Math.max(0, availableQty(stock) + item.quantity) : 0;
-                    const canServeFromStock = Boolean(stock && stock.onHand >= item.quantity);
+                    // What SAP can cover. It used to add this order's own hold
+                    // back on, since that hold was part of the figure being
+                    // subtracted; there are no holds to add back.
+                    const free = stock ? shelfAvailable(stock).rolls : 0;
+                    const canServeFromStock = free >= item.quantity;
                     const rate = rates[item.id] ?? item.quotedRate;
                     const product = productByCode.get(item.itemCode);
                     const amount = product

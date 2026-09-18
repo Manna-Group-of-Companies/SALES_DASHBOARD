@@ -10,6 +10,10 @@
 import { describe, expect, it } from 'vitest';
 import cases from '../../../../shared/fixtures/sap_order_state.json';
 import {
+  cancelledInSap,
+  orderPill,
+  lineStatusFromSap,
+  orderStatusFromLines,
   productionStatusFromSap,
   reachedSap,
   sapStale,
@@ -28,6 +32,64 @@ describe('SAP stage to production status', () => {
       ).toBe(c.expect);
     });
   }
+});
+
+describe('one line of an order', () => {
+  for (const c of cases.line_stage_to_status) {
+    it(c.why, () => {
+      expect(
+        lineStatusFromSap({
+          productionStage: c.line_stage,
+          deliveryOrder: c.line_delivery,
+        }),
+      ).toBe(c.expect);
+    });
+  }
+});
+
+describe('an order rolls up from its lines', () => {
+  for (const c of cases.order_rolls_up_from_lines) {
+    it(c.why, () => {
+      const lines = c.line_stages.map((s) => ({
+        productionOrder: s ? 'PO-1' : '',
+        productionStage: s,
+      }));
+      expect(orderStatusFromLines(lines, { salesOrder: 'SO-1001' })).toBe(c.expect);
+    });
+  }
+
+  for (const c of cases.order_rolls_up_from_deliveries) {
+    it(c.why, () => {
+      const lines = c.line_stages.map((s, i) => ({
+        productionOrder: 'PO-1',
+        productionStage: s,
+        deliveryOrder: c.line_deliveries[i],
+      }));
+      expect(orderStatusFromLines(lines, { salesOrder: 'SO-1001' })).toBe(c.expect);
+    });
+  }
+
+  it('a line SAP has not touched does not drag the order back', () => {
+    // Lines carrying nothing fall back to the order's own stage, rather than
+    // reporting Not Started over the top of a real one.
+    expect(
+      orderStatusFromLines([{}], { salesOrder: 'SO-1', productionStage: 'Curing' }),
+    ).toBe('In Production');
+  });
+
+  it('an order-level delivery no longer overrides an unshipped line', () => {
+    // The bug this replaced: order 381 had a delivery, so every line read
+    // Dispatched - including the one deliberately left off it.
+    expect(
+      orderStatusFromLines(
+        [
+          { productionOrder: 'PO-1', productionStage: 'Closed', deliveryOrder: 'DN-1' },
+          { productionOrder: 'PO-2', productionStage: 'Planned', deliveryOrder: '' },
+        ],
+        { salesOrder: 'SO-1', deliveryOrder: 'DN-1' },
+      ),
+    ).toBe('Not Started');
+  });
 });
 
 describe('the mistakes this mapping exists to prevent', () => {
@@ -107,5 +169,67 @@ describe('the one line a rep reads', () => {
 
   it('says nothing when there is nothing to say', () => {
     expect(sapSummary({})).toBeNull();
+  });
+});
+
+describe('an order SAP has cancelled', () => {
+  /*
+   * The failure this closes, found 18 September 2026: SAP order 399 had been
+   * cancelled and the sync had recorded `bost_Cancelled` on the ERPNext order
+   * correctly, for days. Nothing read it, so the sales manager's board went on
+   * showing the order as approved.
+   */
+  for (const c of cases.cancelled_orders as {
+    why: string;
+    order: Record<string, string>;
+    expect_cancelled: boolean;
+  }[]) {
+    it(c.why, () => {
+      expect(
+        cancelledInSap({ salesOrderStatus: c.order.custom_sap_sales_order_status }),
+      ).toBe(c.expect_cancelled);
+    });
+  }
+
+  it('says CANCELLED IN SAP however the approval status reads', () => {
+    const pill = orderPill('PO Approved - Ready for SAP', {
+      salesOrderStatus: 'bost_Cancelled',
+    });
+    expect(pill.text).toBe('CANCELLED IN SAP');
+    expect(pill.tone).toBe('danger');
+  });
+
+  it('leaves every other order showing its approval status', () => {
+    expect(orderPill('PO Approved - Ready for SAP', { salesOrderStatus: 'bost_Open' }).text).toBe(
+      'APPROVED',
+    );
+    expect(orderPill('Pending Approval', {}).text).toBe('WAITING FOR MANAGER APPROVAL');
+    // Closed is finished, not cancelled. Conflating them would retire a
+    // delivered order as though it had been called off.
+    expect(orderPill('PO Approved - Ready for SAP', { salesOrderStatus: 'bost_Close' }).text).toBe(
+      'APPROVED',
+    );
+  });
+});
+
+describe('a line whose production order was cancelled', () => {
+  /*
+   * `Select-LeastAdvancedPo` skips cancelled production orders, so a line whose
+   * only PO was cancelled has nothing covering it. The sync clears the stage;
+   * these assert that a cleared stage is what Not Started looks like, which is
+   * the half of the rule that lives in the apps.
+   */
+  it('reads Not Started once the sync has cleared its stage', () => {
+    expect(lineStatusFromSap({ productionStage: '', productionOrder: '' })).toBe('Not Started');
+  });
+
+  it('is indistinguishable from a line that never had one, which is the point', () => {
+    expect(lineStatusFromSap({})).toBe('Not Started');
+  });
+
+  it('but a delivered line stays Dispatched, cleared stage or not', () => {
+    // A cancelled production order after the goods have gone must not reopen
+    // the line; the delivery is the later fact.
+    expect(lineStatusFromSap({ productionStage: '', deliveryOrder: 'DN-9' })).toBe('Dispatched');
   });
 });

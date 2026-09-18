@@ -13,19 +13,23 @@ document and both sides still ended up disagreeing about the discount cap
 within a day of each other — see `DIVERGENCES.md`. A document is a promise one
 side makes; a fixture is a test the other side fails.
 
+(Discounts themselves were removed from both apps on 17 September 2026 — the
+sales team types the rate after discount now. The example stands because the
+lesson does: it is *why* this directory exists.)
+
 ## How a fixture works
 
 `fixtures/*.json` holds cases as data, not as code. Both test suites load the
 same file and assert the same expectations:
 
 ```dart
-// app/test/discount_test.dart
-final cases = json.decode(File('../shared/fixtures/discount.json').readAsStringSync());
+// app/test/belt_from_roll_test.dart
+final cases = json.decode(File('../shared/fixtures/belt_from_roll.json').readAsStringSync());
 ```
 
 ```ts
-// client/src/domain/__tests__/discount.test.ts
-import cases from '../../../../shared/fixtures/discount.json'
+// client/src/domain/__tests__/beltFromRoll.test.ts
+import cases from '../../../../shared/fixtures/belt_from_roll.json'
 ```
 
 Change the rule on one side and the other side's tests go red. The divergence
@@ -39,7 +43,7 @@ becomes a build failure rather than something a customer finds.
 - **Every case carries a `why`.** A case named `case_7` teaches nothing when it
   fails at midnight; the sentence is the point.
 - **Cover the money first.** Discounts, approval gates, credit escalation,
-  split arithmetic, the booking protocol. Cosmetic differences between the two
+  split arithmetic, what stock may be promised. Cosmetic differences between the two
   apps are fine and always will be — these are not.
 - **Changing a fixture is changing the rule.** It needs the same thought as
   changing the code, and both apps updated in the same pull request.

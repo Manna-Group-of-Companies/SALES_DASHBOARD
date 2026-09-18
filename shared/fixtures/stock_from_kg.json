@@ -6,7 +6,10 @@
   "the_trap": "Frappe stores Int and Float as NOT NULL DEFAULT 0. There is no null. An item nobody has entered weights for reads exactly like an item that genuinely weighs zero per roll. Every guard here exists because those two must never be conflated: dividing by the first gives Infinity, and rendering it as 0 tells a rep 'out of stock' when the truth is 'nobody has told us how to convert this'.",
 
   "rules": {
-    "unknown_not_zero": "A missing weight-per-roll or belts-per-roll makes the conversion UNKNOWN. Never zero, never Infinity, never a guess. Show the kilos, say the weights are not set.",
+    "unknown_not_zero": "A missing weight-per-roll or belts-per-roll makes the conversion UNKNOWN. Never zero, never Infinity, never a guess. The conversion's own answer is 'unknown', and it stays that way.",
+
+    "unknown_reads_as_nothing_available": "What the SCREENS do with an unknown, decided 17 September 2026 and NOT a change to the rule above. An item whose weights are not set reports NOTHING AVAILABLE - it cannot be promised - and says 'weights not set' rather than 'none left'. The two are different sentences: one is the office's problem and the other is the warehouse's. 250 of 369 stocked items are in this state today and the weights are being uploaded for the rest of the catalogue, so this is a holding position, not a design. The conversion still refuses to guess; the flag (known / weightsKnown) is what keeps the refusal distinguishable from a genuine zero.",
+
     "never_divide_unguarded": "kg / 0 is Infinity in both languages, and Infinity rendered into an order screen is an order for an unbounded quantity.",
     "derive_weight_per_belt": "weight-per-belt = weight-per-roll / belts-per-roll when the stored weight-per-belt is missing. The stored field is authoritative when present; this only fills a hole.",
     "only_weighed_units": "Roll and belt maths applies to weight-based stock only. An item sold in Nos or Litre has no rolls and the question is not asked of it.",

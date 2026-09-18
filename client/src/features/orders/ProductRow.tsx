@@ -11,7 +11,7 @@
  */
 
 import { memo } from 'react';
-import type { MinStockItem, Product } from '@/domain/types';
+import type { MinStockLine, Product } from '@/domain/types';
 import {
   BG_KG_PER_BOX,
   BG_KG_PER_ROLL,
@@ -24,7 +24,7 @@ import {
   rollWeight,
   type LineInput,
 } from '@/domain/productRules';
-import { availableQty } from '@/domain/stockLevels';
+import { shelfAvailable } from '@/domain/minimumStock';
 import { Field, Input, UnitInput } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { StockChip } from '@/features/stock/StockChip';
@@ -32,15 +32,15 @@ import { StockChip } from '@/features/stock/StockChip';
 export interface ProductRowProps {
   product: Product;
   input: LineInput;
-  minStock?: MinStockItem;
+  minStock?: MinStockLine;
   /**
-   * Quantity this rep may still take: on-hand less *other* reps' holds. Their
-   * own hold must not count against them, or the row would flag itself the
-   * moment the booking they just made lands back from the ledger.
+   * What this line may take, when the caller knows better than the row does.
+   *
+   * It existed to add back this rep's own hold, so a row would not flag itself
+   * the moment the booking they had just made landed from the ledger. There
+   * are no holds now; the figure on the row is already what can be promised.
    */
   freeQty?: number | null;
-  /** Of `minStock.reserved`, how much belongs to somebody else. */
-  reservedByOthers?: number;
   /** Rate is fixed once the Sales Manager has approved (2.2). */
   rateLocked?: boolean;
   onChange: (next: LineInput) => void;
@@ -51,7 +51,6 @@ export const ProductRow = memo(function ProductRow({
   input,
   minStock,
   freeQty,
-  reservedByOthers,
   rateLocked = false,
   onChange,
 }: ProductRowProps) {
@@ -66,9 +65,10 @@ export const ProductRow = memo(function ProductRow({
   // finds out after doing the work.
   const broken = isMisconfigured(product);
 
-  // A minimum-stock line cannot exceed what is still free after other reps'
-  // holds — the row says so before the rep gets as far as submitting (1.2).
-  const available = minStock ? (freeQty ?? availableQty(minStock)) : null;
+  // What SAP can cover. The row says so before the rep gets as far as
+  // submitting — it does not refuse the line, because an order for more than
+  // the shelf holds is a normal order with a part to be made.
+  const available = minStock ? (freeQty ?? shelfAvailable(minStock).rolls) : null;
   const oversold = available != null && computed.quantity > available;
 
   const set = (patch: Partial<LineInput>) => onChange({ ...input, ...patch });
@@ -117,7 +117,7 @@ export const ProductRow = memo(function ProductRow({
           <StockChip
             item={minStock}
             available={available ?? undefined}
-            reservedByOthers={reservedByOthers}
+            uom={product.category === 'PCTR' || product.category === 'CTR' ? 'rolls' : 'kg'}
           />
         </div>
         {broken && <div className="prow__broken">{broken}</div>}

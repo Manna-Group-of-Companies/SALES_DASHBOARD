@@ -55,13 +55,11 @@ import type {
   CombinedOrder,
   ItemOption,
   LeadOrder,
-  MinStockItem,
   MinStockLine,
   ProductionOrderRow,
   Dispatch,
   DispatchableLine,
   DispatchLine,
-  StockReservationRow,
   TripTrack,
   NotificationKind,
   NotificationSeverity,
@@ -70,9 +68,7 @@ import type {
   OrderStatus,
   Product,
   ProductCategory,
-  ProductionOrder,
   Role,
-  StockReservation,
   TimelineEntry,
   User,
   WeeklyGroup,
@@ -100,8 +96,9 @@ import {
   type VehicleChange,
 } from '@/domain/trips';
 import { allItemsReady, firstStage, isTerminalStage, stageLabel } from '@/domain/processStages';
-import { availableQty, isBelowThreshold } from '@/domain/stockLevels';
-import { frappeNow, frappeToday, noteServerDate, serverNow } from '@/domain/serverClock';
+import { round2 } from '@/domain/productRules';
+
+import { frappeNow, noteServerDate } from '@/domain/serverClock';
 import { stockFromKg, type StockFromKg } from '@/domain/stockFromKg';
 import {
   COND_CLOSED,
@@ -113,26 +110,18 @@ import { checkCapture } from '@/domain/capture';
 import { DISPATCHED, rollUp } from '@/domain/production';
 import { isFullyDispatched, remainingToDispatch } from '@/domain/dispatch';
 import { planCombinedOrders, type CombinableOrder } from '@/domain/combinedOrders';
-import { heldBy, holdPlan, trueReserved } from '@/domain/minimumStock';
+
 import {
   UNIT_TERRITORY_ROOT,
   VISIBILITY_FIELD,
   territorySubtree,
 } from '@/domain/visibility';
 import {
-  discountFields,
-  discountPercentOf,
-  rateBeforeDiscount,
-  discountRefusal,
-  lineAfterDiscount,
-  lineBeforeDiscount,
-} from '@/domain/discount';
-import {
   PRODUCTION_STATUS,
   PO_STATUS,
   LEAD_ORDER_STATUS,
+  isApproved,
   isSet as isLinkSet,
-  orderSignedOff,
   rateEditable,
 } from '@/domain/orderStatus';
 
@@ -146,17 +135,10 @@ import {
   ITEM_CATEGORIES,
   ITEM_CATEGORY_TO_LINE,
   LINE_CATEGORY_TO_ITEM,
-  MIN_STOCK_FIELD,
-  MIN_STOCK_BATCH_FIELD,
-  PRODUCTION_ORDER_FIELD,
-  PRODUCTION_ORDER_PURPOSE,
-  PRODUCTION_ORDER_STATUS,
   DISPATCH_FIELD,
   DISPATCH_ITEM_FIELD,
   DISPATCH_STATUS,
   FULFILMENT_MODE,
-  RESERVATION_SOURCE,
-  STOCK_RESERVATION_FIELD,
   LEAD_ORDER_FIELD,
   LEAD_ORDER_ITEM_FIELD,
   COMBINED_ORDER_FIELD,
@@ -1054,53 +1036,27 @@ export function pendingAcks(rows: AppNotification[]): AppNotification[] {
 }
 
 // ===========================================================================
-// 6. MINIMUM STOCK
+// 6. STOCK  (see `listMinimumStock`, further down)
 // ===========================================================================
 //
-// Overselling is prevented with a *soft reservation*: the moment a rep keys a
-// quantity the hold is written to the shared ledger, and every other rep's
-// screen picks it up on the next poll. Holds belonging to a draft nobody
-// submitted expire on their own, so an abandoned tab cannot strand stock.
+// This section held a *minimum-stock ledger*: a shared pool per item, soft
+// reservations written the moment a rep keyed a quantity, holds that expired
+// on an abandoned tab, low-stock alerts against a per-item threshold, and
+// replenishment production orders raised and received onto the shelf. It was
+// removed on 17 September 2026 along with the doctypes behind it.
 //
-// This leaves a poll-interval-wide race, which is the trade-off chosen over
-// server-side locking. `reserveStock` is written so that swapping its body for
-// a call to `METHOD.reserveStock` closes that window without touching a caller.
-
-/** A hold on an unsubmitted draft dies after this long. */
-export const SOFT_HOLD_TTL_MS = 30 * 60 * 1000; // 30 minutes
-
-export class InsufficientStockError extends Error {
-  constructor(
-    readonly itemCode: string,
-    readonly requested: number,
-    readonly available: number,
-  ) {
-    super(
-      `Only ${available} available for ${itemCode} — another rep has booked the rest. You asked for ${requested}.`,
-    );
-    this.name = 'InsufficientStockError';
-  }
-}
-
-async function listMinStock(): Promise<MinStockItem[]> {
-  if (USE_MOCK) {
-    sweepExpiredHolds();
-    return delay(withReserved(getDb().minStock), 60);
-  }
-  // These doctypes are new for this module. Until they are created on the site
-  // the ledger is simply empty — which the UI already renders correctly as
-  // "No minimum stock" on every row — rather than breaking the order screen.
-  const [items, reservations] = await Promise.all([
-    listDocs<MinStockItem>(DOCTYPE.minStock, { limit: 0 }).catch(ifMissing([], DOCTYPE.minStock)),
-    listDocs<StockReservation>(DOCTYPE.stockReservation, { limit: 0 }).catch(ifMissing([], DOCTYPE.stockReservation)),
-  ]);
-  return items.map((i) => ({
-    ...i,
-    reserved: reservations
-      .filter((r) => r.itemCode === i.itemCode)
-      .reduce((s, r) => s + r.qty, 0),
-  }));
-}
+// Two reasons, both checked against the live site:
+//
+//   * **It was not working.** `Manna Minimum Stock Item` has no `onHand` or
+//     `threshold` field, so `MinStockItem` read `undefined` for both. The
+//     low-stock alert and every fill meter built on it were comparing nothing
+//     to nothing. Separately, all 129 rows carried a minimum of zero.
+//   * **SAP owns the booking.** A sales order in SAP commits its lines when it
+//     is placed, and `Sync-HitechStockToTreads.ps1` writes back what is left.
+//     An ERPNext reservation on top deducted the same roll a second time.
+//
+// What replaced it is one read — `listMinimumStock`, in the sales section —
+// returning available-to-promise per item, and nothing that writes.
 
 /**
  * Swallow "this doctype does not exist yet" and return a default. Any other
@@ -1124,461 +1080,6 @@ function ifMissing<T>(fallback: T, what = 'a doctype') {
     }
     throw e;
   };
-}
-
-/** Recompute `reserved` from the live reservation rows. */
-function withReserved(items: MinStockItem[]): MinStockItem[] {
-  const { reservations } = getDb();
-  return items.map((i) => ({
-    ...i,
-    reserved: reservations
-      .filter((r) => r.itemCode === i.itemCode)
-      .reduce((s, r) => s + r.qty, 0),
-  }));
-}
-
-async function listReservations(): Promise<StockReservation[]> {
-  if (USE_MOCK) {
-    sweepExpiredHolds();
-    return delay(getDb().reservations, 40);
-  }
-  return listDocs<StockReservation>(DOCTYPE.stockReservation, { limit: 0 }).catch(ifMissing([], DOCTYPE.stockReservation));
-}
-
-function sweepExpiredHolds(): void {
-  const cutoff = Date.now() - SOFT_HOLD_TTL_MS;
-  const db = getDb();
-  const stale = db.reservations.some(
-    (r) => r.orderId == null && new Date(r.heldAt).getTime() < cutoff,
-  );
-  if (!stale) return;
-  mutate((d) => {
-    d.reservations = d.reservations.filter(
-      (r) => r.orderId != null || new Date(r.heldAt).getTime() >= cutoff,
-    );
-  });
-}
-
-export interface ReserveInput {
-  itemCode: string;
-  qty: number;
-  user: User;
-  /** Null while the order is still an unsaved draft. */
-  orderId?: string | null;
-  /** Replace this rep's existing hold on the item rather than stacking on it. */
-  replaceExisting?: boolean;
-}
-
-/**
- * Place (or update) a hold. Rejects when the quantity is not available *after*
- * everyone else's holds, which is what stops two reps selling the same rolls.
- */
-async function reserveStock(input: ReserveInput): Promise<StockReservation | null> {
-  const { itemCode, qty, user, orderId = null, replaceExisting = true } = input;
-
-  if (USE_MOCK) {
-    return mutate((d) => {
-      const item = d.minStock.find((i) => i.itemCode === itemCode);
-      // Not a minimum-stock item: nothing to reserve, and that is not an error.
-      if (!item) return null;
-
-      const mine = d.reservations.filter(
-        (r) => r.repId === user.id && r.itemCode === itemCode && r.orderId === orderId,
-      );
-      const heldByOthers = d.reservations
-        .filter((r) => !mine.includes(r) && r.itemCode === itemCode)
-        .reduce((s, r) => s + r.qty, 0);
-
-      const free = item.onHand - heldByOthers;
-      if (qty > free) throw new InsufficientStockError(itemCode, qty, Math.max(0, free));
-
-      if (replaceExisting) d.reservations = d.reservations.filter((r) => !mine.includes(r));
-      if (qty <= 0) return null;
-
-      const row: StockReservation = {
-        id: uid('RSV'),
-        itemCode,
-        qty,
-        orderId,
-        repId: user.id,
-        repName: user.name,
-        heldAt: nowIso(),
-      };
-      d.reservations.push(row);
-      return clone(row);
-    });
-  }
-
-  // Live: a whitelisted server method does the check and the write in one
-  // transaction, closing the race the poll leaves open.
-  return createDoc<StockReservation>(DOCTYPE.stockReservation, {
-    itemCode,
-    qty,
-    orderId,
-    repId: user.id,
-    repName: user.name,
-    heldAt: nowIso(),
-  });
-}
-
-/** Drop every hold a rep has against a draft — used when they abandon it. */
-async function releaseDraftHolds(user: User, orderId: string | null = null): Promise<void> {
-  if (USE_MOCK) {
-    mutate((d) => {
-      d.reservations = d.reservations.filter(
-        (r) => !(r.repId === user.id && r.orderId === orderId),
-      );
-    });
-    return;
-  }
-  const rows = await listDocs<StockReservation>(DOCTYPE.stockReservation, {
-    filters: [['repId', '=', user.id]],
-  });
-  await Promise.all(
-    rows
-      .filter((r) => r.orderId === orderId)
-      .map((r) => updateDoc(DOCTYPE.stockReservation, r.id, { qty: 0 })),
-  );
-}
-
-/** Attach a draft's holds to the order once it is actually saved. */
-function bindHoldsToOrder(user: User, orderId: string): void {
-  if (!USE_MOCK) return;
-  mutate((d) => {
-    d.reservations.forEach((r) => {
-      if (r.repId === user.id && r.orderId === null) r.orderId = orderId;
-    });
-  });
-}
-
-/**
- * Consume stock for real. Called when the Sales Manager approves an order being
- * served from minimum stock (2.3, 3.5): the hold becomes a withdrawal, drawn
- * oldest-batch-first.
- *
- * Oldest-first survives the removal of the dead-stock feature on 21 Aug 2026,
- * and should. Rubber genuinely is better sold in the order it was made, and
- * nothing about that needed a rep to see a date — it happens underneath.
- */
-function consumeStock(itemCode: string, qty: number, orderId: string): void {
-  if (!USE_MOCK) return;
-
-  mutate((d) => {
-    const item = d.minStock.find((i) => i.itemCode === itemCode);
-    if (!item) return;
-
-    let left = qty;
-    const oldestFirst = [...item.batches]
-      .filter((b) => b.remaining > 0)
-      .sort((a, b) => a.stockedOn.localeCompare(b.stockedOn));
-    for (const batch of oldestFirst) {
-      if (left <= 0) break;
-      const take = Math.min(left, batch.remaining);
-      batch.remaining = round3(batch.remaining - take);
-      left = round3(left - take);
-    }
-    item.onHand = round3(Math.max(0, item.onHand - qty));
-    // The hold has been realised, so it is no longer a separate claim.
-    d.reservations = d.reservations.filter(
-      (r) => !(r.itemCode === itemCode && r.orderId === orderId),
-    );
-  });
-
-  raiseLowStockAlertIfNeeded(itemCode);
-}
-
-/** Alert the Production Manager the moment an item drops below threshold (3.5). */
-function raiseLowStockAlertIfNeeded(itemCode: string): void {
-  const item = getDb().minStock.find((i) => i.itemCode === itemCode);
-  if (!item || !isBelowThreshold(item) || item.replenishmentRaised) return;
-
-  emit({
-    kind: 'min_stock_low',
-    severity: 'warning',
-    title: `${item.itemName} is below minimum stock`,
-    body: `On hand ${item.onHand} ${item.uom}, threshold ${item.threshold} ${item.uom}. Raise a priority production order to replenish.`,
-    audience: ['production_manager', 'stock_manager'],
-    itemCode,
-  });
-}
-
-/** `Manna Production Order.status`, as Frappe spells it → the domain shape. */
-const PRODUCTION_ORDER_STATUS_FROM_FRAPPE: Record<string, ProductionOrder['status']> = {
-  [PRODUCTION_ORDER_STATUS.open]: 'open',
-  [PRODUCTION_ORDER_STATUS.inProduction]: 'in_production',
-  [PRODUCTION_ORDER_STATUS.made]: 'made',
-  [PRODUCTION_ORDER_STATUS.received]: 'received',
-  [PRODUCTION_ORDER_STATUS.dispatched]: 'dispatched',
-  [PRODUCTION_ORDER_STATUS.cancelled]: 'cancelled',
-};
-
-/** Raw Frappe `Manna Production Order` doc → the domain shape. */
-function toProductionOrder(r: Record<string, unknown>): ProductionOrder {
-  const rawStatus = str(r[PRODUCTION_ORDER_FIELD.status]) ?? PRODUCTION_ORDER_STATUS.open;
-  const status = PRODUCTION_ORDER_STATUS_FROM_FRAPPE[rawStatus] ?? 'open';
-  const rawPurpose = str(r[PRODUCTION_ORDER_FIELD.purpose]) ?? PRODUCTION_ORDER_PURPOSE.stock;
-  const purpose: ProductionOrder['purpose'] =
-    rawPurpose === PRODUCTION_ORDER_PURPOSE.order ? 'order' : 'stock';
-  const itemCode = str(r[PRODUCTION_ORDER_FIELD.itemCode]) ?? '';
-
-  return {
-    id: str(r.name) ?? '',
-    itemCode,
-    // Not stored on the doctype — filled in from the min-stock ledger once
-    // both are loaded; see `refreshMinStock` in `minStockSlice`.
-    itemName: itemCode,
-    qty: Number(r[PRODUCTION_ORDER_FIELD.qty]) || 0,
-    looseBelts: Number(r[PRODUCTION_ORDER_FIELD.looseBelts]) || 0,
-    raisedAt: str(r[PRODUCTION_ORDER_FIELD.raisedOn]) ?? '',
-    raisedBy: str(r[PRODUCTION_ORDER_FIELD.raisedBy]) ?? '',
-    status,
-    purpose,
-    salesOrderId: str(r[PRODUCTION_ORDER_FIELD.salesOrder]),
-    receivedAt: str(r[PRODUCTION_ORDER_FIELD.receivedOn]),
-    receivedBy: str(r[PRODUCTION_ORDER_FIELD.receivedBy]),
-    batchId: str(r[PRODUCTION_ORDER_FIELD.batch]),
-  };
-}
-
-/** Production Manager raises a priority run for a depleted item (3.5). */
-async function raiseReplenishment(
-  item: MinStockItem,
-  qty: number,
-  user: User,
-): Promise<ProductionOrder> {
-  const raisedAt = frappeNow();
-  const order: ProductionOrder = {
-    id: uid('PROD'),
-    itemCode: item.itemCode,
-    itemName: item.itemName,
-    qty,
-    raisedAt,
-    raisedBy: user.name,
-    status: 'open',
-    purpose: 'stock',
-  };
-
-  if (USE_MOCK) {
-    mutate((d) => {
-      d.productionOrders.unshift(order);
-      const target = d.minStock.find((i) => i.itemCode === item.itemCode);
-      if (target) target.replenishmentRaised = true;
-    });
-  } else {
-    const created = await createDoc<Record<string, unknown>>(DOCTYPE.productionOrder, {
-      [PRODUCTION_ORDER_FIELD.itemCode]: item.itemCode,
-      [PRODUCTION_ORDER_FIELD.qty]: qty,
-      // Set once, at creation, and never written again — see PRODUCTION_FLOWS.md.
-      [PRODUCTION_ORDER_FIELD.purpose]: PRODUCTION_ORDER_PURPOSE.stock,
-      [PRODUCTION_ORDER_FIELD.status]: PRODUCTION_ORDER_STATUS.open,
-      [PRODUCTION_ORDER_FIELD.raisedOn]: raisedAt,
-      [PRODUCTION_ORDER_FIELD.raisedBy]: user.name,
-    });
-    order.id = str(created.name) ?? order.id;
-  }
-
-  emit({
-    kind: 'min_stock_low',
-    severity: 'info',
-    title: `Replenishment raised for ${item.itemName}`,
-    body: `${qty} ${item.uom} queued as a priority run. Update the ledger once the run is complete.`,
-    audience: ['stock_manager', 'production_manager'],
-    itemCode: item.itemCode,
-  });
-
-  return order;
-}
-
-async function listProductionOrders(): Promise<ProductionOrder[]> {
-  if (USE_MOCK) return delay(getDb().productionOrders, 60);
-  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.productionOrder, {
-    fields: ['name', ...Object.values(PRODUCTION_ORDER_FIELD)],
-    orderBy: 'creation desc',
-    limit: 0,
-  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.productionOrder));
-  return rows.map(toProductionOrder);
-}
-
-/**
- * The stock person books a finished run onto the shelf — flow A's close, and
- * also how an order cancelled after production diverts to company stock
- * (the one join between the two flows; see PRODUCTION_FLOWS.md). The
- * quantity lands as a *new dated batch*, one per production order, which is
- * what keeps the "8 old / 2 new" aging split in 1.6 meaningful and gives the
- * batch a real arrival date rather than one blended with older stock.
- */
-async function recordReplenishment(
-  itemCode: string,
-  qty: number,
-  user: User,
-  productionOrderId?: string,
-  looseBelts = 0,
-): Promise<MinStockItem | undefined> {
-  const today = frappeToday();
-
-  if (USE_MOCK) {
-    return mutate((d) => {
-      const item = d.minStock.find((i) => i.itemCode === itemCode);
-      if (!item) return undefined;
-      item.batches.push({ id: uid('B'), stockedOn: today, remaining: qty, original: qty });
-      item.onHand = round3(item.onHand + qty);
-      item.lastRestockedOn = today;
-      item.replenishmentRaised = false;
-
-      if (productionOrderId) {
-        const po = d.productionOrders.find((p) => p.id === productionOrderId);
-        if (po) {
-          po.status = 'received';
-          po.receivedAt = nowIso();
-          po.receivedBy = user.name;
-        }
-      }
-      const updated = clone(item);
-      emit({
-        kind: 'min_stock_replenished',
-        severity: 'info',
-        title: `${updated.itemName} restocked`,
-        body: `${user.name} booked in ${qty} ${updated.uom}. Now ${updated.onHand} ${updated.uom} on hand.`,
-        audience: ['sales_manager', 'production_manager'],
-        itemCode,
-      });
-      return updated;
-    });
-  }
-
-  const batch = await createDoc<Record<string, unknown>>(DOCTYPE.stockBatch, {
-    [MIN_STOCK_BATCH_FIELD.itemCode]: itemCode,
-    [MIN_STOCK_BATCH_FIELD.rolls]: qty,
-    [MIN_STOCK_BATCH_FIELD.looseBelts]: looseBelts,
-    [MIN_STOCK_BATCH_FIELD.originalRolls]: qty,
-    [MIN_STOCK_BATCH_FIELD.originalBelts]: looseBelts,
-    [MIN_STOCK_BATCH_FIELD.batchDate]: today,
-  });
-  const batchName = str(batch.name);
-
-  if (productionOrderId) {
-    await updateDoc(DOCTYPE.productionOrder, productionOrderId, {
-      [PRODUCTION_ORDER_FIELD.status]: PRODUCTION_ORDER_STATUS.received,
-      [PRODUCTION_ORDER_FIELD.receivedOn]: frappeNow(),
-      [PRODUCTION_ORDER_FIELD.receivedBy]: user.name,
-      [PRODUCTION_ORDER_FIELD.batch]: batchName,
-    });
-  }
-
-  // `onHand` is not a stored field — it is the sum of this item's batches,
-  // recomputed on the next `listMinStock` read. There is nothing else on
-  // `Manna Minimum Stock Item` for this write to touch.
-  emit({
-    kind: 'min_stock_replenished',
-    severity: 'info',
-    title: `${itemCode} restocked`,
-    body: `${user.name} booked in ${qty}${looseBelts ? ` + ${looseBelts} belts` : ''}.`,
-    audience: ['sales_manager', 'production_manager'],
-    itemCode,
-  });
-
-  return undefined;
-}
-
-/**
- * The join between the two flows (PRODUCTION_FLOWS.md): an order cancelled
- * after its goods were produced diverts them to company stock. Unlike flow
- * A, no `Manna Production Order` exists yet for this line — flow B's normal
- * path never raises one, since it tracks stage directly on the order line —
- * so this raises one (`purpose: 'order'`, linked to the order) and closes it
- * in the same call, exactly the way `recordReplenishment` closes a flow-A
- * order: one new batch, dated today.
- *
- * Callers must check `needsStockDiversion` (domain/productionOrders.ts) and
- * `alreadyDiverted` first — this function does not re-check either, so it
- * trusts the caller not to divert a line still on a live order or divert the
- * same line twice.
- */
-async function divertToStock(input: {
-  salesOrderId: string;
-  itemCode: string;
-  qty: number;
-  looseBelts?: number;
-  raisedAt: string;
-  raisedBy: string;
-  user: User;
-}): Promise<ProductionOrder> {
-  const { salesOrderId, itemCode, qty, user } = input;
-  const looseBelts = input.looseBelts ?? 0;
-  const receivedAt = frappeNow();
-  const today = receivedAt.slice(0, 10);
-
-  if (USE_MOCK) {
-    return mutate((d) => {
-      const item = d.minStock.find((i) => i.itemCode === itemCode);
-      if (item) {
-        item.batches.push({ id: uid('B'), stockedOn: today, remaining: qty, original: qty });
-        item.onHand = round3(item.onHand + qty);
-        item.lastRestockedOn = today;
-      }
-      const order: ProductionOrder = {
-        id: uid('PROD'),
-        itemCode,
-        itemName: item?.itemName ?? itemCode,
-        qty,
-        looseBelts,
-        raisedAt: input.raisedAt,
-        raisedBy: input.raisedBy,
-        status: 'received',
-        purpose: 'order',
-        salesOrderId,
-        receivedAt,
-        receivedBy: user.name,
-      };
-      d.productionOrders.unshift(order);
-      return clone(order);
-    });
-  }
-
-  const batch = await createDoc<Record<string, unknown>>(DOCTYPE.stockBatch, {
-    [MIN_STOCK_BATCH_FIELD.itemCode]: itemCode,
-    [MIN_STOCK_BATCH_FIELD.rolls]: qty,
-    [MIN_STOCK_BATCH_FIELD.looseBelts]: looseBelts,
-    [MIN_STOCK_BATCH_FIELD.originalRolls]: qty,
-    [MIN_STOCK_BATCH_FIELD.originalBelts]: looseBelts,
-    [MIN_STOCK_BATCH_FIELD.batchDate]: today,
-  });
-
-  const created = await createDoc<Record<string, unknown>>(DOCTYPE.productionOrder, {
-    [PRODUCTION_ORDER_FIELD.itemCode]: itemCode,
-    [PRODUCTION_ORDER_FIELD.qty]: qty,
-    [PRODUCTION_ORDER_FIELD.looseBelts]: looseBelts,
-    [PRODUCTION_ORDER_FIELD.purpose]: PRODUCTION_ORDER_PURPOSE.order,
-    [PRODUCTION_ORDER_FIELD.salesOrder]: salesOrderId,
-    [PRODUCTION_ORDER_FIELD.status]: PRODUCTION_ORDER_STATUS.received,
-    [PRODUCTION_ORDER_FIELD.raisedOn]: input.raisedAt,
-    [PRODUCTION_ORDER_FIELD.raisedBy]: input.raisedBy,
-    [PRODUCTION_ORDER_FIELD.receivedOn]: receivedAt,
-    [PRODUCTION_ORDER_FIELD.receivedBy]: user.name,
-    [PRODUCTION_ORDER_FIELD.batch]: str(batch.name),
-  });
-
-  emit({
-    kind: 'min_stock_replenished',
-    severity: 'info',
-    title: `${itemCode} diverted to company stock`,
-    body: `${salesOrderId} was cancelled after production. ${qty}${looseBelts ? ` + ${looseBelts} belts` : ''} moved to the shelf.`,
-    audience: ['sales_manager', 'production_manager', 'stock_manager'],
-    itemCode,
-  });
-
-  return toProductionOrder(created);
-}
-
-/** Items currently under their threshold — the Production Manager's watchlist. */
-export function belowThreshold(items: MinStockItem[]): MinStockItem[] {
-  return items.filter(isBelowThreshold);
-}
-
-/** Free-to-sell quantity for an item code, or null when it is not tracked. */
-export function availableFor(items: MinStockItem[], itemCode: string): number | null {
-  const item = items.find((i) => i.itemCode === itemCode);
-  return item ? availableQty(item) : null;
 }
 
 // ===========================================================================
@@ -1693,8 +1194,6 @@ async function createOrder(input: CreateOrderInput): Promise<Order> {
 
   if (USE_MOCK) {
     mutate((d) => d.orders.unshift(order));
-    // Draft holds now belong to a real order, so they stop expiring (1.2).
-    bindHoldsToOrder(input.user, order.id);
   } else {
     await createDoc(DOCTYPE.salesOrder, order as unknown as Record<string, unknown>);
   }
@@ -1814,11 +1313,6 @@ async function approveOrder(input: ApproveInput): Promise<Order> {
       ),
     );
   });
-
-  // Draw down anything the manager sourced from minimum stock.
-  updated.items
-    .filter((it) => it.source === 'min_stock')
-    .forEach((it) => consumeStock(it.itemCode, it.quantity, updated.id));
 
   // No rep-facing copy: the Sales Manager who approved it is the only audience
   // this app has, and telling the rep is the field-sales app's job.
@@ -3326,6 +2820,8 @@ function toTeamOrder(r: Record<string, unknown>): TeamOrder {
     productionStatus: str(r[SALES_ORDER_FIELD.productionStatus]),
     combinedOrder: str(r[SALES_ORDER_FIELD.combinedOrder]),
     ratesApproved: Number(r[SALES_ORDER_FIELD.ratesApproved]) === 1,
+    sapSalesOrder: str(r[SALES_ORDER_FIELD.sapSalesOrder]),
+    sapSalesOrderStatus: str(r[SALES_ORDER_FIELD.sapSalesOrderStatus]),
   };
 }
 
@@ -3348,6 +2844,14 @@ function toOrderDetail(doc: Record<string, unknown>): OrderDetail {
     changedAfterApproval: Number(doc.custom_changed_after_approval) === 1,
     placedAt: str(doc.custom_order_placed_at),
     lines: items.map(toOrderLine),
+    sapSalesOrder: str(doc.custom_sap_sales_order),
+    sapSalesOrderStatus: str(doc.custom_sap_sales_order_status),
+    sapProductionOrder: str(doc.custom_sap_production_order),
+    sapProductionStage: str(doc.custom_sap_production_stage),
+    sapDeliveryOrder: str(doc.custom_sap_delivery_order),
+    sapDeliveryDate: str(doc.custom_sap_delivery_date),
+    sapSyncedAt: str(doc.custom_sap_synced_at),
+    sapSyncError: str(doc.custom_sap_sync_error),
   };
 }
 
@@ -3369,16 +2873,6 @@ function toOrderLine(r: Record<string, unknown>): OrderLine {
     looseBelts: n(SALES_ORDER_ITEM_FIELD.looseBelts),
     packingNote: str(r[SALES_ORDER_ITEM_FIELD.packingNote]),
     rateApproved: Number(r[SALES_ORDER_ITEM_FIELD.rateApproved]) === 1,
-    /*
-     * Read through the shared helpers, which try the standard field, then the
-     * lead-order spelling, then fall back to `rate`. An order raised before
-     * discounts existed has no `price_list_rate` at all and must read as full
-     * price rather than as free.
-     */
-    discountPercent: discountPercentOf(r),
-    priceListRate: rateBeforeDiscount(r),
-    amountBeforeDiscount: lineBeforeDiscount(r),
-    amountAfterDiscount: lineAfterDiscount(r),
     fulfilmentMode: str(r[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
     productionStage: str(r[SALES_ORDER_ITEM_FIELD.productionStage]),
     stockStage: str(r[SALES_ORDER_ITEM_FIELD.stockStage]),
@@ -3386,6 +2880,10 @@ function toOrderLine(r: Record<string, unknown>): OrderLine {
     dispatchedRolls: n(SALES_ORDER_ITEM_FIELD.dispatchedRolls),
     dispatchedLooseBelts: n(SALES_ORDER_ITEM_FIELD.dispatchedLooseBelts),
     dispatchShortReason: str(r[SALES_ORDER_ITEM_FIELD.dispatchShortReason]),
+    sapProductionOrder: str(r[SALES_ORDER_ITEM_FIELD.sapProductionOrder]),
+    sapProductionStage: str(r[SALES_ORDER_ITEM_FIELD.sapProductionStage]),
+    sapDeliveryOrder: str(r[SALES_ORDER_ITEM_FIELD.sapDeliveryOrder]),
+    sapDeliveryDate: str(r[SALES_ORDER_ITEM_FIELD.sapDeliveryDate]),
   };
 }
 
@@ -3462,26 +2960,23 @@ async function decideSalesOrder(input: {
         : Number(l[SALES_ORDER_ITEM_FIELD.priceListRate]) || Number(l.rate) || 0;
 
     /*
-     * The discount is NOT touched here. It is written line by line as the
-     * manager sets it, the way the phone does — `setLineDiscount`. Approval
-     * fixes what is already on the line; it does not apply anything new.
+     * The rate is already net.
      *
-     * The percentage stored on the line is re-applied to the (possibly new)
-     * rate so the two never contradict each other. Reading it through
-     * `discountPercentOf` picks up the lead-order spelling as well.
+     * A per-line discount used to be read off the row and re-applied to the
+     * (possibly new) rate, so the two could never contradict each other. The
+     * feature went on 17 September 2026 — the rep types the rate after
+     * discount — so approval writes one figure and zeroes the discount fields
+     * explicitly, which stops ERPNext deriving a phantom discount from a
+     * price-list rate left over on the row.
      */
-    const percent = discountPercentOf(l);
-    const money = discountFields({
-      item: { ...l, price_list_rate: perUnitBefore, custom_price_list_rate: 0, rate: 0 },
-      percent,
-      isLead: false,
-    });
-
-    // Written on every line, not only the edited ones. A line whose discount
-    // was never touched still needs `price_list_rate` filled in, or the
-    // before/after comparison has nothing to compare against next time.
     if (perKg > 0) next[SALES_ORDER_ITEM_FIELD.ratePerKg] = perKg;
-    Object.assign(next, money);
+    Object.assign(next, {
+      price_list_rate: perUnitBefore,
+      discount_percentage: 0,
+      discount_amount: 0,
+      rate: perUnitBefore,
+      amount: round2(qty * perUnitBefore),
+    });
 
     // Only approval locks a rate. A rejection leaves the prices editable so
     // the rep can fix what was wrong with them.
@@ -3495,305 +2990,113 @@ async function decideSalesOrder(input: {
     items: nextItems,
   });
 
+  /*
+   * An approval is what puts an order in front of the factory, so ask for the
+   * push straight away rather than leaving it to the next timed sweep.
+   *
+   * Nothing here talks to SAP — Frappe Cloud has no route to that LAN. This
+   * raises the same flag the Refresh button raises, and the on-prem watcher
+   * picks it up within about two minutes. Without it an approved order waits
+   * up to fifteen for the unprompted sweep.
+   *
+   * Deliberately not awaited for correctness: the approval is already saved
+   * and must stand whether or not the request lands. A refused request (the
+   * cooldown) or an unreachable script is not an approval failure, so it is
+   * swallowed — the sweep will collect the order regardless.
+   */
+  if (approving) {
+    void requestOrderSync().catch(() => undefined);
+  }
+
   return toOrderDetail(saved);
 }
 
 /**
- * The minimum-stock pool.
+ * Take back a rejection.
+ *
+ * Writes the status and nothing else. A rejection never locked a rate — only
+ * an approval stamps `rateApproved`, see `decideSalesOrder` — so there is
+ * nothing on the lines to undo, and rewriting them here would re-derive
+ * prices the manager never touched.
+ *
+ * The order goes back to `Pending Approval`, the same state a rep's edit
+ * leaves it in (`saveOrderLines`). Restoring whatever status it carried
+ * *before* the rejection would need somewhere to have stored it and there is
+ * no field for that; one "waiting on you" state beats a second one meaning
+ * the same thing.
+ */
+async function undoOrderRejection(orderId: string): Promise<OrderDetail> {
+  const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.salesOrder, orderId, {
+    [SALES_ORDER_FIELD.poStatus]: 'Pending Approval',
+    [SALES_ORDER_FIELD.ratesApproved]: 0,
+  });
+  return toOrderDetail(saved);
+}
+
+/**
+ * What every item has available to promise.
  *
  * Read whole rather than per item: an order has a handful of lines but the
  * screen has to answer "could this have come off the shelf?" for every one of
- * them at once, and 164 rows is one small request against N round trips.
+ * them at once, and one small request beats N round trips to a shared Frappe
+ * instance.
+ *
+ * This read two doctypes until 17 September 2026 — `Manna Minimum Stock Item`
+ * for the target and `Manna Minimum Stock Batch` for the shelf, with a long
+ * warning about never confusing the two. Both are gone. The batches were a
+ * hand-typed snapshot from 10 September and every pool row held a minimum of
+ * zero, so the target was never a target and the shelf was a week stale. The
+ * warehouse is the shelf now, and `Sync-HitechStockToTreads.ps1` refreshes it
+ * from SAP every five minutes at *available to promise* — on hand, less what
+ * SAP has committed to open orders.
  */
 async function listMinimumStock(): Promise<MinStockLine[]> {
-  /*
-   * Two doctypes, because the pool holds the **target** and the batch holds
-   * the **stock**. `Manna Minimum Stock Item.qty` is the minimum to hold —
-   * reading it as the shelf is the mistake that makes every availability
-   * figure wrong. Proven live: `120 AJAX 69` is minimum 2 / shelf 4, and
-   * `160 RTS 99` is minimum 10 / shelf 0.
-   */
-  const [rows, batches] = await Promise.all([
-    listDocs<Record<string, unknown>>(DOCTYPE.minStock, {
-      fields: ['name', ...Object.values(MIN_STOCK_FIELD), 'disabled'],
-      filters: [['disabled', '=', 0]],
-      limit: 0,
-    }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.minStock)),
-    listDocs<Record<string, unknown>>(DOCTYPE.stockBatch, {
-      fields: ['name', ...Object.values(MIN_STOCK_BATCH_FIELD)],
-      limit: 0,
-    }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.stockBatch)),
-  ]);
+  const stock = await listWarehouseStock().catch(() => [] as WarehouseStock[]);
+  const codes = stock.map((s) => s.itemCode);
+  if (!codes.length) return [];
 
-  const n = (r: Record<string, unknown>, k: string) => Number(r[k]) || 0;
-
-  // An item can carry more than one batch, so the shelf is their sum and the
-  // stock age comes from the oldest.
-  const shelf = new Map<string, { rolls: number; belts: number; oldest?: string }>();
-  for (const b of batches) {
-    const code = str(b[MIN_STOCK_BATCH_FIELD.itemCode]) ?? '';
-    if (!code) continue;
-    const cur = shelf.get(code) ?? { rolls: 0, belts: 0 };
-    const date = str(b[MIN_STOCK_BATCH_FIELD.batchDate]);
-    shelf.set(code, {
-      rolls: cur.rolls + n(b, MIN_STOCK_BATCH_FIELD.rolls),
-      belts: cur.belts + n(b, MIN_STOCK_BATCH_FIELD.looseBelts),
-      oldest: !cur.oldest || (date && date < cur.oldest) ? (date ?? cur.oldest) : cur.oldest,
-    });
-  }
-
-  return rows.map((r) => {
-    const itemCode = str(r[MIN_STOCK_FIELD.itemCode]) ?? String(r.name);
-    const s = shelf.get(itemCode);
-    return {
-      itemCode,
-      minimumRolls: n(r, MIN_STOCK_FIELD.minimumRolls),
-      minimumBelts: n(r, MIN_STOCK_FIELD.minimumBelts),
-      // No batch at all means nothing on the shelf, not "unknown". A pool with
-      // no batch is exactly the empty one production needs to see.
-      shelfRolls: s?.rolls ?? 0,
-      shelfBelts: s?.belts ?? 0,
-      reservedRolls: n(r, MIN_STOCK_FIELD.reservedRolls),
-      reservedBelts: n(r, MIN_STOCK_FIELD.reservedLooseBelts),
-      inProductionRolls: n(r, MIN_STOCK_FIELD.inProductionRolls),
-      inProductionBelts: n(r, MIN_STOCK_FIELD.inProductionBelts),
-      reservedInProductionRolls: n(r, MIN_STOCK_FIELD.reservedInProductionRolls),
-      reservedInProductionBelts: n(r, MIN_STOCK_FIELD.reservedInProductionBelts),
-      runStage: str(r[MIN_STOCK_FIELD.runStage]),
-      runUpdatedOn: str(r[MIN_STOCK_FIELD.inProductionUpdatedOn]),
-      runUpdatedBy: str(r[MIN_STOCK_FIELD.inProductionUpdatedBy]),
-      lastSoldOn: str(r[MIN_STOCK_FIELD.lastSoldOn]),
-      batchDate: s?.oldest,
-    };
-  });
-}
-
-/**
- * Claim stock out of a production run.
- *
- * The run is a **second pool with its own counter**, and the two are never
- * added together: an empty shelf with a full run still sells nothing off the
- * shelf. This claims against `custom_reserved_in_production_qty` only.
- *
- * **Compare-and-swap, because there are no Server Scripts.** Two reps claiming
- * the last rolls of a run at the same time would otherwise both read the same
- * free figure and both succeed, promising rubber twice. The protocol is:
- * re-read immediately before writing, refuse if the free quantity no longer
- * covers the claim, write, then read back and confirm the counter holds what
- * we put there. A lost update is detected rather than assumed away.
- *
- * There is **no roll-cutting on a run**: nothing has been made, so there is no
- * roll to open into belts.
- */
-async function claimFromRun(input: {
-  itemCode: string;
-  rolls: number;
-  belts: number;
-  salesOrder: string;
-  salesPerson?: string;
-  /** Bounded retries when another claim lands between our read and write. */
-  attempts?: number;
-}): Promise<{ claimed: boolean; available: number; reason?: string }> {
-  const want = { rolls: input.rolls || 0, belts: input.belts || 0 };
-  if (want.rolls <= 0 && want.belts <= 0) {
-    return { claimed: false, available: 0, reason: 'Nothing to claim.' };
-  }
-
-  const maxAttempts = input.attempts ?? 3;
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const doc = await getDoc<Record<string, unknown>>(DOCTYPE.minStock, input.itemCode);
-    const runRolls = Number(doc[MIN_STOCK_FIELD.inProductionRolls]) || 0;
-    const runBelts = Number(doc[MIN_STOCK_FIELD.inProductionBelts]) || 0;
-    const takenRolls = Number(doc[MIN_STOCK_FIELD.reservedInProductionRolls]) || 0;
-    const takenBelts = Number(doc[MIN_STOCK_FIELD.reservedInProductionBelts]) || 0;
-
-    const freeRolls = Math.max(0, runRolls - takenRolls);
-    const freeBelts = Math.max(0, runBelts - takenBelts);
-
-    if (want.rolls > freeRolls || want.belts > freeBelts) {
-      return {
-        claimed: false,
-        available: freeRolls,
-        reason:
-          runRolls === 0
-            ? 'There is no production run recorded for this item.'
-            : `Only ${freeRolls} roll(s) of this run are unclaimed.`,
-      };
-    }
-
-    await updateDoc(DOCTYPE.minStock, input.itemCode, {
-      [MIN_STOCK_FIELD.reservedInProductionRolls]: takenRolls + want.rolls,
-      [MIN_STOCK_FIELD.reservedInProductionBelts]: takenBelts + want.belts,
-    });
-
-    // Read back. If somebody else's claim interleaved, the counter will not
-    // hold our figure and we start again rather than assume we won.
-    const after = await getDoc<Record<string, unknown>>(DOCTYPE.minStock, input.itemCode);
-    const nowTaken = Number(after[MIN_STOCK_FIELD.reservedInProductionRolls]) || 0;
-    if (nowTaken !== takenRolls + want.rolls) continue;
-
-    // Only once the counter is ours do we record the claim itself. A
-    // reservation without the counter behind it is the phantom booking that
-    // has already bitten this site once.
-    await createDoc(DOCTYPE.stockReservation, {
-      [STOCK_RESERVATION_FIELD.itemCode]: input.itemCode,
-      [STOCK_RESERVATION_FIELD.rolls]: want.rolls,
-      [STOCK_RESERVATION_FIELD.looseBelts]: want.belts,
-      [STOCK_RESERVATION_FIELD.salesOrder]: input.salesOrder,
-      [STOCK_RESERVATION_FIELD.salesPerson]: input.salesPerson,
-      [STOCK_RESERVATION_FIELD.status]: 'Active',
-      [STOCK_RESERVATION_FIELD.source]: RESERVATION_SOURCE.productionRun,
-      [STOCK_RESERVATION_FIELD.reservedOn]: serverNow()
-        .toISOString()
-        .slice(0, 19)
-        .replace('T', ' '),
-    });
-
-    return { claimed: true, available: freeRolls - want.rolls };
-  }
-
-  return {
-    claimed: false,
-    available: 0,
-    reason: 'Another claim landed on this run while yours was saving. Try again.',
-  };
-}
-
-/**
- * Move a run's stage, and write it down onto every line claimed against it.
- *
- * **One batch is being made, not one job per order.** The stage lives on the
- * run; pushing it down onto each claimed `custom_production_stage` is what
- * keeps every other screen — the production order detail, the roll-up, the
- * completion tick — working unchanged rather than needing to know runs exist.
- */
-async function setRunStage(input: { itemCode: string; stage: string }): Promise<number> {
-  await updateDoc(DOCTYPE.minStock, input.itemCode, {
-    [MIN_STOCK_FIELD.runStage]: input.stage,
-  });
-
-  const reservations = await listStockReservations();
-  const claimed = reservations.filter(
-    (r) =>
-      r.status === 'Active' &&
-      r.itemCode === input.itemCode &&
-      r.source === RESERVATION_SOURCE.productionRun &&
-      r.salesOrder,
+  // The belts-per-roll figure, which `WarehouseStock` uses for the conversion
+  // but does not carry out. The split needs it: a belt is cut from a roll, and
+  // without the pack size a line for one belt is sent to production while
+  // whole rolls sit on the shelf.
+  const items = await listDocs<Record<string, unknown>>(DOCTYPE.item, {
+    fields: ['name', ITEM_FIELD.beltsPerRoll],
+    filters: [['name', 'in', codes]],
+    limit: 0,
+  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.item));
+  const perRoll = new Map(
+    items.map((i) => [String(i.name), Number(i[ITEM_FIELD.beltsPerRoll]) || 0]),
   );
 
-  const orders = [...new Set(claimed.map((r) => r.salesOrder as string))];
-  let touched = 0;
-  for (const orderId of orders) {
-    try {
-      const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, orderId);
-      const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
-      const nextItems = items.map((l) =>
-        str(l.item_code) === input.itemCode
-          ? { ...l, [SALES_ORDER_ITEM_FIELD.productionStage]: input.stage }
-          : l,
-      );
-      const status = rollUp(
-        nextItems.map((l) => {
-          const held = heldBy(reservations, str(l.item_code) ?? '', orderId);
-          const rolls = Number(l[SALES_ORDER_ITEM_FIELD.rolls]) || 0;
-          const belts = Number(l[SALES_ORDER_ITEM_FIELD.looseBelts]) || 0;
-          return {
-            category: str(l[SALES_ORDER_ITEM_FIELD.category]),
-            fulfilmentMode: str(l[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
-            productionStage: str(l[SALES_ORDER_ITEM_FIELD.productionStage]),
-            stockStage: str(l[SALES_ORDER_ITEM_FIELD.stockStage]),
-            reservedRolls: held.rolls,
-            reservedBelts: held.belts,
-            toMakeRolls: Math.max(0, rolls - held.rolls),
-            toMakeBelts: Math.max(0, belts - held.belts),
-            splitKnown: true,
-          };
-        }),
-      );
-      await updateDoc(DOCTYPE.salesOrder, orderId, {
-        items: nextItems,
-        [SALES_ORDER_FIELD.productionStatus]: status,
-      });
-      touched += 1;
-    } catch {
-      // One unreachable order must not strand the rest of the run.
-    }
-  }
-  return touched;
+  return stock.map((s) => ({
+    itemCode: s.itemCode,
+    availableRolls: s.converted.known ? s.converted.rolls : 0,
+    availableBelts: s.converted.known ? s.converted.looseBelts : 0,
+    beltsPerRoll: perRoll.get(s.itemCode) ?? 0,
+    // `stockFromKg` refuses to divide when an item has no weights, and that
+    // refusal is carried through rather than flattened to a zero. The screens
+    // say "not set up" for those, which is a different sentence from "none
+    // left" and wants a different thing doing about it.
+    weightsKnown: s.converted.known,
+  }));
 }
 
-/**
- * Receive a run: the goods have landed.
+/*
+ * A block of *production run* machinery stood here until 17 September 2026.
  *
- * Claims against the run become claims against the shelf, the run counters and
- * its stage are cleared, and the reservations are re-labelled `Shelf`.
+ * A run was a second pool: the production manager recorded "20 rolls of this
+ * are being made", reps claimed out of it against their own counter, the run
+ * carried a stage that was pushed down onto every line claimed against it,
+ * and receiving it turned those claims into ordinary shelf bookings. Four
+ * functions — `recordProductionRun`, `claimFromRun`, `setRunStage`,
+ * `receiveRun` — plus a compare-and-swap protecting the claim counter.
  *
- * **It does not create the batch.** Receiving physical stock is a Desk job, and
- * inventing a batch here would put rubber on the shelf that nobody counted. So
- * this raises the shelf's *reserved* figure and leaves the batch quantity to
- * whoever actually books the goods in — which is why the pool will read
- * over-reserved until they do. That is visible and correct; the alternative is
- * invisible and wrong.
+ * Every one of them wrote to `Manna Minimum Stock Item`, and the only screen
+ * that called them was the production manager's minimum-stock page. Both are
+ * gone: the pool held a minimum of zero on all 129 rows, and production is
+ * tracked against the SAP production order on each line now, which the sync
+ * pulls back. `claimFromRun` had no caller at all by the end.
  */
-async function receiveRun(itemCode: string): Promise<{ movedRolls: number; relabelled: number }> {
-  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.minStock, itemCode);
-  const claimedRolls = Number(doc[MIN_STOCK_FIELD.reservedInProductionRolls]) || 0;
-  const claimedBelts = Number(doc[MIN_STOCK_FIELD.reservedInProductionBelts]) || 0;
-  const shelfReservedRolls = Number(doc[MIN_STOCK_FIELD.reservedRolls]) || 0;
-  const shelfReservedBelts = Number(doc[MIN_STOCK_FIELD.reservedLooseBelts]) || 0;
-
-  // One write: the claims move across, the run is cleared, the stage goes.
-  await updateDoc(DOCTYPE.minStock, itemCode, {
-    [MIN_STOCK_FIELD.reservedRolls]: shelfReservedRolls + claimedRolls,
-    [MIN_STOCK_FIELD.reservedLooseBelts]: shelfReservedBelts + claimedBelts,
-    [MIN_STOCK_FIELD.inProductionRolls]: 0,
-    [MIN_STOCK_FIELD.inProductionBelts]: 0,
-    [MIN_STOCK_FIELD.reservedInProductionRolls]: 0,
-    [MIN_STOCK_FIELD.reservedInProductionBelts]: 0,
-    [MIN_STOCK_FIELD.runStage]: '',
-  });
-
-  const reservations = await listStockReservations();
-  let relabelled = 0;
-  for (const r of reservations) {
-    if (r.status !== 'Active') continue;
-    if (r.itemCode !== itemCode) continue;
-    if (r.source !== RESERVATION_SOURCE.productionRun) continue;
-    try {
-      await updateDoc(DOCTYPE.stockReservation, r.id, {
-        [STOCK_RESERVATION_FIELD.source]: RESERVATION_SOURCE.shelf,
-      });
-      relabelled += 1;
-    } catch {
-      // Leave it labelled as a run claim rather than losing the claim itself.
-    }
-  }
-
-  return { movedRolls: claimedRolls, relabelled };
-}
-
-/**
- * Record a production run against a pool.
- *
- * The run is raised in SAP, which neither app can see; this only records it so
- * everyone else knows stock is coming. It is **intent, not stock** — nothing
- * downstream counts it towards availability. Setting 0 clears it.
- */
-async function recordProductionRun(input: {
-  itemCode: string;
-  rolls: number;
-  belts: number;
-  by: string;
-}): Promise<void> {
-  await updateDoc(DOCTYPE.minStock, input.itemCode, {
-    [MIN_STOCK_FIELD.inProductionRolls]: input.rolls,
-    [MIN_STOCK_FIELD.inProductionBelts]: input.belts,
-    // Server clock, so the stamp agrees with every other deadline in the app.
-    [MIN_STOCK_FIELD.inProductionUpdatedOn]: serverNow().toISOString().slice(0, 19).replace('T', ' '),
-    [MIN_STOCK_FIELD.inProductionUpdatedBy]: input.by,
-    ...(input.rolls === 0 && input.belts === 0 ? { [MIN_STOCK_FIELD.runStage]: '' } : {}),
-  });
-}
 
 /**
  * The sellable catalogue, for the order editor's item picker.
@@ -3919,238 +3222,64 @@ export interface OrderLineWrite {
  * Existing rows keep their `name` so their history and any per-line approval
  * survive; a new row is sent without one and Frappe names it.
  */
-/**
- * Put a discount on one line, or take it off.
+/*
+ * `setLineDiscount` stood here until 17 September 2026.
  *
- * A port of `Api.setLineDiscount` in `app/lib/services/api.dart`, down to the
- * order of the checks and the wording of the refusals. The manager sets a
- * discount and it is written **there and then**, not held until the approval —
- * on the phone the figure is applied as soon as it is entered, and a dashboard
- * that queued it would leave a manager who set a discount and walked away
+ * The sales manager could knock a percentage off any line at approval, and it
+ * was written there and then rather than held until the decision — on the
+ * phone the figure applied as soon as it was entered, and a dashboard that
+ * queued it would have left a manager who set a discount and walked away
  * believing they had given one.
  *
- * The order is re-read first. Not for freshness: for the two things that can
- * only be answered against the stored document — whether it has been signed
- * off since the page loaded, and whether the line is still on it.
+ * The whole feature is gone from both apps. The sales team now types the rate
+ * AFTER discount, so the quoted rate is already net and there is one number
+ * on a line instead of three. That is also what reaches SAP: the sync sends
+ * `amount / custom_total_weight` with DiscountPercent always 0.
+ *
+ * Legacy lines keep whatever `discount_percentage` they were saved with —
+ * `SAL-ORD-2026-00135` still reads 10% — and nothing displays or re-applies
+ * it. Their `amount` was always the net figure, so they price correctly
+ * regardless.
  */
-async function setLineDiscount(input: {
-  orderId: string;
-  lineId: string;
-  percent: number;
-  isLead?: boolean;
-}): Promise<OrderDetail> {
-  const isLead = input.isLead ?? false;
-  const refusal = discountRefusal(input.percent);
-  if (refusal) throw new Error(refusal);
 
-  const doctype = isLead ? DOCTYPE.leadOrder : DOCTYPE.salesOrder;
-  const order = await getDoc<Record<string, unknown>>(doctype, input.orderId);
-
-  if (
-    orderSignedOff(
-      {
-        poStatus: str(order[SALES_ORDER_FIELD.poStatus]),
-        status: str(order.status),
-        ratesApproved: Number(order[SALES_ORDER_FIELD.ratesApproved]) === 1,
-      },
-      isLead,
-    )
-  ) {
-    throw new Error('This order is approved — its discounts and rates are final.');
-  }
-
-  const rows = Array.isArray(order.items) ? (order.items as Record<string, unknown>[]) : [];
-  let found = false;
-  const items = rows.map((row) => {
-    if (String(row.name) !== input.lineId) return row;
-    found = true;
-    return { ...row, ...discountFields({ item: row, percent: input.percent, isLead }) };
-  });
-
-  /*
-   * A row that is no longer there means the order moved under the manager — a
-   * rep editing it at the same moment. Writing the array back anyway would
-   * save a discount onto nothing while reporting success.
-   */
-  if (!found) {
-    throw new Error('That line is no longer on the order. Reopen it and try again.');
-  }
-
-  const saved = await updateDoc<Record<string, unknown>>(doctype, input.orderId, { items });
-  return toOrderDetail(saved);
-}
-
-/**
- * Bring this order's hold on one item up (or down) to what the line now asks.
+/*
+ * `holdFromShelf` stood here until 17 September 2026.
  *
- * **Why this exists.** A reservation is written by whoever books the line, and
- * until 13 Aug 2026 that was only ever the rep's phone. Editing the quantity
- * here rewrote the Sales Order and nothing else, so raising `155 MSR 87` from
- * one roll to two left the hold at one — while three rolls sat free on the
- * shelf. The order then read as needing a roll manufactured, and any other rep
- * could have taken the stock in the meantime. Stock that is on the shelf must
- * come off the shelf; production is for what the shelf has not got.
+ * It brought an order's reservation on one item up or down to what the line
+ * asked for, with a compare-and-swap on the pool's reserved counter, because
+ * editing a line here used to rewrite the Sales Order and nothing else —
+ * raising `155 MSR 87` from one roll to two left the hold at one while three
+ * rolls sat free on the shelf, so the order read as needing a roll made.
  *
- * **The shelf is the batch, never the pool's `qty`.** `qty` is the minimum to
- * hold. Reading it as stock is the mistake that makes every figure here wrong.
- *
- * **Free is measured against the reservation rows, not the stored counter.**
- * The counter is a hand-maintained cache with no Server Script behind it and
- * it has already been proven wrong on this site — `120 AJAX 69` claimed three
- * rolls booked with nothing behind them after a Sales Order was deleted in the
- * Desk. Summing the rows both frees stock that genuinely is free and repairs
- * the counter on the way past.
- *
- * **Order of writes.** Taking stock raises the counter first and writes the row
- * second, so a crash in between over-books rather than hands the same roll to
- * two orders. Releasing does the reverse. The counter is read back after every
- * write: if another claim interleaved it will not hold our figure, and we start
- * again instead of assuming we won.
+ * SAP commits stock against its own sales order now, and does it against the
+ * quantities on that order, so an edit that reaches SAP moves the commitment
+ * with it. There is nothing left here to keep in step.
  */
-async function holdFromShelf(input: {
-  itemCode: string;
-  orderId: string;
-  wantRolls: number;
-  wantBelts: number;
-  salesPerson?: string;
-  attempts?: number;
-}): Promise<{ rolls: number; belts: number; short: number } | null> {
-  const maxAttempts = input.attempts ?? 3;
-
-  /*
-   * How many belts one roll cuts into, so a belt asked for against a pool of
-   * whole rolls can open one instead of going to production — see
-   * `allocateFromPool` and shared/fixtures/belt_from_roll.json.
-   *
-   * Read once, outside the retry loop: it is Item master data and cannot
-   * change between attempts. A missing item, or a master without the figure,
-   * leaves it 0, which means "not cuttable" and is the safe reading.
-   */
-  const itemDoc = await getDoc<Record<string, unknown>>(DOCTYPE.item, input.itemCode).catch(
-    () => null,
-  );
-  const beltsPerRoll = Number(itemDoc?.[ITEM_FIELD.beltsPerRoll]) || 0;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const pool = await getDoc<Record<string, unknown>>(DOCTYPE.minStock, input.itemCode).catch(
-      () => null,
-    );
-    // Not a stocked item. Nothing to hold, and nothing has gone wrong: the
-    // line is made to order by definition.
-    if (!pool) return null;
-
-    const batches = await listDocs<Record<string, unknown>>(DOCTYPE.stockBatch, {
-      fields: ['name', ...Object.values(MIN_STOCK_BATCH_FIELD)],
-      filters: [[MIN_STOCK_BATCH_FIELD.itemCode, '=', input.itemCode]],
-      limit: 0,
-    }).catch(() => [] as Record<string, unknown>[]);
-
-    let shelfRolls = 0;
-    let shelfBelts = 0;
-    for (const b of batches) {
-      shelfRolls += Number(b[MIN_STOCK_BATCH_FIELD.rolls]) || 0;
-      shelfBelts += Number(b[MIN_STOCK_BATCH_FIELD.looseBelts]) || 0;
-    }
-
-    const all = await listStockReservations();
-    const mine = all.filter(
-      (r) =>
-        r.status === 'Active' &&
-        r.itemCode === input.itemCode &&
-        r.source !== RESERVATION_SOURCE.productionRun &&
-        (r.salesOrder === input.orderId || r.leadOrder === input.orderId),
-    );
-    const heldRolls = mine.reduce((n, r) => n + r.rolls, 0);
-    const heldBelts = mine.reduce((n, r) => n + r.looseBelts, 0);
-    const plan = holdPlan({
-      ordered: { rolls: input.wantRolls, belts: input.wantBelts },
-      held: { rolls: heldRolls, belts: heldBelts },
-      shelf: { rolls: shelfRolls, belts: shelfBelts },
-      reservedTotal: trueReserved(all, input.itemCode),
-      beltsPerRoll,
-    });
-
-    const targetRolls = plan.target.rolls;
-    const targetBelts = plan.target.belts;
-    const short = plan.short.rolls;
-
-    if (!plan.changed) return { rolls: heldRolls, belts: heldBelts, short };
-
-    const nextCounterRolls = plan.counter.rolls;
-    const nextCounterBelts = plan.counter.belts;
-    const taking = plan.delta.rolls > 0 || plan.delta.belts > 0;
-
-    const writeRows = async () => {
-      // One row per order and item. Extra rows from earlier edits are zeroed
-      // and released so the sum can never read higher than the hold.
-      const [keep, ...spare] = mine;
-      if (targetRolls === 0 && targetBelts === 0) {
-        for (const r of mine) {
-          await updateDoc(DOCTYPE.stockReservation, r.id, {
-            [STOCK_RESERVATION_FIELD.rolls]: 0,
-            [STOCK_RESERVATION_FIELD.looseBelts]: 0,
-            [STOCK_RESERVATION_FIELD.status]: 'Released',
-          });
-        }
-        return;
-      }
-      for (const r of spare) {
-        await updateDoc(DOCTYPE.stockReservation, r.id, {
-          [STOCK_RESERVATION_FIELD.rolls]: 0,
-          [STOCK_RESERVATION_FIELD.looseBelts]: 0,
-          [STOCK_RESERVATION_FIELD.status]: 'Released',
-        });
-      }
-      if (keep) {
-        await updateDoc(DOCTYPE.stockReservation, keep.id, {
-          [STOCK_RESERVATION_FIELD.rolls]: targetRolls,
-          [STOCK_RESERVATION_FIELD.looseBelts]: targetBelts,
-          [STOCK_RESERVATION_FIELD.status]: 'Active',
-        });
-      } else {
-        await createDoc(DOCTYPE.stockReservation, {
-          [STOCK_RESERVATION_FIELD.itemCode]: input.itemCode,
-          [STOCK_RESERVATION_FIELD.rolls]: targetRolls,
-          [STOCK_RESERVATION_FIELD.looseBelts]: targetBelts,
-          [STOCK_RESERVATION_FIELD.salesOrder]: input.orderId,
-          [STOCK_RESERVATION_FIELD.salesPerson]: input.salesPerson,
-          [STOCK_RESERVATION_FIELD.status]: 'Active',
-          [STOCK_RESERVATION_FIELD.source]: RESERVATION_SOURCE.shelf,
-          [STOCK_RESERVATION_FIELD.reservedOn]: serverNow()
-            .toISOString()
-            .slice(0, 19)
-            .replace('T', ' '),
-        });
-      }
-    };
-
-    const writeCounter = () =>
-      updateDoc(DOCTYPE.minStock, input.itemCode, {
-        [MIN_STOCK_FIELD.reservedRolls]: nextCounterRolls,
-        [MIN_STOCK_FIELD.reservedLooseBelts]: nextCounterBelts,
-      });
-
-    if (taking) {
-      await writeCounter();
-      const after = await getDoc<Record<string, unknown>>(DOCTYPE.minStock, input.itemCode);
-      if ((Number(after[MIN_STOCK_FIELD.reservedRolls]) || 0) !== nextCounterRolls) continue;
-      await writeRows();
-    } else {
-      await writeRows();
-      await writeCounter();
-    }
-
-    return { rolls: targetRolls, belts: targetBelts, short };
-  }
-
-  return null;
-}
 
 async function saveOrderLines(input: {
   orderId: string;
   lines: OrderLineWrite[];
 }): Promise<OrderDetail> {
   const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.orderId);
+
+  /*
+   * Checked against the order AS STORED, not against what the page loaded —
+   * a manager can approve while somebody else sits on the edit screen.
+   *
+   * An approved order belongs to SAP from then on, and nothing here can reach
+   * it: the sync only ever CREATES a SAP order, never updates one. A write
+   * accepted at this point would change the ERPNext document, show a new
+   * quantity, and leave the factory building the old one.
+   */
+  if (isApproved(str(doc[SALES_ORDER_FIELD.poStatus]))) {
+    const sap = str(doc[SALES_ORDER_FIELD.sapSalesOrder]);
+    throw new Error(
+      'This order is approved and is with the factory, so it cannot be changed here' +
+        (sap ? ` — quote SAP order ${sap}` : '') +
+        '. Ring the manufacturing team to drop or reduce an item.',
+    );
+  }
+
   const existing = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
   const byName = new Map(existing.map((l) => [String(l.name), l]));
 
@@ -4160,25 +3289,24 @@ async function saveOrderLines(input: {
     const base = l.id ? (byName.get(l.id) ?? {}) : {};
 
     /*
-     * A discount already granted survives a quantity or rate change. It was a
-     * decision about this customer and this product; changing how many rolls
-     * they are taking does not withdraw it. The percentage is re-applied to
-     * the new figure so the money stays consistent — dropping it would
-     * silently raise the price the customer was quoted.
+     * One rate, which is already net.
      *
-     * `l.rate`/`l.amount` arrive from the editor as the UNDISCOUNTED figures,
-     * because that is what the packing rules compute.
+     * A discount granted earlier used to be carried across a quantity or rate
+     * change and re-applied to the new figure. There are no discounts to carry
+     * since 17 September 2026 — the rate the rep types is the rate after
+     * discount — so the editor's figure goes in as-is.
+     *
+     * `price_list_rate` and `discount_percentage` are written explicitly
+     * rather than left alone, so ERPNext's own pricing cannot derive a phantom
+     * discount from a stale price-list rate sitting on the row.
      */
-    const percent = discountPercentOf(base);
-    const money = discountFields({
-      // `l.rate` arrives from the editor as the UNDISCOUNTED per-unit figure,
-      // because that is what the packing rules compute. Handing it in as the
-      // price-list rate is what makes the percentage come off the rep's rate
-      // rather than off an already-discounted one.
-      item: { qty: l.qty, price_list_rate: l.rate },
-      percent,
-      isLead: false,
-    });
+    const money = {
+      price_list_rate: l.rate,
+      discount_percentage: 0,
+      discount_amount: 0,
+      rate: l.rate,
+      amount: round2(l.qty * l.rate),
+    };
 
     return {
       ...base,
@@ -4213,43 +3341,16 @@ async function saveOrderLines(input: {
     [SALES_ORDER_FIELD.poStatus]: 'Pending Approval',
     [SALES_ORDER_FIELD.ratesApproved]: 0,
   });
-
   /*
-   * Now make the stock match the order.
+   * Saving the order used to be followed by a second pass that brought this
+   * order's reservation on every item up to what its lines now asked for —
+   * every line, not just the changed ones, because a line booked before the
+   * shelf was refilled had been sitting under-held.
    *
-   * The order document is written first and the holds second, deliberately.
-   * A hold without a line behind it is stock nobody can sell and nobody can
-   * see; a line without its hold is visible on this screen and fixed by
-   * saving again. The failure that costs least is the recoverable one.
-   *
-   * Every line is topped up, not just the ones that changed — a line the rep
-   * booked before the shelf was refilled has been sitting under-held, and
-   * there is no reason to leave it that way once somebody opens the order.
+   * SAP holds the stock now, against the quantities on its own copy of this
+   * order, so the edit moves the commitment when it reaches SAP. There is
+   * nothing to reconcile here.
    */
-  const want = new Map<string, { rolls: number; belts: number }>();
-  for (const l of input.lines) {
-    const cur = want.get(l.itemCode) ?? { rolls: 0, belts: 0 };
-    want.set(l.itemCode, { rolls: cur.rolls + l.rolls, belts: cur.belts + l.looseBelts });
-  }
-  // A line that has been taken off the order must give its stock back, so the
-  // items that were on the document before are asked for zero.
-  for (const l of existing) {
-    const code = str(l.item_code);
-    if (code && !want.has(code)) want.set(code, { rolls: 0, belts: 0 });
-  }
-
-  const rep = str(doc[SALES_ORDER_FIELD.rep]);
-  for (const [itemCode, q] of want) {
-    // One item failing to hold must not lose the rest. The order is already
-    // saved; the stock position is shown on the line and can be retried.
-    await holdFromShelf({
-      itemCode,
-      orderId: input.orderId,
-      wantRolls: q.rolls,
-      wantBelts: q.belts,
-      salesPerson: rep,
-    }).catch(() => null);
-  }
 
   return toOrderDetail(saved);
 }
@@ -4433,29 +3534,6 @@ async function captureLocation(input: {
     body,
   );
 }
-
-/** Live claims on the pool. Only `Active` rows hold anything. */
-async function listStockReservations(): Promise<StockReservationRow[]> {
-  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.stockReservation, {
-    fields: ['name', ...Object.values(STOCK_RESERVATION_FIELD)],
-    limit: 0,
-  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.stockReservation));
-
-  return rows.map((r) => ({
-    id: String(r.name),
-    itemCode: str(r[STOCK_RESERVATION_FIELD.itemCode]) ?? '',
-    rolls: Number(r[STOCK_RESERVATION_FIELD.rolls]) || 0,
-    looseBelts: Number(r[STOCK_RESERVATION_FIELD.looseBelts]) || 0,
-    salesOrder: str(r[STOCK_RESERVATION_FIELD.salesOrder]),
-    leadOrder: str(r[STOCK_RESERVATION_FIELD.leadOrder]),
-    salesPerson: str(r[STOCK_RESERVATION_FIELD.salesPerson]),
-    batch: str(r[STOCK_RESERVATION_FIELD.batch]),
-    reservedOn: str(r[STOCK_RESERVATION_FIELD.reservedOn]),
-    status: str(r[STOCK_RESERVATION_FIELD.status]) ?? '',
-    source: str(r[STOCK_RESERVATION_FIELD.source]),
-  }));
-}
-
 // ---------------------------------------------------------- lead orders ---
 
 /** Lead orders raised by a set of reps, within a date range. */
@@ -4501,17 +3579,16 @@ function toLeadOrder(r: Record<string, unknown>, items: Record<string, unknown>[
         qty,
         rate,
         /*
-         * Through the shared helpers, so a lead order is read by exactly the
-         * rules a customer order is. `amount` is a read-only Currency on a
-         * custom child table with nothing behind it, so rows written before
-         * the app started sending it hold zero — `lineAfterDiscount` falls
-         * back to qty x rate rather than showing a manager a nil order
-         * against rates the rep entered correctly.
+         * `amount` is a read-only Currency on a custom child table with
+         * nothing behind it, so rows written before the app started sending it
+         * hold zero. Falling back to qty x rate beats showing a manager a nil
+         * order against rates the rep entered correctly.
+         *
+         * This used to go through the shared discount helpers so a lead order
+         * was read by exactly the rules a customer order was. There are no
+         * discounts to read since 17 September 2026 and `rate` is already net.
          */
-        amount: lineAfterDiscount(l),
-        discountPercent: discountPercentOf(l),
-        priceListRate: rateBeforeDiscount(l),
-        amountBeforeDiscount: lineBeforeDiscount(l),
+        amount: Number(l[LEAD_ORDER_ITEM_FIELD.amount]) || round2(qty * rate),
       };
     }),
   };
@@ -4804,28 +3881,14 @@ async function setProductionStage(input: {
     String(l.name) === input.lineId ? { ...l, [target]: input.stage } : l,
   );
 
-  // The roll-up weighs BOTH halves of a split line, so it needs the live
-  // reservations: four rolls dispatched off the shelf while four are still
-  // being made is not a finished order.
-  const reservations = await listStockReservations().catch(() => [] as StockReservationRow[]);
+  // The roll-up used to weigh both halves of a split line, which meant reading
+  // the live reservations first. A line has one half now.
   const status = rollUp(
-    nextItems.map((l) => {
-      const code = str(l.item_code) ?? '';
-      const held = heldBy(reservations, code, input.orderId);
-      const rolls = Number(l[SALES_ORDER_ITEM_FIELD.rolls]) || 0;
-      const belts = Number(l[SALES_ORDER_ITEM_FIELD.looseBelts]) || 0;
-      return {
-        category: str(l[SALES_ORDER_ITEM_FIELD.category]),
-        fulfilmentMode: str(l[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
-        productionStage: str(l[SALES_ORDER_ITEM_FIELD.productionStage]),
-        stockStage: str(l[SALES_ORDER_ITEM_FIELD.stockStage]),
-        reservedRolls: held.rolls,
-        reservedBelts: held.belts,
-        toMakeRolls: Math.max(0, rolls - held.rolls),
-        toMakeBelts: Math.max(0, belts - held.belts),
-        splitKnown: true,
-      };
-    }),
+    nextItems.map((l) => ({
+      category: str(l[SALES_ORDER_ITEM_FIELD.category]),
+      fulfilmentMode: str(l[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
+      productionStage: str(l[SALES_ORDER_ITEM_FIELD.productionStage]),
+    })),
   );
 
   await updateDoc(DOCTYPE.salesOrder, input.orderId, {
@@ -5118,7 +4181,7 @@ async function combineDispatchedOrders(
   groupedBy?: string,
 ): Promise<void> {
   const totalOf = new Map(touched.map((o) => [o.id, o.total]));
-  const round2 = (n: number) => Math.round(n * 100) / 100;
+
 
   /*
    * Every order the van touched goes in; which of them group is the rule's
@@ -5184,10 +4247,6 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
     bySalesOrder.set(l.salesOrder, bucket);
   }
 
-  // Item codes that became fully dispatched, per order — the best-effort
-  // Manna Production Order flip reads this after the Sales Order is saved.
-  const fullyDoneByOrder = new Map<string, string[]>();
-
   // Every order this van touched, with the two facts the grouping rule turns
   // on. It decides which of them combine; see `combineDispatchedOrders`.
   const touched: CombinableOrder[] = [];
@@ -5200,8 +4259,6 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
       );
     }
     const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
-    const reservations = await listStockReservations().catch(() => [] as StockReservationRow[]);
-    const fullyDone: string[] = [];
 
     const nextItems = items.map((row) => {
       const line = lines.find((l) => l.salesOrderItem === String(row.name));
@@ -5224,7 +4281,6 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
         [SALES_ORDER_ITEM_FIELD.dispatchedRolls]: newDispatchedRolls,
         [SALES_ORDER_ITEM_FIELD.dispatchedLooseBelts]: newDispatchedBelts,
       });
-      if (done) fullyDone.push(line.itemCode);
 
       const next: Record<string, unknown> = {
         ...row,
@@ -5233,51 +4289,27 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
         [SALES_ORDER_ITEM_FIELD.dispatchShortReason]: done ? '' : line.shortfallReason ?? '',
       };
       if (done) {
-        // Whichever half(s) this line actually drew on reach the terminal
-        // stage. A line with neither half resolvable (should not happen on
-        // a Ready order) defaults to the made half, so it is never silently
-        // left off the order's rollup.
-        const code = str(row.item_code) ?? '';
-        const held = heldBy(reservations, code, orderId);
-        const rolls = Number(row[SALES_ORDER_ITEM_FIELD.rolls]) || 0;
-        const belts = Number(row[SALES_ORDER_ITEM_FIELD.looseBelts]) || 0;
-        const hasStockHalf = held.rolls > 0 || held.belts > 0;
-        const hasMakeHalf = Math.max(0, rolls - held.rolls) > 0 || Math.max(0, belts - held.belts) > 0;
-        if (!hasStockHalf && !hasMakeHalf) {
-          next[SALES_ORDER_ITEM_FIELD.productionStage] = DISPATCHED;
-        } else {
-          if (hasStockHalf) next[SALES_ORDER_ITEM_FIELD.stockStage] = DISPATCHED;
-          if (hasMakeHalf) next[SALES_ORDER_ITEM_FIELD.productionStage] = DISPATCHED;
-        }
+        // The line reaches the terminal stage. This used to work out which
+        // *half* of a split line had gone — the part off a shelf reservation,
+        // or the part made — and stamp each separately. A line has one half
+        // now, so there is one stage to write.
+        next[SALES_ORDER_ITEM_FIELD.productionStage] = DISPATCHED;
       }
       return next;
     });
 
     const status = rollUp(
-      nextItems.map((l) => {
-        const code = str(l.item_code) ?? '';
-        const held = heldBy(reservations, code, orderId);
-        const rolls = Number(l[SALES_ORDER_ITEM_FIELD.rolls]) || 0;
-        const belts = Number(l[SALES_ORDER_ITEM_FIELD.looseBelts]) || 0;
-        return {
-          category: str(l[SALES_ORDER_ITEM_FIELD.category]),
-          fulfilmentMode: str(l[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
-          productionStage: str(l[SALES_ORDER_ITEM_FIELD.productionStage]),
-          stockStage: str(l[SALES_ORDER_ITEM_FIELD.stockStage]),
-          reservedRolls: held.rolls,
-          reservedBelts: held.belts,
-          toMakeRolls: Math.max(0, rolls - held.rolls),
-          toMakeBelts: Math.max(0, belts - held.belts),
-          splitKnown: true,
-        };
-      }),
+      nextItems.map((l) => ({
+        category: str(l[SALES_ORDER_ITEM_FIELD.category]),
+        fulfilmentMode: str(l[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
+        productionStage: str(l[SALES_ORDER_ITEM_FIELD.productionStage]),
+      })),
     );
 
     await updateDoc(DOCTYPE.salesOrder, orderId, {
       items: nextItems,
       [SALES_ORDER_FIELD.productionStatus]: status,
     });
-    if (fullyDone.length) fullyDoneByOrder.set(orderId, fullyDone);
 
     /*
      * `rollUp` returns Dispatched only when every line on the order has
@@ -5294,36 +4326,17 @@ async function finalizeDispatch(input: FinalizeDispatchInput): Promise<Dispatch>
     });
   }
 
-  // Best-effort: a Manna Production Order raised for a now-fully-dispatched
-  // line (Flow B) should not sit stale. Zero matches is expected and fine —
-  // a line served wholly from the shelf never had one.
-  for (const [orderId, itemCodes] of fullyDoneByOrder) {
-    for (const itemCode of itemCodes) {
-      try {
-        const rows = await listDocs<Record<string, unknown>>(DOCTYPE.productionOrder, {
-          fields: ['name', PRODUCTION_ORDER_FIELD.status],
-          filters: [
-            [PRODUCTION_ORDER_FIELD.purpose, '=', PRODUCTION_ORDER_PURPOSE.order],
-            [PRODUCTION_ORDER_FIELD.salesOrder, '=', orderId],
-            [PRODUCTION_ORDER_FIELD.itemCode, '=', itemCode],
-          ],
-          limit: 0,
-        });
-        for (const r of rows) {
-          const current = str(r[PRODUCTION_ORDER_FIELD.status]);
-          if (current === PRODUCTION_ORDER_STATUS.dispatched || current === PRODUCTION_ORDER_STATUS.cancelled) {
-            continue;
-          }
-          await updateDoc(DOCTYPE.productionOrder, String(r.name), {
-            [PRODUCTION_ORDER_FIELD.status]: PRODUCTION_ORDER_STATUS.dispatched,
-          });
-        }
-      } catch {
-        // Best-effort courtesy write — the Sales Order side is already saved
-        // and is the record that matters.
-      }
-    }
-  }
+  /*
+   * A best-effort flip of the matching `Manna Production Order` to Dispatched
+   * ran here — flow B of shared/PRODUCTION_FLOWS.md, so a run raised against
+   * one order did not sit stale once the goods went out.
+   *
+   * Removed 17 September 2026 with the doctype. It had been a no-op in
+   * practice — zero rows on the live site — and production against an order is
+   * tracked on the order's own line now, from the SAP production order the
+   * sync pulls back.
+   */
+
 
   // Lock the Manna Dispatch itself: capture what actually went per line.
   const dispatchDoc = await getDoc<Record<string, unknown>>(DOCTYPE.dispatch, input.id);
@@ -6441,6 +5454,64 @@ async function requestSapSync(): Promise<SapSyncRequestResult> {
 }
 
 /*
+ * --- the SAP order sync ------------------------------------------------------
+ *
+ * The same shape as the credit refresh above and for the same reason: Frappe
+ * Cloud has no route to the SAP LAN, so a manager pressing Refresh — in the
+ * office or anywhere else — can only raise a flag. A watcher inside the office
+ * sees it, logs into SAP, pulls production and delivery state onto the orders,
+ * and writes the outcome back here.
+ *
+ * So the button is honest about being a request, not an action: the manager is
+ * told when the floor was last read, not that it has just been read.
+ */
+
+export interface OrderSyncState {
+  /** Idle | Running | Success | Failed — the Select's only values. */
+  status: string;
+  /** True while a request is waiting for the on-prem watcher to pick it up. */
+  queued: boolean;
+  lastSyncAt: string | null;
+  lastResultMessage: string;
+  lastRowsChanged: number;
+  cooldownUntil: string | null;
+}
+
+function toOrderSyncState(m: Record<string, unknown>): OrderSyncState {
+  return {
+    status: str(m.status) ?? 'Idle',
+    queued: Number(m.sync_requested ?? m.queued ?? 0) === 1,
+    lastSyncAt: str(m.last_sync_at) || null,
+    lastResultMessage: str(m.last_result_message) ?? '',
+    lastRowsChanged: Number(m.last_rows_changed ?? 0),
+    cooldownUntil: str(m.cooldown_until) || null,
+  };
+}
+
+/** Where the order sync has got to. Safe for any signed-in user. */
+async function getOrderSyncState(): Promise<OrderSyncState> {
+  const { data } = await http.get<{ message: Record<string, unknown> }>(
+    '/api/method/manna_sap_order_get_status',
+  );
+  return toOrderSyncState(data.message ?? {});
+}
+
+/**
+ * Ask the on-prem watcher to re-read SAP.
+ *
+ * A refusal is a normal answer: inside the cooldown the script declines and
+ * says when it will next accept. The cooldown lives in the Server Script, not
+ * here, so a browser console cannot talk past it.
+ */
+async function requestOrderSync(): Promise<OrderSyncState & { accepted: boolean }> {
+  const { data } = await http.post<{ message: Record<string, unknown> }>(
+    '/api/method/manna_sap_order_request_sync',
+  );
+  const m = data.message ?? {};
+  return { ...toOrderSyncState(m), accepted: Boolean(m.accepted) };
+}
+
+/*
  * --- warehouse stock, in kilos, from SAP ------------------------------------
  *
  * The FG catalogue import of 10 September 2026 put 1,656 items on the site and
@@ -6549,21 +5620,6 @@ export const Api = {
     pendingAcks,
   },
 
-  stock: {
-    listMinStock,
-    listReservations,
-    reserve: reserveStock,
-    releaseDraftHolds,
-    bindHoldsToOrder,
-    consume: consumeStock,
-    raiseReplenishment,
-    listProductionOrders,
-    recordReplenishment,
-    divertToStock,
-    belowThreshold,
-    availableFor,
-  },
-
   orders: {
     list: listOrders,
     get: getOrder,
@@ -6619,6 +5675,8 @@ export const Api = {
     listWarehouseStock,
     getSapSyncStatus,
     requestSapSync,
+    getOrderSyncState,
+    requestOrderSync,
     listCreditConditions,
     addCreditCondition,
     decideCreditCondition,
@@ -6626,13 +5684,8 @@ export const Api = {
     listOrders: listTeamOrders,
     getOrder: getSalesOrder,
     decideOrder: decideSalesOrder,
-    setLineDiscount,
+    undoOrderRejection,
     listMinimumStock,
-    recordProductionRun,
-    claimFromRun,
-    setRunStage,
-    receiveRun,
-    listReservations: listStockReservations,
     listItemOptions,
     setFulfilmentMode,
     saveOrderLines,

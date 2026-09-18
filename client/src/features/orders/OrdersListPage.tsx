@@ -57,6 +57,10 @@ interface Row {
   productionFinishDate?: string;
   combinedOrder?: string;
   undecided: boolean;
+  /** SAP's order number once it has one. Lead orders never have one. */
+  sapSalesOrder?: string;
+  /** SAP's own status, so a cancelled order stops reading as approved. */
+  sapSalesOrderStatus?: string;
 }
 
 export function OrdersListPage() {
@@ -160,6 +164,8 @@ export function OrdersListPage() {
         productionStatus: o.productionStatus,
         combinedOrder: o.combinedOrder,
         undecided: awaitingManager(o.poStatus),
+        sapSalesOrder: o.sapSalesOrder,
+        sapSalesOrderStatus: o.sapSalesOrderStatus,
       }));
 
     const leads: Row[] = leadOrders.map((l) => ({
@@ -317,12 +323,25 @@ export function OrdersListPage() {
                 </div>
 
                 <div className="ordrow__meta">
-                  <span className="mono">{r.id}</span> · {r.rep || 'unassigned'} ·{' '}
-                  {formatDate(r.date)}
+                  {/*
+                    SAP's number leads once SAP has the order — it is what the
+                    factory, the delivery note and the invoice all carry, so it
+                    is the one a rep is asked about. The ERPNext name stays for
+                    support to find the document by.
+                  */}
+                  {r.sapSalesOrder ? (
+                    <>
+                      <b className="mono">SAP {r.sapSalesOrder}</b>{' '}
+                      <span className="dim">({r.id})</span>
+                    </>
+                  ) : (
+                    <span className="mono">{r.id}</span>
+                  )}{' '}
+                  · {r.rep || 'unassigned'} · {formatDate(r.date)}
                 </div>
 
                 <div className="ordrow__status">
-                  <StatusPill status={r.status} />
+                  <StatusPill status={r.status} sapStatus={r.sapSalesOrderStatus} />
                   {r.undecided && <span className="tiny dim">Tap to review</span>}
                   {/* Never a tick on a lead order: it is not a Sales Order yet
                       and has no production status, so an empty box would read

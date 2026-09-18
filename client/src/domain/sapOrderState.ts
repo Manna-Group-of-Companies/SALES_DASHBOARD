@@ -23,6 +23,7 @@
  * Pinned by `shared/fixtures/sap_order_state.json`; the Dart twin is
  * `app/lib/core/sap_order_state.dart`.
  */
+import { statusPill, type StatusTone } from './orderStatus';
 
 export type ProductionStatus = 'Not Started' | 'In Production' | 'Ready' | 'Dispatched';
 
@@ -79,6 +80,69 @@ export function reachedSap(s: SapOrderState): boolean {
   return clean(s.salesOrder).length > 0;
 }
 
+/** What SAP has told us about one LINE of an order. */
+export interface SapLineState {
+  productionOrder?: string | null;
+  productionStage?: string | null;
+  /** The delivery that carried THIS line. Blank means this line has not gone. */
+  deliveryOrder?: string | null;
+  deliveryDate?: string | null;
+}
+
+/**
+ * One line's status.
+ *
+ * SAP raises a production order per item, so a four-item order has four
+ * stages and an order-level stage hides which item is holding it up.
+ *
+ * THE DELIVERY IS THE LINE'S OWN, NOT THE ORDER'S
+ *
+ * A delivery need not carry the whole order: dropping a row from it is how the
+ * floor ships what is ready and leaves the rest open, which is exactly what
+ * happened to SAP order 381 on 16 Sep 2026 — three lines shipped, one stayed
+ * open. Reading the order's delivery here would mark that fourth line
+ * Dispatched while it sat unmade in the factory, which is the same lie as
+ * calling an unmapped stage Ready.
+ *
+ * Everything else defers to `productionStatusFromSap`, so a line and an order
+ * can never drift apart on the rules they share.
+ */
+export function lineStatusFromSap(line: SapLineState): ProductionStatus {
+  return productionStatusFromSap({
+    productionStage: line.productionStage,
+    deliveryOrder: line.deliveryOrder,
+  });
+}
+
+const RANK: Record<ProductionStatus, number> = {
+  'Not Started': 0,
+  'In Production': 1,
+  Ready: 2,
+  Dispatched: 3,
+};
+
+/**
+ * The order's status, rolled up from its lines: the least advanced one wins.
+ *
+ * An order is Ready only when every line is. Rounding the other way would tell
+ * a rep an order is made while one item is still in a press — the same error
+ * `unknown_stage_is_in_production` exists to prevent.
+ *
+ * With no lines carrying SAP state at all, falls back to the order's own.
+ */
+export function orderStatusFromLines(lines: SapLineState[], order: SapOrderState): ProductionStatus {
+  const known = lines.filter(
+    (l) => clean(l.productionOrder) || clean(l.productionStage) || clean(l.deliveryOrder),
+  );
+  if (known.length === 0) return productionStatusFromSap(order);
+  // Not short-circuited on the order's delivery: a partly-delivered order is
+  // still open, and saying Dispatched would close it in a rep's mind while a
+  // line is outstanding. It reaches Dispatched here only when every line has.
+  return known
+    .map(lineStatusFromSap)
+    .reduce((worst, s) => (RANK[s] < RANK[worst] ? s : worst));
+}
+
 /**
  * Why an order is not in SAP, or null when it is.
  *
@@ -124,4 +188,48 @@ export function sapSummary(s: SapOrderState): string | null {
   const so = clean(s.salesOrder);
   if (so) bits.push(`SAP ${so}`);
   return bits.length ? bits.join(' · ') : null;
+}
+
+// ------------------------------------------------------------ cancelled ---
+
+/** SAP's own enum value. Not free text, and the only one mapped to behaviour. */
+const SAP_CANCELLED = 'bost_cancelled';
+
+/**
+ * Whether SAP has cancelled this order.
+ *
+ * `custom_sap_sales_order_status` is otherwise **shown verbatim, never
+ * parsed** — the rest of SAP's vocabulary belongs to SAP and must change
+ * without an app release. This is the single exception, and it earns it: a
+ * cancelled order is not a shade of progress, it is the order not happening,
+ * and an app that goes on calling it Approved is telling a manager to expect
+ * goods nobody is making.
+ *
+ * `bost_Cancelled` is a SAP enum, not a stage name, so it is stable in a way
+ * the stage list deliberately is not. The sync folds SAP's separate
+ * `Cancelled = tYES` flag into the same value — see `Resolve-SoStatus` — so
+ * this one check covers both ways SAP says it.
+ *
+ * Found on 18 September 2026: SAP order 399 (DocEntry 2884) had been cancelled
+ * and ERPNext had recorded it correctly for days. Nothing read it, so the
+ * sales manager's board still showed the order approved.
+ */
+export function cancelledInSap(s: SapOrderState): boolean {
+  return clean(s.salesOrderStatus).toLowerCase() === SAP_CANCELLED;
+}
+
+/**
+ * The pill an order shows, once SAP has had its say.
+ *
+ * One function rather than the same two-line check on four screens, which is
+ * how the two apps drift. Cancellation outranks the approval status because it
+ * is the later fact and the terminal one — the same reasoning that puts a
+ * delivery above a stage in `productionStatusFromSap`.
+ */
+export function orderPill(
+  poStatus: string | undefined | null,
+  sap: SapOrderState,
+): { text: string; tone: StatusTone } {
+  if (cancelledInSap(sap)) return { text: 'CANCELLED IN SAP', tone: 'danger' };
+  return statusPill(poStatus);
 }

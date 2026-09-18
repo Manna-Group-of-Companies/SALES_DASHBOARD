@@ -33,7 +33,6 @@ import type {
   OrderDetail,
   OrderLine,
   SalesCustomer,
-  StockReservationRow,
 } from '@/domain/types';
 import {
   isApproved,
@@ -41,11 +40,9 @@ import {
   escalates,
   rateEditable,
   boundByCutoff,
-  orderSignedOff,
   PO_STATUS,
 } from '@/domain/orderStatus';
 import {
-  coverFor,
   describeSplit,
   modeLabel,
   modeTone,
@@ -65,22 +62,11 @@ import {
   snapshotOf,
   stageText,
 } from '@/domain/stageWatch';
-import {
-  MAX_DISCOUNT_PERCENT,
-  discountRefusal,
-  discountTotals,
-  discountedRate,
-  isDiscounted,
-  lineAfterDiscount,
-  lineBeforeDiscount,
-  rateAfterDiscount,
-  rateBeforeDiscount,
-  type PricedRow,
-} from '@/domain/discount';
+import { lineStatusFromSap } from '@/domain/sapOrderState';
 import { pastCutoff, shortDate } from '@/domain/weeks';
 import { serverNow } from '@/domain/serverClock';
 import { formatDate } from '@/domain/orderRules';
-import { Api, type OrderLineWrite } from '@/api/client';
+import { Api, type OrderLineWrite, type OrderSyncState } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import { Alert, Button, Card, Empty, Input } from '@/components/ui';
@@ -130,19 +116,24 @@ export function OrderDetailPage() {
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [customer, setCustomer] = useState<SalesCustomer | null>(null);
   const [pool, setPool] = useState<MinStockLine[]>([]);
-  const [reservations, setReservations] = useState<StockReservationRow[]>([]);
   const [items, setItems] = useState<ItemOption[]>([]);
   const [itemsLoading, setItemsLoading] = useState(false);
   const [rateEdits, setRateEdits] = useState<Record<string, number>>({});
-  /** The line whose discount is being set, and the figure typed so far. */
-  const [discounting, setDiscounting] = useState<{ line: OrderLine; typed: string } | null>(null);
   const [drafts, setDrafts] = useState<Draft[] | null>(null);
   const [picking, setPicking] = useState(false);
   const [tick, setTick] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState<string | null>(null);
+  /**
+   * The banner after a decision or a save.
+   *
+   * It carries its own tone. Until 18 September 2026 this was a bare string
+   * rendered as `tone="ok"` whatever had happened, so rejecting an order
+   * announced it in green under a tick — the one outcome on this screen that
+   * is not an approval, dressed as one.
+   */
+  const [done, setDone] = useState<{ text: string; tone: 'ok' | 'danger' } | null>(null);
 
   /**
    * What production moved since this browser last opened the order.
@@ -153,14 +144,57 @@ export function OrderDetailPage() {
    */
   const [stageNews, setStageNews] = useState<ReturnType<typeof changesSince>>([]);
 
-  const reload = useCallback(() => setTick((t) => t + 1), []);
+  /** Where the SAP order sync has got to, so the manager knows how old this is. */
+  const [syncState, setSyncState] = useState<OrderSyncState | null>(null);
+  const [syncNote, setSyncNote] = useState<string | null>(null);
+
+  /**
+   * Refresh means two things, and the manager should get both.
+   *
+   * Re-reading ERPNext is instant and always happens. Re-reading SAP cannot:
+   * Frappe Cloud has no route to the SAP LAN, so the request is a flag an
+   * on-prem watcher picks up within about half a minute. The page therefore
+   * reloads immediately with what ERPNext has now, and says separately when
+   * the floor was last read and whether a fresh read is on its way.
+   *
+   * A refused request is a normal answer — inside the cooldown the script
+   * declines — so it is reported, never thrown.
+   */
+  const reload = useCallback(() => {
+    setTick((t) => t + 1);
+    Api.sales
+      .requestOrderSync()
+      .then((s) => {
+        setSyncState(s);
+        setSyncNote(
+          s.accepted
+            ? 'Asked SAP for the latest. Refresh again in a moment to see it.'
+            : `SAP was read very recently — next refresh available ${s.cooldownUntil ?? 'shortly'}.`,
+        );
+      })
+      .catch(() => {
+        // Never block the ERPNext reload on this: the order is still worth
+        // showing when the SAP side cannot be asked.
+        setSyncNote(null);
+      });
+  }, []);
+
+  useEffect(() => {
+    let live = true;
+    Api.sales
+      .getOrderSyncState()
+      .then((s) => live && setSyncState(s))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [tick]);
 
   useEffect(() => {
     let live = true;
     setLoading(true);
     setError(null);
     setRateEdits({});
-    setDiscounting(null);
     setDrafts(null);
     Api.sales
       .getOrder(orderId)
@@ -170,23 +204,24 @@ export function OrderDetailPage() {
 
         // Diff before the snapshot is overwritten, then record what is now on
         // screen. Keyed on the child row name, which survives an edit.
+        // The made portion's movement now comes from SAP, so that is what the
+        // "moved since you last looked" notice reports. Fed in under the old key
+        // so the watcher itself is unchanged — only the source of truth moved.
         const rows = o.lines.map((l) => ({
           name: l.id,
           item_name: l.itemName,
-          custom_production_stage: l.productionStage,
+          custom_production_stage: l.sapProductionStage,
           custom_stock_stage: l.stockStage,
         }));
         setStageNews(changesSince(loadSeen(o.id), rows));
         saveSeen(o.id, snapshotOf(rows));
-        const [parties, stock, res] = await Promise.all([
+        const [parties, stock] = await Promise.all([
           Api.sales.listCustomers().catch(() => []),
           Api.sales.listMinimumStock().catch(() => [] as MinStockLine[]),
-          Api.sales.listReservations().catch(() => [] as StockReservationRow[]),
         ]);
         if (!live) return;
         setCustomer(parties.find((c) => c.id === o.customer) ?? null);
         setPool(stock);
-        setReservations(res);
       })
       .catch((e: unknown) => {
         if (live) setError(e instanceof Error ? e.message : 'Could not read this order.');
@@ -240,65 +275,57 @@ export function OrderDetailPage() {
   const now = useMemo(() => serverNow(), [tick, order]);
   const approved = order ? isApproved(order.poStatus) : false;
   /*
-   * The gate on discounts. NOT `rateEditable` — this one has no GM exemption,
-   * because the phone has none (`orderSignedOff` in app/lib/core/order_rules.dart)
-   * and a signed price that can be moved from a desk but not from a counter is
-   * worse than either rule alone. Settled 13 Aug 2026 in favour of the phone.
+   * Read off the stored status, like `approved` above it. A rejection is the
+   * one decision that leaves the order still awaiting a manager — see
+   * `awaitingManager` — so without this the decision block cannot tell an
+   * order nobody has looked at from one that has already been turned down.
    */
-  const signedOff = order
-    ? orderSignedOff({ poStatus: order.poStatus, ratesApproved: order.ratesApproved }, false)
-    : false;
+  const rejected = (order?.poStatus ?? '').trim() === PO_STATUS.rejected;
   const editing = drafts !== null;
 
   /**
    * Whether the line-up may still be changed.
    *
-   * An order freezes at 13:00 on its delivery date. No delivery date means
-   * **permanently open**, not shut — an order without a date is a data problem
-   * and refusing to let anyone fix it makes it worse.
+   * **Approval ends editing, for everyone.** An approved order is pushed to
+   * SAP and lives there from then on; changes go through the manufacturing
+   * team, who reduce or drop a line that has not been made and ship what has.
+   *
+   * That is also the only honest answer. `Sync-SapOrders` has only ever
+   * CREATED a SAP order — nothing anywhere updates one — so an edit saved here
+   * after approval changed the ERPNext document, showed a new quantity, and
+   * left the factory building the old one.
+   *
+   * Failing that, an order freezes at 13:00 on its delivery date. No delivery
+   * date means **permanently open**, not shut — an order without a date is a
+   * data problem and refusing to let anyone fix it makes it worse.
    */
-  const editClosed = order ? pastCutoff(order.deliveryDate, now) && boundByCutoff(user?.role) : false;
+  const frozenByCutoff = order
+    ? pastCutoff(order.deliveryDate, now) && boundByCutoff(user?.role)
+    : false;
 
   /**
-   * The order total as it stands on screen, before and after discount.
-   *
-   * Rebuilt from the lines rather than read off `order.total`, because a rate
-   * the manager has typed and a discount they have set are not saved until the
-   * decision — and an approval screen showing yesterday's total is how a
-   * manager signs off money they did not intend.
-   */
-  /**
-   * The order as it stands on screen, before and after discount.
+   * The order total as it stands on screen.
    *
    * Rebuilt from the lines rather than read off `order.total`, because a rate
    * the manager has typed is not saved until the decision — and an approval
    * screen showing yesterday's total is how a manager signs off money they did
-   * not intend. Discounts, unlike rates, are already saved: they are written
-   * line by line as they are given, the way the phone writes them.
+   * not intend.
    *
-   * Shaped as raw ERPNext rows on purpose, so it goes through exactly the
-   * helpers the phone uses rather than a second arithmetic written here.
+   * It carried a before-and-after pair until 17 September 2026, when the
+   * discount feature was removed from both apps. The rate the rep types is now
+   * the rate after discount, so there is one total.
    */
   const preview = useMemo(() => {
-    if (!order) return { ...discountTotals([]), changed: false };
+    if (!order) return { total: 0, changed: false };
     let changed = false;
-    const rows: PricedRow[] = order.lines.map((l) => {
+    let total = 0;
+    for (const l of order.lines) {
       const edited = rateEdits[l.id];
       const rateMoved = edited != null && edited > 0 && edited !== l.ratePerKg;
       if (rateMoved) changed = true;
-      // A retyped rate is a rate BEFORE discount, so the line's percentage is
-      // re-applied to it rather than the new figure replacing the net rate.
-      const before = rateMoved && l.qty > 0 ? (l.totalWeight * edited) / l.qty : l.priceListRate;
-      const net = discountedRate(before, l.discountPercent);
-      return {
-        qty: l.qty,
-        rate: net,
-        amount: rateMoved ? 0 : l.amountAfterDiscount,
-        price_list_rate: before,
-        discount_percentage: l.discountPercent,
-      };
-    });
-    return { ...discountTotals(rows), changed };
+      total += rateMoved ? l.totalWeight * edited : l.amount;
+    }
+    return { total, changed };
   }, [order, rateEdits]);
 
   // ------------------------------------------------------------ actions ---
@@ -318,13 +345,35 @@ export function OrderDetailPage() {
       setRateEdits({});
       setDone(
         decision === 'approve'
-          ? 'Approved. Every rate on this order is now final.'
+          ? { text: 'Approved. Every rate on this order is now final.', tone: 'ok' }
           : decision === 'reject'
-            ? 'Rejected. The rep can correct the prices and resubmit.'
-            : 'Sent to the General Manager.',
+            ? { text: 'Rejected. The rep can correct the prices and resubmit.', tone: 'danger' }
+            : { text: 'Sent to the General Manager.', tone: 'ok' },
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save the decision.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * Take back a rejection, so the order can be decided again.
+   *
+   * This is a correction, not a second opinion: nothing on the lines moved
+   * when the order was rejected, so nothing is restored here beyond the
+   * status. What the manager gets back is the Approve/Reject pair.
+   */
+  const undoRejection = async () => {
+    if (!order) return;
+    setBusy('undo');
+    setError(null);
+    try {
+      const saved = await Api.sales.undoOrderRejection(order.id);
+      setOrder(saved);
+      setDone({ text: 'Rejection undone. This order is waiting for a decision again.', tone: 'ok' });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not undo the rejection.');
     } finally {
       setBusy(null);
     }
@@ -407,9 +456,10 @@ export function OrderDetailPage() {
       });
       await Api.sales.saveOrderLines({ orderId: order.id, lines });
       setDrafts(null);
-      setDone(
-        'Lines saved, and the stock re-held to match. Anything on the shelf has been booked to this order; only what the shelf has not got is left for production. The order went back for approval and every rate reopened, because the money changed.',
-      );
+      setDone({
+        text: 'Lines saved, and the stock re-held to match. Anything on the shelf has been booked to this order; only what the shelf has not got is left for production. The order went back for approval and every rate reopened, because the money changed.',
+        tone: 'ok',
+      });
       // A full reload, not the saved document. Saving also moves the holds, and
       // the returned order carries none of that — the stock column would keep
       // showing the position from before the edit.
@@ -421,38 +471,6 @@ export function OrderDetailPage() {
     }
   };
 
-  /**
-   * Give, change or remove a discount on one line.
-   *
-   * Written the moment it is confirmed, not queued until the approval. That is
-   * what the phone does, and a dashboard that held it would leave a manager
-   * who set a discount and walked away believing they had given one.
-   */
-  const applyDiscount = async () => {
-    if (!order || !discounting) return;
-    const percent = Number(discounting.typed);
-    const refusal = discountRefusal(percent);
-    if (refusal) {
-      setError(refusal);
-      return;
-    }
-    setBusy('discount');
-    setError(null);
-    try {
-      await Api.sales.setLineDiscount({
-        orderId: order.id,
-        lineId: discounting.line.id,
-        percent,
-      });
-      setDone(percent > 0 ? `Discount of ${percent}% applied.` : 'Discount removed.');
-      setDiscounting(null);
-      reload();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not save the discount.');
-    } finally {
-      setBusy(null);
-    }
-  };
 
   const patch = (idx: number, change: Partial<Draft>) =>
     setDrafts((cur) => cur?.map((d, i) => (i === idx ? { ...d, ...change } : d)) ?? cur);
@@ -523,7 +541,27 @@ export function OrderDetailPage() {
               <>
                 Raised by {order.rep} · delivery{' '}
                 {order.deliveryDate ? formatDate(order.deliveryDate) : 'not set'} ·{' '}
-                <span className="mono">{order.id}</span>
+                {/*
+                  Once SAP has the order, SAP's number is the one everyone
+                  quotes — the factory, the delivery note, the invoice all
+                  carry it. The ERPNext name stays visible but small: it is an
+                  internal id, and support still needs to find the document by
+                  it.
+
+                  They are NOT interchangeable and must never be merged. SAP
+                  restarts DocNum per series and per year — 399 has been issued
+                  four times in this company, twice in 2024 alone — so it is
+                  only unique alongside its series and date, while an ERPNext
+                  name must be unique forever.
+                */}
+                {order.sapSalesOrder ? (
+                  <>
+                    <b className="mono">SAP order {order.sapSalesOrder}</b>{' '}
+                    <span className="tiny dim">({order.id} in ERPNext)</span>
+                  </>
+                ) : (
+                  <span className="mono">{order.id}</span>
+                )}
               </>
             ) : (
               orderId
@@ -531,13 +569,32 @@ export function OrderDetailPage() {
           </div>
         </div>
         <div className="cal__nav">
-          {order && <StatusPill status={order.poStatus} />}
+          {order && <StatusPill status={order.poStatus} sapStatus={order.sapSalesOrderStatus} />}
           <RefreshButton onClick={reload} loading={loading} />
           <Link to="/orders" className="btn btn--ghost btn--sm">
             ← Team orders
           </Link>
         </div>
       </div>
+      {/*
+        How old the SAP half of this page is.
+        Refresh re-reads ERPNext instantly but can only *ask* for SAP, so the
+        manager is told when the floor was actually last read rather than being
+        left to assume the figures are live. Silent until SAP has run at least
+        once, so an order that never reached SAP says nothing here.
+      */}
+      {syncState?.lastSyncAt && (
+        <p className="tiny dim" style={{ marginTop: 0 }}>
+          Factory floor last read from SAP: <b>{syncState.lastSyncAt}</b>
+          {syncState.status === 'Running'
+            ? ' · reading now…'
+            : syncState.queued
+              ? ' · a fresh read is on its way'
+              : ''}
+          {syncState.status === 'Failed' && ' · last attempt failed'}
+          {syncNote && ` — ${syncNote}`}
+        </p>
+      )}
 
       {error && (
         <Alert tone="danger" title="Could not read or save">
@@ -546,7 +603,11 @@ export function OrderDetailPage() {
       )}
       {done && !error && (
         <div style={{ marginBottom: 14 }}>
-          <Alert tone="ok" title={done} />
+          <Alert
+            tone={done.tone}
+            icon={done.tone === 'danger' ? '✕' : undefined}
+            title={done.text}
+          />
         </div>
       )}
       {loading && !error && <Empty icon="◔" title="Reading order…" />}
@@ -650,32 +711,18 @@ export function OrderDetailPage() {
                     {order.lines.map((l) => {
                       const edited = rateEdits[l.id];
                       /*
-                       * The line as a raw ERPNext row, so every figure below
-                       * comes out of the same helpers the phone uses. A rate
-                       * the manager has retyped is a rate BEFORE discount, so
-                       * the stored percentage is re-applied to it rather than
-                       * the new figure replacing the net rate.
+                       * One figure per line. It was three — a rate before
+                       * discount, a percentage and a net rate — and the row was
+                       * shaped as a raw ERPNext row so it went through the same
+                       * helpers the phone used. The discount feature went on
+                       * 17 September 2026 and the rep's rate is already net.
                        */
                       const rateMoved = edited != null && edited > 0 && edited !== l.ratePerKg;
-                      const beforeRate =
-                        rateMoved && l.qty > 0 ? (l.totalWeight * edited) / l.qty : l.priceListRate;
-                      const row: PricedRow = {
-                        qty: l.qty,
-                        rate: discountedRate(beforeRate, l.discountPercent),
-                        amount: rateMoved ? 0 : l.amountAfterDiscount,
-                        price_list_rate: beforeRate,
-                        discount_percentage: l.discountPercent,
-                      };
-                      const lineDiscount = l.discountPercent;
-                      const pos = positionFor(l.itemCode, stock, reservations, order.id);
-                      const split = splitOf(l, reservations, order.id);
-                      // Measured against the UNBOOKED shelf, so it never offers
-                      // a roll another order is already holding.
-                      const cover = coverFor(split, pos.freeForOthers);
-                      const mode = servedFrom(l, reservations, order.id);
-                      const heldElsewhere = pos.heldByOthers.rolls > 0 || pos.heldByOthers.belts > 0;
-                      const freeOnShelf = pos.freeForOthers.rolls > 0 || pos.freeForOthers.belts > 0;
-                      const heldHere = cover.reserved.rolls > 0 || cover.reserved.belts > 0;
+                      const lineTotal = rateMoved ? l.totalWeight * edited : l.amount;
+                      const pos = positionFor(l.itemCode, stock);
+                      const split = splitOf(l, pos.available, stock.get(l.itemCode)?.beltsPerRoll ?? 0);
+                      const mode = servedFrom(l);
+                      const freeOnShelf = pos.available.rolls > 0 || pos.available.belts > 0;
                       const movedHere = movedLines.has(l.id);
                       return (
                         <tr key={l.id}>
@@ -709,86 +756,91 @@ export function OrderDetailPage() {
                               />
                             )}
                           </td>
-                          <td className="right">
-                            {/*
-                              The concession, per line rather than per order.
-                              A discount is nearly always about one product,
-                              and spreading it across the order would give it
-                              away on items nobody negotiated on.
-
-                              Once the order is signed off this becomes a plain
-                              statement of what was given, with no way in — for
-                              everyone, the GM included. A line that never had
-                              a discount says nothing at all: an order with no
-                              discounts should not be covered in notices about
-                              discounts.
-                            */}
-                            {signedOff ? (
-                              lineDiscount > 0 ? (
-                                <span className="tiny disc__final">
-                                  {lineDiscount}% off — {money(rateBeforeDiscount(row), 2)} to{' '}
-                                  {money(rateAfterDiscount(row), 2)}. Final.
-                                </span>
-                              ) : (
-                                <span className="dim">—</span>
-                              )
-                            ) : (
-                              <button
-                                type="button"
-                                className="btn btn--ghost btn--sm"
-                                disabled={!!busy}
-                                onClick={() =>
-                                  setDiscounting({
-                                    line: l,
-                                    typed: lineDiscount > 0 ? String(lineDiscount) : '',
-                                  })
-                                }
-                              >
-                                {lineDiscount > 0 ? `${lineDiscount}% off · Change` : 'Discount'}
-                              </button>
-                            )}
-                          </td>
                           <td className="right num">
-                            {isDiscounted(row) ? (
-                              /* The full price stays visible beside the
-                                 discounted one. A total that quietly became
-                                 smaller is a total nobody can check. */
-                              <>
-                                <div className="line__was">
-                                  {money(lineBeforeDiscount(row), 0)}
-                                </div>
-                                <b className="exp__corrected">{money(lineAfterDiscount(row), 0)}</b>
-                              </>
-                            ) : edited != null && edited !== l.ratePerKg ? (
-                              <b className="exp__corrected">{money(lineAfterDiscount(row), 0)}</b>
+                            {/*
+                              A Discount column stood between the rate and this
+                              one: a per-line concession the manager could give,
+                              change or withdraw, shown as "10% off - 875.00 to
+                              787.50. Final." once the order was signed off.
+
+                              Removed 17 September 2026. The sales team types
+                              the rate AFTER discount, so the rate column beside
+                              this one is the whole price story and this is
+                              simply what it comes to. Lines saved before that
+                              keep their stored percentage; nothing re-applies
+                              it, and their `amount` was always the net figure.
+                            */}
+                            {rateMoved ? (
+                              <b className="exp__corrected">{money(lineTotal, 0)}</b>
                             ) : (
-                              money(lineAfterDiscount(row), 0)
+                              money(lineTotal, 0)
                             )}
                           </td>
                           <td className="small">
                             {/*
-                              Both halves, each on its own line. A split line's
-                              made and shelf portions finish separately, and one
-                              combined stage would be a fiction on every order
-                              that is part stock and part production.
+                              SAP owns the floor, so the made portion's stage is
+                              read from SAP below and nowhere else.
+
+                              The "Being made" line that used to sit here showed
+                              `custom_production_stage`, set by hand on the
+                              production board. It was removed on 16 Sep 2026:
+                              once SAP raises a production order per item, two
+                              stages appear side by side on the same line and the
+                              hand-set one is the stale one. Showing both is worse
+                              than showing neither — a manager cannot tell which
+                              to believe.
+
+                              A "From stock" portion used to appear below with
+                              its own stage, because stock served off the
+                              minimum-stock pool never reached a SAP production
+                              order. The pool is gone; every line is made
+                              against a SAP production order or it is not
+                              started.
                             */}
                             <div className={movedHere ? 'stagecell is-moved' : 'stagecell'}>
-                              {(cover.needsProduction || l.productionStage) && (
-                                <div>
-                                  <span className="stagecell__part">Being made</span>
-                                  <b>{stageText(l.productionStage ?? '')}</b>
-                                </div>
-                              )}
-                              {(heldHere || l.stockStage) && (
+                              {l.stockStage && (
                                 <div>
                                   <span className="stagecell__part">From stock</span>
                                   <b>{stageText(l.stockStage ?? '')}</b>
                                 </div>
                               )}
-                              {!cover.needsProduction &&
-                                !l.productionStage &&
-                                !heldHere &&
-                                !l.stockStage && <span className="dim">—</span>}
+                              {/*
+                                What SAP says about THIS line. SAP raises one
+                                production order per item, so this is the only
+                                place that can say which item is holding the
+                                order back — the order-level stage is a roll-up
+                                of the least advanced line and hides that.
+
+                                The status is derived, never string-matched
+                                here: the stage list belongs to the factory and
+                                changes without a release.
+                              */}
+                              {(l.sapProductionOrder || l.sapProductionStage || l.sapDeliveryOrder) && (
+                                <div className="stagecell__sap">
+                                  <span className="stagecell__part">SAP</span>
+                                  <b>
+                                    {lineStatusFromSap({
+                                      productionOrder: l.sapProductionOrder,
+                                      productionStage: l.sapProductionStage,
+                                      deliveryOrder: l.sapDeliveryOrder,
+                                    })}
+                                  </b>
+                                  <div className="tiny dim">
+                                    {[
+                                      l.sapDeliveryOrder && `Delivery ${l.sapDeliveryOrder}`,
+                                      l.sapDeliveryOrder && l.sapDeliveryDate && `leaves ${l.sapDeliveryDate}`,
+                                      !l.sapDeliveryOrder && l.sapProductionStage,
+                                      l.sapProductionOrder && `PO ${l.sapProductionOrder}`,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(' · ')}
+                                  </div>
+                                </div>
+                              )}
+                              {!l.stockStage &&
+                                !l.sapProductionOrder &&
+                                !l.sapProductionStage &&
+                                !l.sapDeliveryOrder && <span className="dim">—</span>}
                               {movedHere && <div className="stagecell__flag">moved</div>}
                               {/*
                                 Dispatch is separate from stage: a line can sit
@@ -808,124 +860,75 @@ export function OrderDetailPage() {
                             </div>
                           </td>
                           <td className="small">
-                            {!pos.pooled ? (
+                            {/*
+                              Two figures, from five.
+
+                              The five were "on the shelf", "booked by other
+                              orders", "free — nobody has booked it", "minimum
+                              to hold" and what this order held, because four
+                              of them had once been collapsed into "booked by
+                              this order: 4 rolls + 2 belts" and nothing said
+                              the order was for eight or that four had to be
+                              made.
+
+                              Four of the five no longer exist. SAP reports
+                              available to promise, already net of every open
+                              order including this one; there is no separate
+                              shelf figure, no attribution of who holds what,
+                              and no minimum (all 129 pool rows held zero).
+                              What is left is what the manager decides on.
+                            */}
+                            {!pos.stocked ? (
                               <span className="dim tiny">not stocked</span>
+                            ) : !pos.weightsKnown ? (
+                              <span
+                                className="dim tiny"
+                                title="SAP holds this in kilograms and the item master has no weight per roll, so how many rolls that is cannot be worked out."
+                              >
+                                weights not set
+                              </span>
                             ) : (
-                              /*
-                               * Five separate figures, because four of them
-                               * were once collapsed into "booked by this
-                               * order: 4 rolls + 2 belts" and nothing said the
-                               * order was for eight or that four had to be
-                               * made. Production then read "8 rolls" with four
-                               * already in the plant, and a run raised off that
-                               * screen would have been for double.
-                               */
                               <table className="stockpos">
                                 <tbody>
-                                  {/*
-                                    Two questions, asked in order and kept
-                                    apart: what is on the shelf and who has it,
-                                    then what this order needs.
-
-                                    "Booked by other orders" is the row that
-                                    was missing. Without it a shelf of 2 sat
-                                    above "must be made: 4" with two dashes in
-                                    between, and the only way to work out that
-                                    somebody else held both rolls was to notice
-                                    that nothing was free. A manager should not
-                                    have to do arithmetic to find out why an
-                                    order is going to production.
-                                  */}
-                                  <tr className="stockpos__head">
-                                    <td colSpan={2}>The shelf</td>
-                                  </tr>
-                                  <tr>
-                                    <td>On the shelf now</td>
-                                    <td className="num">{qty({ rolls: pos.shelf, belts: 0 })}</td>
-                                  </tr>
-                                  <tr className={heldElsewhere ? 'warn' : 'dim'}>
-                                    <td>Booked by other orders</td>
-                                    <td className="num">{qty(pos.heldByOthers)}</td>
-                                  </tr>
-                                  <tr className={freeOnShelf ? 'ok' : 'dim'}>
-                                    <td>Free — nobody has booked it</td>
-                                    <td className="num">{qty(pos.freeForOthers)}</td>
-                                  </tr>
-                                  <tr className="dim">
-                                    {/* The target, not the stock. Two different
-                                        numbers that happen to match on some
-                                        items, which made the coincidence look
-                                        like the rule. */}
-                                    <td>Minimum to hold</td>
-                                    <td className="num">{pos.minimum}</td>
-                                  </tr>
-
-                                  <tr className="stockpos__head">
-                                    <td colSpan={2}>This order</td>
-                                  </tr>
                                   <tr>
                                     <td>Ordered</td>
                                     <td className="num">{qty(split.ordered)}</td>
                                   </tr>
-                                  <tr className={heldHere ? 'ok' : 'dim'}>
-                                    <td>Held for this order</td>
-                                    <td className="num">{qty(cover.reserved)}</td>
+                                  <tr className={freeOnShelf ? 'ok' : 'dim'}>
+                                    <td>Available in SAP</td>
+                                    <td className="num">{qty(pos.available)}</td>
                                   </tr>
-                                  {(cover.availableNow.rolls > 0 || cover.availableNow.belts > 0) && (
-                                    /*
-                                      Uncovered, but the shelf has it free.
-                                      Saving the order takes it; until then it
-                                      is nobody's.
-                                    */
-                                    <tr className="info">
-                                      <td>Not yet booked — free to take</td>
-                                      <td className="num">{qty(cover.availableNow)}</td>
-                                    </tr>
-                                  )}
-                                  <tr className={cover.needsProduction ? 'warn' : 'dim'}>
+                                  <tr
+                                    className={
+                                      split.toMake.rolls > 0 || split.toMake.belts > 0
+                                        ? 'warn'
+                                        : 'dim'
+                                    }
+                                  >
                                     <td>Must be made</td>
-                                    <td className="num">{qty(cover.toMake)}</td>
+                                    <td className="num">{qty(split.toMake)}</td>
                                   </tr>
                                 </tbody>
                               </table>
                             )}
 
                             {/*
-                              The sentence, for the case the columns make a
-                              manager work out. Only shown when something has
-                              to be made even though stock exists — which is
-                              exactly the reading that looks like a bug and is
-                              not one.
+                              One thing that still catches a reader out, said
+                              plainly: once this order has reached SAP, its own
+                              lines are inside the deduction above. A line can
+                              therefore read as short by exactly what it
+                              ordered, and that is correct — the rolls are
+                              spoken for, by this order.
                             */}
-                            {pos.pooled && cover.needsProduction && pos.shelf > 0 && (
-                              <div className="stockpos__why">
-                                {heldElsewhere && !freeOnShelf
-                                  ? `All ${qty(pos.heldByOthers)} on the shelf ${
-                                      pos.heldByOthers.rolls === 1 ? 'is' : 'are'
-                                    } booked by other orders, so nothing here can come off it.`
-                                  : `The shelf has ${qty(pos.freeForOthers)} free, which is less than this line needs.`}
-                              </div>
-                            )}
-                            {pos.pooled && pos.inProduction.rolls > 0 && (
-                              /* Its own line, never folded in beside a
-                                 sellable figure. Two numbers in one sentence,
-                                 one sellable and one not, is how a rep
-                                 promises stock nobody has made. */
-                              <div className="run__note">
-                                🏭 {pos.inProduction.rolls} rolls being made — not on the shelf yet
-                              </div>
-                            )}
-                            {pos.drift > 0 && (
-                              <div
-                                className="danger tiny"
-                                title={`ERPNext still counts ${pos.drift} roll(s)${
-                                  pos.driftBelts > 0 ? ` and ${pos.driftBelts} belt(s)` : ''
-                                } as booked with no reservation behind them — usually a Sales Order deleted directly in ERPNext. The figures above ignore it.`}
-                              >
-                                ⚠ {pos.drift} phantom booking
-                                {pos.drift === 1 ? '' : 's'} ignored
-                              </div>
-                            )}
+                            {pos.stocked &&
+                              pos.weightsKnown &&
+                              !freeOnShelf &&
+                              order.sapSalesOrder && (
+                                <div className="stockpos__why">
+                                  This order is in SAP, so the rolls it asked for are already
+                                  committed to it and are not counted as available here.
+                                </div>
+                              )}
                           </td>
                           <td>
                             {/*
@@ -954,53 +957,36 @@ export function OrderDetailPage() {
             )}
           </Card>
 
-          {/* --------------------------------------- Block 5 — order total --- */}
-          {preview.hasDiscount ? (
-            /*
-              Three rows, not one, and the same three the phone shows. The
-              whole point of a discount the manager grants is that somebody can
-              see what was given away, so the before figure stays on screen
-              beside the after — never replaced by it.
+          {/*
+            One total.
 
-              The percentage is `given / before` for the ORDER, not the mean of
-              the line percentages: 10% off a small line and nothing off a
-              large one is not a 5% order.
-            */
-            <div className="order__totals">
-              <div className="order__total order__total--was">
-                <span>Order before discount</span>
-                <span>{money(preview.beforeDiscount, 0)}</span>
-              </div>
-              <div className="order__total order__total--off">
-                <span>Discount ({preview.discountPercent}%)</span>
-                <span>−{money(preview.discount, 0)}</span>
-              </div>
-              <div className="order__total">
-                <span>Order after discount</span>
-                <b>{money(preview.afterDiscount, 0)}</b>
-              </div>
-              <p className="note right">
-                {preview.discountedLines} of {order.lines.length}{' '}
-                {order.lines.length === 1 ? 'line' : 'lines'} discounted.
-              </p>
-            </div>
-          ) : (
-            <div className="order__total">
-              <span>Order total</span>
-              <b>{money(preview.changed ? preview.afterDiscount : order.total, 0)}</b>
-            </div>
-          )}
+            It was three rows when the order carried a discount — before, the
+            concession, and after — so somebody could see what had been given
+            away. The discount feature went on 17 September 2026 and the rate
+            the rep types is already net, so there is one figure and nothing
+            hidden behind it.
+          */}
+          <div className="order__total">
+            <span>Order total</span>
+            <b>{money(preview.changed ? preview.total : order.total, 0)}</b>
+          </div>
           {preview.changed && (
             <p className="note right">
-              Was {money(order.total, 0)}. Rates save when you approve. Discounts are already
-              saved, and are final once the order is approved.
+              Was {money(order.total, 0)}. Rates save when you approve.
             </p>
           )}
 
           {/* ------------------------------------- Block 6 — edit line-up --- */}
           {!editing && (
             <div className="line__edit-bar">
-              {editClosed ? (
+              {approved ? (
+                <span className="note">
+                  This order is approved and is with the factory. It cannot be changed here
+                  {order.sapSalesOrder ? ` — quote SAP order ${order.sapSalesOrder}` : ''}. To drop
+                  or reduce an item, ring the manufacturing team: anything already made is
+                  delivered and the rest of the order stays open.
+                </span>
+              ) : frozenByCutoff ? (
                 <span className="note">
                   Changes closed at 1 pm on {shortDate(order.deliveryDate)}, the required delivery
                   date.
@@ -1201,61 +1187,42 @@ export function OrderDetailPage() {
             </>
           )}
 
-          {/* ------------------------------- the discount, one line at a time --- */}
-          {discounting && (
-            (() => {
-              const base = discounting.line.priceListRate;
-              const typed = Number(discounting.typed);
-              const blank = discounting.typed.trim() === '';
-              const refusal = blank ? null : discountRefusal(typed);
-              const preview = discountedRate(base, blank ? 0 : typed);
-              return (
-                <div className="disc__scrim" role="dialog" aria-modal="true" aria-label="Discount">
-                  <Card title="Discount" flush={false}>
-                    <p className="note">{discounting.line.itemName}</p>
-                    <Input
-                      autoFocus
-                      numeric
-                      type="number"
-                      min={0}
-                      max={MAX_DISCOUNT_PERCENT}
-                      step="0.5"
-                      aria-label="Discount percent"
-                      placeholder="Discount %"
-                      value={discounting.typed}
-                      onChange={(e) =>
-                        setDiscounting((cur) => (cur ? { ...cur, typed: e.target.value } : cur))
-                      }
-                      onKeyDown={(e) => e.key === 'Escape' && setDiscounting(null)}
-                    />
-                    {/* The rate the customer would pay, updating as they type.
-                        A percentage means nothing to a customer; the rate does. */}
-                    <p className="note">
-                      {money(base, 2)} → <b>{money(preview, 2)}</b> per unit
-                    </p>
-                    {refusal && <Alert tone="warn">{refusal}</Alert>}
-                    <div className="line__edit-bar">
-                      <Button variant="ghost" onClick={() => setDiscounting(null)}>
-                        Cancel
-                      </Button>
-                      <Button
-                        onClick={applyDiscount}
-                        disabled={!!refusal || busy === 'discount'}
-                        loading={busy === 'discount'}
-                      >
-                        {blank || typed === 0 ? 'Remove discount' : 'Apply'}
-                      </Button>
-                    </div>
-                  </Card>
-                </div>
-              );
-            })()
-          )}
 
           {/* ------------------------------------------ Block 7 — decision --- */}
           {approved ? (
             <div className="mt-16">
               <Alert tone="ok" title="✓ Approved. Rates on this order are final." />
+            </div>
+          ) : rejected ? (
+            /*
+             * A rejected order shows its answer rather than the buttons that
+             * produced it. Offering Approve and Reject again under the word
+             * "Rejected" invites a second decision on an order the rep is
+             * already correcting.
+             *
+             * Undo is the way back from this screen. The other is the rep's
+             * own edit in the field app, which returns the order to Pending on
+             * its own — so this state ends either when the manager changes
+             * their mind or when the order itself changes, and not otherwise.
+             */
+            <div className="mt-16">
+              <Alert
+                tone="danger"
+                icon="✕"
+                title="Rejected"
+                actions={
+                  <Button
+                    variant="ghost"
+                    onClick={undoRejection}
+                    loading={busy === 'undo'}
+                    disabled={!!busy || editing}
+                  >
+                    Undo
+                  </Button>
+                }
+              >
+                The rep can correct the prices and resubmit. Undo to decide this order again.
+              </Alert>
             </div>
           ) : (
             <Card title="Decision" className="mt-16">

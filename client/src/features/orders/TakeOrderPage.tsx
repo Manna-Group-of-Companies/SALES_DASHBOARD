@@ -14,7 +14,7 @@
  *    without one (1.3).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { canStartOrder, NO_ROUTE_MESSAGE } from '@/domain/sales';
 import type { OrderItem, Product, ProductCategory } from '@/domain/types';
@@ -32,11 +32,10 @@ import {
   selectMinStockByCode,
   selectMinStockItems,
   selectProducts,
-  selectReservations,
   selectUser,
 } from '@/store/selectors';
 import { createOrder } from '@/store/slices/ordersSlice';
-import { releaseHolds, reserveStock } from '@/store/slices/minStockSlice';
+import { shelfAvailable } from '@/domain/minimumStock';
 import { pushToast } from '@/store/slices/notificationsSlice';
 import { Alert, Button, Card, Field, Input, Segmented, Empty, Modal } from '@/components/ui';
 import { money } from '@/components/common/format';
@@ -64,8 +63,6 @@ export function TakeOrderPage() {
   const customers = useAppSelector(selectCustomers);
   const minStockByCode = useAppSelector(selectMinStockByCode);
   const minStockItems = useAppSelector(selectMinStockItems);
-  const reservations = useAppSelector(selectReservations);
-  const conflict = useAppSelector((s) => s.minStock.lastConflict);
   const saving = useAppSelector((s) => s.orders.saving);
 
   const customer = customers.find((c) => c.id === customerId);
@@ -84,58 +81,38 @@ export function TakeOrderPage() {
   );
 
   /**
-   * What this rep may still take, per item: on-hand less *other* reps' holds.
-   * Their own hold is excluded, otherwise the quantity they just keyed would
-   * come back from the ledger and flag their own row as oversold (1.2).
+   * What can be promised, per item.
+   *
+   * This used to subtract every OTHER rep's hold from the on-hand figure,
+   * excluding this rep's own so the quantity they had just keyed did not come
+   * back from the ledger and flag their own row as oversold. SAP nets off
+   * every open order itself, so the figure arrives ready to use.
    */
   const stockForMe = useMemo(() => {
-    const byOthers = new Map<string, number>();
-    reservations.forEach((r) => {
-      if (user && r.repId === user.id) return;
-      byOthers.set(r.itemCode, (byOthers.get(r.itemCode) ?? 0) + r.qty);
-    });
     const free = new Map<string, number>();
     minStockItems.forEach((item) => {
-      free.set(item.itemCode, Math.max(0, item.onHand - (byOthers.get(item.itemCode) ?? 0)));
+      free.set(item.itemCode, shelfAvailable(item).rolls);
     });
-    return { free, byOthers };
-  }, [reservations, minStockItems, user]);
+    return { free };
+  }, [minStockItems]);
 
-  // ---------------------------------------------------------- reserving ---
-  //
-  // Booking on every keystroke would hammer the ledger, so each item's hold is
-  // debounced. The hold is placed against a null order id until the order is
-  // actually saved, at which point it is bound to it.
-  const timers = useRef<Record<string, number>>({});
-
-  const bookStock = useCallback(
-    (code: string, quantity: number) => {
-      if (!user || !minStockByCode.has(code)) return;
-      window.clearTimeout(timers.current[code]);
-      timers.current[code] = window.setTimeout(() => {
-        void dispatch(reserveStock({ itemCode: code, qty: quantity, user, orderId: null }));
-      }, 400);
-    },
-    [dispatch, user, minStockByCode],
-  );
-
-  // Walking away from a half-typed order must not strand stock for other reps.
-  useEffect(() => {
-    const held = timers.current;
-    return () => {
-      Object.values(held).forEach((t) => window.clearTimeout(t));
-      if (user) void dispatch(releaseHolds({ user, orderId: null }));
-    };
-  }, [dispatch, user]);
-
-  const updateLine = useCallback(
-    (product: Product, next: LineInput) => {
-      setLines((prev) => ({ ...prev, [product.code]: next }));
-      const { quantity } = computeLine(product, next);
-      bookStock(product.code, quantity);
-    },
-    [bookStock],
-  );
+  /*
+   * Nothing is booked while the order is typed.
+   *
+   * Each item's hold used to be written — debounced, against a null order id
+   * until the order was saved and the holds bound to it — and released again
+   * if the manager walked away from a half-typed order. SAP commits the stock
+   * when the order reaches it, and an order being typed has not reached it, so
+   * there is nothing to write and nothing to release.
+   *
+   * The cost is a window: two people can be shown the same eight rolls until
+   * one of the orders lands in SAP. SAP short-ships the second, which is a
+   * worse experience and a better answer than a local refusal made against
+   * stock this app could not see.
+   */
+  const updateLine = useCallback((product: Product, next: LineInput) => {
+    setLines((prev) => ({ ...prev, [product.code]: next }));
+  }, []);
 
   // -------------------------------------------------------------- derived ---
 
@@ -284,14 +261,6 @@ export function TakeOrderPage() {
         </Button>
       </div>
 
-      {conflict && (
-        <div style={{ marginBottom: 12 }}>
-          <Alert tone="warn" title="Stock booked by another rep">
-            {conflict}
-          </Alert>
-        </div>
-      )}
-
       <div className="take-order">
         <div>
           <div className="order-toolbar">
@@ -357,7 +326,6 @@ export function TakeOrderPage() {
                     input={lines[product.code] ?? {}}
                     minStock={minStockByCode.get(product.code)}
                     freeQty={stockForMe.free.get(product.code) ?? null}
-                    reservedByOthers={stockForMe.byOthers.get(product.code) ?? 0}
                     onChange={(next) => updateLine(product, next)}
                   />
                 ))}

@@ -1,8 +1,9 @@
 // What a rep sees on a product row.
 //
-// The distinction these cover is the one most easily lost: an item that is not
-// on the minimum-stock list must read "No minimum stock", which is a different
-// statement from an item whose pool is empty. Getting those two confused would
+// The distinctions these cover are the ones most easily lost. An item with no
+// stock record at all must read "No minimum stock", which is a different
+// statement from an item SAP holds none of; and an item whose weights are not
+// set must say so rather than read as empty. Confusing any of the three would
 // have reps refusing orders they could have taken.
 
 import 'package:flutter/material.dart';
@@ -25,7 +26,7 @@ Product _pctr() => Product({
     });
 
 void main() {
-  testWidgets('an item off the minimum-stock list says so', (tester) async {
+  testWidgets('an item with no stock record at all says so', (tester) async {
     await tester.pumpWidget(_host(ProductRow(
       line: OrderLine(product: _pctr()),
       stock: null,
@@ -35,140 +36,71 @@ void main() {
     expect(find.text('No minimum stock'), findsOneWidget);
   });
 
-  testWidgets('a pool shows what is left after other reps have booked',
-      (tester) async {
+  testWidgets('the shelf reads what SAP says is available', (tester) async {
     await tester.pumpWidget(_host(ProductRow(
       line: OrderLine(product: _pctr()),
-      stock: MinStock(
-        itemCode: 'PCTR-100',
-        minimumQty: 10,
-        reservedQty: 4,
-        myReservedQty: 0,
-      ),
+      stock: const MinStock(itemCode: 'PCTR-100', availableQty: 6),
       onChanged: () {},
     )));
 
-    // No batch rows, so this falls back to the pool arithmetic: 10 - 4.
     // Counted in rolls, the item's stock UOM — not the kilograms the rate is
     // quoted against.
     expect(find.textContaining('6 rolls available'), findsOneWidget);
-    // "4 booked" until 21 August 2026, which named no unit and mentioned no
-    // belts. Four of what was the rep's problem.
-    expect(find.textContaining('4 rolls booked'), findsOneWidget);
   });
 
-  testWidgets('booked belts are counted, not silently dropped', (tester) async {
-    // Reported from the field: a pool with twelve rolls AND twelve loose belts
-    // booked against it told the rep "12 booked". The belts were spoken for and
-    // nothing on the row said so.
-    await tester.pumpWidget(_host(ProductRow(
-      line: OrderLine(product: _pctr()),
-      stock: MinStock(
-        itemCode: 'PCTR-100',
-        minimumQty: 20,
-        minimumLooseBelts: 12,
-        reservedQty: 12,
-        reservedLooseBelts: 12,
-        myReservedQty: 0,
-        myReservedLooseBelts: 0,
-      ),
-      onChanged: () {},
-    )));
-
-    expect(find.textContaining('12 rolls + 12 belts booked'), findsOneWidget);
-  });
-
-  testWidgets('a restocked shelf reads above the minimum, not pinned to it',
+  testWidgets('nothing is said about what other reps have booked',
       (tester) async {
-    // The reporting bug: restocking adds batch rows and never moves the pool,
-    // so availability read off the pool stayed stuck at the threshold.
-    await tester.pumpWidget(_host(ProductRow(
-      line: OrderLine(product: _pctr()),
-      stock: MinStock(
-        itemCode: 'PCTR-100',
-        minimumQty: 10,
-        reservedQty: 0,
-        myReservedQty: 0,
-        batches: [
-          StockBatch(
-              name: 'MSB-1',
-              itemCode: 'PCTR-100',
-              batchDate: '2026-01-01',
-              qty: 12,
-              looseBelts: 0,
-              originalQty: 12,
-              ageDays: 40),
-          StockBatch(
-              name: 'MSB-2',
-              itemCode: 'PCTR-100',
-              batchDate: '2026-02-01',
-              qty: 15,
-              looseBelts: 0,
-              originalQty: 15,
-              ageDays: 5),
-        ],
-      ),
-      onChanged: () {},
-    )));
-
-    expect(find.textContaining('27 rolls available'), findsOneWidget);
-    // The threshold is not quoted when the shelf is comfortably above it.
-    expect(find.textContaining('below minimum'), findsNothing);
-  });
-
-  testWidgets('a rep is never told what the minimum is, even under it',
-      (tester) async {
-    await tester.pumpWidget(_host(ProductRow(
-      line: OrderLine(product: _pctr()),
-      stock: MinStock(
-        itemCode: 'PCTR-100',
-        minimumQty: 10,
-        reservedQty: 0,
-        myReservedQty: 0,
-        batches: [
-          StockBatch(
-              name: 'MSB-1',
-              itemCode: 'PCTR-100',
-              batchDate: '2026-01-01',
-              qty: 3,
-              looseBelts: 0,
-              originalQty: 12,
-              ageDays: 40),
-        ],
-      ),
-      onChanged: () {},
-    )));
-
-    expect(find.textContaining('3 rolls available'), findsOneWidget);
     /*
-     * This read "below minimum 10" until 21 August 2026 and now must not.
-     * The minimum is management's figure: a rep quoting it to a customer is
-     * describing how the company runs its shelf rather than what they can
-     * sell. The shelf being under it is still true — it is simply not the
-     * rep's to know, and this is the case where it would have leaked.
+     * Reversed on 17 September 2026, and the reversal is the point.
+     *
+     * This used to assert that the row read "4 rolls booked" beside what was
+     * available, because that figure explained why the number in front of the
+     * rep had moved. It was ERPNext's own reservation counter.
+     *
+     * SAP owns the booking now, and the figure this row shows is already net
+     * of every open order. Printing a "booked" figure beside it would invite
+     * the rep to subtract a deduction that has already been made.
      */
-    expect(find.textContaining('below minimum'), findsNothing);
-    // Not a bare '10' — the product is called "Precured 100mm" and would
-    // match it. What must not appear is the word alongside the figure.
-    expect(find.textContaining('minimum 10'), findsNothing);
+    await tester.pumpWidget(_host(ProductRow(
+      line: OrderLine(product: _pctr()),
+      stock: const MinStock(
+          itemCode: 'PCTR-100', availableQty: 6, availableLooseBelts: 2),
+      onChanged: () {},
+    )));
+
+    expect(find.textContaining('booked'), findsNothing);
+    expect(find.textContaining('6 rolls + 2 loose belts available'),
+        findsOneWidget);
   });
 
-  testWidgets('an empty shelf does not read as an item with no pool at all',
+  testWidgets('an item with no weights set says so, and offers no figure',
+      (tester) async {
+    // SAP holds this item in kilograms and nobody has said what a roll weighs,
+    // so there is no honest number to print. "None left" would be a lie about
+    // the warehouse; a converted figure would be a guess.
+    await tester.pumpWidget(_host(ProductRow(
+      line: OrderLine(product: _pctr()),
+      stock: const MinStock(
+          itemCode: 'PCTR-100', availableQty: 0, weightsKnown: false),
+      onChanged: () {},
+    )));
+
+    expect(find.text('Stock not set up for this item'), findsOneWidget);
+    expect(find.textContaining('available'), findsNothing);
+    expect(find.textContaining('None left'), findsNothing);
+  });
+
+  testWidgets('an empty shelf does not read as an item with no record at all',
       (tester) async {
     await tester.pumpWidget(_host(ProductRow(
       line: OrderLine(product: _pctr()),
-      stock: MinStock(
-        itemCode: 'PCTR-100',
-        minimumQty: 10,
-        reservedQty: 10,
-        myReservedQty: 0,
-      ),
+      stock: const MinStock(itemCode: 'PCTR-100', availableQty: 0),
       onChanged: () {},
     )));
 
     expect(find.textContaining('None left'), findsOneWidget);
-    // "No minimum stock" means the item is not on the list at all, which is a
-    // different thing from being on it and sold out.
+    // "No minimum stock" means there is no record for the item at all, which
+    // is a different thing from having one and being sold out.
     expect(find.text('No minimum stock'), findsNothing);
   });
 
@@ -225,12 +157,8 @@ void main() {
     // the rep was told to reduce the order. A customer wanting more than the
     // minimum stock is a customer worth having — the pool covers what it can
     // and the rest is made.
-    MinStock shelf({double available = 10}) => MinStock(
-          itemCode: 'PCTR-100',
-          minimumQty: 10,
-          reservedQty: 10 - available,
-          myReservedQty: 0,
-        );
+    MinStock shelf({double available = 10}) =>
+        MinStock(itemCode: 'PCTR-100', availableQty: available);
 
     testWidgets('a line inside the pool says nothing about splitting',
         (tester) async {
@@ -279,33 +207,28 @@ void main() {
   });
 
   group('what is being made', () {
-    MinStock pool({double inProduction = 0, double available = 6}) => MinStock(
-          itemCode: 'PCTR-100',
-          minimumQty: 10,
-          reservedQty: 10 - available,
-          myReservedQty: 0,
-          inProductionQty: inProduction,
-        );
-
-    testWidgets('a rep is never told about a replenishment run', (tester) async {
-      /*
-       * Reversed on 18 Aug 2026. This used to assert the opposite — that a run
-       * WAS shown on the order row — on the reasoning that "none left" and
-       * "none left, twenty being made" are different answers to give somebody
-       * at a counter.
-       *
-       * That reasoning was overtaken. A replenishment run goes into COMPANY
-       * stock: production make it, the stock person receives it, and it
-       * reaches the shelf as a batch. Until then it is not stock anybody can
-       * sell and it has no date attached, so telling a rep only invited a
-       * promise nobody could keep.
-       *
-       * Production against a specific ORDER is a different flow and is still
-       * shown, on that order's own lines, with its stage.
-       */
+    /*
+     * These asserted that a *replenishment run* — the production manager's
+     * "20 rolls of this are being made" figure, held on the minimum-stock
+     * pool — was never shown to a rep and never counted towards what they
+     * could sell. The run was intent rather than stock, and promising against
+     * it at a counter was a promise nobody could keep.
+     *
+     * The pool and its run counter were removed on 17 September 2026 along
+     * with the rest of the minimum-stock doctypes, so there is no longer a
+     * figure that *could* be shown or wrongly added in. The rule these pinned
+     * is now structural, and what is left is the part that can still regress:
+     * the row must say nothing about anything being made, and offer no way to
+     * claim it.
+     *
+     * Production against a specific ORDER is a different flow and is still
+     * shown, on that order's own lines, with its stage.
+     */
+    testWidgets('a rep is never told that anything is being made',
+        (tester) async {
       await tester.pumpWidget(_host(ProductRow(
         line: OrderLine(product: _pctr()),
-        stock: pool(inProduction: 20),
+        stock: const MinStock(itemCode: 'PCTR-100', availableQty: 6),
         onChanged: () {},
       )));
 
@@ -313,32 +236,11 @@ void main() {
       expect(find.textContaining('not on the shelf yet'), findsNothing);
       // And no way to claim any of it.
       expect(find.byType(Switch), findsNothing);
-    });
-
-    testWidgets('it never inflates what is available to sell', (tester) async {
-      // 6 available with 20 on a run must still read 6. The run is intent,
-      // not stock.
-      await tester.pumpWidget(_host(ProductRow(
-        line: OrderLine(product: _pctr()),
-        stock: pool(inProduction: 20, available: 6),
-        onChanged: () {},
-      )));
-
+      // What is available is what SAP said, and nothing has been added to it.
       expect(find.textContaining('6 rolls available'), findsOneWidget);
-      expect(find.textContaining('26'), findsNothing);
     });
 
-    testWidgets('nothing is said when no run is on', (tester) async {
-      await tester.pumpWidget(_host(ProductRow(
-        line: OrderLine(product: _pctr()),
-        stock: pool(),
-        onChanged: () {},
-      )));
-
-      expect(find.textContaining('being made'), findsNothing);
-    });
-
-    testWidgets('an item off the minimum-stock list says nothing about runs',
+    testWidgets('an item with no stock record says nothing about runs either',
         (tester) async {
       await tester.pumpWidget(_host(ProductRow(
         line: OrderLine(product: _pctr()),

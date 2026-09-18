@@ -15,7 +15,8 @@ import { CATEGORY_LABEL } from '@/domain/types';
 import { computeLine, uomFor, validateLine, type LineInput } from '@/domain/productRules';
 import { isPostApprovalEdit, isRateLocked } from '@/domain/orderRules';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
-import { selectMinStockByCode, selectProducts, selectReservations } from '@/store/selectors';
+import { selectMinStockByCode, selectProducts } from '@/store/selectors';
+import { shelfAvailable } from '@/domain/minimumStock';
 import { updateOrderItems } from '@/store/slices/ordersSlice';
 import { pushToast } from '@/store/slices/notificationsSlice';
 import { Alert, Button, Field, Input, Modal, Select } from '@/components/ui';
@@ -39,29 +40,27 @@ export function EditItemsModal({
   const dispatch = useAppDispatch();
   const products = useAppSelector(selectProducts);
   const minStockByCode = useAppSelector(selectMinStockByCode);
-  const reservations = useAppSelector(selectReservations);
   const saving = useAppSelector((s) => s.orders.saving);
   const error = useAppSelector((s) => s.orders.error);
 
   const productByCode = useMemo(() => new Map(products.map((p) => [p.code, p])), [products]);
 
   /**
-   * Stock free to *this* order: on hand, less holds belonging to other orders.
-   * Without this the rows fall back to StockChip's "not tracked" branch and
-   * every line wrongly reads "No minimum stock" while quantities are edited.
+   * What can be promised, per item.
+   *
+   * This used to take every OTHER order's hold off the on-hand figure so that
+   * this order was not shown competing with itself. SAP nets off every open
+   * order, including this one once it has reached SAP — so a line already
+   * pushed can read as short by exactly what it ordered. That is correct: the
+   * rolls are spoken for, by this order.
    */
   const stockForOrder = useMemo(() => {
-    const byOthers = new Map<string, number>();
-    reservations.forEach((r) => {
-      if (r.orderId === order.id) return;
-      byOthers.set(r.itemCode, (byOthers.get(r.itemCode) ?? 0) + r.qty);
-    });
     const free = new Map<string, number>();
     minStockByCode.forEach((item, code) => {
-      free.set(code, Math.max(0, item.onHand - (byOthers.get(code) ?? 0)));
+      free.set(code, shelfAvailable(item).rolls);
     });
-    return { free, byOthers };
-  }, [reservations, minStockByCode, order.id]);
+    return { free };
+  }, [minStockByCode]);
 
   const [drafts, setDrafts] = useState<Draft[]>(() =>
     order.items.map((item) => ({ item, input: toInput(item) })),
@@ -212,7 +211,6 @@ export function EditItemsModal({
                   input={input}
                   minStock={minStockByCode.get(item.itemCode)}
                   freeQty={stockForOrder.free.get(item.itemCode) ?? null}
-                  reservedByOthers={stockForOrder.byOthers.get(item.itemCode) ?? 0}
                   rateLocked={isRateLocked(item, order)}
                   onChange={(next) =>
                     setDrafts((d) =>

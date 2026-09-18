@@ -3,6 +3,23 @@
 Written 18 August 2026, before building. Records the decisions taken so the
 schema work is one paste and the code is not designed twice.
 
+> **Flow A was removed on 17 September 2026, and so was `Manna Production
+> Order` itself.** Replenishment existed to refill the minimum-stock pool, and
+> the pool has gone: all 129 rows on the live site carried a minimum of zero,
+> so nothing ever asked for a replenishment, and the doctype held zero rows to
+> the end. Receiving one wrote a `Manna Minimum Stock Batch`, which is also
+> gone. Stock arrives in SAP now and the sync brings the figure back.
+>
+> **Flow B is what production is.** It is no longer tracked in this doctype at
+> all: a production order is raised in SAP against the sales order, and
+> `Sync-SapOrders.ps1` writes its number and stage onto the ERPNext line —
+> `custom_sap_production_order`, `custom_sap_production_stage`. See
+> `shared/SAP_ORDER_SYNC.md`.
+>
+> The rest of this file is kept because the *reasoning* still holds and is
+> still the thing to read before changing how production is modelled. Read it
+> as history, not as a description of the code.
+
 ## The rule that separates them
 
 Goods produced go to **one of two places**, and which one is decided when the

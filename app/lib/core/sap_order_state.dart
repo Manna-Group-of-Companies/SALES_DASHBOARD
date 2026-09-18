@@ -21,6 +21,7 @@
 //
 // Pinned by `shared/fixtures/sap_order_state.json`; the TypeScript twin is
 // `client/src/domain/sapOrderState.ts`.
+import 'package:manna_field_sales/core/order_rules.dart';
 
 /// What SAP has told us about one order. All of it optional; none of it ours.
 class SapOrderState {
@@ -57,6 +58,37 @@ class SapOrderState {
       );
 }
 
+/// What SAP has told us about one LINE of an order.
+class SapLineState {
+  final String? productionOrder;
+  final String? productionStage;
+
+  /// The delivery that carried THIS line. Blank means this line has not gone.
+  final String? deliveryOrder;
+  final String? deliveryDate;
+
+  const SapLineState({
+    this.productionOrder,
+    this.productionStage,
+    this.deliveryOrder,
+    this.deliveryDate,
+  });
+
+  /// Straight off a row of the order's `items` table.
+  factory SapLineState.fromLine(Map<String, dynamic> l) => SapLineState(
+        productionOrder: l['custom_sap_production_order'] as String?,
+        productionStage: l['custom_sap_production_stage'] as String?,
+        deliveryOrder: l['custom_sap_delivery_order'] as String?,
+        deliveryDate: l['custom_sap_delivery_date'] as String?,
+      );
+
+  /// Whether SAP has said anything about this line yet.
+  bool get hasSap =>
+      _clean(productionOrder).isNotEmpty ||
+      _clean(productionStage).isNotEmpty ||
+      _clean(deliveryOrder).isNotEmpty;
+}
+
 String _clean(String? v) {
   final s = (v ?? '').trim();
   // Frappe reads an unset Link back as the string 'null' when it was written
@@ -88,6 +120,53 @@ String productionStatusFromSap(SapOrderState s) {
 /// Whether SAP has taken the order at all.
 bool reachedSap(SapOrderState s) => _clean(s.salesOrder).isNotEmpty;
 
+/// One line's status.
+///
+/// SAP raises a production order per item, so a four-item order has four
+/// stages and an order-level stage hides which item is holding it up.
+///
+/// THE DELIVERY IS THE LINE'S OWN, NOT THE ORDER'S
+///
+/// A delivery need not carry the whole order: dropping a row from it is how the
+/// floor ships what is ready and leaves the rest open, which is exactly what
+/// happened to SAP order 381 on 16 Sep 2026 — three lines shipped, one stayed
+/// open. Reading the order's delivery here would mark that fourth line
+/// Dispatched while it sat unmade in the factory, the same lie as calling an
+/// unmapped stage Ready.
+///
+/// Everything else defers to [productionStatusFromSap], so a line and an order
+/// cannot drift apart on the rules they share.
+String lineStatusFromSap(SapLineState line) =>
+    productionStatusFromSap(SapOrderState(
+      productionStage: line.productionStage,
+      deliveryOrder: line.deliveryOrder,
+    ));
+
+const Map<String, int> _rank = {
+  'Not Started': 0,
+  'In Production': 1,
+  'Ready': 2,
+  'Dispatched': 3,
+};
+
+/// The order's status, rolled up from its lines: the least advanced one wins.
+///
+/// An order is Ready only when every line is. Rounding the other way would tell
+/// a rep an order is made while one item is still in a press — the same error
+/// the unknown-stage rule exists to prevent.
+///
+/// With no line carrying SAP state at all, falls back to the order's own.
+/// Not short-circuited on the order's delivery: a partly-delivered order is
+/// still open, and saying Dispatched would close it in a rep's mind while a
+/// line is outstanding. It reaches Dispatched only when every line has.
+String orderStatusFromLines(List<SapLineState> lines, SapOrderState order) {
+  final known = lines.where((l) => l.hasSap).toList();
+  if (known.isEmpty) return productionStatusFromSap(order);
+  return known
+      .map(lineStatusFromSap)
+      .reduce((worst, s) => (_rank[s] ?? 1) < (_rank[worst] ?? 1) ? s : worst);
+}
+
 /// True when SAP has the order but nothing has reconciled it recently.
 bool sapStale(SapOrderState s, DateTime now, {int hours = 24}) {
   if (!reachedSap(s)) return false;
@@ -118,3 +197,39 @@ String? sapSummary(SapOrderState s) {
   if (so.isNotEmpty) bits.add('SAP $so');
   return bits.isEmpty ? null : bits.join(' · ');
 }
+
+// --------------------------------------------------------------- cancelled ---
+
+/// SAP's own enum value. Not free text, and the only one mapped to behaviour.
+const String _kSapCancelled = 'bost_cancelled';
+
+/// Whether SAP has cancelled this order.
+///
+/// `custom_sap_sales_order_status` is otherwise **shown verbatim, never
+/// parsed** — the rest of SAP's vocabulary belongs to SAP and must change
+/// without an app release. This is the single exception, and it earns it: a
+/// cancelled order is not a shade of progress, it is the order not happening,
+/// and an app that goes on calling it Approved is telling a rep to expect goods
+/// nobody is making.
+///
+/// `bost_Cancelled` is a SAP enum, not a stage name, so it is stable in a way
+/// the stage list deliberately is not. The sync folds SAP's separate
+/// `Cancelled = tYES` flag into the same value — see `Resolve-SoStatus` in
+/// `Sync-SapOrders.ps1` — so this one check covers both ways SAP says it.
+///
+/// Found on 18 September 2026: SAP order 399 had been cancelled and ERPNext had
+/// recorded it correctly for days. Nothing read it, so the order still showed
+/// as approved.
+///
+/// The TypeScript twin is `cancelledInSap` in `client/src/domain/sapOrderState.ts`.
+bool cancelledInSap(SapOrderState s) =>
+    _clean(s.salesOrderStatus).toLowerCase() == _kSapCancelled;
+
+/// The approval line an order shows, once SAP has had its say.
+///
+/// One function rather than the same check on every screen, which is how the
+/// two apps drift. Cancellation outranks the approval status because it is the
+/// later fact and the terminal one — the same reasoning that puts a delivery
+/// above a stage in [productionStatusFromSap].
+String orderApprovalLabel(dynamic rawPoStatus, SapOrderState sap) =>
+    cancelledInSap(sap) ? 'Cancelled in SAP' : approvalLabel(rawPoStatus);

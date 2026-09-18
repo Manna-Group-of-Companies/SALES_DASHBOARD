@@ -11,8 +11,6 @@ import {
   FALLBACK_SEQUENCE,
   MINIMUM_STOCK_SEQUENCE,
   SEQUENCES,
-  hasMakeHalf,
-  hasStockHalf,
   rollUp,
   sequenceFor,
   stageCaption,
@@ -22,16 +20,6 @@ import {
   type StagedLine,
 } from '../production';
 import { PRODUCTION_STATUS } from '../orderStatus';
-
-const split = (over: Partial<StagedLine> = {}): StagedLine => ({
-  category: 'PCTR',
-  reservedRolls: 4,
-  reservedBelts: 2,
-  toMakeRolls: 4,
-  toMakeBelts: 0,
-  splitKnown: true,
-  ...over,
-});
 
 describe('a minimum-stock line skips the making stages', () => {
   it('gets the three-step cycle however it was made', () => {
@@ -54,68 +42,43 @@ describe('a minimum-stock line skips the making stages', () => {
   });
 });
 
-describe('two tracks on a split line', () => {
-  it('renders one per half, with the quantity in the title', () => {
-    const t = tracksFor(split({ stockStage: 'Packed', productionStage: 'Curing' }));
-    expect(t.map((x) => x.key)).toEqual(['stock', 'make']);
-    expect(t[0].title).toBe('From minimum stock · 4 + 2 belts');
-    expect(t[1].title).toBe('To be made · 4');
+describe('one track per line', () => {
+  /*
+   * There were two, when a line was split between a shelf reservation and the
+   * part being made, and this block asserted each half kept its own stage,
+   * its own sequence and its own field — so a shelf half dispatched while the
+   * made half was still curing could not read as a finished order.
+   *
+   * Reservations were removed on 17 September 2026 with the rest of the
+   * minimum-stock doctypes, so no line reports a shelf half. The list shape
+   * survives, holding exactly one track.
+   */
+  it('renders one, on the line own sequence', () => {
+    const t = tracksFor({ category: 'PCTR', productionStage: 'Curing' });
+    expect(t.map((x) => x.key)).toEqual(['progress']);
+    expect(t[0].title).toBe('Progress');
+    expect(t[0].sequence).toEqual(SEQUENCES.PCTR);
+    expect(t[0].stage).toBe('Curing');
+  });
+
+  it('writes to the made-part field, the only one left', () => {
+    expect(tracksFor({ category: 'PCTR' })[0].field).toBe('productionStage');
+  });
+
+  it('keeps the shorter cycle for a line marked as served from stock', () => {
+    // The fulfilment mode is a label the manager sets, not a reservation, and
+    // it still picks the three-step cycle: a line taken off the shelf is
+    // picked and packed, not extruded and cured.
+    const t = tracksFor({ category: 'PCTR', fulfilmentMode: 'From Minimum Stock' });
     expect(t[0].sequence).toEqual(MINIMUM_STOCK_SEQUENCE);
-    expect(t[1].sequence).toEqual(SEQUENCES.PCTR);
   });
 
-  it('writes each half to its own field', () => {
-    const t = tracksFor(split());
-    expect(t[0].field).toBe('stockStage');
-    expect(t[1].field).toBe('productionStage');
-  });
-
-  it('shows one track when the line is wholly off the shelf', () => {
-    const t = tracksFor(split({ toMakeRolls: 0, toMakeBelts: 0 }));
-    expect(t.map((x) => x.key)).toEqual(['stock']);
-  });
-
-  it('shows one track when nothing was reserved', () => {
-    const t = tracksFor(split({ reservedRolls: 0, reservedBelts: 0 }));
-    expect(t.map((x) => x.key)).toEqual(['progress']);
-  });
-
-  it('shows ONE honest track when the split could not be read', () => {
-    // Two invented tracks would be worse than one true one.
-    const t = tracksFor(split({ splitKnown: false }));
-    expect(t.map((x) => x.key)).toEqual(['progress']);
-    expect(hasStockHalf(split({ splitKnown: false }))).toBe(false);
-    expect(hasMakeHalf(split({ splitKnown: false }))).toBe(false);
+  it('treats a blank stage as Not Started rather than leaving it empty', () => {
+    expect(tracksFor({ category: 'PCTR' })[0].stage).toBe('Not Started');
   });
 });
 
-describe('the roll-up weighs both halves', () => {
-  it('THE CASE: shelf half dispatched, made half curing, is NOT finished', () => {
-    expect(rollUp([split({ stockStage: 'Dispatched', productionStage: 'Curing' })])).toBe(
-      PRODUCTION_STATUS.inProduction,
-    );
-  });
-
-  it('is finished only when both halves are', () => {
-    expect(rollUp([split({ stockStage: 'Dispatched', productionStage: 'Dispatched' })])).toBe(
-      PRODUCTION_STATUS.dispatched,
-    );
-  });
-
-  it('is Ready only when the slowest half is packed', () => {
-    expect(rollUp([split({ stockStage: 'Packed', productionStage: 'Packed' })])).toBe(
-      PRODUCTION_STATUS.ready,
-    );
-    expect(rollUp([split({ stockStage: 'Packed', productionStage: 'Not Started' })])).toBe(
-      PRODUCTION_STATUS.inProduction,
-    );
-  });
-
-  it('is started as soon as the fastest half is touched', () => {
-    expect(rollUp([split({ stockStage: 'Not Started', productionStage: 'Curing' })])).toBe(
-      PRODUCTION_STATUS.inProduction,
-    );
-  });
+describe('the roll-up takes the least advanced line', () => {
 
   it('is Ready by the slowest LINE, not the fastest', () => {
     expect(
@@ -149,8 +112,8 @@ describe('errors round DOWN, never to shippable', () => {
       [],
       [{ category: 'ZZZ', productionStage: 'nonsense' }],
       [{ category: 'VS', productionStage: 'Sealing' }],
-      [split({ stockStage: 'garbage', productionStage: 'garbage' })],
-      [split({ stockStage: 'Dispatched', productionStage: 'Dispatched' })],
+      [{ category: 'PCTR', productionStage: 'garbage' }],
+      [{ category: 'PCTR', productionStage: 'Dispatched' }],
     ];
     for (const c of cases) expect(allowed).toContain(rollUp(c));
   });

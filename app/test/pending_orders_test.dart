@@ -17,14 +17,12 @@ List<Map<String, dynamic>> _items({double qty = 2, double rate = 100}) => [
 Future<PendingOrder> _save({
   String customer = 'CUST-001',
   String name = 'Renjith Tyres',
-  List<Map<String, dynamic>>? reservations,
 }) =>
     PendingOrders.save(
       customer: customer,
       customerName: name,
       deliveryDate: '2026-08-20',
       items: _items(),
-      reservations: reservations ?? const [],
     );
 
 void main() {
@@ -63,16 +61,6 @@ void main() {
     test('the total is worked out from the lines', () async {
       final d = await _save();
       expect(d.total, 200);
-    });
-
-    test('a draft knows whether it is asking for minimum stock', () async {
-      final plain = await _save();
-      expect(plain.needsStock, isFalse);
-
-      final booked = await _save(reservations: [
-        {'item_code': 'PCTR-100', 'qty': 2.0, 'loose_belts': 0}
-      ]);
-      expect(booked.needsStock, isTrue);
     });
 
     test('discarding one leaves the rest', () async {

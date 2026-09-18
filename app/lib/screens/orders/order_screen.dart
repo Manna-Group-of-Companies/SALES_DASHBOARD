@@ -269,48 +269,20 @@ class _OrderScreenState extends State<OrderScreen> {
     if (broken.isNotEmpty) {
       return '${broken.first.product.name} is missing its packing details.';
     }
-    // Wanting more than the pool holds is not an error, and refusing it here
-    // was wrong. Fifteen rolls against a pool of ten is an order for fifteen:
-    // ten come off the shelf and five are made. The order is placed in full
-    // and only the *reservation* is capped — see [_poolShare].
+    // Wanting more than the shelf holds is not an error, and refusing it here
+    // would be wrong. Fifteen rolls against eight available is an order for
+    // fifteen: eight come off the shelf and seven are made. The order is
+    // placed in full and SAP decides what it can ship.
     return null;
-  }
-
-  /// How much of a line the pool can actually cover, in the pool's own units.
-  ///
-  /// Everything above this is made to order. Returning less than the line asks
-  /// for is the normal case, not a failure — it is what splits an order across
-  /// the shelf and a production run.
-  ({double qty, int belts}) _poolShare(OrderLine l) {
-    final s = _stock[l.product.code];
-    if (s == null) return (qty: 0, belts: 0);
-
-    // This rep's own booking is already inside the reserved figures, so it is
-    // added back — otherwise editing an order would fail to re-book the
-    // quantity it already holds.
-    final rollsFree = s.availableQty + s.myReservedQty;
-    final perRoll = l.product.beltsPerRoll;
-    final beltCeiling = s.beltCeiling(perRoll) + s.myReservedLooseBelts;
-
-    final belts = l.reserveBelts.clamp(0, beltCeiling).toInt();
-    // Belts are cut from whole rolls, so the belts taken may already have cost
-    // rolls. Those rolls are gone from what is left for this line's own rolls.
-    final looseFree = s.availableLooseBelts + s.myReservedLooseBelts;
-    final opened = MinStock.rollsToOpen(belts, looseFree.toInt(), perRoll);
-    final rollsLeft = rollsFree - opened;
-    final qty = l.reserveQty.clamp(0, rollsLeft < 0 ? 0 : rollsLeft).toDouble();
-
-    return (qty: qty, belts: belts);
   }
 
   /// Offers to hold an order that could not be sent for want of signal.
   ///
-  /// The wording is careful on purpose. Nothing has been reserved and no order
-  /// number exists, so the rep must not walk away believing the customer is
-  /// covered — particularly on minimum-stock lines, where another rep in signal
-  /// can take the same rolls before this draft is ever sent.
-  Future<void> _offerDraft(
-      String deliveryDate, List<Map<String, dynamic>> reservations) async {
+  /// The wording is careful on purpose. No order number exists and no stock is
+  /// held — stock is committed in SAP, which this order has not reached — so
+  /// the rep must not walk away believing the customer is covered. Another rep
+  /// in signal can take the same rolls before this draft is ever sent.
+  Future<void> _offerDraft(String deliveryDate) async {
     if (!mounted) return;
     setState(() => _submitting = false);
 
@@ -318,13 +290,10 @@ class _OrderScreenState extends State<OrderScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('No signal'),
-        content: Text(
-          reservations.isEmpty
-              ? 'This order has not been sent. Keep it on the phone and send it '
-                  'when you have signal?'
-              : 'This order has not been sent, and the minimum stock on it is '
-                  'not held for you. Another rep with signal can still take it.\n\n'
-                  'Keep the order on the phone and send it when you have signal?',
+        content: const Text(
+          'This order has not been sent, so no stock on it is held for you. '
+          'Another rep with signal can still take it.\n\n'
+          'Keep the order on the phone and send it when you have signal?',
         ),
         actions: [
           TextButton(
@@ -344,7 +313,6 @@ class _OrderScreenState extends State<OrderScreen> {
       customerName: widget.party.label,
       deliveryDate: deliveryDate,
       items: [for (final l in _picked) l.toSalesOrderItem()],
-      reservations: reservations,
       isLead: widget.party.isLead,
     );
     if (!mounted) return;
@@ -363,30 +331,6 @@ class _OrderScreenState extends State<OrderScreen> {
     final dd = '${d.year}-${d.month.toString().padLeft(2, '0')}-'
         '${d.day.toString().padLeft(2, '0')}';
 
-    // Only lines that draw on the shared pool need booking. Everything else
-    // is made to order and has nothing to race over.
-    // Booked in the pool's own units — whole rolls and whole belts, not the
-    // fractional roll the order line carries.
-    // Built outside the try so the offline path can still hand them to a draft.
-    // Only what the pool can cover is reserved. A line for fifteen rolls
-    // against a pool of ten books ten and leaves five to be made — so a line
-    // with nothing left to draw on reserves nothing at all and is simply made
-    // to order, rather than failing the whole order.
-    final reservations = <Map<String, dynamic>>[
-      for (final l in _picked)
-        if (_stock.containsKey(l.product.code))
-          if (_poolShare(l) case (qty: final q, belts: final b)
-              when q > 0 || b > 0)
-            {
-              'item_code': l.product.code,
-              'qty': double.parse(q.toStringAsFixed(3)),
-              'loose_belts': b,
-              if (l.agedBatch != null) 'batch': l.agedBatch,
-              // Which pool this line draws on. Read by Api._bookOrUnwind,
-              // which sends it down a different booking path entirely.
-            }
-    ];
-
     try {
       final String name;
       if (_isEdit) {
@@ -400,7 +344,6 @@ class _OrderScreenState extends State<OrderScreen> {
                     _approvedLines.contains(l.product.code) ? 1 : 0
           ],
           deliveryDate: dd,
-          reservations: reservations,
           // Nothing has been signed off yet on an unapproved order, so the rep
           // simply saves. Once it has been approved, any change at all — a
           // quantity, a new product, even the delivery date — goes back to the
@@ -422,7 +365,6 @@ class _OrderScreenState extends State<OrderScreen> {
           lead: widget.party.name,
           items: [for (final l in _picked) l.toSalesOrderItem()],
           deliveryDate: dd,
-          reservations: reservations,
           total: _total,
         );
         _snack('Order sent for approval ✓  $name');
@@ -437,7 +379,6 @@ class _OrderScreenState extends State<OrderScreen> {
           company: _company,
           items: [for (final l in _picked) l.toSalesOrderItem()],
           deliveryDate: dd,
-          reservations: reservations,
         );
         _snack('Order sent for approval ✓  $name');
       }
@@ -455,7 +396,7 @@ class _OrderScreenState extends State<OrderScreen> {
       // Every other failure means the server considered this order and said no,
       // so a draft would only defer the same answer.
       if (isOffline(e) && !_isEdit) {
-        await _offerDraft(dd, reservations);
+        await _offerDraft(dd);
         return;
       }
       // The most likely failure is someone else getting there first, so the

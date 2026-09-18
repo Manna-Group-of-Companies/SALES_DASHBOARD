@@ -1,40 +1,31 @@
 /**
- * Minimum stock, as the sales side needs to read it.
+ * What is in stock, and what can be promised.
  *
- * Deliberately a different screen from the production manager's, because it
- * answers a different question. Production asks *what should we make next*, so
- * theirs is ordered by how badly a pool needs a run. Sales asks *what can I
- * promise*, so this one leads with what is free to sell.
+ * The only stock screen left. There were four — this one, the production
+ * manager's "what should we make next", the stock manager's ledger and their
+ * replenishment page — and the other three read the minimum-stock doctypes,
+ * removed on 17 September 2026. This one reads SAP.
  *
- * It answered "and what should I clear first" too until 21 August 2026, with
- * an Age column, an Aging filter and an oldest-first sort. That was the
- * dead-stock feature and it has been removed — the dated batches still exist
- * in ERPNext and still add up to what is on the shelf, but nobody is asked to
- * make a decision about how old they are. The column that replaced Age is the
- * **minimum** the pool is meant to hold, which is what this screen is for.
+ * Six columns became two, and the four that went are worth naming so nobody
+ * puts them back:
  *
- * That minimum is shown here and **not** on the reps' phones. See
- * `app/lib/screens/orders/min_stock_screen.dart`: it is management's figure,
- * and a rep quoting it to a customer describes how the company runs its shelf
- * rather than what they can sell.
+ *   - **On the shelf** and **Booked** were gross stock and what reps had
+ *     reserved off it. SAP reports *available to promise* — on hand, less what
+ *     it has committed to open orders — so the two are already netted. Showing
+ *     a booked figure beside it invites the reader to subtract it twice.
+ *   - **Minimum** was the level the shelf was meant to hold. All 129 rows on
+ *     the site carried zero, so the column, the "Minimum held" tile and the
+ *     alarms built on it had never had anything to say.
+ *   - **Being made** was a production run recorded against the pool. Runs are
+ *     raised in SAP against a sales order now, and the sync brings the stage
+ *     back onto the order's own lines, where the person waiting on it looks.
  *
- * It is **read-only**. Recording a run, moving its stage and receiving it are
- * production's decisions, and putting the controls on two screens would be two
- * places to change the same number.
- *
- * The one thing carried over verbatim from the production screen is the rule
- * about runs: a run in flight is **intent, not stock**. It gets its own line
- * and never joins the free figure — two numbers in one sentence, one sellable
- * and one not, is how a rep promises stock nobody has made.
+ * It is read-only, as it always was.
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import type { MinStockLine, StockReservationRow } from '@/domain/types';
-import {
-  fullyBooked,
-  shelfAvailable,
-  trueReserved,
-} from '@/domain/minimumStock';
+import type { MinStockLine } from '@/domain/types';
+import { outOfStock, shelfAvailable } from '@/domain/minimumStock';
 import { parseItemName, distinctOf, worthOffering } from '@/domain/itemNaming';
 import { serverNow } from '@/domain/serverClock';
 import { Api } from '@/api/client';
@@ -49,14 +40,12 @@ import '@/features/hr/attendance.css';
 import '@/features/orders/orders.css';
 import '@/features/production/production.css';
 
-type Filter = 'sellable' | 'coming' | 'none_left' | 'all';
+type Filter = 'sellable' | 'none_left' | 'not_set_up' | 'all';
 
 export function SalesStockPage() {
   const user = useAppSelector(selectUser);
 
   const [pool, setPool] = useState<MinStockLine[]>([]);
-  const [reservations, setReservations] = useState<StockReservationRow[]>([]);
-  const [reservationsLoaded, setReservationsLoaded] = useState(true);
   const [filter, setFilter] = useState<Filter>('sellable');
   const [quality, setQuality] = useState('');
   const [pattern, setPattern] = useState('');
@@ -71,22 +60,11 @@ export function SalesStockPage() {
     setError(null);
     Api.sales
       .listMinimumStock()
-      .then(async (p) => {
-        if (!live) return;
-        setPool(p);
-        try {
-          const res = await Api.sales.listReservations();
-          if (!live) return;
-          setReservations(res);
-          setReservationsLoaded(true);
-        } catch {
-          // Fall back to the stored counters rather than reading "no rows" as
-          // "nothing is booked" and over-promising the whole shelf.
-          if (live) setReservationsLoaded(false);
-        }
+      .then((p) => {
+        if (live) setPool(p);
       })
       .catch((e: unknown) => {
-        if (live) setError(e instanceof Error ? e.message : 'Could not read minimum stock.');
+        if (live) setError(e instanceof Error ? e.message : 'Could not read stock.');
       })
       .finally(() => {
         if (live) setLoading(false);
@@ -98,38 +76,16 @@ export function SalesStockPage() {
 
   const now = useMemo(() => serverNow(), [tick]);
 
-  /**
-   * Each pool with its booked figure reconciled against the reservation rows.
-   *
-   * The stored counter has been proven wrong on this site — an order deleted
-   * in the Desk left two pools claiming bookings with nothing behind them — so
-   * the rows win where they are available.
-   */
   const rowsWithTruth = useMemo(
-    () =>
-      pool.map((s) => {
-        const actual = reservationsLoaded
-          ? trueReserved(reservations, s.itemCode)
-          : { rolls: s.reservedRolls, belts: s.reservedBelts };
-        const reconciled: MinStockLine = {
-          ...s,
-          reservedRolls: actual.rolls,
-          reservedBelts: actual.belts,
-        };
-        return {
-          s: reconciled,
-          free: shelfAvailable(reconciled),
-          phantom: s.reservedRolls - actual.rolls,
-        };
-      }),
-    [pool, reservations, reservationsLoaded, now],
+    () => pool.map((s) => ({ s, free: shelfAvailable(s) })),
+    [pool],
   );
 
   const counts = useMemo(
     () => ({
       sellable: rowsWithTruth.filter((r) => r.free.rolls > 0 || r.free.belts > 0).length,
-      coming: rowsWithTruth.filter((r) => r.s.inProductionRolls > 0).length,
-      noneLeft: rowsWithTruth.filter((r) => fullyBooked(r.s)).length,
+      noneLeft: rowsWithTruth.filter((r) => r.s.weightsKnown && outOfStock(r.s)).length,
+      notSetUp: rowsWithTruth.filter((r) => !r.s.weightsKnown).length,
       all: rowsWithTruth.length,
     }),
     [rowsWithTruth],
@@ -147,8 +103,8 @@ export function SalesStockPage() {
   const rows = useMemo(() => {
     let list = rowsWithTruth;
     if (filter === 'sellable') list = list.filter((r) => r.free.rolls > 0 || r.free.belts > 0);
-    if (filter === 'coming') list = list.filter((r) => r.s.inProductionRolls > 0);
-    if (filter === 'none_left') list = list.filter((r) => fullyBooked(r.s));
+    if (filter === 'none_left') list = list.filter((r) => r.s.weightsKnown && outOfStock(r.s));
+    if (filter === 'not_set_up') list = list.filter((r) => !r.s.weightsKnown);
 
     if (quality) list = list.filter((r) => parseItemName(r.s.itemCode).quality === quality);
     if (pattern) list = list.filter((r) => parseItemName(r.s.itemCode).pattern === pattern);
@@ -168,8 +124,6 @@ export function SalesStockPage() {
   const totals = useMemo(
     () => ({
       free: rowsWithTruth.reduce((n, r) => n + r.free.rolls, 0),
-      coming: rowsWithTruth.reduce((n, r) => n + r.s.inProductionRolls, 0),
-      minimum: rowsWithTruth.reduce((n, r) => n + r.s.minimumRolls, 0),
     }),
     [rowsWithTruth],
   );
@@ -180,27 +134,20 @@ export function SalesStockPage() {
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">Minimum stock</div>
-          <div className="page-head__sub">
-            What is free to sell, and what is already spoken for
-          </div>
+          <div className="page-head__title">Stock</div>
+          <div className="page-head__sub">What SAP has, and what can be promised</div>
         </div>
         <div className="cal__nav">
           <ExportButton
             filename={`stock-${now.toISOString().slice(0, 10)}.xlsx`}
-            sheet="Minimum stock"
+            sheet="Stock"
             disabled={rows.length === 0}
             rows={() =>
               rows.map((r) => ({
                 Item: r.s.itemCode,
-                'Free to sell': r.free.rolls,
-                'Loose belts free': r.free.belts,
-                'On the shelf': r.s.shelfRolls,
-                'Loose belts on the shelf': r.s.shelfBelts,
-                'Booked by reps': r.s.reservedRolls,
-                'Loose belts booked': r.s.reservedBelts,
-                'Being made': r.s.inProductionRolls,
-                'Last sold': r.s.lastSoldOn ?? '',
+                'Available (rolls)': r.s.weightsKnown ? r.free.rolls : '',
+                'Available (loose belts)': r.s.weightsKnown ? r.free.belts : '',
+                'Weights set': r.s.weightsKnown ? 'Yes' : 'No',
               }))
             }
           />
@@ -209,34 +156,46 @@ export function SalesStockPage() {
       </div>
 
       {error && (
-        <Alert tone="danger" title="Could not read minimum stock">
+        <Alert tone="danger" title="Could not read stock">
           {error}
         </Alert>
       )}
 
-      {!reservationsLoaded && !loading && (
+      {/*
+        Not a defect and not hidden. SAP holds these items in kilograms and
+        nobody has said what a roll weighs, so there is no honest figure to
+        print — and the instruction is that they read as nothing available
+        until the weights are loaded. Saying how many there are is what stops
+        somebody reading the "Nothing left" count as the whole story.
+      */}
+      {!loading && counts.notSetUp > 0 && (
         <div style={{ marginBottom: 14 }}>
-          <Alert tone="warn" title="Bookings could not be read">
-            The figures below use ERPNext's stored booked counts, which have been wrong before.
-            Treat “free to sell” as the lowest it could be, not the highest.
+          <Alert tone="warn" title={`${counts.notSetUp} items have no weights set`}>
+            SAP holds these in kilograms and their item master has no weight per roll or belts per
+            roll, so how many rolls that is cannot be worked out. They report nothing available
+            until the weights are loaded.
           </Alert>
         </div>
       )}
 
       <div className="tiles" style={{ marginBottom: 14 }}>
-        <Tile label="Free to sell" value={String(totals.free)} tone="ok" foot="Rolls, across all pools" />
         <Tile
-          label="Minimum held"
-          value={String(totals.minimum)}
-          foot="Rolls the shelf is meant to hold"
+          label="Available to promise"
+          value={String(totals.free)}
+          tone="ok"
+          foot="Rolls, across every item"
         />
         <Tile
           label="Nothing left"
           value={String(counts.noneLeft)}
           tone={counts.noneLeft ? 'warn' : undefined}
-          foot="Fully booked"
+          foot="In SAP, none available"
         />
-        <Tile label="Being made" value={String(totals.coming)} foot="Rolls on a run" />
+        <Tile
+          label="Weights not set"
+          value={String(counts.notSetUp)}
+          foot="No figure can be given"
+        />
       </div>
 
       <div className="cal__toolbar">
@@ -245,9 +204,9 @@ export function SalesStockPage() {
           value={filter}
           onChange={setFilter}
           options={[
-            { value: 'sellable', label: `Free to sell (${counts.sellable})` },
-            { value: 'coming', label: `Being made (${counts.coming})` },
+            { value: 'sellable', label: `Available (${counts.sellable})` },
             { value: 'none_left', label: `Nothing left (${counts.noneLeft})` },
+            { value: 'not_set_up', label: `Weights not set (${counts.notSetUp})` },
             { value: 'all', label: `All (${counts.all})` },
           ]}
         />
@@ -279,12 +238,12 @@ export function SalesStockPage() {
         />
       </div>
 
-      {loading && <Empty icon="◔" title="Reading minimum stock…" />}
+      {loading && <Empty icon="◔" title="Reading stock…" />}
 
       {!loading && !error && rows.length === 0 && (
         <Empty icon="—" title="Nothing matches">
           {filter === 'sellable'
-            ? 'Every pool is fully booked or empty.'
+            ? 'SAP has nothing available to promise.'
             : 'Try another filter, or clear the search.'}
         </Empty>
       )}
@@ -296,11 +255,7 @@ export function SalesStockPage() {
               <thead>
                 <tr>
                   <th>Item</th>
-                  <th className="right">Free to sell</th>
-                  <th className="right">On the shelf</th>
-                  <th className="right">Booked</th>
-                  <th className="right">Minimum</th>
-                  <th>Being made</th>
+                  <th className="right">Available to promise</th>
                 </tr>
               </thead>
               <tbody>
@@ -319,57 +274,15 @@ export function SalesStockPage() {
                         )}
                       </td>
                       <td className="right num">
-                        {r.free.rolls > 0 || r.free.belts > 0 ? (
+                        {!r.s.weightsKnown ? (
+                          <Badge tone="neutral">weights not set</Badge>
+                        ) : r.free.rolls > 0 || r.free.belts > 0 ? (
                           <b className="ok">
                             {r.free.rolls}
                             {r.free.belts ? ` + ${r.free.belts} belts` : ''}
                           </b>
                         ) : (
                           <Badge tone="warn">none</Badge>
-                        )}
-                      </td>
-                      {/*
-                        Belts alongside the rolls on both of these, since
-                        21 August 2026. "Free to sell" above always carried
-                        them and these two did not, so a pool with twelve
-                        rolls and twelve belts booked against it read as
-                        twelve booked — and the belts were unaccounted for
-                        exactly where somebody would go looking for them.
-                      */}
-                      <td className="right num dim">
-                        {r.s.shelfRolls}
-                        {r.s.shelfBelts ? ` + ${r.s.shelfBelts} belts` : ''}
-                      </td>
-                      <td className="right num dim">
-                        {r.s.reservedRolls}
-                        {r.s.reservedBelts ? ` + ${r.s.reservedBelts} belts` : ''}
-                        {/* A counter claiming more booked than any reservation
-                            supports means an order was deleted without
-                            releasing its hold. The stock is really free. */}
-                        {r.phantom > 0 && (
-                          <div
-                            className="tiny danger"
-                            title="ERPNext still counts these as booked with no reservation behind them. The free figure ignores it."
-                          >
-                            ⚠ {r.phantom} phantom
-                          </div>
-                        )}
-                      </td>
-                      {/*
-                        What the shelf is meant to hold. This column was the
-                        batch's age until 21 August 2026; the dead-stock
-                        feature it belonged to was removed, and the minimum is
-                        what this screen is actually for. It is shown here and
-                        deliberately NOT on the reps' phones — see
-                        app/lib/screens/orders/min_stock_screen.dart.
-                      */}
-                      <td className="right num dim">{r.s.minimumRolls}</td>
-                      <td className="small">
-                        {r.s.inProductionRolls > 0 ? (
-                          /* Its own column, never added to "free to sell". */
-                          <span className="run__note">🏭 {r.s.inProductionRolls} coming</span>
-                        ) : (
-                          <span className="dim">—</span>
                         )}
                       </td>
                     </tr>
@@ -383,9 +296,9 @@ export function SalesStockPage() {
 
       {!loading && rows.length > 0 && (
         <p className="note" style={{ marginTop: 12 }}>
-          “Being made” is a production run raised in SAP — it is <b>not on the shelf</b> and is never
-          counted as free to sell. “Minimum” is the level this pool is meant to hold, and is not
-          shown to reps on their phones.
+          These figures come from SAP and are <b>already net of every open sales order</b>, whoever
+          raised it. They refresh on the five-minute stock sync, so two people can briefly be shown
+          the same rolls — SAP decides who gets them.
         </p>
       )}
     </div>

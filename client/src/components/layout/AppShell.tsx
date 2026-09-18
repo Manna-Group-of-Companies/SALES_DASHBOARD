@@ -12,13 +12,12 @@ import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import type { Role } from '@/domain/types';
 import { ROLE_LABEL } from '@/domain/types';
-import { canOpen, type ManagerScreen } from '@/domain/sales';
+import { canOpenAs, type ManagerScreen } from '@/domain/sales';
 import { USE_MOCK, MIN_STOCK_POLL_MS } from '@/api/config';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import {
   selectActiveEmployees,
   selectFreezingSoon,
-  selectLowStockItems,
   selectPendingAcks,
   selectPendingApproval,
   selectPendingLeave,
@@ -69,7 +68,6 @@ export function AppShell() {
 
   const myOrders = useAppSelector(selectVisibleOrders);
   const awaitingApproval = useAppSelector(selectPendingApproval);
-  const lowStock = useAppSelector(selectLowStockItems);
   const freezingSoon = useAppSelector(selectFreezingSoon);
   const headcount = useAppSelector(selectActiveEmployees).length;
   const pendingLeave = useAppSelector(selectPendingLeave);
@@ -142,12 +140,25 @@ export function AppShell() {
     { to: '/combined', label: 'Combined Orders', icon: '⑃', roles: ['sales_manager'], screen: 'combined', group: 'Sales' },
 
     { to: '/production', label: 'Production Queue', icon: '⚙', roles: ['production_manager'], group: 'Production' },
-    { to: '/production/stock', label: 'Minimum Stock', icon: '📦', roles: ['production_manager'], group: 'Production' },
     { to: '/production/dispatch', label: 'Dispatch Planning', icon: '🚚', roles: ['production_manager'], group: 'Production' },
 
-    { to: '/stock', label: 'Minimum Stock', icon: '📦', roles: ['sales_manager', 'general_manager'], screen: 'stock', group: 'Sales' },
-    { to: '/stock/ledger', label: 'Stock Ledger', icon: '📦', roles: ['stock_manager'], count: lowStock.length, urgent: lowStock.length > 0, group: 'Stock' },
-    { to: '/stock/replenish', label: 'Replenishment', icon: '↻', roles: ['stock_manager'], group: 'Stock' },
+    /*
+      One stock screen now, reached two ways. There were four entries —
+      production's Minimum Stock, sales' Minimum Stock, the stock manager's
+      Ledger and their Replenishment — and all but this one read the
+      minimum-stock doctypes, removed 17 September 2026. The Ledger's urgent
+      count came from `selectLowStockItems`, which measured every item against
+      a minimum that was zero on all 129 rows, so it could never have fired.
+
+      Two entries because the gates differ and cannot be expressed in one.
+      Sales-side access is by managed team (`screen`), which is what keeps a
+      manager running party records only out of the order pipeline. The other
+      two roles have no managed team at all, so they are gated on the role —
+      and without that a stock manager would be locked out of the only stock
+      page left in the app. Exactly one of the two shows for any login.
+    */
+    { to: '/stock', label: 'Stock', icon: '📦', roles: ['sales_manager', 'general_manager'], screen: 'stock', group: 'Sales' },
+    { to: '/stock', label: 'Stock', icon: '📦', roles: ['production_manager', 'stock_manager'], group: 'Stock' },
 
     { to: '/hr/employees', label: 'Employees', icon: '🧑', roles: ['hr'], count: headcount, group: 'People' },
     { to: '/hr/leave', label: 'Leave Requests', icon: '🗓', roles: ['hr'], count: pendingLeave.length, urgent: pendingLeave.length > 0, group: 'People' },
@@ -172,7 +183,13 @@ export function AppShell() {
    * and without this he would have no route to his own reps.
    */
   const visible = items.filter((i) => {
-    if (i.screen) return canOpen(user.managedTeam, i.screen);
+    /*
+     * It runs the other way too. The GM manages no team, so a team-only test
+     * hid every screen their own `roles` already name — Customers, Team
+     * Orders, Stock and Combined all list `general_manager` and none of them
+     * appeared.
+     */
+    if (i.screen) return canOpenAs(user.role, user.managedTeam, i.screen);
     return i.roles.includes(user.role);
   });
   const groups = [...new Set(visible.map((i) => i.group))];

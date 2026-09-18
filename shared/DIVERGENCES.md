@@ -517,3 +517,139 @@ The distance is carried across the change, not recomputed: a change of vehicle
 is a change of rate, not of journey. A leg moved to a mode with no odometer
 keeps the kilometres it had, including a reading HR had corrected. The approved
 amount is left alone and the dialog says so. See `withVehicle`.
+
+## SAP owns the booking; the minimum-stock pool is gone — **decided 17 September 2026**
+
+**Removed from both sides in one commit**, so nothing below is a divergence —
+it is recorded here because it deletes rules that several fixtures and both
+`CLAUDE.md` files still pointed at, and somebody will want to know why.
+
+### What went
+
+`Manna Minimum Stock Item`, `Manna Minimum Stock Batch`, `Manna Stock
+Reservation` and `Manna Production Order`, and with them:
+
+- the **booking protocol** — the client-side compare-and-swap on the pool's
+  `modified` that stood in for the row lock a Server Script would have given
+  us (`app/lib/services/stock_service.dart`, `holdFromShelf` in
+  `client/src/api/client.ts`);
+- **minimums** and everything measured against one: below-minimum, shortfall,
+  dead stock, replenishment urgency, the fill meters, the low-stock nav badge;
+- the **production run** as a second pool with its own claim counter;
+- **Flow A** of `shared/PRODUCTION_FLOWS.md`, replenishment;
+- the **split of a line into two halves** — the part a reservation covered and
+  the part being made — each with its own stage, its own sequence and its own
+  field (`custom_stock_stage` is now written by nothing);
+- four screens: the production manager's Minimum Stock, the stock manager's
+  Ledger and Replenishment, and the Flutter replenishment-receiving screen.
+
+### Why, in three findings against the live site
+
+1. **No item had a minimum.** All 129 `Manna Minimum Stock Item` rows carried
+   `qty = 0`, so every alarm built on the minimum was comparing against zero
+   and could never fire. The dashboard's older `MinStockItem` path was worse:
+   the doctype has no `onHand` or `threshold` field at all, so both read
+   `undefined`.
+2. **The batches were beating SAP.** The 129 batch rows were a hand-typed
+   snapshot dated 10 September 2026, and `StockService.load()` skipped the
+   warehouse fill for any item that had a pool row — so those items showed a
+   week-old hand count instead of live stock.
+3. **The deduction was happening twice.** SAP commits its own sales orders'
+   lines when they are placed, and `Sync-HitechStockToTreads.ps1` writes back
+   *available to promise* — on hand less committed. Subtracting an ERPNext
+   reservation on top took the same roll off again.
+
+### What replaced it
+
+One figure per item, from `Bin.actual_qty` in `Finished Goods - MT`, converted
+out of kilograms by `stockFromKg` and refreshed by the five-minute SAP stock
+sync. `MinStock` on the phone and `MinStockLine` on the dashboard carry it, and
+neither app writes anything.
+
+### What is weaker, and was accepted
+
+**The window.** The apps see SAP on a five-minute delay, so two reps can be
+shown the same eight rolls inside one cycle. Nothing closes that: the order is
+accepted, pushed to SAP, and SAP refuses or short-ships it. That is a worse
+experience than the old local refusal and a better answer, because the old one
+was confidently wrong about stock it could not see — it knew nothing of orders
+placed in SAP directly.
+
+### What deliberately survives
+
+- **`custom_fulfilment_mode`** ("From Minimum Stock" / "From Production Run" /
+  "New Production"). It is a note for the floor and moves no stock; it still
+  picks the shorter three-step cycle for a line served off the shelf, and
+  `fixtures/production_order.json` still keys the cancel-after-production
+  diversion off it.
+- **`allocateFromPool`** and `fixtures/belt_from_roll.json`. A belt still comes
+  out of a roll; the rule now governs a *display* — how much of a line the
+  shelf covers — rather than what gets reserved.
+- **Oldest-batch-first allocation** is not affected: it never needed the pool.
+
+### The open one
+
+**Items with no weights report nothing available**, on instruction — 250 of 369
+stocked items today. `fixtures/stock_from_kg.json` carries both halves of that
+decision: the conversion still refuses to guess (`unknown_not_zero`), and the
+screens render the refusal as "weights not set", never as "none left". This is
+a holding position while the weights are uploaded. **Revisit it once they are**;
+if it outlives the upload it becomes a permanent blind spot over two thirds of
+the catalogue.
+
+---
+
+## Discounts removed; the rep types the net rate — **decided 17 September 2026**
+
+**Removed from both apps in one commit,** so this is not a divergence. It is
+recorded here because items 1–3 at the top of this file — the founding
+disagreement that caused the two repositories to be merged — were all about
+discounts, and `fixtures/discount.json` is gone with them.
+
+### What went
+
+`domain/discount.ts`, `core/discount.dart`, both test suites, the fixture, the
+per-line Discount control and its modal on the dashboard and the phone, the
+before/after order totals, `setLineDiscount` on both sides, `_keepDiscounts`,
+and the discount carry-over when a lead order converts.
+
+### Why
+
+The rate the rep quotes is now **the rate after discount**, typed at order
+confirmation. One number on a line instead of three.
+
+The trigger was SAP. The sync had to start sending the approved price (see the
+entry above this one), and `custom_rate_per_kg` turned out to be the rate
+*before* the discount — `SAL-ORD-2026-00135` carries 25/kg against a 10%
+discount and a real 22.50/kg. Rather than teach a second system about a
+three-number pricing model, the model was reduced to one number.
+
+### What reaches SAP
+
+`UnitPrice = amount / custom_total_weight`, `DiscountPercent` always **0**.
+Derived from the line amount rather than the rate, which also prices the legacy
+discounted lines correctly without knowing anything about discounts — the
+amount was always the net figure. `Sync-SapOrders.ps1`, `New-SapOrderLine`.
+
+### The data that already exists
+
+Nothing was migrated. One order on the site carries a discount
+(`SAL-ORD-2026-00135`, both lines at 10%) and zero lead orders do. Those lines
+keep their stored `discount_percentage`; nothing displays or re-applies it, and
+their `amount` was always net, so every figure derived from them stays right.
+
+New writes zero `price_list_rate` to the rate and `discount_percentage` /
+`discount_amount` to 0 **explicitly**, rather than leaving them alone, so
+ERPNext's own pricing cannot derive a phantom discount from a stale price-list
+rate left on a row.
+
+### What is weaker
+
+**Nothing records that a concession was given.** The business could previously
+see what it had given away — per line, per order, and in a "3 of 5 lines
+discounted" summary. A net rate typed by a rep looks identical to a full-price
+rate typed by a rep. If someone later asks "how much are we discounting", the
+answer is no longer in the system, and reconstructing it would mean comparing
+every line against a price list that covers 29% of the catalogue.
+
+That was accepted deliberately. Revisit it if margin reporting is ever wanted.

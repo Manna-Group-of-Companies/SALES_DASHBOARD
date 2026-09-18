@@ -215,76 +215,37 @@ void _orderRollUp() {
       expect(Api.rollUpStage([stale]), 'Not Started');
     });
 
-    // A split line is two pieces of work finished separately: the part off
-    // the shelf, and the part being made. Both have to land.
-    Map<String, dynamic> split({
-      double ordered = 8,
-      double reserved = 4,
-      String? stockStage,
-      String? madeStage,
-    }) =>
-        {
-          'custom_product_category': 'PCTR',
-          'custom_rolls': ordered,
-          'reserved_rolls': reserved,
-          if (stockStage != null) 'custom_stock_stage': stockStage,
-          if (madeStage != null) 'custom_production_stage': madeStage,
-        };
+    /*
+     * A group of split-line cases stood here until 17 September 2026.
+     *
+     * A line could be two pieces of work finished separately — the part
+     * covered by a shelf reservation, and the part being made — each moving
+     * along its own stage sequence, and the order was not done until both had
+     * landed. Those cases pinned that: dispatching the shelf half while the
+     * made half was still curing must not report a finished order.
+     *
+     * Reservations were removed with the rest of the minimum-stock doctypes,
+     * so no line reports a shelf half any more and `_rollUpStage` weighs each
+     * line once, on its own product's sequence. The cases below are what is
+     * left of that group — the single-line behaviour, which is now the only
+     * behaviour.
+     */
+    test('a line is weighed once, on its own sequence', () {
+      expect(Api.rollUpStage([line('PCTR', kStageDispatched)]), 'Dispatched');
+      expect(Api.rollUpStage([line('PCTR', 'Packed')]), 'Ready');
+      expect(Api.rollUpStage([line('PCTR', 'Curing')]), 'In Production');
+      expect(Api.rollUpStage([line('PCTR', '')]), 'Not Started');
+    });
 
-    test('a split order is not done because the shelf half went out', () {
-      // The failure that would matter: four rolls dispatched off the shelf
-      // while four are still being made, reported as a finished order.
+    test('the order takes the least advanced of its lines', () {
+      // The failure that would matter: one line dispatched while another is
+      // still curing, reported as a finished order.
       expect(
           Api.rollUpStage([
-            split(stockStage: kStageDispatched, madeStage: 'Curing'),
+            line('PCTR', kStageDispatched),
+            line('PCTR', 'Curing'),
           ]),
           'In Production');
-    });
-
-    test('a split order is not done because the made half finished', () {
-      expect(
-          Api.rollUpStage([
-            split(stockStage: null, madeStage: kStageDispatched),
-          ]),
-          'In Production');
-    });
-
-    test('a split order is done only when both halves have gone', () {
-      expect(
-          Api.rollUpStage([
-            split(stockStage: kStageDispatched, madeStage: kStageDispatched),
-          ]),
-          'Dispatched');
-    });
-
-    test('both halves packed reads Ready', () {
-      expect(
-          Api.rollUpStage([
-            split(stockStage: 'Packed', madeStage: 'Packed'),
-          ]),
-          'Ready');
-    });
-
-    test('touching either half starts the order', () {
-      expect(Api.rollUpStage([split(stockStage: 'Packed')]), 'In Production');
-      expect(Api.rollUpStage([split(madeStage: 'Curing')]), 'In Production');
-    });
-
-    test('a fully covered line has no made half to wait for', () {
-      // Ordered eight, reserved eight: nothing is being made, so the shelf
-      // stage alone decides.
-      expect(
-          Api.rollUpStage([
-            split(ordered: 8, reserved: 8, stockStage: kStageDispatched),
-          ]),
-          'Dispatched');
-    });
-
-    test('a line with no split resolved is weighed once, as before', () {
-      // An order read without its reservations. Inventing a half that may not
-      // exist would hold every such order at Not Started for ever.
-      expect(
-          Api.rollUpStage([line('PCTR', kStageDispatched)]), 'Dispatched');
     });
 
     test('only the four Select values are ever produced', () {

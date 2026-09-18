@@ -1,0 +1,87 @@
+{
+  "about": "When a Sales Order stops being editable from either app. Decided 17 September 2026. Both test suites read this file.",
+
+  "the_rule": "Approval ends editing, for everyone. An approved order is pushed to SAP and lives there from then on; changes go through the manufacturing team, who reduce or drop a line that has not been made and ship what has. The rest of the order stays open and stays with the rep who raised it.",
+
+  "why": "This is the honest position rather than a new restriction. Sync-SapOrders.ps1 has only ever CREATED a SAP order - there is no code path in the repository or the sync that updates one - so an edit saved after approval changed the ERPNext document, showed the rep a new quantity, and left the factory building the old one. Refusing the edit is strictly better than pretending it landed.",
+
+  "no_seniority_exemption": "The GM exemption that applies to the 1 pm cutoff does NOT apply here. It exists because escalations arrive at the GM and an escalation with no power to act is a rubber stamp - but that is about approving, not about editing an order the factory is working to. No seniority makes an app edit reach SAP.",
+
+  "checked_as_stored": "Every gate is re-checked against the order as STORED at the moment of the write, never against what the screen loaded. A manager can approve while a rep sits on the edit screen. There is no Server Script on this site to catch it afterwards.",
+
+  "fields": {
+    "po_status": "custom_po_status",
+    "approved_value": "PO Approved - Ready for SAP",
+    "sap_order": "custom_sap_sales_order",
+    "delivery_date": "delivery_date",
+    "owner": "custom_sales_person"
+  },
+
+  "can_edit": [
+    {
+      "why": "the ordinary case: raised, not yet approved, in the edit window, owned by this rep",
+      "order": { "custom_po_status": "Pending Approval", "docstatus": 0 },
+      "expect": true
+    },
+    {
+      "why": "approved is the end of it, whatever else is true",
+      "order": { "custom_po_status": "PO Approved - Ready for SAP", "docstatus": 0 },
+      "expect": false
+    },
+    {
+      "why": "approved and already in SAP - the case the rule exists for",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_sap_sales_order": "404",
+        "docstatus": 0
+      },
+      "expect": false
+    },
+    {
+      "why": "a rejected order is editable again - the rep is meant to fix what was wrong with it",
+      "order": { "custom_po_status": "Rejected", "docstatus": 0 },
+      "expect": false,
+      "note": "false only because the fixture's default owner is not the acting rep; ownership is asserted separately. The po_status itself does not block it."
+    },
+    {
+      "why": "an order with no status at all has never been approved, so it is open",
+      "order": { "docstatus": 0 },
+      "expect": true
+    }
+  ],
+
+  "lock_reason": [
+    {
+      "why": "an approved order names the SAP number, because that is what the manufacturing team asks for on the phone",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_sap_sales_order": "404"
+      },
+      "expect_contains": ["approved", "factory", "SAP order 404", "manufacturing team"]
+    },
+    {
+      "why": "approved but not yet pushed - no number to quote yet, so none is invented",
+      "order": { "custom_po_status": "PO Approved - Ready for SAP" },
+      "expect_contains": ["approved", "factory", "manufacturing team"],
+      "expect_excludes": ["SAP order "]
+    },
+    {
+      "why": "an unapproved order in the window is not locked at all",
+      "order": { "custom_po_status": "Pending Approval" },
+      "expect_empty_for_owner": true
+    }
+  ],
+
+  "can_delete": [
+    {
+      "why": "approval means production has it - deleting is refused from here on, and was before this rule",
+      "order": { "custom_po_status": "PO Approved - Ready for SAP", "docstatus": 0 },
+      "expect": false
+    },
+    {
+      "why": "a submitted document is never deleted from a phone",
+      "order": { "custom_po_status": "Pending Approval", "docstatus": 1 },
+      "expect": false
+    }
+  ]
+}

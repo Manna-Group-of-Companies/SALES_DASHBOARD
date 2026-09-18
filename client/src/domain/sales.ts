@@ -280,6 +280,40 @@ export function canOpen(managedTeam: string | undefined, screen: ManagerScreen):
 }
 
 /**
+ * What this user may open, from their **role** as well as their team.
+ *
+ * The General Manager is scoped by role and not by team. They are who every
+ * other role escalates to, they hold the three exemptions in `orderStatus.ts`,
+ * and `GmQueuePage` promises them "the same full review the sales manager
+ * gets".
+ *
+ * But the team token is a *sales manager's* token — it is read off
+ * `Sales Person.custom_team_manager` — and a GM who runs no team of their own
+ * has none. `screensFor` then returned an empty list, so `TeamRoute` bounced
+ * them off every sales screen, including the order their own escalation queue
+ * had just linked them to. Clicking "Open the order" redirected to `/` and
+ * looked to the GM like a link that did nothing.
+ *
+ * Same shape as `StockRoute` in `routes.tsx`, for the same reason: a role
+ * that legitimately manages no team cannot be gated on managing one.
+ */
+export function screensForUser(
+  role: string | undefined,
+  managedTeam: string | undefined,
+): ManagerScreen[] {
+  if (role === 'general_manager') return FULL;
+  return screensFor(managedTeam);
+}
+
+export function canOpenAs(
+  role: string | undefined,
+  managedTeam: string | undefined,
+  screen: ManagerScreen,
+): boolean {
+  return screensForUser(role, managedTeam).includes(screen);
+}
+
+/**
  * §7.7 — an order cannot be *started* for a party with no sales route.
  *
  * Checked before the order screen opens and again at creation, because a rep

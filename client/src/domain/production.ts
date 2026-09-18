@@ -58,37 +58,19 @@ export const SEQUENCES: Record<string, string[]> = {
 /** Used when a line's category is missing or unrecognised. */
 export const FALLBACK_SEQUENCE = [NOT_STARTED, 'In Production', PACKED, DISPATCHED];
 
-/** What this line carries, as far as staging is concerned. */
+/**
+ * What this line carries, as far as staging is concerned.
+ *
+ * It carried a *split* until 17 September 2026: how much of the line a shelf
+ * reservation covered, how much was left to make, and a separate stage for
+ * each half. Reservations are gone — SAP commits stock against its own sales
+ * orders now — so no line reports a shelf half and every line is one piece of
+ * work on one sequence.
+ */
 export interface StagedLine {
   category?: string;
   fulfilmentMode?: string;
-  /** Stage of the portion being **made**. */
   productionStage?: string;
-  /** Stage of the portion coming **off the shelf**. */
-  stockStage?: string;
-  /** Rolls/belts reserved against a pool, from the reservation rows. */
-  reservedRolls?: number;
-  reservedBelts?: number;
-  /** Rolls/belts that have to be manufactured. */
-  toMakeRolls?: number;
-  toMakeBelts?: number;
-  /** False when the reservations could not be read — show one track, not two. */
-  splitKnown?: boolean;
-}
-
-const has = (a?: number, b?: number) => (a ?? 0) > 0 || (b ?? 0) > 0;
-
-/** Does this line have a portion coming off the shelf? */
-export function hasStockHalf(line: StagedLine): boolean {
-  return line.splitKnown !== false && has(line.reservedRolls, line.reservedBelts);
-}
-
-/** Does this line have a portion that must be manufactured? */
-export function hasMakeHalf(line: StagedLine): boolean {
-  if (line.splitKnown === false) return false;
-  // A line with a reserved part and nothing left over is wholly off the shelf.
-  if (hasStockHalf(line)) return has(line.toMakeRolls, line.toMakeBelts);
-  return false;
 }
 
 /**
@@ -104,70 +86,33 @@ export function sequenceFor(line: StagedLine): string[] {
 }
 
 /**
- * The two tracks a split line is worked in.
+ * The track a line is worked in. There is always exactly one.
  *
- * A split line is two pieces of work that finish separately: the shelf half
- * only has to be picked and packed, while the made half runs the family's full
- * cycle. Showing the shelf half against Curing and Extrusion described work
- * nobody was doing, and left the floor looking permanently behind on goods
- * that were finished before the order was placed.
- *
- * When the split is unknown — the reservation lookup failed — a single
- * `progress` track is returned instead. One honest track beats two invented
- * ones.
+ * There were two when a line was split: the shelf half only had to be picked
+ * and packed, while the made half ran the family's full cycle, and showing the
+ * shelf half against Curing and Extrusion described work nobody was doing.
+ * A line is no longer divisible — the reservations that divided it are gone —
+ * so the shape stays a list of one rather than the callers all changing.
  */
 export interface Track {
-  key: 'stock' | 'make' | 'progress';
+  key: 'progress';
   title: string;
   sequence: string[];
   stage: string;
   /** Which field a change writes to. */
-  field: 'stockStage' | 'productionStage';
+  field: 'productionStage';
 }
 
-const qtyLabel = (rolls?: number, belts?: number): string => {
-  const parts: string[] = [];
-  if ((rolls ?? 0) > 0) parts.push(String(rolls));
-  if ((belts ?? 0) > 0) parts.push(`${belts} belts`);
-  return parts.join(' + ') || '0';
-};
-
 export function tracksFor(line: StagedLine): Track[] {
-  const stockHalf = hasStockHalf(line);
-  const makeHalf = hasMakeHalf(line);
-
-  if (!stockHalf) {
-    // No reserved portion, or the split is unknown: one track, as before.
-    return [
-      {
-        key: 'progress',
-        title: 'Progress',
-        sequence: sequenceFor(line),
-        stage: (line.productionStage ?? '').trim() || NOT_STARTED,
-        field: 'productionStage',
-      },
-    ];
-  }
-
-  const tracks: Track[] = [
+  return [
     {
-      key: 'stock',
-      title: `From minimum stock · ${qtyLabel(line.reservedRolls, line.reservedBelts)}`,
-      sequence: MINIMUM_STOCK_SEQUENCE,
-      stage: (line.stockStage ?? '').trim() || NOT_STARTED,
-      field: 'stockStage',
-    },
-  ];
-  if (makeHalf) {
-    tracks.push({
-      key: 'make',
-      title: `To be made · ${qtyLabel(line.toMakeRolls, line.toMakeBelts)}`,
-      sequence: SEQUENCES[(line.category ?? '').trim()] ?? FALLBACK_SEQUENCE,
+      key: 'progress',
+      title: 'Progress',
+      sequence: sequenceFor(line),
       stage: (line.productionStage ?? '').trim() || NOT_STARTED,
       field: 'productionStage',
-    });
-  }
-  return tracks;
+    },
+  ];
 }
 
 /** The stored stage, treating blank as the first step. */
@@ -290,24 +235,6 @@ function rankOf(line: StagedLine): 0 | 1 | 2 | 3 {
 }
 
 /**
- * Every half of every line, as ranks.
- *
- * A split line contributes **two** ranks, because it is two pieces of work
- * that finish separately. Four rolls dispatched off the shelf while four are
- * still being made is not a finished order, and weighing only one half is
- * exactly how it would come to look like one.
- */
-function ranksOf(line: StagedLine): (0 | 1 | 2 | 3)[] {
-  if (!hasStockHalf(line)) return [rankOf(line)];
-  const out: (0 | 1 | 2 | 3)[] = [rankIn(MINIMUM_STOCK_SEQUENCE, line.stockStage)];
-  if (hasMakeHalf(line)) {
-    const family = SEQUENCES[(line.category ?? '').trim()] ?? FALLBACK_SEQUENCE;
-    out.push(rankIn(family, line.productionStage));
-  }
-  return out;
-}
-
-/**
  * The order-level status implied by its lines.
  *
  * Three things here are load-bearing:
@@ -318,10 +245,14 @@ function ranksOf(line: StagedLine): (0 | 1 | 2 | 3)[] {
  *     anything, work is under way.
  *   - The result is always one of the four values the Select accepts, so this
  *     is the only thing that may be written to `custom_production_status`.
+ *
+ * A split line used to contribute **two** ranks, one per half, so that four
+ * rolls dispatched off the shelf while four were still being made could not
+ * read as a finished order. There are no halves now; one rank per line.
  */
 export function rollUp(lines: StagedLine[]): ProductionStatus {
   if (!lines.length) return PRODUCTION_STATUS.notStarted;
-  const ranks = lines.flatMap(ranksOf);
+  const ranks = lines.map(rankOf);
   if (ranks.every((r) => r === 3)) return PRODUCTION_STATUS.dispatched;
   if (ranks.every((r) => r >= 2)) return PRODUCTION_STATUS.ready;
   if (ranks.some((r) => r > 0)) return PRODUCTION_STATUS.inProduction;

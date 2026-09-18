@@ -38,8 +38,8 @@ bool isOffline(Object? e) {
 String humanError(Object? e) {
   if (e == null) return 'Something went wrong.';
 
-  // Anything that already writes for a rep is left alone. StockUnavailable is
-  // the main one: "Only 2 rolls left of X — another rep booked the rest."
+  // Anything that already writes for a rep is left alone: a refused capture
+  // and a coarse GPS fix both phrase themselves better than this file could.
   final own = _ownMessage(e);
   if (own != null) return own;
 
@@ -108,11 +108,14 @@ String _fromResponse(Response? r) {
 ///
 /// Recognised by shape rather than by type, so this file does not have to
 /// import every feature that defines one.
+///
+/// `StockUnavailable` stood here too and has gone with the booking protocol
+/// that raised it: nothing in the app refuses an order for want of stock any
+/// more, SAP decides that after the order reaches it. See the note in
+/// `test/errors_test.dart`.
 String? _ownMessage(Object e) {
   final t = e.runtimeType.toString();
-  if (t == 'StockUnavailable' ||
-      t == 'CoarseFixException' ||
-      t == 'CaptureRefused') {
+  if (t == 'CoarseFixException' || t == 'CaptureRefused') {
     final s = '$e'.trim();
     if (s.isNotEmpty) return s;
   }

@@ -1,57 +1,53 @@
 /**
- * The minimum-stock rules, against the real figures on the live site.
+ * The stock rules, and what is left of them.
  *
- * These are the rules the mobile app and this dashboard must agree on. Where a
- * case is taken from a real record it says so, because a rule verified against
- * live data is worth more than one verified against an example I invented.
+ * WHAT THIS FILE USED TO ASSERT
+ *
+ * A *pool*: that the minimum-to-hold and the shelf were different numbers and
+ * confusing them offered rolls that did not exist; that "below minimum" and
+ * "fully booked" were two independent alarms; that a production run was intent
+ * rather than stock and must never be added to the shelf; that the pool's
+ * `custom_reserved_qty` was a cache which had already drifted on the live site
+ * and the reservation rows were the truth. Every one of those was worth
+ * pinning while the pool existed.
+ *
+ * It was removed on 17 September 2026. All 129 pool rows on the site carried a
+ * minimum of zero, so nothing built on the minimum had ever fired; the batches
+ * were a hand-typed snapshot beating SAP's live figure; and SAP commits stock
+ * against its own sales orders, so an ERPNext reservation on top deducted the
+ * same roll twice.
+ *
+ * What survives is what the dashboard and the phone still have to agree on:
+ * what is available, how a line divides between the shelf and the plant, and
+ * that a missing weight is never reported as a measurement.
  */
 
 import { describe, expect, it } from 'vitest';
 import {
-  belowMinimum,
-  byUrgency,
   describeSplit,
-  findDrift,
-  fullyBooked,
-  heldBy,
-  heldFrom,
   modeLabel,
   modeOf,
   modeValue,
-  needsRun,
-  positionFor,
+  outOfStock,
   poolByItem,
-  runAvailable,
+  positionFor,
+  servedFrom,
   shelfAvailable,
-  shortfall,
-  shortfallAfterRun,
   splitOf,
-  trueReserved,
-  urgency,
 } from '../minimumStock';
-import type { MinStockLine, OrderLine, StockReservationRow } from '../types';
+import type { MinStockLine, OrderLine } from '../types';
 
 const pool = (over: Partial<MinStockLine> = {}): MinStockLine => ({
   itemCode: 'X',
-  minimumRolls: 0,
-  minimumBelts: 0,
-  shelfRolls: 0,
-  shelfBelts: 0,
-  reservedRolls: 0,
-  reservedBelts: 0,
-  inProductionRolls: 0,
-  inProductionBelts: 0,
-  reservedInProductionRolls: 0,
-  reservedInProductionBelts: 0,
+  availableRolls: 0,
+  availableBelts: 0,
+  beltsPerRoll: 0,
+  weightsKnown: true,
   ...over,
 });
 
 const line = (rolls: number, belts = 0, over: Partial<OrderLine> = {}): OrderLine => ({
   id: 'L1',
-  discountPercent: 0,
-  priceListRate: 0,
-  amountBeforeDiscount: 0,
-  amountAfterDiscount: 0,
   itemCode: 'X',
   itemName: 'X',
   qty: rolls,
@@ -65,191 +61,120 @@ const line = (rolls: number, belts = 0, over: Partial<OrderLine> = {}): OrderLin
   ...over,
 });
 
-const res = (over: Partial<StockReservationRow> = {}): StockReservationRow => ({
-  id: 'R1',
-  itemCode: 'X',
-  rolls: 0,
-  looseBelts: 0,
-  salesOrder: 'SO1',
-  status: 'Active',
-  source: 'Shelf',
-  ...over,
-});
-
-describe('the shelf and the minimum are different numbers', () => {
-  // Live: 120 AJAX 69 is minimum 2 with 4 on batch MSB-00057.
-  it('is not below minimum when the shelf exceeds the target', () => {
-    const s = pool({ minimumRolls: 2, shelfRolls: 4 });
-    expect(belowMinimum(s)).toBe(false);
-    expect(shortfall(s)).toBe(0);
+describe('what is available', () => {
+  it('is what SAP reported, with nothing taken off it', () => {
+    // SAP has already deducted every quantity committed to an open order,
+    // whoever raised it. A second deduction here books the same roll twice.
+    const s = pool({ availableRolls: 6, availableBelts: 2 });
+    expect(shelfAvailable(s)).toEqual({ rolls: 6, belts: 2 });
+    expect(outOfStock(s)).toBe(false);
   });
 
-  // Live: 160 RTS 99 is minimum 10 with 0 on batch MSB-00030.
-  it('is below minimum, and fully booked, when the shelf is empty', () => {
-    const s = pool({ minimumRolls: 10, shelfRolls: 0 });
-    expect(belowMinimum(s)).toBe(true);
-    expect(fullyBooked(s)).toBe(true);
-    expect(urgency(s)).toBe(3);
-    expect(shortfall(s)).toBe(10);
+  it('never reports a negative, however SAP got there', () => {
+    // SAP can commit more than it holds. A negative would render as a figure
+    // somebody would try to read.
+    expect(shelfAvailable(pool({ availableRolls: -3, availableBelts: -1 }))).toEqual({
+      rolls: 0,
+      belts: 0,
+    });
+  });
+
+  it('counts loose belts, so belts alone are not "none left"', () => {
+    const s = pool({ availableRolls: 0, availableBelts: 4 });
+    expect(outOfStock(s)).toBe(false);
   });
 });
 
-describe('the two alarms fire independently', () => {
-  it('fires fully-booked at exactly the minimum, while the quantity still looks right', () => {
-    const s = pool({ minimumRolls: 10, shelfRolls: 10, reservedRolls: 10 });
-    expect(belowMinimum(s)).toBe(false);
-    expect(fullyBooked(s)).toBe(true);
-    expect(urgency(s)).toBe(2);
+describe('an item whose weights are not set', () => {
+  /*
+   * SAP holds these in kilograms and the item master has no weight-per-roll or
+   * belts-per-roll, so how many rolls that is cannot be worked out. On
+   * instruction they report nothing available while the weights are loaded for
+   * the rest of the catalogue.
+   *
+   * `shared/fixtures/stock_from_kg.json` states the opposite for the
+   * *conversion* — a missing weight makes the answer UNKNOWN, never zero — and
+   * both hold at once: the conversion still refuses to guess, and the display
+   * decision on top of that refusal is to offer nothing. `weightsKnown` is
+   * what keeps the two distinguishable.
+   */
+  it('reports nothing, whatever quantity the payload carried', () => {
+    const s = pool({ availableRolls: 30, availableBelts: 5, weightsKnown: false });
+    expect(shelfAvailable(s)).toEqual({ rolls: 0, belts: 0 });
   });
 
-  it('fires below-minimum while stock is still sellable', () => {
-    const s = pool({ minimumRolls: 10, shelfRolls: 4, reservedRolls: 0 });
-    expect(belowMinimum(s)).toBe(true);
-    expect(fullyBooked(s)).toBe(false);
-    expect(urgency(s)).toBe(1);
-    expect(shelfAvailable(s).rolls).toBe(4);
-  });
-
-  it('is healthy when neither fires', () => {
-    const s = pool({ minimumRolls: 4, shelfRolls: 10, reservedRolls: 2 });
-    expect(needsRun(s)).toBe(false);
-    expect(urgency(s)).toBe(0);
-  });
-});
-
-describe('the shortfall is measured against the shelf, not against what is left to sell', () => {
-  it('does not ask for goods that already exist and are going out', () => {
-    // 10 on the shelf, 8 booked: only 2 to sell, but all 10 exist.
-    const s = pool({ minimumRolls: 10, shelfRolls: 10, reservedRolls: 8 });
-    expect(shelfAvailable(s).rolls).toBe(2);
-    expect(shortfall(s)).toBe(0); // NOT 8 — that would build them twice
+  it('stays distinguishable from an item that is genuinely out', () => {
+    const unset = pool({ availableRolls: 30, weightsKnown: false });
+    const empty = pool({ availableRolls: 0 });
+    expect(outOfStock(unset)).toBe(true);
+    expect(outOfStock(empty)).toBe(true);
+    expect(unset.weightsKnown).toBe(false);
+    expect(empty.weightsKnown).toBe(true);
   });
 });
 
-describe('a production run is intent, never availability', () => {
-  it('never adds the run to the shelf', () => {
-    const s = pool({ minimumRolls: 20, shelfRolls: 0, inProductionRolls: 20 });
-    expect(shelfAvailable(s).rolls).toBe(0); // an empty shelf sells nothing
-    expect(runAvailable(s).rolls).toBe(20);
-  });
-
-  it('nets the run off the ASK so a pool is not ordered twice', () => {
-    const s = pool({ minimumRolls: 20, shelfRolls: 0, inProductionRolls: 20 });
-    expect(shortfall(s)).toBe(20);
-    expect(shortfallAfterRun(s)).toBe(0);
-  });
-
-  it('still reports the remainder when the run only part-covers it', () => {
-    expect(shortfallAfterRun(pool({ minimumRolls: 20, inProductionRolls: 15 }))).toBe(5);
-  });
-
-  it('counts claims against the run separately from the shelf', () => {
-    const s = pool({ inProductionRolls: 20, reservedInProductionRolls: 8 });
-    expect(runAvailable(s).rolls).toBe(12);
-    expect(shelfAvailable(s).rolls).toBe(0);
-  });
-});
-
-describe('an order may exceed the pool', () => {
-  it('caps the reservation, not the order', () => {
-    const s = splitOf(line(15), [res({ rolls: 10 })], 'SO1');
+describe('an order may exceed what is on the shelf', () => {
+  it('caps what comes off the shelf, never the order', () => {
+    const s = splitOf(line(15), { rolls: 10, belts: 0 });
     expect(s.ordered.rolls).toBe(15);
-    expect(s.reserved.rolls).toBe(10);
+    expect(s.fromStock.rolls).toBe(10);
     expect(s.toMake.rolls).toBe(5);
     expect(s.isSplit).toBe(true);
   });
 
   it('does not call a wholly-made line a split', () => {
-    const s = splitOf(line(15), [], 'SO1');
+    const s = splitOf(line(15), { rolls: 0, belts: 0 });
     expect(s.toMake.rolls).toBe(15);
     expect(s.isSplit).toBe(false);
     expect(s.allMadeToOrder).toBe(true);
     expect(describeSplit(s)).toBe('This whole line will be made to order');
   });
 
-  // The order the addendum names as the bug worth not repeating.
-  it('reproduces SAL-ORD-2026-00106: 8+2 ordered, 4+2 from stock, 4 to make', () => {
-    const s = splitOf(line(8, 2), [res({ rolls: 4, looseBelts: 2 })], 'SO1');
-    expect(s.ordered).toEqual({ rolls: 8, belts: 2 });
-    expect(s.reserved).toEqual({ rolls: 4, belts: 2 });
-    expect(s.toMake).toEqual({ rolls: 4, belts: 0 });
+  it('does not call a wholly-covered line a split either', () => {
+    const s = splitOf(line(4), { rolls: 10, belts: 0 });
+    expect(s.isSplit).toBe(false);
+    expect(s.allMadeToOrder).toBe(false);
+    expect(describeSplit(s)).toBe('4 rolls from stock');
   });
 
-  it('ignores another order’s reservation when splitting this one', () => {
-    const s = splitOf(line(8), [res({ rolls: 4, salesOrder: 'SO-OTHER' })], 'SO1');
-    expect(s.reserved.rolls).toBe(0);
-    expect(s.toMake.rolls).toBe(8);
+  it('opens a roll for a belt rather than sending the belt to production', () => {
+    // The reported bug, in its smallest form: five rolls and one belt against
+    // 48 whole rolls and nothing loose. The belt comes out of a roll.
+    const s = splitOf(line(5, 1), { rolls: 48, belts: 0 }, 6);
+    expect(s.fromStock).toEqual({ rolls: 5, belts: 1 });
+    expect(s.toMake).toEqual({ rolls: 0, belts: 0 });
   });
 
-  it('ignores Released rows', () => {
-    const s = splitOf(line(8), [res({ rolls: 4, status: 'Released' })], 'SO1');
-    expect(s.reserved.rolls).toBe(0);
+  it('refuses to cut an item with no belts-per-roll on its master', () => {
+    // Not sold in belts, or the master is incomplete. Either way selling belts
+    // that cannot be cut is the worse mistake.
+    const s = splitOf(line(0, 1), { rolls: 48, belts: 0 });
+    expect(s.fromStock.belts).toBe(0);
+    expect(s.toMake.belts).toBe(1);
   });
 });
 
-describe('the counter is a cache and the reservation rows are the truth', () => {
-  // Live on 8 Aug 2026: two pools claimed bookings with no rows behind them.
-  it('detects the phantom bookings left by an order deleted in the Desk', () => {
-    const pools = [
-      pool({ itemCode: 'AJAX', shelfRolls: 4, reservedRolls: 3, reservedBelts: 2 }),
-      pool({ itemCode: 'EAGLE', shelfRolls: 5, reservedRolls: 2 }),
-      pool({ itemCode: 'RTS', shelfRolls: 0, reservedRolls: 1 }),
-    ];
-    const rows = [res({ id: 'MSR-00022', itemCode: 'EAGLE', rolls: 2 })];
-    const drift = findDrift(pools, rows);
-    expect(drift.map((d) => d.itemCode)).toEqual(['AJAX', 'RTS']);
-    expect(drift[0].storedRolls).toBe(3);
-    expect(drift[0].actualRolls).toBe(0);
+describe('the position shown against one line', () => {
+  it('reports an item SAP has no record of as not stocked', () => {
+    const pos = positionFor('MISSING', poolByItem([pool({ itemCode: 'X' })]));
+    expect(pos.stocked).toBe(false);
+    expect(pos.available).toEqual({ rolls: 0, belts: 0 });
   });
 
-  it('frees stock the counter was wrongly blocking', () => {
-    const idx = poolByItem([pool({ itemCode: 'AJAX', shelfRolls: 4, reservedRolls: 3 })]);
-    const p = positionFor('AJAX', idx, [], 'SO1');
-    expect(p.freeForOthers.rolls).toBe(4);
-    expect(p.drift).toBe(3);
+  it('carries the weights flag through, so the screen can say why it is zero', () => {
+    const pos = positionFor('X', poolByItem([pool({ availableRolls: 9, weightsKnown: false })]));
+    expect(pos.stocked).toBe(true);
+    expect(pos.weightsKnown).toBe(false);
+    expect(pos.available).toEqual({ rolls: 0, belts: 0 });
   });
 
-  it('leaves a genuine booking alone', () => {
-    const idx = poolByItem([pool({ itemCode: 'EAGLE', shelfRolls: 5, reservedRolls: 2 })]);
-    const rows = [res({ itemCode: 'EAGLE', rolls: 2, salesOrder: 'SO-OTHER' })];
-    const p = positionFor('EAGLE', idx, rows, 'SO1');
-    expect(p.heldByOthers.rolls).toBe(2);
-    expect(p.freeForOthers.rolls).toBe(3);
-    expect(p.drift).toBe(0);
-  });
-
-  it('FAILSAFE: falls back to the counter when the rows could not be read', () => {
-    const idx = poolByItem([pool({ itemCode: 'EAGLE', shelfRolls: 5, reservedRolls: 2 })]);
-    // Not loaded: an empty array must not be read as "nothing is reserved".
-    expect(positionFor('EAGLE', idx, [], 'SO1', false).freeForOthers.rolls).toBe(3);
-    // Trusting it blindly would have freed the whole shelf.
-    expect(positionFor('EAGLE', idx, [], 'SO1', true).freeForOthers.rolls).toBe(5);
-  });
-
-  it('does not count a production-run claim as a shelf booking', () => {
-    const rows = [res({ rolls: 5, source: 'Production Run' }), res({ id: 'R2', rolls: 2 })];
-    expect(trueReserved(rows, 'X')).toEqual({ rolls: 2, belts: 0 });
-  });
-});
-
-describe('which pool a booking came from', () => {
-  it('reports the shelf', () => {
-    expect(heldFrom([res({ rolls: 2 })], 'X', 'SO1')).toBe('shelf');
-  });
-  it('reports the run', () => {
-    expect(heldFrom([res({ rolls: 2, source: 'Production Run' })], 'X', 'SO1')).toBe('run');
-  });
-  it('reports none', () => {
-    expect(heldFrom([], 'X', 'SO1')).toBe('none');
-  });
-  it('sums only this order’s Active rows', () => {
-    const rows = [
-      res({ id: 'a', rolls: 2 }),
-      res({ id: 'b', rolls: 3 }),
-      res({ id: 'c', rolls: 9, salesOrder: 'SO-OTHER' }),
-      res({ id: 'd', rolls: 9, status: 'Released' }),
-    ];
-    expect(heldBy(rows, 'X', 'SO1')).toEqual({ rolls: 5, belts: 0 });
+  it('reports what SAP has for a stocked item', () => {
+    const pos = positionFor('X', poolByItem([pool({ availableRolls: 7, availableBelts: 3 })]));
+    expect(pos).toEqual({
+      stocked: true,
+      weightsKnown: true,
+      available: { rolls: 7, belts: 3 },
+    });
   });
 });
 
@@ -266,27 +191,17 @@ describe('fulfilment mode is reported, not chosen', () => {
     expect(modeLabel('undecided')).toBe('Made to order');
   });
 
+  it('resolves an unlabelled line to made-to-order rather than undecided', () => {
+    // It used to read the reservation rows first, because the field-sales app
+    // booked stock without ever writing the field. The field is the only
+    // record now, and an empty one means nobody marked the line.
+    expect(servedFrom({ itemCode: 'X', fulfilmentMode: '' })).toBe('new_production');
+  });
+
   it('never writes a value the Select would refuse', () => {
     const allowed = ['', 'From Minimum Stock', 'From Production Run', 'New Production'];
     for (const m of ['minimum_stock', 'production_run', 'new_production', 'undecided'] as const) {
       expect(allowed).toContain(modeValue(m));
     }
-  });
-});
-
-describe('urgency ordering', () => {
-  it('puts both-alarms first, then fully booked, then below minimum', () => {
-    const both = pool({ itemCode: 'both', minimumRolls: 10, shelfRolls: 0 });
-    const booked = pool({ itemCode: 'booked', minimumRolls: 5, shelfRolls: 10, reservedRolls: 10 });
-    const low = pool({ itemCode: 'low', minimumRolls: 10, shelfRolls: 4 });
-    const fine = pool({ itemCode: 'fine', minimumRolls: 2, shelfRolls: 10 });
-    const sorted = [fine, low, booked, both].sort(byUrgency).map((s) => s.itemCode);
-    expect(sorted).toEqual(['both', 'booked', 'low', 'fine']);
-  });
-
-  it('breaks ties on the biggest shortfall', () => {
-    const small = pool({ itemCode: 'small', minimumRolls: 6, shelfRolls: 4 });
-    const big = pool({ itemCode: 'big', minimumRolls: 20, shelfRolls: 4 });
-    expect([small, big].sort(byUrgency).map((s) => s.itemCode)).toEqual(['big', 'small']);
   });
 });

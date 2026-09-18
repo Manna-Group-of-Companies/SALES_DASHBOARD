@@ -13,7 +13,7 @@
 import { lazy, Suspense, type ReactElement } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import type { Role } from '@/domain/types';
-import { canOpen, type ManagerScreen } from '@/domain/sales';
+import { canOpen, canOpenAs, type ManagerScreen } from '@/domain/sales';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import { AppShell } from '@/components/layout/AppShell';
@@ -31,13 +31,9 @@ import { LocationVerificationPage } from '@/features/approvals/LocationVerificat
 import { TeamRegularizationsPage } from '@/features/approvals/TeamRegularizationsPage';
 import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
 import { ProductionOrderPage } from '@/features/production/ProductionOrderPage';
-import { ProductionStockPage } from '@/features/production/ProductionStockPage';
 import { DispatchPlanningPage } from '@/features/production/DispatchPlanningPage';
-import { MinStockPage } from '@/features/stock/MinStockPage';
 import { SalesStockPage } from '@/features/stock/SalesStockPage';
-import { ReplenishmentPage } from '@/features/stock/ReplenishmentPage';
 import { SalesDashboardPage } from '@/features/dashboard/SalesDashboardPage';
-import { StockDashboardPage } from '@/features/dashboard/StockDashboardPage';
 import { HrDashboardPage } from '@/features/hr/HrDashboardPage';
 import { EmployeesPage } from '@/features/hr/EmployeesPage';
 import { LeaveRequestsPage } from '@/features/hr/LeaveRequestsPage';
@@ -77,7 +73,24 @@ function RoleRoute({ allow, children }: { allow: Role[]; children: ReactElement 
 function TeamRoute({ screen, children }: { screen: ManagerScreen; children: ReactElement }) {
   const user = useAppSelector(selectUser);
   if (!user) return <Navigate to="/login" replace />;
-  if (!canOpen(user.managedTeam, screen)) return <Navigate to="/" replace />;
+  if (!canOpenAs(user.role, user.managedTeam, screen)) return <Navigate to="/" replace />;
+  return children;
+}
+
+/**
+ * The stock view, which is gated two different ways.
+ *
+ * Sales-side access is by managed team, as every other sales screen is. The
+ * production and stock managers have no managed team at all, so a plain
+ * `TeamRoute` would bounce them — and since 17 September 2026 this is the only
+ * stock page in the app, theirs having been removed with the minimum-stock
+ * doctypes. They are let in on the role instead.
+ */
+function StockRoute({ children }: { children: ReactElement }) {
+  const user = useAppSelector(selectUser);
+  if (!user) return <Navigate to="/login" replace />;
+  const byRole = user.role === 'stock_manager' || user.role === 'production_manager';
+  if (!byRole && !canOpen(user.managedTeam, 'stock')) return <Navigate to="/" replace />;
   return children;
 }
 
@@ -99,7 +112,7 @@ function RoleHome() {
    * summarise, so the sales dashboard would open on a page of empty tiles.
    * Send them to the customer list, which is the work.
    */
-  if (user.managedTeam && !canOpen(user.managedTeam, 'orders')) {
+  if (user.managedTeam && !canOpenAs(user.role, user.managedTeam, 'orders')) {
     return <Navigate to="/customers" replace />;
   }
 
@@ -120,8 +133,19 @@ function RoleHome() {
      */
     case 'production_manager':
       return <ProductionQueuePage />;
+    /*
+     * The stock manager lands on the same read-only stock view the sales side
+     * gets. They had their own dashboard until 17 September 2026 — fill meters
+     * against each item's minimum, a low-stock list, a live reservation
+     * count — and every figure on it came from the fixture-era ledger. It had
+     * no minimums to measure against (all 129 rows held zero) and no holds to
+     * count once SAP took over booking.
+     *
+     * Receiving replenishment runs onto the shelf was this role's other job,
+     * and that has gone the same way: stock arrives in SAP now.
+     */
     case 'stock_manager':
-      return <StockDashboardPage />;
+      return <SalesStockPage />;
   }
 }
 
@@ -265,14 +289,6 @@ export function AppRoutes() {
           }
         />
         <Route
-          path="production/stock"
-          element={
-            <RoleRoute allow={['production_manager']}>
-              <ProductionStockPage />
-            </RoleRoute>
-          }
-        />
-        <Route
           path="production/dispatch"
           element={
             <RoleRoute allow={['production_manager']}>
@@ -290,35 +306,17 @@ export function AppRoutes() {
         />
 
         {/*
-          The sales side gets its own read-only view: it answers "what can I
-          promise and what should I clear", where production's answers "what
-          should we make next". The fixture-era MinStockPage stays for the
-          stock manager until that role has live data behind it.
+          One stock view, read-only, for everybody who needs one: what SAP has
+          and what can be promised.
+
+          There were three. `/production/stock` answered "what should we make
+          next" off the minimum-stock pool, `/stock/ledger` was the stock
+          manager's fixture-era ledger, and `/stock/replenish` raised and
+          received replenishment runs. All three read doctypes that no longer
+          exist, and the first two were measuring against minimums that were
+          zero on every row. Removed 17 September 2026.
         */}
-        <Route
-          path="stock"
-          element={
-            <TeamRoute screen="stock">
-              <SalesStockPage />
-            </TeamRoute>
-          }
-        />
-        <Route
-          path="stock/ledger"
-          element={
-            <RoleRoute allow={['stock_manager']}>
-              <MinStockPage />
-            </RoleRoute>
-          }
-        />
-        <Route
-          path="stock/replenish"
-          element={
-            <RoleRoute allow={['stock_manager', 'production_manager']}>
-              <ReplenishmentPage />
-            </RoleRoute>
-          }
-        />
+        <Route path="stock" element={<StockRoute><SalesStockPage /></StockRoute>} />
 
         <Route
           path="hr/employees"

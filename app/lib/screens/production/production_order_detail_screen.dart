@@ -89,16 +89,13 @@ class _ProductionOrderDetailScreenState
     }
   }
 
-  Future<void> _setStage(Map<String, dynamic> item, String stage,
-          {bool stockPart = false}) =>
-      _run(
-          () => Api.setItemStage(
-                orderName: widget.orderName,
-                itemRowName: '${item['name']}',
-                stage: stage,
-                stockPart: stockPart,
-              ),
-          'Stage updated.');
+  Future<void> _setStage(Map<String, dynamic> item, String stage) => _run(
+      () => Api.setItemStage(
+            orderName: widget.orderName,
+            itemRowName: '${item['name']}',
+            stage: stage,
+          ),
+      'Stage updated.');
 
   Future<void> _moveDelivery() async {
     final current =
@@ -276,18 +273,6 @@ class _ProductionOrderDetailScreenState
     );
   }
 
-  /// What is left to make on a line: ordered, less whatever the shelf covered.
-  ///
-  /// Never negative. A reservation larger than the order would mean the two
-  /// records disagree, and telling the floor to make a negative quantity is
-  /// not a useful way to surface that.
-  ({double rolls, int belts}) _toMake(Map<String, dynamic> it) {
-    final rolls = _num(it['custom_rolls']) - _num(it['reserved_rolls']);
-    final belts = ((it['custom_loose_belts'] as num?)?.toInt() ?? 0) -
-        ((it['reserved_belts'] as num?)?.toInt() ?? 0);
-    return (rolls: rolls < 0 ? 0 : rolls, belts: belts < 0 ? 0 : belts);
-  }
-
   Widget _itemCard(Map<String, dynamic> it) {
     final stages = stagesForItem(it);
     final current = '${it['custom_production_stage'] ?? ''}';
@@ -303,36 +288,10 @@ class _ProductionOrderDetailScreenState
               style: const TextStyle(
                   fontSize: 13, fontWeight: FontWeight.w600)),
           const SizedBox(height: 2),
-          // What has to be made, as against what the shelf already covers.
-          // Without it a line reading "8 rolls" looks like eight to make when
-          // four are already sitting in the plant.
-          if (_toMake(it) case (rolls: final r, belts: final b)
-              when r > 0.0001 || b > 0)
-            Padding(
-              padding: const EdgeInsets.only(top: 4, bottom: 2),
-              child: Container(
-                padding: const EdgeInsets.all(7),
-                decoration: BoxDecoration(
-                    color: const Color(0xFFF3E8FF),
-                    borderRadius: BorderRadius.circular(5)),
-                child: Row(children: [
-                  const Icon(Icons.call_split,
-                      size: 14, color: Colors.deepPurple),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Text(
-                        'To make: ${trimQtyLocal(r)}'
-                        '${b > 0 ? ' + $b belts' : ''}'
-                        '   ·   ${trimQtyLocal(_num(it['custom_rolls']))} ordered, '
-                        '${trimQtyLocal(_num(it['reserved_rolls']))} already in stock',
-                        style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.deepPurple)),
-                  ),
-                ]),
-              ),
-            ),
+          // A purple "to make: 4 of 8 ordered, 4 already in stock" banner
+          // stood here, splitting the line by what a shelf reservation
+          // covered. There are no reservations to split by any more, so the
+          // whole ordered quantity is what the floor is being asked for.
           Text('${it['custom_packing_note'] ?? ''}',
               style: const TextStyle(fontSize: 11, color: Colors.black54)),
           const SizedBox(height: 6),
@@ -358,64 +317,30 @@ class _ProductionOrderDetailScreenState
                     fontSize: 11, fontWeight: FontWeight.w600)),
           ]),
           const Divider(height: 18),
-          // A split line is two pieces of work, and they are tracked apart.
-          // The half coming off the shelf only has to be picked and packed;
-          // running it against Curing and Extrusion described work nobody was
-          // doing and left the floor looking behind on goods already made.
-          if (_reservedRolls(it) > 0 || _reservedBelts(it) > 0)
-            _stageTrack(
-              it,
-              title: 'From minimum stock  ·  '
-                  '${trimQtyLocal(_reservedRolls(it))}'
-                  '${_reservedBelts(it) > 0 ? ' + ${_reservedBelts(it)} belts' : ''}',
-              stages: fromStockStages,
-              current: '${it['custom_stock_stage'] ?? ''}',
-              colour: Colors.blue.shade700,
-              stockPart: true,
-            ),
-          if (_toMake(it) case (rolls: final r, belts: final b)
-              when r > 0.0001 || b > 0)
-            _stageTrack(
-              it,
-              title: 'To be made  ·  ${trimQtyLocal(r)}'
-                  '${b > 0 ? ' + $b belts' : ''}',
-              stages: stagesForLabel(it['custom_product_category']),
-              current: current,
-              colour: Colors.deepPurple,
-              stockPart: false,
-            ),
-          // Nothing reserved and nothing left to make means the split is not
-          // known — an order read before its reservations resolved. The line
-          // keeps the single track it always had.
-          if (_reservedRolls(it) <= 0 &&
-              _reservedBelts(it) <= 0 &&
-              _toMake(it).rolls <= 0.0001 &&
-              _toMake(it).belts <= 0)
-            _stageTrack(
-              it,
-              title: 'Progress',
-              stages: stages,
-              current: current,
-              colour: const Color(0xFF7C3AED),
-              stockPart: false,
-            ),
+          // One track per line. There were three — a "from minimum stock"
+          // half, a "to be made" half, and a single fallback — because a line
+          // could be part-covered by a shelf reservation and each half ran its
+          // own cycle. There are no reservations now, so every line is one
+          // piece of work on its own product's cycle.
+          _stageTrack(
+            it,
+            title: 'Progress',
+            stages: stages,
+            current: current,
+            colour: const Color(0xFF7C3AED),
+          ),
         ]),
       ),
     );
   }
 
-  double _reservedRolls(Map<String, dynamic> it) => _num(it['reserved_rolls']);
-  int _reservedBelts(Map<String, dynamic> it) =>
-      (it['reserved_belts'] as num?)?.toInt() ?? 0;
-
-  /// One half of a line: what it is, where it has got to, and how to move it.
+  /// A line: what it is, where it has got to, and how to move it.
   Widget _stageTrack(
     Map<String, dynamic> it, {
     required String title,
     required List<String> stages,
     required String current,
     required Color colour,
-    required bool stockPart,
   }) {
     // Counted against the stages the FLOOR works, not the stored sequence:
     // Dispatch Planning owns `Dispatched` now, so measuring against it left a
@@ -487,8 +412,7 @@ class _ProductionOrderDetailScreenState
           ],
           onChanged: (_busy || dispatched)
               ? null
-              : (v) =>
-                  v == null ? null : _setStage(it, v, stockPart: stockPart),
+              : (v) => v == null ? null : _setStage(it, v),
         ),
       ]),
     );
