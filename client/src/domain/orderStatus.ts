@@ -15,13 +15,20 @@ import type { OrderLine } from './types';
 
 // ------------------------------------------------------- approval status ---
 
-/** The seven values `Sales Order.custom_po_status` accepts. */
+/** The eight values `Sales Order.custom_po_status` accepts. */
 export const PO_STATUS = {
   none: 'No PO Yet',
   pending: 'Pending Approval',
   pendingRate: 'Pending Rate Approval',
   poUploaded: 'PO Uploaded - Pending Approval',
   pendingGm: 'Pending GM Approval',
+  /**
+   * The GM has approved the credit and the order is back with the sales
+   * manager, who pushes it to SAP. The Select carried this option unused until
+   * 24 Sep 2026, when the GM stopped pushing to SAP themselves — see
+   * `shared/fixtures/credit_commitment.json`. Shown as "Approved by GM".
+   */
+  finalApproval: 'Pending Final Approval',
   approved: 'PO Approved - Ready for SAP',
   rejected: 'Rejected',
 } as const;
@@ -43,6 +50,10 @@ export function statusPill(status: string | undefined | null): {
       return { text: 'WAITING FOR RATE APPROVAL', tone: 'warn' };
     case PO_STATUS.pendingGm:
       return { text: 'ESCALATED TO GM', tone: 'warn' };
+    // Amber, not green: the GM has decided the credit, but the order is not
+    // in SAP until the sales manager pushes it, and a green pill reads as done.
+    case PO_STATUS.finalApproval:
+      return { text: 'APPROVED BY GM', tone: 'warn' };
     case PO_STATUS.rejected:
       return { text: 'REJECTED', tone: 'danger' };
     // `No PO Yet`, empty and null all mean the same thing to a manager: it has
@@ -135,7 +146,7 @@ export function isDispatched(status: string | undefined | null): boolean {
 
 // ------------------------------------------------------ completion tick ---
 
-export type TickState = 'complete' | 'ready' | 'in_production' | 'not_started';
+export type TickState = 'complete' | 'in_sap' | 'ready' | 'in_production' | 'not_started';
 
 /**
  * The completion tick, **derived and never stored**.
@@ -152,6 +163,11 @@ export function tickState(productionStatus: string | undefined | null): TickStat
   switch ((productionStatus ?? '').trim()) {
     case PRODUCTION_STATUS.dispatched:
       return 'complete';
+    // What `orderProgress` reads once SAP has the order and it is not yet
+    // invoiced. Named, not rounded down: an order SAP has taken is not "Not
+    // Started" to the manager chasing it.
+    case 'Pushed to SAP':
+      return 'in_sap';
     case PRODUCTION_STATUS.ready:
       return 'ready';
     case PRODUCTION_STATUS.inProduction:
@@ -163,6 +179,7 @@ export function tickState(productionStatus: string | undefined | null): TickStat
 
 export const TICK_LABEL: Record<TickState, string> = {
   complete: 'Complete',
+  in_sap: 'Pushed to SAP',
   ready: 'Ready',
   in_production: 'In Production',
   not_started: 'Not Started',

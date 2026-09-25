@@ -13,7 +13,18 @@
     if nobody approved anything new.
 
   Safe to re-run: unregisters and recreates both tasks.
+
+  SUPERSEDED 24 September 2026 by Register-FlagWatchTasks.ps1. The order sync
+  no longer runs on a timer at all - only when somebody presses Sync or
+  approves an order. Running this would bring back the 15-minute Force run the
+  user decided to remove, so it refuses unless told otherwise.
 #>
+param([switch] $IKnowThisBringsBackTheTimer)
+if (-not $IKnowThisBringsBackTheTimer) {
+    Write-Host 'Superseded by Register-FlagWatchTasks.ps1 (24 Sep 2026): the order sync now runs only when asked.' -ForegroundColor Yellow
+    Write-Host 'This would restore the 15-minute timed sync. Pass -IKnowThisBringsBackTheTimer if that is really what you want.' -ForegroundColor Yellow
+    exit 1
+}
 $dir = 'C:\Users\eldhose\sap-order-sync'
 $dur = New-TimeSpan -Days 3650   # Task Scheduler rejects [TimeSpan]::MaxValue - out of range
 

@@ -2,10 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/credit_commitment.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/models/approval.dart';
 import 'package:manna_field_sales/screens/manager/manager_order_review_screen.dart';
-import 'package:manna_field_sales/core/week.dart';
+import 'package:manna_field_sales/widgets/gm_condition_dialog.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class GMApprovalsScreen extends StatefulWidget {
@@ -33,7 +34,9 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
     for (final r in res[0]) {
       out.add(Approval('Customer PO — GM approval', r['name'],
           r['custom_sales_person'], r['customer'], (r['grand_total'] ?? 0),
-          'gm_so_po'));
+          'gm_so_po',
+          commitment: r['custom_credit_commitment'],
+          commitmentDue: r['custom_credit_commitment_due']));
     }
     for (final r in res[1]) {
       out.add(Approval('Lead PO — GM approval', r['name'], r['sales_person'],
@@ -83,118 +86,73 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
     _reload();
   }
 
-  /// Approve, and optionally attach a condition the rep has to meet.
+  /// Approve on the rep's commitment, which becomes their condition.
   ///
   /// The GM's yes on an over-limit order used to leave no trace of what was
   /// promised in return, so nobody could be held to it afterwards. Asking here
-  /// is what makes the condition and the approval one act — a condition
-  /// recorded later is one the GM has to remember to record.
-  ///
-  /// Optional. Plenty of approvals carry no condition, and forcing one would
-  /// produce a field full of "n/a".
-  Future<({String text, DateTime due})?> _askCondition(Approval a) async {
-    final ctrl = TextEditingController();
-    DateTime due = DateTime.now().add(const Duration(days: 15));
-
-    return showDialog<({String text, DateTime due})?>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('Approve with a condition?'),
-          content: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Text(
-                  'This order is over the credit limit for ${a.party}. '
-                  'Anything typed here becomes a commitment owned by '
-                  '${a.rep}, and stays on the customer until you close it.',
-                  style: const TextStyle(fontSize: 12, color: Colors.black54)),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ctrl,
-                autofocus: true,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  labelText: 'Condition',
-                  hintText: 'e.g. clear the 60-day outstanding before the next order',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(children: [
-                const Text('Due by', style: TextStyle(fontSize: 13)),
-                const Spacer(),
-                TextButton(
-                  onPressed: () async {
-                    final picked = await showDatePicker(
-                      context: ctx,
-                      initialDate: due,
-                      firstDate: DateTime.now(),
-                      lastDate: DateTime.now().add(const Duration(days: 365)),
-                    );
-                    if (picked != null) setLocal(() => due = picked);
-                  },
-                  child: Text(isoDate(due)),
-                ),
-              ]),
-            ]),
-          ),
-          actions: [
-            // Approving without one is a normal outcome, not a cancel.
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, null),
-                child: const Text('Approve, no condition')),
-            FilledButton(
-              onPressed: () {
-                final t = ctrl.text.trim();
-                if (t.isEmpty) return;
-                Navigator.pop(ctx, (text: t, due: due));
-              },
-              child: const Text('Approve with condition'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
+  /// is what makes the condition and the approval one act. Since 24 Sep 2026
+  /// the words start as the rep's own commitment, and with one on the order
+  /// the condition is required — `askGmCondition` and
+  /// `Api.approveEscalatedOrder` both hold that line.
   Future<void> _act(Approval a, bool approve) async {
-    ({String text, DateTime due})? condition;
+    GmApproval? terms;
     // Only on a real Sales Order, and only on the way in. A rejection carries
     // no obligation, and a Lead Order has no customer to hang one on yet.
     if (approve && a.kind == 'gm_so_po') {
-      condition = await _askCondition(a);
-      if (!mounted) return;
+      terms = await askGmCondition(context,
+          party: '${a.party}',
+          rep: '${a.rep}',
+          commitment: a.commitment,
+          commitmentDue: a.commitmentDue);
+      // Backing out is not approving.
+      if (terms == null || !mounted) return;
     }
 
     try {
+      bool? conditionSaved;
       if (a.kind == 'gm_so_po') {
-        await Api.approveSalesOrderPO(a.name, approve);
+        if (approve) {
+          final t = terms!;
+          conditionSaved = await Api.approveEscalatedOrder(a.name,
+              condition: t.condition, dueDateIso: t.dueIso);
+        } else {
+          await Api.approveSalesOrderPO(a.name, false);
+        }
       } else {
         await Api.approveLeadOrderPO(a.name, approve);
       }
 
-      // After the approval and unable to undo it: an approval the GM believes
-      // they gave, blocked because a condition would not save, is the worse
-      // failure. addCreditCondition swallows its own errors for the same
-      // reason and reports by returning null.
-      if (condition != null) {
-        final made = await Api.addCreditCondition(
-          customer: '${a.party}',
-          salesPerson: '${a.rep}',
-          condition: condition.text,
-          dueDateIso: isoDate(condition.due),
-          salesOrder: a.name,
-        );
-        if (made == null && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Approved, but the condition could not be saved. '
-                  'Add it from the customer.')));
-        }
+      // The approval stands whatever happened to the condition — see
+      // `approveEscalatedOrder` — so the order is no longer in this queue to
+      // approve again. The retry writes the condition alone.
+      if (conditionSaved == false && mounted) {
+        final t = terms!;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          duration: const Duration(seconds: 12),
+          content: const Text('Approved, but the condition could not be saved.'),
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: () => Api.addCreditCondition(
+              customer: '${a.party}',
+              salesPerson: '${a.rep}',
+              condition: t.condition,
+              dueDateIso: t.dueIso,
+              salesOrder: a.name,
+            ),
+          ),
+        ));
+        _reload();
+        return;
       }
       if (mounted) {
+        // The GM's approval is not a push: say where the order went, so
+        // nobody waits for it to turn up in SAP.
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                '${approve ? 'Approved (Ready for SAP)' : 'Rejected'} ${a.name}')));
+            content: Text(!approve
+                ? 'Rejected ${a.name}'
+                : a.kind == 'gm_so_po'
+                    ? 'Approved ${a.name} — back with the sales manager to push to SAP'
+                    : 'Approved ${a.name}')));
       }
       _reload();
     } catch (e) {
@@ -279,6 +237,35 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
                                           fontWeight: FontWeight.bold,
                                           color: Color(0xFFB3261E))),
                                 ]),
+                          ),
+                          // What the customer promised in return — the other
+                          // half of the question, so it is on the card rather
+                          // than a tap away.
+                          const SizedBox(height: 6),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(8),
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFFFF8E1),
+                              border: Border(
+                                  left: BorderSide(
+                                      color: Color(0xFFF9A825), width: 3)),
+                            ),
+                            child: Text(
+                              hasCommitment(a.commitment)
+                                  ? '“${'${a.commitment}'.trim()}”'
+                                  : 'No commitment from the rep.',
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontStyle: hasCommitment(a.commitment)
+                                      ? FontStyle.normal
+                                      : FontStyle.italic,
+                                  color: hasCommitment(a.commitment)
+                                      ? null
+                                      : Colors.black54),
+                            ),
                           ),
                         ],
                         const SizedBox(height: 8),

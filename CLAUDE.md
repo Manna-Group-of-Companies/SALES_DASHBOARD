@@ -9,6 +9,7 @@ and tread-rubber manufacturer.
 | `app/` | Flutter — the reps' phones. Not hosted; built as an APK and side-loaded |
 | `shared/` | Rules both must obey, as fixtures. Read `shared/README.md` first |
 | `sap-order-sync/` | PowerShell. The ERPNext ⇄ SAP B1 order sync. Runs on the **SAP server**, not hosted. Needs the factory LAN; `config.json` is gitignored |
+| `sap-pricing/` | PowerShell behind the MD's `/rates` screen: the read-only snapshot of Manna Treads' prices (the master, where the dealers are) and Hi-Tech's (kept a margin below), plus the office server's own check of them. Reads SAP only; the screen hands out DTW files. Every price is GST-inclusive as it stands. The real rules and the margin live in ERPNext, not here; see its README |
 
 They were separate repositories until 13 August 2026. They are one repository
 now for a single reason: **the same business rule is written twice, in two

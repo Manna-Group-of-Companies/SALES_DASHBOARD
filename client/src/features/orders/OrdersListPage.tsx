@@ -30,6 +30,7 @@ import {
 } from '@/domain/orderStatus';
 import {
   orderBucket,
+  orderProgress,
   ORDER_BUCKETS,
   ORDER_BUCKET_LABEL,
   type OrderBucket,
@@ -171,7 +172,13 @@ export function OrdersListPage() {
         date: o.placedOn,
         total: o.total,
         status: o.poStatus,
-        productionStatus: o.productionStatus,
+        // SAP's word once SAP has the order, the in-app status before: the
+        // tick, the production line and the export all read this. Same rule as
+        // the phone's lists — see `orderProgress`.
+        productionStatus: orderProgress(
+          { salesOrder: o.sapSalesOrder, invoice: o.sapInvoice },
+          o.productionStatus,
+        ),
         combinedOrder: o.combinedOrder,
         undecided: awaitingManager(o.poStatus),
         sapSalesOrder: o.sapSalesOrder,

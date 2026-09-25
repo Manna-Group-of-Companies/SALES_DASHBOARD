@@ -291,5 +291,8 @@ export function roleCanSee(order: Order, role: Role): boolean {
     case 'hr':
       // HR has no business in the order book — people data only.
       return false;
+    case 'managing_director':
+      // The MD's login is the rates screen; orders are not on it.
+      return false;
   }
 }

@@ -26,12 +26,15 @@ import { OrderDetailPage } from '@/features/orders/OrderDetailPage';
 import { LeadOrderPage } from '@/features/orders/LeadOrderPage';
 import { CombinedOrdersPage } from '@/features/orders/CombinedOrdersPage';
 import { GmQueuePage } from '@/features/orders/GmQueuePage';
+import { GmOrderPage } from '@/features/orders/GmOrderPage';
+import { GmFollowUpPage } from '@/features/orders/GmFollowUpPage';
+import { RatesPage } from '@/features/rates/RatesPage';
+import { GmFollowUpOrderPage } from '@/features/orders/GmFollowUpOrderPage';
 import { ApprovalsInboxPage } from '@/features/approvals/ApprovalsInboxPage';
 import { LocationVerificationPage } from '@/features/approvals/LocationVerificationPage';
 import { TeamRegularizationsPage } from '@/features/approvals/TeamRegularizationsPage';
 import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
 import { ProductionOrderPage } from '@/features/production/ProductionOrderPage';
-import { DispatchPlanningPage } from '@/features/production/DispatchPlanningPage';
 import { SalesStockPage } from '@/features/stock/SalesStockPage';
 import { SalesDashboardPage } from '@/features/dashboard/SalesDashboardPage';
 import { HrDashboardPage } from '@/features/hr/HrDashboardPage';
@@ -121,9 +124,14 @@ function RoleHome() {
       return <HrDashboardPage />;
     case 'sales_manager':
       return <SalesDashboardPage />;
-    // The GM opens on what is waiting for them and nothing else.
+    // The GM opens on what is waiting for them and nothing else. Sent to
+    // `/gm` rather than drawn here, so the sidebar marks where they are and an
+    // order opened from the queue sits under it.
     case 'general_manager':
-      return <GmQueuePage />;
+      return <Navigate to="/gm" replace />;
+    // The Managing Director's login is the rates screen (25 Sep 2026).
+    case 'managing_director':
+      return <Navigate to="/rates" replace />;
     /*
      * The production manager lands straight on the queue (B1), not on a
      * summary. The old dashboard is fed by the Redux order slice, which is the
@@ -150,6 +158,7 @@ function RoleHome() {
 }
 
 const GM: Role[] = ['general_manager'];
+const MD: Role[] = ['managing_director'];
 const HR: Role[] = ['hr'];
 
 export function AppRoutes() {
@@ -243,6 +252,49 @@ export function AppRoutes() {
             </RoleRoute>
           }
         />
+        {/*
+          The GM's own review of an escalated order. Not `orders/:orderId`:
+          that is the sales manager's review, and it offered the GM Send to GM
+          on an order already escalated to them.
+        */}
+        <Route
+          path="gm/orders/:orderId"
+          element={
+            <RoleRoute allow={GM}>
+              <GmOrderPage />
+            </RoleRoute>
+          }
+        />
+        {/*
+          The GM's follow-up — every order they approved, after the approval
+          (asked for 25 Sep 2026). Its own path rather than under `gm/`, so the
+          sidebar marks one of the two GM screens and not both.
+        */}
+        <Route
+          path="follow-up"
+          element={
+            <RoleRoute allow={GM}>
+              <GmFollowUpPage />
+            </RoleRoute>
+          }
+        />
+        {/* Quality-wise list prices and dealer prices, Hi-Tech Pretreads (SAP), as DTW files. */}
+        <Route
+          path="rates"
+          element={
+            <RoleRoute allow={MD}>
+              <RatesPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="follow-up/:orderId"
+          element={
+            <RoleRoute allow={GM}>
+              <GmFollowUpOrderPage />
+            </RoleRoute>
+          }
+        />
 
         {/*
           Its own screen, not a tab in the approvals inbox. 74 locations against
@@ -288,14 +340,15 @@ export function AppRoutes() {
             </RoleRoute>
           }
         />
-        <Route
-          path="production/dispatch"
-          element={
-            <RoleRoute allow={['production_manager']}>
-              <DispatchPlanningPage />
-            </RoleRoute>
-          }
-        />
+        {/*
+          Dispatch planning is parked (24 September 2026) — SAP's invoice is
+          dispatch for now. The path is kept as a redirect rather than dropped:
+          without it, `production/:orderId` below would take "dispatch" for an
+          order number and an old bookmark would open an error. To bring the
+          page back, render `DispatchPlanningPage` here again (the file is
+          untouched) and restore its nav item in AppShell.tsx.
+        */}
+        <Route path="production/dispatch" element={<Navigate to="/production" replace />} />
         <Route
           path="production/:orderId"
           element={

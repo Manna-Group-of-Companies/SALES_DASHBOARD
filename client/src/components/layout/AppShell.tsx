@@ -37,6 +37,9 @@ import { initials } from '@/components/common/format';
 import { useTheme } from '@/app/theme';
 import { NotificationPanel } from '@/features/notifications/NotificationPanel';
 import { ToastHost } from '@/features/notifications/ToastHost';
+import { SyncAllButton } from './SyncAllButton';
+import { Api } from '@/api/client';
+import { COND_AWAITING } from '@/domain/creditCondition';
 import './layout.css';
 
 interface NavItem {
@@ -74,6 +77,9 @@ export function AppShell() {
 
   const [navOpen, setNavOpen] = useState(false);
   const [theme, toggleTheme] = useTheme();
+  // Bumped by the header's Sync button to remount the page, so it re-reads
+  // what SAP just wrote. See SyncAllButton for why that waits for a click.
+  const [pageKey, setPageKey] = useState(0);
 
   // HR works on an entirely different set of records — loading the product
   // catalogue and the order book for them would be pure waste.
@@ -123,6 +129,25 @@ export function AppShell() {
     setNavOpen(false);
   }, [location.pathname]);
 
+  /*
+   * How many reps have answered a condition and are waiting on the GM — the
+   * badge on Follow-up, which is how an answer typed on a phone "arrives".
+   * Re-read on every page change: the GM closing one should clear it without
+   * a reload, and one small list is cheap.
+   */
+  const [repAnswers, setRepAnswers] = useState(0);
+  useEffect(() => {
+    if (user?.role !== 'general_manager') return;
+    let live = true;
+    Api.sales
+      .listCreditConditions()
+      .then((rows) => live && setRepAnswers(rows.filter((c) => c.status === COND_AWAITING).length))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [user?.role, location.pathname]);
+
   if (!user) return null;
 
   const items: NavItem[] = [
@@ -130,17 +155,23 @@ export function AppShell() {
     // "/" only ever redirects. HR keeps its people overview.
     { to: '/', label: 'HR Dashboard', icon: '◫', roles: ['hr'], group: 'Overview' },
 
+    // The GM's two screens — see `screensForUser`. What waits on their
+    // decision, and what their decisions set in motion (25 Sep 2026).
     { to: '/gm', label: 'Escalated to You', icon: '⚖', roles: ['general_manager'], group: 'Overview' },
-    { to: '/customers', label: 'Customers', icon: '👥', roles: ['sales_manager', 'general_manager'], screen: 'customers', group: 'Sales' },
+    { to: '/follow-up', label: 'Follow-up', icon: '↻', roles: ['general_manager'], count: repAnswers, urgent: repAnswers > 0, group: 'Overview' },
+    // The MD's one screen (25 Sep 2026): quality-wise rates for Hi-Tech Pretreads.
+    { to: '/rates', label: 'Rates & Dealer Prices', icon: '₹', roles: ['managing_director'], group: 'Overview' },
+    { to: '/customers', label: 'Customers', icon: '👥', roles: ['sales_manager'], screen: 'customers', group: 'Sales' },
     { to: '/leads', label: 'Leads', icon: '🌱', roles: ['sales_manager'], screen: 'leads', group: 'Sales' },
-    { to: '/orders', label: 'Team Orders', icon: '📄', roles: ['sales_manager', 'general_manager'], screen: 'orders', count: myOrders.length, group: 'Sales' },
+    { to: '/orders', label: 'Team Orders', icon: '📄', roles: ['sales_manager'], screen: 'orders', count: myOrders.length, group: 'Sales' },
     { to: '/locations', label: 'Location Checks', icon: '📍', roles: ['sales_manager'], screen: 'locations', group: 'Sales' },
     { to: '/team/regularizations', label: 'Attendance Corrections', icon: '🕓', roles: ['sales_manager'], screen: 'regularizations', group: 'Sales' },
     { to: '/approvals', label: 'Approvals', icon: '✔', roles: ['sales_manager'], screen: 'approvals', count: awaitingApproval.length, urgent: awaitingApproval.length > 0, group: 'Sales' },
     { to: '/combined', label: 'Combined Orders', icon: '⑃', roles: ['sales_manager'], screen: 'combined', group: 'Sales' },
 
     { to: '/production', label: 'Production Queue', icon: '⚙', roles: ['production_manager'], group: 'Production' },
-    { to: '/production/dispatch', label: 'Dispatch Planning', icon: '🚚', roles: ['production_manager'], group: 'Production' },
+    // Dispatch Planning was here. Parked on 24 September 2026 on instruction —
+    // SAP's invoice is dispatch for now. The page is kept; see routes.tsx.
 
     /*
       One stock screen now, reached two ways. There were four entries —
@@ -157,7 +188,7 @@ export function AppShell() {
       and without that a stock manager would be locked out of the only stock
       page left in the app. Exactly one of the two shows for any login.
     */
-    { to: '/stock', label: 'Stock', icon: '📦', roles: ['sales_manager', 'general_manager'], screen: 'stock', group: 'Sales' },
+    { to: '/stock', label: 'Stock', icon: '📦', roles: ['sales_manager'], screen: 'stock', group: 'Sales' },
     { to: '/stock', label: 'Stock', icon: '📦', roles: ['production_manager', 'stock_manager'], group: 'Stock' },
 
     { to: '/hr/employees', label: 'Employees', icon: '🧑', roles: ['hr'], count: headcount, group: 'People' },
@@ -183,20 +214,21 @@ export function AppShell() {
    * and without this he would have no route to his own reps.
    */
   const visible = items.filter((i) => {
-    /*
-     * It runs the other way too. The GM manages no team, so a team-only test
-     * hid every screen their own `roles` already name — Customers, Team
-     * Orders, Stock and Combined all list `general_manager` and none of them
-     * appeared.
-     */
+    // `canOpenAs` is role-aware as well as team-aware: it gives the GM no team
+    // screen at all, so the GM's sidebar is the escalation queue alone.
     if (i.screen) return canOpenAs(user.role, user.managedTeam, i.screen);
     return i.roles.includes(user.role);
   });
   const groups = [...new Set(visible.map((i) => i.group))];
 
   // Matched against the visible items, not all of them: "/" is the Dashboard
-  // for most roles and the HR Dashboard for HR.
-  const title = visible.find((i) => i.to === location.pathname)?.label ?? 'Sales';
+  // for most roles and the HR Dashboard for HR. A page under a nav item — the
+  // GM's review of one order — takes its parent's name rather than "Sales".
+  const title =
+    (
+      visible.find((i) => i.to === location.pathname) ??
+      visible.find((i) => i.to !== '/' && location.pathname.startsWith(`${i.to}/`))
+    )?.label ?? 'Sales';
 
   return (
     <div className="shell">
@@ -266,13 +298,29 @@ export function AppShell() {
           </Button>
           <div className="grow">
             <div className="header__title">{title}</div>
-            {freezingSoon.length > 0 && user.role !== 'production_manager' && (
+            {/* Not for the GM either: the freeze does not bind them, and the
+                orders it counts are not the ones escalated to them. */}
+            {freezingSoon.length > 0 &&
+              user.role !== 'production_manager' &&
+              user.role !== 'general_manager' && (
               <div className="header__sub">
                 ⏳ {freezingSoon.length} order{freezingSoon.length === 1 ? '' : 's'} freeze within 24
                 hours
               </div>
             )}
           </div>
+
+          {/* HR's records never come from SAP, so there is nothing to sync for them.
+              The MD's rates screen has its own "Sync from SAP", for prices. */}
+          {!isHr && user.role !== 'managing_director' && (
+            <SyncAllButton
+              onSettled={() => {
+                void dispatch(loadOrders(undefined));
+                void dispatch(refreshMinStock());
+              }}
+              onReload={() => setPageKey((k) => k + 1)}
+            />
+          )}
 
           <button
             className="bell"
@@ -313,7 +361,7 @@ export function AppShell() {
         )}
 
         <main className="content">
-          <Outlet />
+          <Outlet key={pageKey} />
         </main>
       </div>
 

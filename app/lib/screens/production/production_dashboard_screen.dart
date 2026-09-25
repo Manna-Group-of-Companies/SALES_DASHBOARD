@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/production/production_order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -132,7 +133,17 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
                               '\n${r['name']}  ·  raised ${r['transaction_date'] ?? ''}'
                               '\nDeliver by ${delivery.isEmpty || delivery == 'null' ? 'not set' : delivery}'),
                           const SizedBox(height: 4),
-                          OrderCompleteTick(order: r),
+                          // The tick reads SAP (orderProgress), which has no
+                          // word for cancelled — so a cancelled order is said
+                          // outright rather than read as still in SAP.
+                          if (cancelledInSap(SapOrderState.fromOrder(r)))
+                            Text('CANCELLED IN SAP',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.red.shade700))
+                          else
+                            OrderCompleteTick(order: r),
                         ]),
                     trailing: Text('₹${(r['grand_total'] ?? 0)}',
                         style: const TextStyle(fontWeight: FontWeight.bold)),

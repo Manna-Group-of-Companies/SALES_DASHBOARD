@@ -21,6 +21,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { CombinedOrder, TeamOrder } from '@/domain/types';
 import { isSet } from '@/domain/orderStatus';
+import { orderProgress } from '@/domain/sapOrderState';
 import { formatDate } from '@/domain/orderRules';
 import { Api } from '@/api/client';
 import { Alert, Card, Empty, Input } from '@/components/ui';
@@ -206,7 +207,12 @@ export function CombinedOrdersPage() {
                               <td className="num">{formatDate(o.placedOn)}</td>
                               <td className="dim">{o.rep}</td>
                               <td>
-                                <CompletionTick productionStatus={o.productionStatus} />
+                                <CompletionTick
+                                  productionStatus={orderProgress(
+                                    { salesOrder: o.sapSalesOrder, invoice: o.sapInvoice },
+                                    o.productionStatus,
+                                  )}
+                                />
                               </td>
                               <td className="right num">{money(o.total, 0)}</td>
                             </tr>

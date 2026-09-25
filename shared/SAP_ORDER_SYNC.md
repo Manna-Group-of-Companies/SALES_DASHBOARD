@@ -15,33 +15,65 @@ The apps do not push to SAP and do not compute floor state. They report it.
    submitted** — neither app has ever submitted a Sales Order; approval is a
    field write and the order stays `docstatus = 0`. See `DIVERGENCES.md`.
 2. **The sync creates a Sales Order in SAP** and writes its DocNum back to
-   `custom_sap_sales_order`.
-3. SAP links a production order and moves it through stages. The sync copies
-   the DocNum and the current stage back.
-4. A SAP **Delivery Order** eventually carries several orders out together. The
-   sync writes its DocNum and ship date onto **every order it carries**.
+   `custom_sap_sales_order`. The apps now show the order as **Pushed to SAP**.
+3. SAP is the record from here. A line the factory reduces or drops in SAP is
+   reduced or removed in ERPNext by the sync's line reconcile.
+4. An **A/R invoice** is raised against the order, possibly in parts. The sync
+   writes it onto each line it carried, and onto the order once every line is
+   invoiced. The apps now show it as **Dispatched**.
+
+**Changed 24 September 2026:** production orders and deliveries no longer drive
+anything. Under MRP one production order pools the demand of many sales orders
+and SAP does not record which order it is for — MRP-created orders carry no
+sales-order link, and the link table has no quantity column — so a per-order
+production stage would be a guess. And the floor delivers before it invoices,
+so a delivery is not dispatch. See `fixtures/sap_order_state.json`.
+
+**When it runs — changed 24 September 2026.** Nothing syncs on a timer. The
+sync runs when somebody presses **Sync** (on every screen of both apps), or
+when an order becomes approved. See `sap-order-sync/README.md` → *When it
+runs*. That puts one obligation on **both** apps, and it is a shared rule:
+
+> **Anything that makes a Sales Order `PO Approved - Ready for SAP` must then
+> call `manna_sap_order_request_sync`.** Otherwise the order never reaches SAP
+> until somebody happens to press Sync.
+
+Today that is two places on each side: approving an order (`decideOrder` /
+`approveSalesOrderPO`) and converting a lead order, which creates the Sales
+Order already approved (`approveLeadOrder` / `_salesOrderFromLeadOrder`). The
+request is fire-and-forget — the approval stands whether it lands or not — and
+a failure is logged, because nothing sweeps the order up afterwards.
 
 ---
 
 ## The fields
 
-All nine are on `Sales Order`, all `allow_on_submit = 1`, all read-only in
-Desk. Created 11 September 2026 and verified live.
+On `Sales Order`, all `allow_on_submit = 1`, all read-only in Desk.
 
 | field | type | written by | means |
 |---|---|---|---|
 | `custom_sap_sales_order` | Data | sync, step 2 | SAP's DocNum. The proof it reached the factory. |
-| `custom_sap_sales_order_status` | Data | sync | SAP's own words. Shown verbatim, never parsed. |
-| `custom_sap_production_order` | Data | sync, step 3 | SAP's production order DocNum. |
-| `custom_sap_production_stage` | Data | sync, step 3 | SAP's stage name, free text. |
-| `custom_sap_delivery_order` | Data | sync, step 4 | SAP's delivery DocNum. |
-| `custom_sap_delivery_date` | Date | sync, step 4 | When that delivery ships. |
+| `custom_sap_sales_order_status` | Data | sync | SAP's own words. Shown verbatim, never parsed — except `bost_Cancelled`. |
+| `custom_sap_invoice` | Data | sync, step 4 | The invoice that **completed** the order. Set only once every line is invoiced. |
+| `custom_sap_invoice_date` | Date | sync, step 4 | That invoice's posting date. |
 | `custom_sap_synced_at` | Datetime | sync, every pass | When this order was last reconciled. |
 | `custom_sap_sync_error` | Small Text | sync, on failure | Why the last push or pull failed. |
 
+And on `Sales Order Item`, per line:
+
+| field | type | written by | means |
+|---|---|---|---|
+| `custom_sap_invoice` | Data | sync, step 4 | The invoice that carried **this** line. |
+| `custom_sap_invoice_date` | Date | sync, step 4 | That invoice's posting date. |
+
 `custom_sap_section` is a Section Break, for the Desk form only.
 
-**`allow_on_submit` is set on all eight, and kept set.** Today it is inert —
+**No longer written or read (24 Sep 2026):** `custom_sap_production_order`,
+`custom_sap_production_stage`, `custom_sap_delivery_order` and
+`custom_sap_delivery_date`, on both the order and the line. They stay in
+ERPNext with whatever they last held. Nothing may act on them.
+
+**`allow_on_submit` is set on every field above, and kept set.** Today it is inert —
 the apps do not submit Sales Orders, so the sync writes to drafts and Frappe
 would take these fields either way. It stays because the flag is the trap
 `custom_production_stage` originally shipped without: the day anything does
@@ -52,18 +84,18 @@ life of the document.
 
 ## What you must NOT write
 
-**`custom_production_status`.** The apps derive it from the stage and the
-delivery, in `shared/fixtures/sap_order_state.json`. Writing it as well gives
-two sources for one answer, and they will disagree the first time a delivery
-lands before a stage update.
+**`custom_production_status`.** The apps derive the status from the SAP order
+number and the invoice, in `shared/fixtures/sap_order_state.json`. Writing it
+as well gives two sources for one answer.
+
+**The order-level `custom_sap_invoice` on a partial invoice.** It is what takes
+an order out of the sync's polling. Set it on the first invoice and the rest of
+the order is never followed again.
 
 **Anything on an order that has not been approved.** `custom_po_status ==
 "PO Approved - Ready for SAP"` is the gate, together with `docstatus < 2` (any
 live order — draft or, if that ever changes, submitted — but never a Frappe
 cancel). An order that has not passed the gate has no business in SAP.
-
-**`custom_sap_delivery_date` from anywhere but a delivery order.** It is a date
-a rep repeats to a customer.
 
 ---
 
@@ -75,9 +107,11 @@ a rep repeats to a customer.
    normal state and is shown differently from a failure — that distinction only
    works if you clear it.
 
-2. **Write the delivery onto every order it carries**, not just the first. A
-   rep whose order is on somebody else's delivery has no other way to learn
-   when it ships.
+2. **Resolve a pooled invoice line by line**, not invoice by invoice. One
+   invoice can carry lines from several orders, and a line may be based on the
+   order (`BaseType 17`) or on a delivery (`BaseType 15`) that must be followed
+   back to its own base. A rep whose order is on somebody else's invoice has no
+   other way to learn it has gone.
 
 3. **Percent-encode doctype names with spaces** in REST paths
    (`Sales%20Order`). An unencoded space returns an empty body, not an error,
@@ -91,26 +125,29 @@ a rep repeats to a customer.
 
 ---
 
-## How a stage becomes a status
+## How an order gets its status
 
-The apps map SAP's free-text stage onto the four values every screen already
-acts on. The full table is `shared/fixtures/sap_order_state.json`, read by
-both test suites. In short:
+Three values, from two facts. The full table is
+`shared/fixtures/sap_order_state.json`, read by both test suites.
 
-- a **delivery order** means `Dispatched`, whatever the stage says — the
-  delivery is the later fact, and a production record can be stale;
-- `Finished`, `Closed`, `Completed`, `Ready` mean `Ready`;
-- empty, `Planned`, `Open`, `Pending` mean `Not Started`;
-- **anything else means `In Production`**.
+- no SAP order number: **Not Started**;
+- SAP has the order, not invoiced: **Pushed to SAP**;
+- invoiced: **Dispatched**.
 
-That last one is deliberate. A stage nobody has mapped means the floor has
-started and we do not know how far. Calling it `Ready` would tell a rep an
-order is made when it is halfway through a press, so the unknown case rounds
-towards "in progress" and never towards "done".
+Per line, a line is Dispatched only when **that** line was invoiced, and the
+order rolls up to its least advanced line — a partly-invoiced order is still
+Pushed to SAP. `bost_Cancelled` outranks all of it.
 
-**You can add stages in SAP freely.** A new one shows up verbatim on the rep's
-screen and counts as In Production without an app release. Only stages that
-should read as *finished* or *not begun* need a line adding to the fixture.
+An order **list** (and the completion tick, and the phone's duplicate-order
+check) shows this status once SAP has the order, and the stored in-app
+`custom_production_status` only before — `orderProgress` on both sides, cases
+`order_progress`. An in-app Dispatched on an order SAP has not invoiced is not
+dispatch. A list query must therefore fetch `custom_sap_sales_order` and
+`custom_sap_invoice`, or every order silently falls back to the in-app status.
+
+*Superseded 24 Sep 2026:* the stage-to-status table that used to be here —
+`Finished`/`Closed` → Ready, unknown stage → In Production, delivery →
+Dispatched — is gone with the production-order link.
 
 ---
 
@@ -149,10 +186,15 @@ There is no `DeliveredQuantity` on a Service Layer order line to separate them �
 checked against the live DB, the quantity fields are `Quantity`,
 `RemainingOpenQuantity` and `LineStatus`, and that is all.
 
-So the reconcile takes the item codes a delivery note actually carried, which
-PASS B already has in `$dnByEntryItem`. Closed **with** a delivery is finished
-and left alone. Closed **without** one is the factory dropping an item, and the
-ERPNext row goes.
+So the reconcile takes the item codes a delivery note **or an A/R invoice**
+actually carried, which PASS B has in `$dnByEntryItem` and `$invByEntryItem`.
+Closed **with** either is finished and left alone. Closed **without** either is
+the factory dropping an item, and the ERPNext row goes.
+
+Invoices were added on 24 September 2026, when the invoice became the dispatch
+signal: a line invoiced straight from the order has no delivery at all, and
+without invoices in the set it would read as dropped and be deleted — a line
+the customer has already been billed for.
 
 Getting this backwards deletes the lines the customer has already been sent.
 
@@ -251,6 +293,11 @@ ERPNext `SAL-ORD-2026-00143`, raised by Test Rep → SAP DocNum **407**
 ---
 
 ## A production order linked by hand — fixed 18 September 2026
+
+> **Superseded 24 September 2026.** The sync no longer reads production orders
+> at all (see *The flow* above), so this fix and its code are gone. The section
+> is kept because its measurement still stands and explains the decision: the
+> factory's production orders almost never carry a sales-order link.
 
 **The symptom.** SAP order 406 had a **Released** production order against its
 I-14637 line. The PWA showed the order as Not Started. The sync was not

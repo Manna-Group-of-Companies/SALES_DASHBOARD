@@ -1,0 +1,356 @@
+{
+  "about": "The rep's commitment on an order that takes a customer past their credit limit, and who may decide such an order. The rep writes what the customer has committed to when raising the order; the sales manager reads it and can only send the order on to the GM; the sales manager and the GM may comment on it; the GM approves the credit, which turns the commitment into the rep's credit condition (see credit_condition.json) and sends the order BACK to the sales manager; only the sales manager pushes it to SAP. Both apps implement this file - app/lib/core/credit_commitment.dart and client/src/domain/creditCommitment.ts - and both test suites read it.",
+  "why": "Asked for 24 September 2026. Before it, an over-limit order reached the GM with nothing but a number: the reason the rep thought it was worth taking lived in a phone call, and the condition the GM attached was the GM's guess at what the customer had offered. The commitment is the customer's promise, written by the person who heard it, at the moment it was made.",
+  "fields": {
+    "commitment": "Sales Order.custom_credit_commitment",
+    "commitment_due": "Sales Order.custom_credit_commitment_due",
+    "comments": "Manna Credit Comment (sales_order, customer, author, author_role, posted_on, comment)",
+    "note": "Created on the live site 24 Sep 2026. The due date is optional; the commitment is required whenever the order escalates.",
+    "status_after_gm": "Sales Order.custom_po_status = 'Pending Final Approval' - an option the Select already carried and nothing used. Shown as 'Approved by GM'. The SAP sync only takes 'PO Approved - Ready for SAP', so a GM approval cannot reach SAP by any path.",
+    "gm_approved": "Sales Order.custom_gm_approved_by (Data) and custom_gm_approved_on (Datetime), created 24 Sep 2026, so the sales manager sees whose approval they are acting on."
+  },
+  "rules": {
+    "when_required": "Exactly when the order will escalate to the GM: the customer's outstanding plus this order goes past a credit limit that is set. The same test as credit.json's 'escalates', so an order can never reach the GM without one - and a customer with no limit, or a lead, is never asked.",
+    "min_length": 10,
+    "sales_manager": "Reads the commitment and may comment. May NOT approve an over-limit order: the only ways forward are Send to GM or Reject. Once the order is with the GM, the sales manager may still comment but no longer decides. When the GM has approved it, the sales manager's one move is Push to SAP - at the rates the GM approved.",
+    "gm": "Reads the commitment and every comment, may edit the order, may comment, and approves or rejects. The GM's approval is a credit decision, NOT a push to SAP: it moves the order to 'Pending Final Approval' and back to the sales manager. Approving an order that carries a commitment always creates the credit condition - the GM may reword it and set the date, but may not drop it. Until the sales manager pushes, the GM may still reject it, which closes that condition.",
+    "rep": "Writes the commitment and nothing else here. The rep's later say is the answer on the condition, under credit_condition.json.",
+    "after_approval": "Once the sales manager has pushed it to SAP the thread is closed. What happens next is the condition's life, not the order's.",
+    "within_limit_by_decision": "If the order is back inside the limit by the time the sales manager decides it - SAP brought a payment in - they approve it as usual and no condition is made: there is nothing left to be conditional on, and a condition is the GM's to set.",
+    "no_commitment": "An order that reaches the GM without one - escalated before this existed, or pushed over the limit after the rep sent it - keeps the old rule: the GM's condition is optional.",
+    "gm_never_pushes": "Asked for 24 Sep 2026: the GM approves, the sales manager pushes. 'approve' below always means approve to SAP, and the GM never has it.",
+    "edited_after_gm": "Changing the lines of an order the GM approved sends it back to the GM, and the GM's approval is cleared. They approved different money."
+  },
+  "required": [
+    {
+      "why": "a customer already past their limit - the case the whole feature was asked for",
+      "customer": {
+        "custom_outstanding_balance": 169900,
+        "custom_credit_limit": 70000
+      },
+      "order_total": 5000,
+      "expect": true
+    },
+    {
+      "why": "inside the limit today, but this order takes them past it. It escalates all the same, so it needs the reason all the same - otherwise it reaches the GM with nothing to weigh",
+      "customer": {
+        "custom_outstanding_balance": 60000,
+        "custom_credit_limit": 70000
+      },
+      "order_total": 15000,
+      "expect": true
+    },
+    {
+      "why": "landing exactly on the limit is not past it, so nothing escalates and nothing is asked",
+      "customer": {
+        "custom_outstanding_balance": 65000,
+        "custom_credit_limit": 70000
+      },
+      "order_total": 5000,
+      "expect": false
+    },
+    {
+      "why": "comfortably inside the limit - asking would train reps to type anything into the box",
+      "customer": {
+        "custom_outstanding_balance": 10000,
+        "custom_credit_limit": 100000
+      },
+      "order_total": 5000,
+      "expect": false
+    },
+    {
+      "why": "no limit set never escalates (credit.json), so it never asks - many customers have none and the rep cannot fix that at the counter",
+      "customer": {
+        "custom_outstanding_balance": 169900,
+        "custom_credit_limit": 0
+      },
+      "order_total": 5000,
+      "expect": false
+    },
+    {
+      "why": "a lead never escalates: no limit and no trading history, so there is nothing to commit against",
+      "customer": {
+        "custom_outstanding_balance": 169900,
+        "custom_credit_limit": 70000
+      },
+      "order_total": 5000,
+      "is_lead": true,
+      "expect": false
+    },
+    {
+      "why": "the buckets arrived and the stored total did not - the money is still owed, so it still asks (the same fallback credit.json pins)",
+      "customer": {
+        "custom_outstanding_balance": 0,
+        "custom_outstanding_0_30": 40000,
+        "custom_outstanding_30_60": 55000,
+        "custom_credit_limit": 70000
+      },
+      "order_total": 5000,
+      "expect": true
+    }
+  ],
+  "messages": {
+    "missing": "Write what the customer has committed to. This order takes them past their credit limit, and the general manager decides it on your word.",
+    "too_short": "Say what the customer has committed to, and by when. A word or two is not something anyone can be held to.",
+    "condition_required": "This order came with the rep's commitment, so approving it makes that their condition. Keep the words or change them, but do not leave them empty.",
+    "comment_empty": "Write the comment first.",
+    "sales_manager_cannot_approve": "This order takes the customer past their credit limit, so only the general manager can approve it. Send it to the GM instead.",
+    "gm_does_not_push": "The general manager approves the credit; the sales manager pushes the order to SAP."
+  },
+  "text": [
+    {
+      "why": "nothing written is refused",
+      "text": "",
+      "expect": "missing"
+    },
+    {
+      "why": "spaces are nothing written",
+      "text": "    ",
+      "expect": "missing"
+    },
+    {
+      "why": "an unset field read back as the string null is nothing written either",
+      "text": "null",
+      "expect": "missing"
+    },
+    {
+      "why": "'ok' is the answer this rule exists to stop",
+      "text": "ok",
+      "expect": "too_short"
+    },
+    {
+      "why": "nine characters after trimming is still too short",
+      "text": "  will pay  ",
+      "expect": "too_short"
+    },
+    {
+      "why": "ten characters is enough - the line is drawn low on purpose, because the rep is standing at a counter",
+      "text": "Pays by 15",
+      "expect": null
+    },
+    {
+      "why": "a real commitment",
+      "text": "Cheque for 50,000 on Friday, balance with the next order",
+      "expect": null
+    }
+  ],
+  "actions": [
+    {
+      "why": "the sales manager meets an over-limit order and can only send it on - approving it to SAP needs the GM first",
+      "role": "sales_manager", "po_status": "Pending Approval", "over_limit": true,
+      "expect": { "approve": false, "gm_approve": false, "escalate": true, "reject": true, "comment": true }
+    },
+    {
+      "why": "inside the limit nothing changes: the sales manager approves as always, and there is nobody to escalate to",
+      "role": "sales_manager", "po_status": "Pending Approval", "over_limit": false,
+      "expect": { "approve": true, "gm_approve": false, "escalate": false, "reject": true, "comment": true }
+    },
+    {
+      "why": "an old waiting status reads as waiting - the over-limit rule is not dodged by a legacy value",
+      "role": "sales_manager", "po_status": "PO Uploaded - Pending Approval", "over_limit": true,
+      "expect": { "approve": false, "gm_approve": false, "escalate": true, "reject": true, "comment": true }
+    },
+    {
+      "why": "once it is with the GM the sales manager no longer decides it, but can still add what they know",
+      "role": "sales_manager", "po_status": "Pending GM Approval", "over_limit": true,
+      "expect": { "approve": false, "gm_approve": false, "escalate": false, "reject": false, "comment": true }
+    },
+    {
+      "why": "the GM decides what was escalated to them - by approving the credit, not by pushing to SAP",
+      "role": "general_manager", "po_status": "Pending GM Approval", "over_limit": true,
+      "expect": { "approve": false, "gm_approve": true, "escalate": false, "reject": true, "comment": true }
+    },
+    {
+      "why": "a GM who trims the order back inside the limit still decides it - it was escalated to them, and handing it back undecided would be a second trip for nothing",
+      "role": "general_manager", "po_status": "Pending GM Approval", "over_limit": false,
+      "expect": { "approve": false, "gm_approve": true, "escalate": false, "reject": true, "comment": true }
+    },
+    {
+      "why": "the GM outranks the queue: an order not yet escalated is still theirs to approve - and still goes back to the sales manager to push",
+      "role": "general_manager", "po_status": "Pending Approval", "over_limit": true,
+      "expect": { "approve": false, "gm_approve": true, "escalate": false, "reject": true, "comment": true }
+    },
+    {
+      "why": "approved by the GM, the order is back with the sales manager, whose one move is to push it to SAP - over the limit or not, the GM has decided the credit",
+      "role": "sales_manager", "po_status": "Pending Final Approval", "over_limit": true,
+      "expect": { "approve": true, "gm_approve": false, "escalate": false, "reject": false, "comment": true }
+    },
+    {
+      "why": "the sales manager may not refuse what the GM approved; if it must not ship, that is the GM's call",
+      "role": "sales_manager", "po_status": "Pending Final Approval", "over_limit": false,
+      "expect": { "approve": true, "gm_approve": false, "escalate": false, "reject": false, "comment": true }
+    },
+    {
+      "why": "the GM has approved it and does not push it - but may still withdraw the approval by rejecting, until the sales manager has pushed",
+      "role": "general_manager", "po_status": "Pending Final Approval", "over_limit": true,
+      "expect": { "approve": false, "gm_approve": false, "escalate": false, "reject": true, "comment": true }
+    },
+    {
+      "why": "pushed to SAP is finished - the thread closes and the condition takes over",
+      "role": "general_manager", "po_status": "PO Approved - Ready for SAP", "over_limit": true,
+      "expect": { "approve": false, "gm_approve": false, "escalate": false, "reject": false, "comment": false }
+    },
+    {
+      "why": "the sales manager cannot re-open a pushed order's thread either",
+      "role": "sales_manager", "po_status": "PO Approved - Ready for SAP", "over_limit": false,
+      "expect": { "approve": false, "gm_approve": false, "escalate": false, "reject": false, "comment": false }
+    },
+    {
+      "why": "a rejected order may be decided again - the phone has no Undo, and deciding it is its only way back - but an over-limit one still only goes to the GM, and it cannot be rejected twice",
+      "role": "sales_manager", "po_status": "Rejected", "over_limit": true,
+      "expect": { "approve": false, "gm_approve": false, "escalate": true, "reject": false, "comment": true }
+    },
+    {
+      "why": "a rejected order back inside the limit is the sales manager's to approve again",
+      "role": "sales_manager", "po_status": "Rejected", "over_limit": false,
+      "expect": { "approve": true, "gm_approve": false, "escalate": false, "reject": false, "comment": true }
+    },
+    {
+      "why": "the GM may take back their own rejection by approving - which again goes to the sales manager",
+      "role": "general_manager", "po_status": "Rejected", "over_limit": true,
+      "expect": { "approve": false, "gm_approve": true, "escalate": false, "reject": false, "comment": true }
+    },
+    {
+      "why": "the rep's say is the commitment itself, not a vote on the order",
+      "role": "rep", "po_status": "Pending Approval", "over_limit": true,
+      "expect": { "approve": false, "gm_approve": false, "escalate": false, "reject": false, "comment": false }
+    },
+    {
+      "why": "a role nobody recognises is refused everything rather than guessed at",
+      "role": "production_manager", "po_status": "Pending GM Approval", "over_limit": true,
+      "expect": { "approve": false, "gm_approve": false, "escalate": false, "reject": false, "comment": false }
+    }
+  ],
+  "approval": [
+    {
+      "why": "the rep's words are the condition by default - the GM approving as-is is the common case",
+      "commitment": "Cheque for 50,000 on Friday",
+      "condition": "Cheque for 50,000 on Friday",
+      "expect": {
+        "required": true,
+        "problem": null
+      }
+    },
+    {
+      "why": "the GM may reword it; the obligation is theirs to set",
+      "commitment": "Cheque for 50,000 on Friday",
+      "condition": "Cheque for 50,000 by Friday AND clear the 60-day bucket",
+      "expect": {
+        "required": true,
+        "problem": null
+      }
+    },
+    {
+      "why": "the GM may not quietly drop it - the rep promised it and the customer was told it",
+      "commitment": "Cheque for 50,000 on Friday",
+      "condition": "   ",
+      "expect": {
+        "required": true,
+        "problem": "condition_required"
+      }
+    },
+    {
+      "why": "no commitment on the order keeps the old rule: an approval may carry no condition at all",
+      "commitment": "",
+      "condition": "",
+      "expect": {
+        "required": false,
+        "problem": null
+      }
+    },
+    {
+      "why": "without a commitment the GM may still set one of their own",
+      "commitment": null,
+      "condition": "Collect the cheque before the next delivery",
+      "expect": {
+        "required": false,
+        "problem": null
+      }
+    }
+  ],
+  "default_due": [
+    {
+      "why": "the rep's date is what the customer promised, so it is what the GM starts from",
+      "commitment_due": "2026-09-30",
+      "today": "2026-09-24",
+      "expect": "2026-09-30"
+    },
+    {
+      "why": "a promise for today is still today",
+      "commitment_due": "2026-09-24",
+      "today": "2026-09-24",
+      "expect": "2026-09-24"
+    },
+    {
+      "why": "no date from the rep falls back to fifteen days, as it always has",
+      "commitment_due": "",
+      "today": "2026-09-24",
+      "expect": "2026-10-09"
+    },
+    {
+      "why": "an unset date read back as the string null is no date",
+      "commitment_due": "null",
+      "today": "2026-09-24",
+      "expect": "2026-10-09"
+    },
+    {
+      "why": "a date already gone by would make the condition overdue the moment it is made, so it falls back too",
+      "commitment_due": "2026-09-20",
+      "today": "2026-09-24",
+      "expect": "2026-10-09"
+    }
+  ],
+  "follow_up": {
+    "why": "Asked for 25 September 2026. Once the GM has approved, the order leaves the GM's queue and the promise it was approved on still has to be kept. The follow-up is where that is watched: every order the GM approved, what SAP has made of it, and the conversation with the rep about the condition - kept on the order, so the history of what was promised, answered and accepted reads in one place.",
+    "rules": {
+      "which_orders": "Every order the GM approved - `custom_gm_approved_by` set, which a rejection or an edit clears - and any order a credit condition points at. Waiting for the sales manager's push, in SAP, or invoiced: all of them, until the condition is closed and nothing is left to watch.",
+      "rep_answer": "When the rep answers their condition, the answer is ALSO written as a Manna Credit Comment on the order, author_role 'Sales Rep'. The condition's own `response` still holds the latest answer and moves it to Awaiting Review, as credit_condition.json has it; the comment is what keeps every answer, so a changed answer does not erase the first.",
+      "gm_note": "The GM may add a follow-up note to an order they approved at any stage, including after SAP has it - the thread no longer closes at the push for them. A note given when sending a condition back is written to the thread as well, so the rep reads why on their phone - the condition card only ever showed a note on closing. A closing note stays on the condition, where the phone already shows it.",
+      "who_else": "Nobody else writes follow-up notes. The sales manager's comments close at the push (the actions above); the rep's voice is the answer on the condition."
+    },
+    "comment_roles": [
+      {
+        "why": "the rep answering their condition",
+        "role": "rep",
+        "expect": "Sales Rep"
+      },
+      {
+        "why": "the sales manager commenting before the push",
+        "role": "sales_manager",
+        "expect": "Sales Manager"
+      },
+      {
+        "why": "the GM, before or after approval",
+        "role": "general_manager",
+        "expect": "General Manager"
+      },
+      {
+        "why": "anybody else writes nothing - there is no role to write them under",
+        "role": "production_manager",
+        "expect": null
+      }
+    ],
+    "note": [
+      {
+        "why": "the GM follows up on what they approved, whatever SAP has done with it",
+        "role": "general_manager",
+        "expect": true
+      },
+      {
+        "why": "the sales manager's say ended with the push",
+        "role": "sales_manager",
+        "expect": false
+      },
+      {
+        "why": "the rep answers the condition; that is their voice here",
+        "role": "rep",
+        "expect": false
+      },
+      {
+        "why": "an unknown role is refused",
+        "role": "",
+        "expect": false
+      }
+    ]
+  }
+}

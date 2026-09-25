@@ -1,277 +1,220 @@
 {
-  "about": "What an order's SAP identifiers and dates mean to the apps, and how SAP's production stage maps onto the four-value custom_production_status the screens already act on.",
-  "why": "From 11 September 2026 the manufacturing floor moves to SAP. An approved order becomes a SAP Sales Order, SAP links it to a production order and moves it through stages, and a SAP Delivery Order eventually carries several orders out together. The apps stop owning any of that and report it instead.",
+  "about": "What an order's SAP identifiers mean to the apps, and how SAP's documents map onto the status a rep sees once an order is approved.",
+  "why": "An approved order becomes a SAP Sales Order, and an A/R invoice raised against it is what says it has gone. The apps report those two facts and nothing in between. Decided 24 Sep 2026: production-order linking is out of the initial release. Under MRP a production order pools demand from many sales orders, SAP does not persist which order a pooled production order is for (verified: MRP-created POs carry no sales-order link, and the link table has no quantity), so any per-order production stage would be an allocation guess. The release reports only what SAP records as fact.",
   "the_shape": {
     "custom_sap_sales_order": "SAP's DocNum for the order. The rep's proof it reached the factory.",
-    "custom_sap_sales_order_status": "SAP's own words. Shown verbatim, never parsed.",
-    "custom_sap_production_order": "SAP's production order DocNum.",
-    "custom_sap_production_stage": "SAP's stage name, free text, e.g. Curing.",
-    "custom_sap_delivery_order": "SAP's delivery DocNum. One delivery carries many orders.",
-    "custom_sap_delivery_date": "When that delivery ships.",
+    "custom_sap_sales_order_status": "SAP's own words. Shown verbatim, never parsed, with the one exception under cancelled_is_the_one_mapped_status.",
+    "custom_sap_invoice": "SAP's A/R invoice DocNum. Set on the ORDER only once every line has been invoiced - see order_is_dispatched_only_when_every_line_is.",
+    "custom_sap_invoice_date": "The invoice's posting date.",
     "custom_sap_synced_at": "When the sync last reconciled this order.",
     "custom_sap_sync_error": "Why the last push or pull failed."
   },
-  "rules": {
-    "stage_is_free_text": "The stage list lives in SAP and must change without an app release, so it is never an enum here. Screens print it; only the mapping below turns it into behaviour.",
-    "unknown_stage_is_in_production": "A stage nobody has mapped means the floor has started and we do not know how far. In Production, never Ready - calling an unknown stage Ready would ship an order that is not made.",
-    "delivery_implies_dispatched": "A delivery order number means it has left, whatever the stage says. The delivery is the later fact.",
-    "no_sap_order_is_not_a_failure": "An order with no SAP number has not been picked up yet. Only custom_sap_sync_error means something went wrong, and the two must never be shown the same way.",
-    "dates_come_only_from_sap": "custom_sap_delivery_date is a promise a rep repeats to a customer. Nothing in either app may write it.",
-    "stale_is_worth_saying": "custom_sap_synced_at going quiet means the floor has moved and nobody here knows. Older than a day is worth showing.",
-    "cancelled_is_the_one_mapped_status": "custom_sap_sales_order_status is shown verbatim and never parsed, with exactly ONE exception: bost_Cancelled. A cancelled order is not a shade of progress, it is the order not happening, and an app that goes on calling it Approved tells a rep to expect goods nobody is making. bost_Cancelled is a SAP enum, not a stage name, so it is stable in a way the stage list deliberately is not - and the sync folds SAPs separate Cancelled=tYES flag into the same value (Resolve-SoStatus), so one check covers both ways SAP says it. Found 18 Sep 2026: SAP order 399 had been cancelled and ERPNext had recorded it correctly for days, but nothing read it.",
-    "cancelled_outranks_approval": "Cancellation beats the approval status wherever the two are shown together, because it is the later fact and the terminal one - the same reasoning that puts a delivery above a stage.",
-    "no_live_production_order_is_not_started": "A line whose production order has been cancelled has nothing being made for it, so it reads Not Started - the same as a line that never had one. Until 18 Sep 2026 the sync wrote nothing when it found no live production order, so a line whose PO was cancelled after release read In Production for ever, with no press anywhere near it. The sync now clears custom_sap_production_order and custom_sap_production_stage instead."
-  },
   "the_shape_per_line": {
-    "custom_sap_production_order": "On Sales Order Item: the SAP production order covering THIS line.",
-    "custom_sap_production_stage": "On Sales Order Item: where THIS line is on the floor.",
-    "why": "One order becomes one production order per item. Reporting a single stage for the whole order tells a rep nothing about which item is holding it up."
+    "custom_sap_invoice": "On Sales Order Item: the A/R invoice that carried THIS line.",
+    "custom_sap_invoice_date": "That invoice's posting date.",
+    "why": "An order can be invoiced in parts. Only a per-line invoice can say which items have gone and which have not."
+  },
+  "statuses": {
+    "Not Started": "SAP does not have the order yet. Approved-but-not-yet-pushed and not-yet-approved both read this way; the approval label, not this status, tells them apart.",
+    "Pushed to SAP": "SAP has the order and it has not been invoiced.",
+    "Dispatched": "Invoiced."
+  },
+  "rules": {
+    "invoice_is_dispatch": "An A/R invoice is what makes an order or a line Dispatched. Nothing else does. A delivery note is NOT dispatch in this release: the floor posts deliveries before invoicing, so an order that has been delivered but not invoiced reads Pushed to SAP until its invoice exists. Decided 24 Sep 2026.",
+    "no_production_stage": "There is no production stage between Pushed to SAP and Dispatched. custom_sap_production_order and custom_sap_production_stage are no longer written by the sync or read by either app. They still exist in ERPNext and may carry old values; nothing may act on them.",
+    "no_sap_order_is_not_a_failure": "An order with no SAP number has not been picked up yet. Only custom_sap_sync_error means something went wrong, and the two must never be shown the same way.",
+    "edits_come_from_sap": "Once approved, SAP is the record. A line the factory reduces or drops in SAP is reduced or removed in ERPNext by the sync's line reconcile, and both apps show the order as ERPNext then holds it. Neither app edits an approved order.",
+    "stale_is_worth_saying": "custom_sap_synced_at going quiet means SAP has moved and nobody here knows. Older than a day is worth showing.",
+    "cancelled_is_the_one_mapped_status": "custom_sap_sales_order_status is shown verbatim and never parsed, with exactly ONE exception: bost_Cancelled. A cancelled order is not a shade of progress, it is the order not happening, and an app that goes on calling it Approved tells a rep to expect goods nobody is making. bost_Cancelled is a SAP enum, so it is stable - and the sync folds SAP's separate Cancelled=tYES flag into the same value (Resolve-SoStatus), so one check covers both ways SAP says it. Found 18 Sep 2026: SAP order 399 had been cancelled and ERPNext had recorded it correctly for days, but nothing read it.",
+    "cancelled_outranks_approval": "Cancellation beats the approval status wherever the two are shown together, because it is the later fact and the terminal one.",
+    "a_list_shows_sap_once_sap_has_it": "An order list shows SAP's status once SAP has the order (or an invoice exists), and the stored in-app custom_production_status only before that - which is what every order placed before the floor moved to SAP on 11 Sep 2026 carries. The two are never mixed: an in-app Dispatched on an order SAP has not invoiced is not dispatch (invoice_is_dispatch). An order is complete - the tick, 'Order complete - dispatched' - exactly when this reads Dispatched. See order_progress. Added 24 Sep 2026, when both order lists were found still marking Dispatched from the in-app field."
   },
   "line_rules": {
     "same_derivation": "A line's status is derived exactly as an order's is. There is no second set of rules to drift.",
-    "delivery_is_per_line": "A delivery need not carry the whole order - dropping a row from it is how the floor ships what is ready and leaves the rest open. So a line is Dispatched only when THAT line was on a delivery. Reading the order's delivery would mark an unshipped line Dispatched while it sat unmade, the same lie as calling an unmapped stage Ready. Proved on SAP order 381, 16 Sep 2026: three lines shipped on DN 1, the fourth stayed open.",
-    "order_is_the_least_advanced_line": "The order rolls up to its least advanced line. An order is Ready only when every line is, and Dispatched only when every line has gone. Rounding the other way would tell a rep an order is made while one item is still in a press.",
-    "a_line_without_sap_is_not_a_failure": "A line with no production order has not been raised yet. It reads Not Started, exactly like an order SAP has not picked up."
+    "invoice_is_per_line": "An invoice need not carry the whole order. A line is Dispatched only when THAT line was invoiced. Reading the order's invoice would mark an uninvoiced line Dispatched.",
+    "a_line_is_pushed_when_its_order_is": "A line has no SAP number of its own. It is Pushed to SAP when its order is.",
+    "order_is_dispatched_only_when_every_line_is": "The order rolls up to its least advanced line. An order is Dispatched only when every line has been invoiced; a partly-invoiced order is still Pushed to SAP. The sync writes the order-level custom_sap_invoice only at that point, because that field is what takes an order out of the sync's polling - writing it on the first partial invoice would stop the rest of the order ever being followed."
   },
-  "line_stage_to_status": [
+  "order_status": [
     {
-      "why": "no production order raised for this line yet",
-      "line_stage": "",
-      "line_delivery": "",
+      "why": "nothing has reached SAP yet",
+      "sap_order": "",
+      "invoice": "",
       "expect": "Not Started"
     },
     {
-      "why": "planned is not started, for a line as for an order",
-      "line_stage": "Planned",
-      "line_delivery": "",
-      "expect": "Not Started"
+      "why": "SAP has the order, nothing invoiced",
+      "sap_order": "412",
+      "invoice": "",
+      "expect": "Pushed to SAP"
     },
     {
-      "why": "this line is on the floor",
-      "line_stage": "Released",
-      "line_delivery": "",
-      "expect": "In Production"
-    },
-    {
-      "why": "a named floor stage on one line",
-      "line_stage": "Curing",
-      "line_delivery": "",
-      "expect": "In Production"
-    },
-    {
-      "why": "unmapped on a line rounds the same safe way",
-      "line_stage": "Zzz Unmapped",
-      "line_delivery": "",
-      "expect": "In Production"
-    },
-    {
-      "why": "this line is finished but has not gone",
-      "line_stage": "Closed",
-      "line_delivery": "",
-      "expect": "Ready"
-    },
-    {
-      "why": "this line went out, whatever its stage said",
-      "line_stage": "Curing",
-      "line_delivery": "DN-500",
+      "why": "invoiced",
+      "sap_order": "412",
+      "invoice": "INV-900",
       "expect": "Dispatched"
     },
     {
-      "why": "a line delivered straight from stock, never produced",
-      "line_stage": "",
-      "line_delivery": "DN-500",
-      "expect": "Dispatched"
+      "why": "Frappe reads an unset field back as the string null - that is not an invoice",
+      "sap_order": "412",
+      "invoice": "null",
+      "expect": "Pushed to SAP"
     },
     {
-      "why": "left off a partial delivery - unshipped, however far the others got",
-      "line_stage": "Planned",
-      "line_delivery": "",
+      "why": "padding is SAP's, not ours",
+      "sap_order": "  412  ",
+      "invoice": "   ",
+      "expect": "Pushed to SAP"
+    }
+  ],
+  "line_status": [
+    {
+      "why": "order not in SAP yet, so neither is the line",
+      "order_sap": "",
+      "line_invoice": "",
       "expect": "Not Started"
     },
     {
-      "why": "a production order cancelled after release leaves nothing being made, so the line goes back to Not Started",
-      "line_stage": "",
-      "line_delivery": "",
-      "expect": "Not Started",
-      "note": "the sync clears the stage when no live production order covers the line"
+      "why": "order in SAP, this line not invoiced",
+      "order_sap": "412",
+      "line_invoice": "",
+      "expect": "Pushed to SAP"
+    },
+    {
+      "why": "this line was invoiced",
+      "order_sap": "412",
+      "line_invoice": "INV-900",
+      "expect": "Dispatched"
+    },
+    {
+      "why": "an invoiced line is Dispatched even if the order's own SAP number is missing on this read",
+      "order_sap": "",
+      "line_invoice": "INV-900",
+      "expect": "Dispatched"
     }
   ],
   "order_rolls_up_from_lines": [
     {
-      "why": "one line still queued holds the order back",
-      "line_stages": [
-        "Released",
-        "Planned"
-      ],
-      "expect": "Not Started"
-    },
-    {
-      "why": "all lines on the floor",
-      "line_stages": [
-        "Released",
-        "Curing"
-      ],
-      "expect": "In Production"
-    },
-    {
-      "why": "one line finished, one still going",
-      "line_stages": [
-        "Closed",
-        "Curing"
-      ],
-      "expect": "In Production"
-    },
-    {
-      "why": "every line finished",
-      "line_stages": [
-        "Closed",
-        "Finished"
-      ],
-      "expect": "Ready"
-    },
-    {
-      "why": "no lines carry a stage at all",
-      "line_stages": [
-        "",
-        ""
-      ],
-      "expect": "Not Started"
-    }
-  ],
-  "order_rolls_up_from_deliveries": [
-    {
-      "why": "every line gone - the order has gone",
-      "line_stages": [
-        "Closed",
-        "Closed"
-      ],
-      "line_deliveries": [
-        "DN-1",
-        "DN-1"
-      ],
+      "why": "every line invoiced - the order has gone",
+      "order_sap": "412",
+      "line_invoices": ["INV-1", "INV-1"],
       "expect": "Dispatched"
     },
     {
-      "why": "a partial delivery is NOT a dispatched order - order 381's real shape",
-      "line_stages": [
-        "Closed",
-        "Planned"
-      ],
-      "line_deliveries": [
-        "DN-1",
-        ""
-      ],
+      "why": "invoiced in parts across two invoices still counts once every line is covered",
+      "order_sap": "412",
+      "line_invoices": ["INV-1", "INV-2"],
+      "expect": "Dispatched"
+    },
+    {
+      "why": "a partial invoice is NOT a dispatched order",
+      "order_sap": "412",
+      "line_invoices": ["INV-1", ""],
+      "expect": "Pushed to SAP"
+    },
+    {
+      "why": "nothing invoiced yet",
+      "order_sap": "412",
+      "line_invoices": ["", ""],
+      "expect": "Pushed to SAP"
+    },
+    {
+      "why": "not in SAP, no lines invoiced",
+      "order_sap": "",
+      "line_invoices": ["", ""],
       "expect": "Not Started"
     },
     {
-      "why": "one gone, one still being made",
-      "line_stages": [
-        "Closed",
-        "Curing"
-      ],
-      "line_deliveries": [
-        "DN-1",
-        ""
-      ],
-      "expect": "In Production"
-    },
-    {
-      "why": "one gone, one made and waiting",
-      "line_stages": [
-        "Closed",
-        "Closed"
-      ],
-      "line_deliveries": [
-        "DN-1",
-        ""
-      ],
-      "expect": "Ready"
+      "why": "an order with no lines falls back to its own invoice",
+      "order_sap": "412",
+      "order_invoice": "INV-7",
+      "line_invoices": [],
+      "expect": "Dispatched"
     }
   ],
-  "stage_to_status": [
+  "order_progress": [
     {
-      "why": "nothing has reached SAP yet",
-      "sap_stage": "",
+      "why": "not in SAP yet: the stored in-app status, as before the changeover",
       "sap_order": "",
-      "delivery": "",
-      "expect": "Not Started"
-    },
-    {
-      "why": "SAP has the order but the floor has not begun",
-      "sap_stage": "",
-      "sap_order": "SO-1001",
-      "delivery": "",
-      "expect": "Not Started"
-    },
-    {
-      "why": "planned is not started",
-      "sap_stage": "Planned",
-      "sap_order": "SO-1001",
-      "delivery": "",
-      "expect": "Not Started"
-    },
-    {
-      "why": "released to the floor",
-      "sap_stage": "Released",
-      "sap_order": "SO-1001",
-      "delivery": "",
+      "invoice": "",
+      "stored": "In Production",
       "expect": "In Production"
     },
     {
-      "why": "a named floor stage",
-      "sap_stage": "Buffing",
-      "sap_order": "SO-1001",
-      "delivery": "",
-      "expect": "In Production"
-    },
-    {
-      "why": "another named floor stage",
-      "sap_stage": "Curing",
-      "sap_order": "SO-1001",
-      "delivery": "",
-      "expect": "In Production"
-    },
-    {
-      "why": "a stage nobody has mapped - started, distance unknown, and never Ready",
-      "sap_stage": "Zzz Unmapped",
-      "sap_order": "SO-1001",
-      "delivery": "",
-      "expect": "In Production"
-    },
-    {
-      "why": "finished on the floor, not yet gone",
-      "sap_stage": "Finished",
-      "sap_order": "SO-1001",
-      "delivery": "",
-      "expect": "Ready"
-    },
-    {
-      "why": "closed is finished by another name",
-      "sap_stage": "Closed",
-      "sap_order": "SO-1001",
-      "delivery": "",
-      "expect": "Ready"
-    },
-    {
-      "why": "a delivery order means it has left, whatever the stage says",
-      "sap_stage": "Curing",
-      "sap_order": "SO-1001",
-      "delivery": "DN-500",
+      "why": "an order finished in-app before the floor moved to SAP keeps its Dispatched",
+      "sap_order": "",
+      "invoice": "",
+      "stored": "Dispatched",
       "expect": "Dispatched"
     },
     {
-      "why": "delivered with no stage at all still means gone",
-      "sap_stage": "",
-      "sap_order": "SO-1001",
-      "delivery": "DN-500",
+      "why": "not in SAP and nothing stored",
+      "sap_order": "",
+      "invoice": "",
+      "stored": "",
+      "expect": "Not Started"
+    },
+    {
+      "why": "Frappe's string null is nothing stored",
+      "sap_order": "",
+      "invoice": "",
+      "stored": "null",
+      "expect": "Not Started"
+    },
+    {
+      "why": "once SAP has it, SAP reports it - the stored status is not read",
+      "sap_order": "412",
+      "invoice": "",
+      "stored": "In Production",
+      "expect": "Pushed to SAP"
+    },
+    {
+      "why": "an in-app Dispatched is not dispatch - only an invoice is",
+      "sap_order": "412",
+      "invoice": "",
+      "stored": "Dispatched",
+      "expect": "Pushed to SAP"
+    },
+    {
+      "why": "invoiced",
+      "sap_order": "412",
+      "invoice": "INV-900",
+      "stored": "",
       "expect": "Dispatched"
     },
     {
-      "why": "case and padding are SAP's, not ours",
-      "sap_stage": "  cURING  ",
-      "sap_order": "SO-1001",
-      "delivery": "",
-      "expect": "In Production"
+      "why": "an invoice is dispatch even if the SAP number is missing on this read",
+      "sap_order": "",
+      "invoice": "INV-900",
+      "stored": "In Production",
+      "expect": "Dispatched"
+    }
+  ],
+  "summary": [
+    {
+      "why": "invoiced - say which invoice and when",
+      "order": { "custom_sap_sales_order": "412", "custom_sap_invoice": "INV-900", "custom_sap_invoice_date": "2026-09-24" },
+      "expect": "Invoice INV-900 · 2026-09-24 · SAP 412"
+    },
+    {
+      "why": "invoiced, date not recorded",
+      "order": { "custom_sap_sales_order": "412", "custom_sap_invoice": "INV-900" },
+      "expect": "Invoice INV-900 · SAP 412"
+    },
+    {
+      "why": "in SAP, not invoiced",
+      "order": { "custom_sap_sales_order": "412" },
+      "expect": "SAP 412"
+    },
+    {
+      "why": "a stale production stage from before 24 Sep 2026 is never shown",
+      "order": { "custom_sap_sales_order": "412", "custom_sap_production_stage": "Curing" },
+      "expect": "SAP 412"
+    },
+    {
+      "why": "nothing to say",
+      "order": {},
+      "expect": null
     }
   ],
   "cancelled_orders": [

@@ -25,7 +25,7 @@
  *
  * 288 items hold about 37,260 kg in SAP with no belt data. They read 0 qty in
  * ERPNext today only because the import deliberately withheld their stock. On
- * the next scheduled sync they become eligible to receive it, and this stops
+ * the next stock sync they become eligible to receive it, and this stops
  * being theoretical.
  *
  * Pinned by `shared/fixtures/stock_from_kg.json`, which the phone's suite reads

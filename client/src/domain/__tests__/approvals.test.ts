@@ -51,6 +51,10 @@ describe('the status pill never leaks the stored string', () => {
     expect(statusPill(PO_STATUS.poUploaded).text).toBe('WAITING FOR MANAGER APPROVAL');
     expect(statusPill(PO_STATUS.pendingRate).text).toBe('WAITING FOR RATE APPROVAL');
     expect(statusPill(PO_STATUS.pendingGm).text).toBe('ESCALATED TO GM');
+    // Approved by the GM is not approved: it is not in SAP until the sales
+    // manager pushes it, so it must not read as done.
+    expect(statusPill(PO_STATUS.finalApproval)).toEqual({ text: 'APPROVED BY GM', tone: 'warn' });
+    expect(isApproved(PO_STATUS.finalApproval)).toBe(false);
     expect(statusPill(PO_STATUS.rejected)).toEqual({ text: 'REJECTED', tone: 'danger' });
   });
 
@@ -190,6 +194,10 @@ describe('the completion tick is derived, and names the state', () => {
 
   it('rounds an unrecognised status down', () => {
     expect(tickState('Curing')).toBe('not_started');
+  });
+
+  it('names an order SAP has taken, rather than calling it not started', () => {
+    expect(tickState('Pushed to SAP')).toBe('in_sap');
   });
 });
 

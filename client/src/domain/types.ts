@@ -20,9 +20,16 @@ export type Role =
   | 'general_manager'
   | 'production_manager'
   | 'stock_manager'
-  | 'hr';
+  | 'hr'
+  /**
+   * The Managing Director (25 Sep 2026): quality-wise list prices and dealer
+   * prices for Hi-Tech Pretreads in SAP, handed over as DTW files. From
+   * `User.custom_is_managing_director`.
+   */
+  | 'managing_director';
 
 export const ROLE_LABEL: Record<Role, string> = {
+  managing_director: 'Managing Director',
   sales_manager: 'Sales Manager',
   general_manager: 'General Manager',
   production_manager: 'Production Manager',
@@ -308,7 +315,26 @@ export interface TeamOrder {
    * to behaviour - see `cancelledInSap`.
    */
   sapSalesOrderStatus?: string;
+  /**
+   * The SAP invoice that completed the order — written only once every line
+   * has been invoiced. What makes a list show it Dispatched; see `orderProgress`.
+   */
+  sapInvoice?: string;
   route?: string;
+  /**
+   * What the customer committed to, in the rep's words, when the order took
+   * them past their credit limit. Empty on an order that never needed one.
+   * See `domain/creditCommitment.ts`.
+   */
+  creditCommitment?: string;
+  /** When the rep said it would be met. Optional; the GM may change it. */
+  creditCommitmentDue?: string;
+  /**
+   * The GM whose approval moved this order to `Pending Final Approval`, and
+   * when. The sales manager reads it before pushing to SAP.
+   */
+  gmApprovedBy?: string;
+  gmApprovedOn?: string;
 }
 
 /** Where a captured location stands. */
@@ -426,25 +452,14 @@ export interface OrderLine {
   dispatchShortReason?: string;
 
   /**
-   * What SAP says about THIS line: the production order covering it and where
-   * that order is on the floor.
+   * The A/R invoice that carried THIS line, and its posting date.
    *
-   * SAP raises one production order per item, so the order-level stage is only
-   * a roll-up and cannot say which item is holding an order back. Free text —
-   * the stage list belongs to the factory. Turn it into behaviour only through
-   * `domain/sapOrderState.ts`, never by comparing strings on a screen.
+   * Blank means this line has not gone — even when other lines have. An order
+   * can be invoiced in parts. Turn it into a status only through
+   * `domain/sapOrderState.ts`, never by testing it on a screen.
    */
-  sapProductionOrder?: string;
-  sapProductionStage?: string;
-  /**
-   * The delivery that carried THIS line, and when it ships.
-   *
-   * Blank means this line has not gone — even when the order carries a
-   * delivery number. A delivery can be raised for part of an order, which is
-   * how the floor ships what is ready and leaves the rest open.
-   */
-  sapDeliveryOrder?: string;
-  sapDeliveryDate?: string;
+  sapInvoice?: string;
+  sapInvoiceDate?: string;
 }
 
 /** A lead order — the pre-customer equivalent of a Sales Order. */
@@ -512,6 +527,18 @@ export interface ProductionOrderRow {
   /** Times the rep has edited it since raising it. 0 on most orders. */
   editCount: number;
   combinedOrder?: string;
+  /**
+   * What SAP has said about the order, as the sync wrote it back. The queue
+   * lists an order only once `salesOrder` is set — see `productionQueue.ts`.
+   * The shape is `SapOrderState`'s, so its rules read it directly.
+   */
+  sap: {
+    salesOrder?: string;
+    salesOrderStatus?: string;
+    invoice?: string;
+    invoiceDate?: string;
+    syncedAt?: string;
+  };
 }
 
 /**
@@ -587,16 +614,14 @@ export interface OrderDetail extends TeamOrder {
    * What SAP says about the order as a whole. The per-line detail is on
    * `OrderLine`; these are the order-level facts a line cannot carry.
    *
-   * `sapDeliveryOrder` matters beyond display: SAP delivers an ORDER, not a
-   * line, so a delivery means every line on it has gone — which is why
-   * `lineStatusFromSap` takes the order as well as the line.
+   * A line has no SAP number of its own, so `lineStatusFromSap` takes the
+   * order as well as the line: an uninvoiced line is Pushed to SAP only when
+   * its order is. `sapInvoice` is set only once every line has been invoiced.
    */
   sapSalesOrder?: string;
   sapSalesOrderStatus?: string;
-  sapProductionOrder?: string;
-  sapProductionStage?: string;
-  sapDeliveryOrder?: string;
-  sapDeliveryDate?: string;
+  sapInvoice?: string;
+  sapInvoiceDate?: string;
   sapSyncedAt?: string;
   sapSyncError?: string;
 }
@@ -624,6 +649,20 @@ export interface OrderDetail extends TeamOrder {
  */
 export interface MinStockLine {
   itemCode: string;
+  /**
+   * What a person recognises — "Tread Rubber Precured Black Pearl 156 AJAX
+   * 91". The code alone (`I-10280`) says nothing, and quality and pattern are
+   * parsed out of the name, never the code.
+   */
+  itemName?: string;
+  itemGroup?: string;
+  /**
+   * SAP's figure as it arrived, in kilos, available to promise. The only
+   * figure an item without weights has; see `stockView` for who is shown it.
+   */
+  kg?: number;
+  /** The item's stock UOM. `kg` is in this unit — five FG items are not Kg. */
+  uom?: string;
   /**
    * Available to promise. SAP has already taken off every quantity committed
    * to an open sales order, whoever raised it. Nothing subtracts further.

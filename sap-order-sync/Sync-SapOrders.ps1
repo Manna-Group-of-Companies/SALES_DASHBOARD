@@ -54,34 +54,41 @@
        custom_sap_sales_order_status = SAP status verbatim,
        custom_sap_synced_at = now, custom_sap_sync_error = "" (cleared).
 
-  PASS B - orders already in SAP, not yet delivered
-    In scope:  custom_sap_sales_order set  AND  custom_sap_delivery_order empty
+  PASS B - orders already in SAP, not yet fully invoiced
+    In scope:  custom_sap_sales_order set  AND  custom_sap_invoice empty
                AND docstatus < 2
-    Using one scan of open ProductionOrders and one scan of recent DeliveryNotes:
+    Using one scan of recent DeliveryNotes and one of recent A/R Invoices:
       custom_sap_sales_order_status <- refreshed SAP status verbatim
-      custom_sap_production_order    <- ProductionOrders.DocumentNumber of the
-                                        production order linked to this SO -
-                                        either a ProductionOrdersSalesOrderLines
-                                        row with BaseAbsEntry = this SO's DocEntry,
-                                        or ProductionOrderOrigin = bopooSalesOrder
-                                        with ProductionOrderOriginEntry = DocEntry
-      custom_sap_production_stage    <- current routing stage name
-                                        (ProductionOrdersStages[].Name; when the
-                                        PO has no routing stages, a label mapped
-                                        from ProductionOrderStatus)
-      custom_sap_delivery_order      <- DeliveryNotes.DocNum of a delivery whose
-                                        line BaseType=17 / BaseEntry = this SO's
-                                        DocEntry  (written to EVERY order the
-                                        delivery carries, because every order is
-                                        matched independently). NOTE this is the
-                                        Hi-Tech DN into the Manna Treads godown,
-                                        not a delivery to the end customer.
-      custom_sap_delivery_date      <- that delivery's DocDueDate (config)
+      lines                         <- reconciled to SAP (a line the factory
+                                       reduced or dropped there is reduced or
+                                       removed here)
+      custom_sap_invoice (LINE)     <- Invoices.DocNum of the invoice that
+                                       carried THIS line. An invoice line is
+                                       based either on the sales order
+                                       (BaseType 17) or on a delivery
+                                       (BaseType 15), which is then followed
+                                       back to its own sales-order base.
+      custom_sap_invoice_date (LINE)<- that invoice's DocDate
+      custom_sap_invoice (ORDER)    <- written only once EVERY line is invoiced,
+                                       because it is what takes the order out
+                                       of this pass. It names the invoice that
+                                       completed the order.
     custom_sap_synced_at is stamped on EVERY pass, changed or not.
     custom_sap_sync_error is cleared on any clean pass.
 
-  NEVER written here: custom_production_status (the app derives it), and
-  custom_sap_delivery_date from anywhere but a delivery order.
+    The delivery scan does not set any status. It stays because the line
+    reconcile needs it: a SAP line closes both when it ships and when the
+    factory drops it, and only "was this item delivered or invoiced?" tells
+    the two apart.
+
+  NO PRODUCTION ORDERS. Decided 24 Sep 2026: under MRP one production order
+  pools the demand of many sales orders and SAP does not record which order it
+  is for, so production-order linking is out of the initial release. See
+  shared/fixtures/sap_order_state.json.
+
+  NEVER written here: custom_production_status (the app derives it), and the
+  old custom_sap_production_* / custom_sap_delivery_* fields, which still exist
+  in ERPNext and are no longer read by either app.
 
   ALWAYS logs out of the Service Layer in a finally (few licence seats).
 
@@ -128,14 +135,13 @@ $script:Result = [ordered]@{
     adopted           = 0
     createFailed      = 0
     openPolled        = 0
-    productionMatched = 0
-    stagesWritten     = 0
     linesWritten      = 0
     linesCorrected    = 0
     linesRemoved      = 0
-    stagesCleared     = 0
+    linesInvoiced     = 0
+    ordersInvoiced    = 0
+    invoiceUnresolved = 0
     repUnmatched      = 0
-    deliveriesWritten = 0
     writeErrors       = 0
     failures          = 0
     changed           = 0
@@ -147,12 +153,11 @@ $script:Result = [ordered]@{
 }
 
 # ERPNext Sales Order fieldnames this job writes (single source of truth).
+# The same two invoice fieldnames exist on Sales Order Item, per line.
 $script:F_SO       = 'custom_sap_sales_order'
 $script:F_SO_STAT  = 'custom_sap_sales_order_status'
-$script:F_PROD     = 'custom_sap_production_order'
-$script:F_STAGE    = 'custom_sap_production_stage'
-$script:F_DELIV    = 'custom_sap_delivery_order'
-$script:F_DELIV_DT = 'custom_sap_delivery_date'
+$script:F_INV      = 'custom_sap_invoice'
+$script:F_INV_DT   = 'custom_sap_invoice_date'
 $script:F_SYNCED   = 'custom_sap_synced_at'
 $script:F_ERR      = 'custom_sap_sync_error'
 
@@ -709,76 +714,56 @@ function Resolve-SoStatus {
     return "$(Get-JsonProp $Order 'DocumentStatus')"
 }
 
-function Resolve-CurrentStage {
-    param($Po, $Labels, [string] $StageSource)
-    $stages = Get-JsonProp $Po 'ProductionOrdersStages'
-    if ($StageSource -eq 'routing_stages' -and $stages -and @($stages).Count -gt 0) {
-        $ordered = @($stages) | Sort-Object { [int](ConvertTo-Number (Get-JsonProp $_ 'SequenceNumber')) }
-        $active  = $ordered | Where-Object { -not "$(Get-JsonProp $_ 'EndDate')".Trim() } | Select-Object -First 1
-        if ($active) { return "$(Get-JsonProp $active 'Name')".Trim() }
-        $last = $ordered | Select-Object -Last 1
-        if ($last) { return "$(Get-JsonProp $last 'Name')".Trim() }
-    }
-    $st  = "$(Get-JsonProp $Po 'ProductionOrderStatus')"
-    $lbl = Get-JsonProp $Labels $st
-    if ($lbl) { return "$lbl" }
-    return $st
-}
-
-function Select-LeastAdvancedPo {
-    # Of several production orders covering the same thing, report the one the
-    # floor has got least far with. An order is only Ready when everything for
-    # it is finished - reporting the most advanced would tell a rep an order is
-    # made while part of it is still in a press.
-    # Cancelled orders are ignored entirely; they cover nothing.
-    param($Pos)
-    $rank = @{ 'boposPlanned' = 0; 'boposReleased' = 1; 'boposClosed' = 2 }
-    $best = $null; $bestRank = 99
-    foreach ($p in $Pos) {
-        $st = "$(Get-JsonProp $p 'ProductionOrderStatus')"
-        if ($st -eq 'boposCancelled') { continue }
-        $r = if ($rank.ContainsKey($st)) { $rank[$st] } else { 1 }   # unknown = In Production
-        if ($r -lt $bestRank) { $bestRank = $r; $best = $p }
-    }
-    return $best
-}
-
-function Add-PoToMap {
-    param($Map, [string] $Key, $Po)
-    if ($Key -eq '' -or $Key -eq '0') { return }
-    if (-not $Map.ContainsKey($Key)) { $Map[$Key] = New-Object System.Collections.ArrayList }
-    [void]$Map[$Key].Add($Po)
-}
-
-function Resolve-SoEntryByDocNumAndItem {
-    param($Candidates, [string] $ItemCode)
-    # A production order raised by hand carries the sales order NUMBER and no
-    # entry: type 406 into the Sales Order field and SAP fills
-    # ProductionOrderOriginNumber = 406, leaving ProductionOrderOriginEntry
-    # null. DocNum is not unique in this database - 406 is four different sales
-    # orders - so the number alone cannot say which one.
+function Resolve-InvoiceLineSoEntry {
+    # Which sales order an A/R invoice LINE is for.
     #
-    # The item breaks the tie. A production order makes ONE item, and that item
-    # has to be on the order it is for. Returns the DocEntry only when exactly
-    # one candidate carries it; anything else is ambiguous and refused, because
-    # guessing here attaches a live production order to a stranger's order.
+    # An invoice line is based either on the sales order itself (BaseType 17,
+    # BaseEntry = the order's DocEntry) or on a delivery (BaseType 15, BaseEntry
+    # = the delivery's DocEntry, BaseLine = the delivery's line), which is then
+    # followed back to that delivery line's own sales-order base. One invoice
+    # cannot mix the two base types, but a pooled invoice can carry lines from
+    # several sales orders, so this is resolved per line, never per invoice.
     #
-    # Returns @{ Entry = <string, '' when refused>; Reason = <string> }.
-    if ("$ItemCode".Trim() -eq '') { return @{ Entry = ''; Reason = 'the production order names no item' } }
-    $hits = @()
-    foreach ($c in $Candidates) {
-        foreach ($l in @(Get-JsonProp $c 'DocumentLines')) {
-            if ("$(Get-JsonProp $l 'ItemCode')".Trim() -eq "$ItemCode".Trim()) {
-                $de = "$(Get-JsonProp $c 'DocEntry')".Trim()
-                if ($de -ne '' -and $de -ne '0') { $hits += $de }
-                break
-            }
+    # $DnLineToSo maps "<delivery DocEntry>|<delivery LineNum>" to the sales
+    # order DocEntry that delivery line was based on.
+    #
+    # The base types are literals here rather than the script's constants so
+    # the function stands alone when a test extracts it.
+    #
+    # Returns the sales order DocEntry, or '' when the line is not based on a
+    # sales order this run can see - a standalone invoice, or a delivery older
+    # than the scan window.
+    param($InvoiceLine, [hashtable] $DnLineToSo)
+    $bt = [int](ConvertTo-Number (Get-JsonProp $InvoiceLine 'BaseType'))
+    $be = "$(Get-JsonProp $InvoiceLine 'BaseEntry')".Trim()
+    if ($be -eq '' -or $be -eq '0') { return '' }
+    if ($bt -eq 17) { return $be }                              # based on the sales order
+    if ($bt -eq 15) {                                           # based on a delivery
+        $bl = "$(Get-JsonProp $InvoiceLine 'BaseLine')".Trim()
+        $k  = "$be|$bl"
+        if ($DnLineToSo -and $DnLineToSo.ContainsKey($k)) { return "$($DnLineToSo[$k])" }
+    }
+    return ''
+}
+
+function Select-CompletingInvoice {
+    # Of the invoices that between them cover an order, the one that completed
+    # it: the latest by DocDate, then by DocEntry. That is the invoice named on
+    # the order once every line has gone. DocDate is ISO, so it sorts as text.
+    param($Invoices)
+    $best = $null
+    foreach ($i in @($Invoices)) {
+        if ($null -eq $i) { continue }
+        if ($null -eq $best) { $best = $i; continue }
+        $d  = "$(Get-JsonProp $i 'DocDate')"
+        $bd = "$(Get-JsonProp $best 'DocDate')"
+        if ($d -gt $bd) { $best = $i; continue }
+        if ($d -eq $bd -and
+            [int](ConvertTo-Number (Get-JsonProp $i 'DocEntry')) -gt [int](ConvertTo-Number (Get-JsonProp $best 'DocEntry'))) {
+            $best = $i
         }
     }
-    $hits = @($hits | Select-Object -Unique)
-    if ($hits.Count -eq 1) { return @{ Entry = "$($hits[0])"; Reason = '' } }
-    if ($hits.Count -eq 0) { return @{ Entry = ''; Reason = 'no sales order with that DocNum carries the item' } }
-    return @{ Entry = ''; Reason = ("{0} sales orders with that DocNum carry the item" -f $hits.Count) }
+    return $best
 }
 
 function Update-ErpOrderLine {
@@ -879,10 +864,16 @@ function New-ErpPackingNote {
   line to tell them apart - checked against the live DB, the fields are
   Quantity, RemainingOpenQuantity and LineStatus and nothing else.
 
-  So -DeliveredItems is required: the item codes a delivery note actually
-  carried for this order, which PASS B already has in $dnByEntryItem. Closed
-  WITH a delivery is a finished line and is left alone. Closed WITHOUT one is
-  the manufacturing team dropping an item, and the ERPNext row goes.
+  So -DeliveredItems is required: the item codes a delivery note OR an A/R
+  invoice actually carried for this order, which PASS B builds from
+  $dnByEntryItem and $invByEntryItem. Closed WITH either is a finished line and
+  is left alone. Closed WITHOUT either is the manufacturing team dropping an
+  item, and the ERPNext row goes.
+
+  Invoices count as well as deliveries because a line can be invoiced straight
+  from the order with no delivery at all. Leaving invoices out would read such
+  a line as closed-and-dropped and delete it - a line the customer has been
+  billed for.
 
   Getting this backwards would delete the lines the customer has already been
   sent.
@@ -960,7 +951,7 @@ function Get-ErpLineCorrections {
 
         # Closed in SAP. Delivered, or dropped? Only the delivery note knows.
         if (-not $sapOpen[$code]) {
-            if ($DeliveredItems.ContainsKey($code)) { continue }   # shipped; PASS B marks it dispatched
+            if ($DeliveredItems.ContainsKey($code)) { continue }   # delivered or invoiced; finished, not dropped
             $act.Action = 'remove'
             $act.Note   = "closed in SAP with no delivery against it - dropped by the factory (ERPNext still has $erpKg kg)."
             $removals++
@@ -1072,19 +1063,17 @@ try {
     # which is how every order up to 18 Sep 2026 ended up committing stock to
     # warehouse 01 while the finished goods sat in 07.
     $lineWarehouse = Get-OptionalString $os 'line_warehouse' ''
-    $stageSource   = Get-OptionalString $os 'stage_source' 'routing_stages'
     $stampField    = Get-OptionalString $os 'stamp_erpnext_name_in' 'NumAtCard'   # NumAtCard | U_FreeText | none
-    $shipDateFrom  = Get-OptionalString $os 'delivery_ship_date_from' 'DocDueDate' # DocDate | DocDueDate
+    # How far back the delivery and invoice scans look. Deliveries are still
+    # read - not for status, but because the line reconcile needs them.
     $deliveryDays  = Get-OptionalInt    $os 'delivery_scan_days' 120
-    $statusLabels  = Get-JsonProp $os 'production_status_labels'
-    $prodStatuses  = @(Get-JsonProp $os 'production_scan_statuses')
-    if (-not $prodStatuses -or $prodStatuses.Count -eq 0) { $prodStatuses = @('boposPlanned', 'boposReleased', 'boposClosed') }
+    $invoiceDays   = Get-OptionalInt    $os 'invoice_scan_days' $deliveryDays
+    # stage_source, production_scan_statuses, production_status_labels and
+    # delivery_ship_date_from are no longer read (24 Sep 2026). A config that
+    # still carries them is fine; they are ignored.
 
     if ($stampField -notin @('NumAtCard', 'U_FreeText', 'none')) {
         throw "config: order_sync.stamp_erpnext_name_in must be NumAtCard, U_FreeText or none (got '$stampField')."
-    }
-    if ($shipDateFrom -notin @('DocDate', 'DocDueDate')) {
-        throw "config: order_sync.delivery_ship_date_from must be DocDate or DocDueDate (got '$shipDateFrom')."
     }
 
     # ---- logging ----
@@ -1107,8 +1096,8 @@ try {
     } catch { }
 
     $script:Result.company = $companyName
-    Write-Log INFO ("==== run start ==== company='{0}' db='{1}' DryRun={2} Limit={3} gate='{4}' cardCode={5} sendUnitPrice={6} warehouse={11} stageSource={7} stamp={8} shipDate={9} PS={10}" -f `
-        $companyName, $companyDb, [bool]$DryRun, $Limit, $poGate, $fixedCardCode, $sendUnitPrice, $stageSource, $stampField, $shipDateFrom, $PSVersionTable.PSVersion, $(if ($lineWarehouse -eq '') { "<SAP default>" } else { $lineWarehouse }))
+    Write-Log INFO ("==== run start ==== company='{0}' db='{1}' DryRun={2} Limit={3} gate='{4}' cardCode={5} sendUnitPrice={6} warehouse={7} stamp={8} deliveryDays={9} invoiceDays={10} PS={11}" -f `
+        $companyName, $companyDb, [bool]$DryRun, $Limit, $poGate, $fixedCardCode, $sendUnitPrice, $(if ($lineWarehouse -eq '') { "<SAP default>" } else { $lineWarehouse }), $stampField, $deliveryDays, $invoiceDays, $PSVersionTable.PSVersion)
 
     # ---- TLS / cert ----
     # The Service Layer answers any POST carrying 'Expect: 100-continue' with an
@@ -1142,12 +1131,17 @@ try {
         $newList   = Get-ErpList -Filters $newFilter -Fields @('name', 'customer', 'transaction_date', 'delivery_date', 'grand_total')
         $newList   = @($newList | Sort-Object { "$($_.name)" })
 
-        $openFilter = '[["' + $script:F_SO + '","is","set"],["' + $script:F_DELIV + '","in",["",null]],["docstatus","<",2]]'
-        $openList   = Get-ErpList -Filters $openFilter -Fields @('name', 'customer', $script:F_SO, $script:F_SO_STAT, $script:F_PROD, $script:F_STAGE)
+        # PASS B's working set: in SAP and not yet FULLY invoiced. The
+        # order-level custom_sap_invoice is written only once every line is,
+        # so a partly-invoiced order stays here and its remaining lines are
+        # still followed. This field must exist in ERPNext before this runs -
+        # Frappe fails the whole list on an unknown field in a filter.
+        $openFilter = '[["' + $script:F_SO + '","is","set"],["' + $script:F_INV + '","in",["",null]],["docstatus","<",2]]'
+        $openList   = Get-ErpList -Filters $openFilter -Fields @('name', 'customer', $script:F_SO, $script:F_SO_STAT)
         $openList   = @($openList | Sort-Object { "$($_.name)" })
 
         $script:Result.inScopeNew = $newList.Count
-        Write-Log INFO ("ERPNext: {0} order(s) approved & not yet in SAP; {1} order(s) in SAP & not yet delivered." -f $newList.Count, $openList.Count)
+        Write-Log INFO ("ERPNext: {0} order(s) approved & not yet in SAP; {1} order(s) in SAP & not yet fully invoiced." -f $newList.Count, $openList.Count)
 
         if ($newList.Count -eq 0 -and $openList.Count -eq 0) {
             Write-Log INFO "nothing to do."
@@ -1186,10 +1180,9 @@ try {
             }
 
             # ---- 2b. prefetch scans for PASS B (only if needed) ----
-            $poBySoEntry    = @{}   # SO DocEntry -> ArrayList of production orders
-            $posByEntryItem = @{}   # "SO DocEntry|ItemCode" -> ArrayList of production orders
-            $dnBySoEntry   = @{}   # SO DocEntry -> delivery note object (earliest by DocDate)
-            $dnByEntryItem = @{}   # "SO DocEntry|ItemCode" -> the delivery that carried THAT line
+            $dnByEntryItem  = @{}   # "SO DocEntry|ItemCode" -> the delivery that carried THAT line (reconcile only)
+            $dnLineToSo     = @{}   # "DN DocEntry|DN LineNum" -> SO DocEntry, to follow an invoice back through its delivery
+            $invByEntryItem = @{}   # "SO DocEntry|ItemCode" -> the A/R invoice that carried THAT line
             $sapOrderByDocNum = @{}
             if ($openList.Count -gt 0) {
                 # SAP Orders for the open set, resolved by DocNum (need DocEntry to join).
@@ -1212,166 +1205,61 @@ try {
                     }
                 }
 
-                # Open production orders + their SO links and routing stages.
-                # Three ways a production order points at its sales order:
-                #   - ProductionOrdersSalesOrderLines[].BaseAbsEntry = SO DocEntry
-                #   - ProductionOrderOrigin = bopooSalesOrder with
-                #     ProductionOrderOriginEntry = SO DocEntry
-                #   - ProductionOrderOrigin = bopooManual, same OriginEntry.
-                # The third is how this factory actually works: the floor raises
-                # standalone orders and types the sales order into the Sales Order
-                # field, which links it but leaves the origin Manual. Requiring
-                # bopooSalesOrder matched 1 of 31,853 production orders.
-                # Other origins (MRP and friends) are NOT accepted - their
-                # OriginEntry points at a different document type, so trusting it
-                # would attach a production order to an unrelated sales order.
-                # Ask only for the production orders that could possibly matter.
-                #
-                # Filtering on status alone returned every open production order in
-                # the company - 32,374 rows over 162 pages, about 50 of the 60
-                # seconds a run took - to use the four that belong to the orders in
-                # hand. Restricting to the sales orders we actually resolved turns
-                # that into a handful of rows.
-                #
-                # TWO link styles, and SAP records them differently:
-                #
-                #   - generated by the Procurement Confirmation Wizard: BOTH
-                #     ProductionOrderOriginEntry (the DocEntry) and
-                #     ProductionOrderOriginNumber (the DocNum) are filled.
-                #   - raised standalone with the sales order typed into the
-                #     Sales Order field - which is how this floor actually
-                #     works: ONLY ProductionOrderOriginNumber is filled.
-                #     OriginEntry stays null.
-                #
-                # This comment used to claim the entry was filled either way. It
-                # is not, and so the sync silently ignored every hand-linked
-                # production order until 18 September 2026: SAP order 406 had a
-                # RELEASED order against its I-14637 line and the line still
-                # read Not Started, because the scan below never fetched it.
-                #
-                # Hence both clauses. The number is resolved back to an entry by
-                # Resolve-SoEntryByDocNumAndItem, which refuses when ambiguous -
-                # DocNum is not unique here (406 is four different orders).
-                $soEntries = @()
-                $soDocNums = @()
-                foreach ($lst in $sapOrderByDocNum.Values) {
-                    foreach ($o in $lst) {
-                        $de = "$(Get-JsonProp $o 'DocEntry')".Trim()
-                        if ($de -ne '' -and $de -ne '0') { $soEntries += $de }
-                        $dnum = "$(Get-JsonProp $o 'DocNum')".Trim()
-                        if ($dnum -ne '' -and $dnum -ne '0') { $soDocNums += $dnum }
-                    }
-                }
-                $soEntries = @($soEntries | Select-Object -Unique)
-                $soDocNums = @($soDocNums | Select-Object -Unique)
-
-                # Collect EVERY production order per sales order, and per line item,
-                # rather than keeping one. A line can need several (a part quantity
-                # started now, the rest later) and an order usually needs one per
-                # item - the status they roll up to is decided at write time by
-                # Select-LeastAdvancedPo.
-                $posByEntryItem = @{}   # "<SO DocEntry>|<ItemCode>" -> ArrayList of POs
-
-                $stFilter = ($prodStatuses | ForEach-Object { "ProductionOrderStatus eq '$_'" }) -join ' or '
-                $poSelect = 'DocumentNumber,AbsoluteEntry,ItemNo,ProductionOrderStatus,ProductionOrderOrigin,ProductionOrderOriginEntry,ProductionOrderOriginNumber,ProductionOrdersSalesOrderLines,ProductionOrdersStages'
-                $poRows = New-Object System.Collections.ArrayList
-                # One clause per sales order, by entry AND by number. Matching on
-                # the number over-fetches - other orders share a DocNum - but the
-                # extras are discarded when the item fails to tie them back.
-                $poClauses = @()
-                foreach ($e in $soEntries) { $poClauses += "ProductionOrderOriginEntry eq $e" }
-                foreach ($n in $soDocNums) { $poClauses += "ProductionOrderOriginNumber eq $n" }
-                # Chunked: the filter goes in the URL, and one clause per sales
-                # order would eventually outgrow what the Service Layer accepts.
-                $poChunk = 20
-                for ($i = 0; $i -lt $poClauses.Count; $i += $poChunk) {
-                    $slice = $poClauses[$i..([math]::Min($i + $poChunk - 1, $poClauses.Count - 1))]
-                    $origins = $slice -join ' or '
-                    $f = "($stFilter) and ($origins)"
-                    $poRel = "ProductionOrders?`$filter=$([uri]::EscapeDataString($f))&`$select=$poSelect&`$orderby=AbsoluteEntry"
-                    foreach ($row in (Invoke-SapGet -BaseUrl $sapUrl -Session $sess -RelUrl $poRel -PageSize $pageSize -UseSkipCert $useSkip -Label "ProductionOrders for $($slice.Count) link clause(s)")) {
-                        [void]$poRows.Add($row)
-                    }
-                }
-                # The same production order can come back from both clauses.
-                $seenPo = @{}
-                $uniqPo = New-Object System.Collections.ArrayList
-                foreach ($row in $poRows) {
-                    $ae = "$(Get-JsonProp $row 'AbsoluteEntry')".Trim()
-                    if ($ae -ne '' -and $seenPo.ContainsKey($ae)) { continue }
-                    if ($ae -ne '') { $seenPo[$ae] = $true }
-                    [void]$uniqPo.Add($row)
-                }
-                $poRows = $uniqPo
-
-                $poByNumber = 0
-                foreach ($po in $poRows) {
-                    $item = "$(Get-JsonProp $po 'ItemNo')".Trim()
-                    $seen = @{}
-                    foreach ($sol in @(Get-JsonProp $po 'ProductionOrdersSalesOrderLines')) {
-                        $be = "$(Get-JsonProp $sol 'BaseAbsEntry')".Trim()
-                        if ($be -eq '') { continue }
-                        Add-PoToMap $poBySoEntry $be $po
-                        if ($item) { Add-PoToMap $posByEntryItem "$be|$item" $po }
-                        $seen[$be] = $true
-                    }
-                    $origin = "$(Get-JsonProp $po 'ProductionOrderOrigin')"
-                    if ($origin -eq 'bopooSalesOrder' -or $origin -eq 'bopooManual') {
-                        $oe = "$(Get-JsonProp $po 'ProductionOrderOriginEntry')".Trim()
-                        if ($oe -ne '' -and $oe -ne '0') {
-                            if (-not $seen.ContainsKey($oe)) {
-                                Add-PoToMap $poBySoEntry $oe $po
-                                if ($item) { Add-PoToMap $posByEntryItem "$oe|$item" $po }
-                            }
-                        }
-                        else {
-                            # Linked by hand: the number is filled, the entry is not.
-                            $onum = "$(Get-JsonProp $po 'ProductionOrderOriginNumber')".Trim()
-                            if ($onum -ne '' -and $onum -ne '0' -and $sapOrderByDocNum.ContainsKey($onum)) {
-                                $res = Resolve-SoEntryByDocNumAndItem -Candidates $sapOrderByDocNum[$onum] -ItemCode $item
-                                if ($res.Entry -ne '' -and -not $seen.ContainsKey($res.Entry)) {
-                                    Add-PoToMap $poBySoEntry $res.Entry $po
-                                    Add-PoToMap $posByEntryItem "$($res.Entry)|$item" $po
-                                    $poByNumber++
-                                }
-                                elseif ($res.Entry -eq '') {
-                                    # Never guess. A wrongly attached production
-                                    # order reports someone else's order as being
-                                    # made - see Resolve-SoEntryByDocNumAndItem.
-                                    Write-Log WARN ("production order {0} ({1}) names sales order {2} but {3} - not attached to any order." -f `
-                                        "$(Get-JsonProp $po 'DocumentNumber')", $item, $onum, $res.Reason)
-                                }
-                            }
-                        }
-                    }
-                }
-                if ($poByNumber -gt 0) {
-                    Write-Log INFO ("SAP prefetch: {0} production order(s) attached by sales order NUMBER (typed in by hand, no DocEntry link)." -f $poByNumber)
-                }
-
                 # Recent deliveries + their base-document links.
+                #
+                # NOT for status - a delivery is not dispatch in this release.
+                # Two other jobs need it:
+                #   - the line reconcile, which tells a shipped closed line from
+                #     a dropped one by whether it was delivered (or invoiced);
+                #   - following an invoice back to its sales order, when the
+                #     invoice was raised from the delivery rather than the order.
                 $cutoff = (Get-Date).AddDays(-1 * [math]::Abs($deliveryDays)).ToString('yyyy-MM-dd')
-                $dnRel = "DeliveryNotes?`$filter=DocDate ge $cutoff&`$select=DocEntry,DocNum,DocDate,DocDueDate,DocumentLines&`$orderby=DocDate"
+                $dnRel = "DeliveryNotes?`$filter=DocDate ge $cutoff&`$select=DocEntry,DocNum,DocDate,DocumentLines&`$orderby=DocDate"
                 $dnRel = $dnRel -replace ' ', '%20'
                 foreach ($dn in (Invoke-SapGet -BaseUrl $sapUrl -Session $sess -RelUrl $dnRel -PageSize $pageSize -UseSkipCert $useSkip -Label "recent DeliveryNotes")) {
+                    $dnEntry = "$(Get-JsonProp $dn 'DocEntry')".Trim()
                     foreach ($dl in @(Get-JsonProp $dn 'DocumentLines')) {
                         if ([int](ConvertTo-Number (Get-JsonProp $dl 'BaseType')) -ne $SAP_BASETYPE_SALESORDER) { continue }
                         $be = "$(Get-JsonProp $dl 'BaseEntry')".Trim()
                         if ($be -eq '') { continue }
-                        if (-not $dnBySoEntry.ContainsKey($be)) { $dnBySoEntry[$be] = $dn }   # earliest by DocDate - orderby asc
-                        # Per LINE as well as per order. A delivery need not carry
-                        # the whole order - dropping a row from it is how the floor
-                        # ships what is ready and leaves the rest open. Recording
-                        # only the order-level delivery would mark every line
-                        # Dispatched the moment ANY line shipped.
+                        # Per LINE. A delivery need not carry the whole order.
                         $di = "$(Get-JsonProp $dl 'ItemCode')".Trim()
                         if ($di -ne '' -and -not $dnByEntryItem.ContainsKey("$be|$di")) {
                             $dnByEntryItem["$be|$di"] = $dn
                         }
+                        $dln = "$(Get-JsonProp $dl 'LineNum')".Trim()
+                        if ($dnEntry -ne '' -and $dln -ne '') { $dnLineToSo["$dnEntry|$dln"] = $be }
                     }
                 }
-                Write-Log INFO ("SAP prefetch: {0} SAP order(s) resolved, {1} PO<-SO link(s), {2} delivery<-SO link(s)." -f `
-                    ($sapOrderByDocNum.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum, $poBySoEntry.Count, $dnBySoEntry.Count)
+
+                # Recent A/R invoices - the only thing that makes a line Dispatched.
+                #
+                # Resolved per LINE: a pooled invoice can carry lines from several
+                # sales orders, and a line may be based on the order or on a
+                # delivery (Resolve-InvoiceLineSoEntry). A cancelled invoice is not
+                # a dispatch and is skipped - otherwise cancelling a wrong invoice
+                # in SAP would leave the order reading Dispatched for ever.
+                $invCutoff = (Get-Date).AddDays(-1 * [math]::Abs($invoiceDays)).ToString('yyyy-MM-dd')
+                $invRel = "Invoices?`$filter=DocDate ge $invCutoff&`$select=DocEntry,DocNum,DocDate,Cancelled,DocumentLines&`$orderby=DocDate"
+                $invRel = $invRel -replace ' ', '%20'
+                $invCancelledSkipped = 0
+                foreach ($inv in (Invoke-SapGet -BaseUrl $sapUrl -Session $sess -RelUrl $invRel -PageSize $pageSize -UseSkipCert $useSkip -Label "recent Invoices")) {
+                    if ("$(Get-JsonProp $inv 'Cancelled')" -eq 'tYES') { $invCancelledSkipped++; continue }
+                    foreach ($il in @(Get-JsonProp $inv 'DocumentLines')) {
+                        $soE = Resolve-InvoiceLineSoEntry -InvoiceLine $il -DnLineToSo $dnLineToSo
+                        if ($soE -eq '') {
+                            if ([int](ConvertTo-Number (Get-JsonProp $il 'BaseType')) -eq 15) { $script:Result.invoiceUnresolved++ }
+                            continue
+                        }
+                        $ii = "$(Get-JsonProp $il 'ItemCode')".Trim()
+                        # Earliest invoice wins (orderby asc): the line went on that one.
+                        if ($ii -ne '' -and -not $invByEntryItem.ContainsKey("$soE|$ii")) {
+                            $invByEntryItem["$soE|$ii"] = $inv
+                        }
+                    }
+                }
+                Write-Log INFO ("SAP prefetch: {0} SAP order(s) resolved, {1} delivered line link(s), {2} invoiced line link(s); {3} cancelled invoice(s) ignored; {4} invoice line(s) based on a delivery older than the scan window." -f `
+                    ($sapOrderByDocNum.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum, $dnByEntryItem.Count, $invByEntryItem.Count, $invCancelledSkipped, $script:Result.invoiceUnresolved)
             }
 
             $nowStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
@@ -1516,7 +1404,7 @@ try {
                 }
             }
 
-            # =================== PASS B - pull PO / stage / delivery ===================
+            # =================== PASS B - pull status / lines / invoices ===================
             $doneB = 0
             foreach ($row in $openList) {
                 if ($Limit -gt 0 -and $doneB -ge $Limit) { Write-Log WARN ("PASS B -Limit {0} reached; {1} open order(s) left for the next run." -f $Limit, ($openList.Count - $doneB)); break }
@@ -1551,52 +1439,15 @@ try {
                         $fields[$script:F_SO_STAT] = (Resolve-SoStatus $sapOrder)
                     }
 
-                    # production order + current stage (order roll-up)
-                    if ($soEntry -and $poBySoEntry.ContainsKey($soEntry)) {
-                        $po = Select-LeastAdvancedPo $poBySoEntry[$soEntry]
-                        if ($po) {
-                            $fields[$script:F_PROD]  = "$(Get-JsonProp $po 'DocumentNumber')"
-                            $fields[$script:F_STAGE] = (Resolve-CurrentStage -Po $po -Labels $statusLabels -StageSource $stageSource)
-                            $script:Result.productionMatched++
-                            if ("$($fields[$script:F_STAGE])".Trim()) { $script:Result.stagesWritten++ }
-                        }
-                    }
-
-                    # Delivery + ship date at ORDER level - and only once the WHOLE
-                    # order has gone.
-                    #
-                    # This field is what takes an order out of PASS B: the scan
-                    # reads orders where it is still empty. Writing it for a
-                    # partial delivery retires an order that still owes the
-                    # customer a line, and nothing would ever poll it again -
-                    # the remaining line would freeze at whatever stage it had
-                    # when the first lorry left. Seen on SAP order 381, where
-                    # three lines shipped on DN 1 and the fourth stayed open.
-                    #
-                    # A line that HAS gone still says so: the per-line delivery
-                    # written below is not gated on this.
-                    if ($soEntry -and $dnBySoEntry.ContainsKey($soEntry) -and $sapOrder) {
-                        $soStatus = "$(Get-JsonProp $sapOrder 'DocumentStatus')"
-                        if ($soStatus -eq 'bost_Close') {
-                            $dn = $dnBySoEntry[$soEntry]
-                            $fields[$script:F_DELIV]    = "$(Get-JsonProp $dn 'DocNum')"
-                            $shipRaw = Get-JsonProp $dn $shipDateFrom
-                            $ship = ConvertTo-DateOnly $shipRaw
-                            if ($ship) { $fields[$script:F_DELIV_DT] = $ship }
-                            $script:Result.deliveriesWritten++
-                        } else {
-                            Write-Log INFO ("PASS B {0}: delivered in part - SAP order still {1}, so the order-level delivery is left unset and it stays in scope." -f $name, $soStatus)
-                        }
-                    }
-
                     $fields[$script:F_ERR] = ''   # clean pass clears a stale error
 
-                    # Per-line production status. SAP links a production order to the
-                    # sales ORDER, not to a line, so the join is the item code. An
-                    # item appearing on two lines of one order would be ambiguous;
-                    # both lines then get the same status, which is the honest answer
-                    # since SAP cannot say which line the production covers.
+                    # Per-line invoice. The join is the item code, as the delivery
+                    # join always was: an ERPNext row does not carry its SAP line
+                    # number. An item appearing on two lines of one order would be
+                    # ambiguous; both lines then get the same invoice, which is the
+                    # honest answer when SAP cannot be asked which line it meant.
                     $lineUpdates = New-Object System.Collections.ArrayList
+                    $lineInvoices = New-Object System.Collections.ArrayList   # one per ERPNext line; $null = not invoiced
                     if ($soEntry) {
                         $full = Get-ErpSalesOrder -Name $name
 
@@ -1619,15 +1470,19 @@ try {
                             Write-Log INFO ("PASS B {0}: SAP order is cancelled - lines left as they are." -f $name)
                         }
                         elseif ($reconcileLines -and $sapOrder) {
-                            # Which items a delivery actually carried for THIS
-                            # order. A SAP line closes both when it ships and
-                            # when the factory drops it, and nothing on the
+                            # Which items a delivery OR an invoice actually carried
+                            # for THIS order. A SAP line closes both when it ships
+                            # and when the factory drops it, and nothing on the
                             # line itself tells the two apart - see
-                            # Get-ErpLineCorrections.
+                            # Get-ErpLineCorrections. Invoices count too: a line
+                            # invoiced straight from the order has no delivery,
+                            # and leaving it out would delete a billed line.
                             $delivered = @{}
-                            foreach ($dk in $dnByEntryItem.Keys) {
-                                $bits = "$dk".Split('|', 2)
-                                if ($bits.Count -eq 2 -and $bits[0] -eq $soEntry) { $delivered[$bits[1]] = $true }
+                            foreach ($map in @($dnByEntryItem, $invByEntryItem)) {
+                                foreach ($dk in $map.Keys) {
+                                    $bits = "$dk".Split('|', 2)
+                                    if ($bits.Count -eq 2 -and $bits[0] -eq $soEntry) { $delivered[$bits[1]] = $true }
+                                }
                             }
 
                             $plan = Get-ErpLineCorrections `
@@ -1684,65 +1539,68 @@ try {
                             $ic = "$(Get-JsonProp $row 'item_code')".Trim()
                             $rn = "$(Get-JsonProp $row 'name')".Trim()
                             if (-not $ic -or -not $rn) { continue }
-                            # Not gated on there being a production order: a line
-                            # can be delivered from stock without one, and would
-                            # otherwise never be told it had shipped.
                             $key = "$soEntry|$ic"
-                            $lf = @{}
 
-                            $lpo = $null
-                            if ($posByEntryItem.ContainsKey($key)) {
-                                $lpo = Select-LeastAdvancedPo $posByEntryItem[$key]
+                            $hadNo = "$(Get-JsonProp $row $script:F_INV)".Trim()
+                            if ($hadNo -eq 'null') { $hadNo = '' }
+                            $hadDt = "$(Get-JsonProp $row $script:F_INV_DT)".Trim()
+                            if ($hadDt -eq 'null') { $hadDt = '' }
+
+                            # The invoice that carried THIS line, if any. A line
+                            # left off a partial invoice keeps these blank and so
+                            # never reads Dispatched, while its neighbours do.
+                            if ($invByEntryItem.ContainsKey($key)) {
+                                $linv  = $invByEntryItem[$key]
+                                [void]$lineInvoices.Add($linv)
+                                $invNo = "$(Get-JsonProp $linv 'DocNum')"
+                                $invDt = ConvertTo-DateOnly (Get-JsonProp $linv 'DocDate')
+                                # Only when it changes: this runs every pass for
+                                # every open order, and an unchanged write still
+                                # bumps `modified` on the row.
+                                if ($hadNo -eq $invNo -and (-not $invDt -or $hadDt -eq "$invDt")) { continue }
+                                $lf = @{ $script:F_INV = $invNo }
+                                if ($invDt) { $lf[$script:F_INV_DT] = $invDt }
+                                [void]$lineUpdates.Add([pscustomobject]@{ RowName = $rn; ItemCode = $ic; Fields = $lf })
+                                $script:Result.linesInvoiced++
                             }
-                            if ($lpo) {
-                                $lf['custom_sap_production_order'] = "$(Get-JsonProp $lpo 'DocumentNumber')"
-                                $lf['custom_sap_production_stage'] = (Resolve-CurrentStage -Po $lpo -Labels $statusLabels -StageSource $stageSource)
+                            elseif ($hadNo) {
+                                # Recorded as invoiced, but no live invoice for it
+                                # this run: either the invoice has since been
+                                # cancelled, or it is older than the scan window.
+                                # Those need opposite answers and this run cannot
+                                # tell them apart, so it is left as it is and said
+                                # out loud rather than guessed at. It still counts
+                                # towards the order being complete.
+                                Write-Log WARN ("PASS B {0}: line {1} shows invoice {2} but no live invoice for it was found in the last {3} day(s) - cancelled since, or older than the scan. Left as it is." -f `
+                                    $name, $ic, $hadNo, $invoiceDays)
+                                [void]$lineInvoices.Add([pscustomobject]@{ DocNum = $hadNo; DocDate = $hadDt; DocEntry = 0 })
                             }
                             else {
-                                # NO LIVE PRODUCTION ORDER - and the line is only
-                                # told so if it was previously told otherwise.
-                                #
-                                # Cancelling a released production order is the
-                                # case this exists for. Select-LeastAdvancedPo
-                                # skips cancelled orders, so the line has nothing
-                                # covering it and nothing is being made for it.
-                                # Until 18 Sep 2026 the sync simply wrote nothing
-                                # here, so the last stage it had written stood for
-                                # ever: a line whose production order was cancelled
-                                # after release read "In Production" indefinitely,
-                                # with no press anywhere near it.
-                                #
-                                # Clearing both fields puts the line back to Not
-                                # Started, which is where a line with no production
-                                # order belongs - see `line_stage_to_status` in
-                                # shared/fixtures/sap_order_state.json.
-                                $hadPo    = "$(Get-JsonProp $row 'custom_sap_production_order')".Trim()
-                                $hadStage = "$(Get-JsonProp $row 'custom_sap_production_stage')".Trim()
-                                if (($hadPo -and $hadPo -ne 'null') -or ($hadStage -and $hadStage -ne 'null')) {
-                                    $lf['custom_sap_production_order'] = ''
-                                    $lf['custom_sap_production_stage'] = ''
-                                    Write-Log INFO ("PASS B {0}: line {1} has no live production order (was PO '{2}' / '{3}') - back to Not Started." -f `
-                                        $name, $ic, $hadPo, $hadStage)
-                                    $script:Result.stagesCleared++
-                                }
+                                [void]$lineInvoices.Add($null)
                             }
+                        }
 
-                            # The delivery that carried THIS line, if any. A line
-                            # left off a partial delivery keeps these blank and so
-                            # never reads Dispatched, while its neighbours do.
-                            if ($dnByEntryItem.ContainsKey($key)) {
-                                $ldn = $dnByEntryItem[$key]
-                                $lf['custom_sap_delivery_order'] = "$(Get-JsonProp $ldn 'DocNum')"
-                                $lship = ConvertTo-DateOnly (Get-JsonProp $ldn $shipDateFrom)
-                                if ($lship) { $lf['custom_sap_delivery_date'] = $lship }
-                            }
-
-                            if ($lf.Count -eq 0) { continue }
-                            [void]$lineUpdates.Add([pscustomobject]@{
-                                RowName  = $rn
-                                ItemCode = $ic
-                                Fields   = $lf
-                            })
+                        # ORDER level - only once EVERY line has been invoiced.
+                        #
+                        # This field is what takes an order out of PASS B: the
+                        # scan reads orders where it is still empty. Writing it
+                        # for a partial invoice would retire an order that still
+                        # owes the customer a line, and nothing would ever poll it
+                        # again - the trap the old order-level delivery had, seen
+                        # on SAP order 381 where three lines shipped and one
+                        # stayed open.
+                        $lineCount = $lineInvoices.Count
+                        $invoiced  = @($lineInvoices | Where-Object { $null -ne $_ })
+                        if ($lineCount -gt 0 -and $invoiced.Count -eq $lineCount) {
+                            $done = Select-CompletingInvoice $invoiced
+                            $fields[$script:F_INV] = "$(Get-JsonProp $done 'DocNum')"
+                            $odt = ConvertTo-DateOnly (Get-JsonProp $done 'DocDate')
+                            if ($odt) { $fields[$script:F_INV_DT] = $odt }
+                            $script:Result.ordersInvoiced++
+                            Write-Log INFO ("PASS B {0}: every line invoiced - completed by invoice {1}; the order leaves PASS B." -f $name, $fields[$script:F_INV])
+                        }
+                        elseif ($invoiced.Count -gt 0) {
+                            Write-Log INFO ("PASS B {0}: invoiced in part ({1} of {2} line(s)) - stays in scope." -f $name, $invoiced.Count, $lineCount)
                         }
                     }
 
@@ -1785,8 +1643,8 @@ try {
         # ---- summary ----
         $r = $script:Result
         $modeWord = if ($DryRun) { 'DRY-RUN' } else { 'APPLIED' }
-        $summary = ("SUMMARY | {0} | company: {1} | new in scope: {2} | created: {3} | adopted: {4} | create-failed: {5} | rep unmatched: {16} | open polled: {6} | production matched: {7} | stages: {8} | lines: {9} | corrected: {13} | removed: {14} | stages cleared: {15} | deliveries: {10} | write-back errors: {11} | failures: {12}" -f `
-            $modeWord, $companyName, $r.inScopeNew, $r.created, $r.adopted, $r.createFailed, $r.openPolled, $r.productionMatched, $r.stagesWritten, $r.linesWritten, $r.deliveriesWritten, $r.writeErrors, $r.failures, $r.linesCorrected, $r.linesRemoved, $r.stagesCleared, $r.repUnmatched)
+        $summary = ("SUMMARY | {0} | company: {1} | new in scope: {2} | created: {3} | adopted: {4} | create-failed: {5} | rep unmatched: {6} | open polled: {7} | lines invoiced: {8} | orders fully invoiced: {9} | lines written: {10} | corrected: {11} | removed: {12} | invoice lines unresolved: {13} | write-back errors: {14} | failures: {15}" -f `
+            $modeWord, $companyName, $r.inScopeNew, $r.created, $r.adopted, $r.createFailed, $r.repUnmatched, $r.openPolled, $r.linesInvoiced, $r.ordersInvoiced, $r.linesWritten, $r.linesCorrected, $r.linesRemoved, $r.invoiceUnresolved, $r.writeErrors, $r.failures)
         Write-Log INFO $summary
         $script:Result.summary = $summary
 

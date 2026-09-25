@@ -3,9 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/credit.dart';
+import 'package:manna_field_sales/core/credit_commitment.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/week.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
@@ -276,13 +279,139 @@ class _OrderScreenState extends State<OrderScreen> {
     return null;
   }
 
+  /// Whether this order needs the customer's commitment before it may go.
+  ///
+  /// Exactly when it will escalate to the GM — the same test the manager's
+  /// review uses (credit_commitment.json). An edit to an order that already
+  /// carries one keeps it. A manager editing from their review is not the
+  /// person who heard the customer's promise, so they are not asked to invent
+  /// one; the GM sees "no commitment" and asks the rep.
+  bool get _needsCommitment {
+    if (widget.party.isLead) return false;
+    if (!commitmentRequired(widget.party.doc, _total)) return false;
+    if (_isEdit) {
+      if (hasCommitment(widget.existingOrder!['custom_credit_commitment'])) {
+        return false;
+      }
+      if (Session.I.isManager || Session.I.isGM) return false;
+    }
+    return true;
+  }
+
+  /// Asks the rep what the customer has committed to.
+  ///
+  /// Asked at the moment of sending, with the credit figures in front of
+  /// them, because that is when the customer is still at the counter and the
+  /// promise is still fresh. The date is optional: plenty of promises are
+  /// "with the next order", and the GM sets one on approval anyway.
+  Future<({String text, String? due})?> _askCommitment() async {
+    final ctrl = TextEditingController();
+    DateTime? due;
+    String? problem;
+    final a = agingOf(widget.party.doc);
+    String rs(double v) => 'Rs ${v.toStringAsFixed(0)}';
+
+    return showDialog<({String text, String? due})?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Over the credit limit'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Owes ${rs(a.total)} · this order ${rs(_total)} · '
+                  'limit ${rs(a.creditLimit)}.',
+                  style: const TextStyle(
+                      fontSize: 12.5, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Your manager cannot approve this order on their own. They '
+                  'send it to the general manager, who decides it on what you '
+                  'write here — and once approved, it becomes your condition.',
+                  style: TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ctrl,
+                  autofocus: true,
+                  maxLines: 4,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: InputDecoration(
+                    labelText: 'What has the customer committed to?',
+                    hintText:
+                        'Cheque for 50,000 on Friday, balance with the next order',
+                    border: const OutlineInputBorder(),
+                    errorText: problem,
+                    errorMaxLines: 3,
+                  ),
+                  onChanged: (_) {
+                    if (problem != null) setLocal(() => problem = null);
+                  },
+                ),
+                const SizedBox(height: 8),
+                Row(children: [
+                  const Text('By when', style: TextStyle(fontSize: 13)),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () async {
+                      final now = DateTime.now();
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: due ?? now.add(const Duration(days: 7)),
+                        firstDate: now,
+                        lastDate: now.add(const Duration(days: 365)),
+                      );
+                      if (picked != null) setLocal(() => due = picked);
+                    },
+                    child: Text(due == null ? 'Optional' : isoDate(due!)),
+                  ),
+                  if (due != null)
+                    IconButton(
+                      tooltip: 'No date',
+                      icon: const Icon(Icons.close, size: 18),
+                      onPressed: () => setLocal(() => due = null),
+                    ),
+                ]),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, null),
+                child: const Text('Back to the order')),
+            FilledButton(
+              onPressed: () {
+                final p = commitmentProblem(ctrl.text);
+                if (p != null) {
+                  setLocal(() => problem = p);
+                  return;
+                }
+                Navigator.pop(ctx, (
+                  text: ctrl.text.trim(),
+                  due: due == null ? null : isoDate(due!),
+                ));
+              },
+              child: const Text('Send for approval'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Offers to hold an order that could not be sent for want of signal.
   ///
   /// The wording is careful on purpose. No order number exists and no stock is
   /// held — stock is committed in SAP, which this order has not reached — so
   /// the rep must not walk away believing the customer is covered. Another rep
   /// in signal can take the same rolls before this draft is ever sent.
-  Future<void> _offerDraft(String deliveryDate) async {
+  Future<void> _offerDraft(String deliveryDate,
+      {({String text, String? due})? commitment}) async {
     if (!mounted) return;
     setState(() => _submitting = false);
 
@@ -314,6 +443,8 @@ class _OrderScreenState extends State<OrderScreen> {
       deliveryDate: deliveryDate,
       items: [for (final l in _picked) l.toSalesOrderItem()],
       isLead: widget.party.isLead,
+      commitment: commitment?.text,
+      commitmentDue: commitment?.due,
     );
     if (!mounted) return;
     _snack('Saved on your phone — not sent yet. Send it from Unsent Orders.');
@@ -324,6 +455,14 @@ class _OrderScreenState extends State<OrderScreen> {
   Future<void> _submit() async {
     final problem = _validate();
     if (problem != null) return _snack(problem);
+
+    // Before anything is sent, so backing out of the dialog leaves the order
+    // on screen exactly as the rep built it.
+    ({String text, String? due})? commitment;
+    if (_needsCommitment) {
+      commitment = await _askCommitment();
+      if (commitment == null || !mounted) return;
+    }
 
     setState(() => _submitting = true);
 
@@ -350,6 +489,8 @@ class _OrderScreenState extends State<OrderScreen> {
           // manager, because what they approved is no longer what will ship.
           returnForApproval: _wasApproved,
           isLead: widget.party.isLead,
+          commitment: commitment?.text,
+          commitmentDue: commitment?.due,
         );
         _snack(_wasApproved
             ? 'Order updated ✓ — sent back to your manager'
@@ -379,8 +520,12 @@ class _OrderScreenState extends State<OrderScreen> {
           company: _company,
           items: [for (final l in _picked) l.toSalesOrderItem()],
           deliveryDate: dd,
+          commitment: commitment?.text,
+          commitmentDue: commitment?.due,
         );
-        _snack('Order sent for approval ✓  $name');
+        _snack(commitment != null
+            ? 'Order sent with your commitment ✓  $name'
+            : 'Order sent for approval ✓  $name');
       }
 
       await Future.delayed(const Duration(milliseconds: 400));
@@ -396,7 +541,7 @@ class _OrderScreenState extends State<OrderScreen> {
       // Every other failure means the server considered this order and said no,
       // so a draft would only defer the same answer.
       if (isOffline(e) && !_isEdit) {
-        await _offerDraft(dd);
+        await _offerDraft(dd, commitment: commitment);
         return;
       }
       // The most likely failure is someone else getting there first, so the

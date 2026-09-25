@@ -105,7 +105,8 @@ class _CreditConditionsSectionState extends State<CreditConditionsSection> {
 
     setState(() => _busy = true);
     try {
-      await Api.respondToCondition('${r['name']}', ctrl.text.trim());
+      await Api.respondToCondition('${r['name']}', ctrl.text.trim(),
+          salesOrder: '${r['sales_order'] ?? ''}', customer: '${r['customer'] ?? ''}');
       await _load();
       if (mounted) _snack('Sent to the general manager.');
     } catch (e) {
@@ -118,7 +119,10 @@ class _CreditConditionsSectionState extends State<CreditConditionsSection> {
   Future<void> _decide(Map<String, dynamic> r, bool close) async {
     setState(() => _busy = true);
     try {
-      await Api.decideCondition('${r['name']}', closed: close);
+      await Api.decideCondition('${r['name']}',
+          closed: close,
+          salesOrder: '${r['sales_order'] ?? ''}',
+          customer: '${r['customer'] ?? ''}');
       await _load();
       if (mounted) _snack(close ? 'Closed.' : 'Sent back to the rep.');
     } catch (e) {

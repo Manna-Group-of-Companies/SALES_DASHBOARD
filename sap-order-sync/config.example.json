@@ -30,18 +30,9 @@
     "line_warehouse":          "07",
 
     "status_source":           "document_status",
-    "stage_source":            "routing_stages",
     "stamp_erpnext_name_in":   "NumAtCard",
-    "delivery_ship_date_from": "DocDueDate",
-    "production_scan_statuses": ["boposPlanned", "boposReleased", "boposClosed"],
     "delivery_scan_days":       120,
-
-    "production_status_labels": {
-      "boposPlanned":   "Planned",
-      "boposReleased":  "In Production",
-      "boposClosed":    "Closed",
-      "boposCancelled": "Cancelled"
-    }
+    "invoice_scan_days":        120
   },
 
   "log_dir":       "./logs",

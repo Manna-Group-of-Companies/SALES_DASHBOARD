@@ -192,6 +192,10 @@
 }
 .bell--urgent { animation: pulse-ring 1.8s infinite; border-color: var(--danger); }
 
+/* The header's Sync button and the line of status beside it. */
+.sync-all { display: flex; align-items: center; gap: 8px; }
+.bell--busy { animation: pulse-ring 1.8s infinite; cursor: progress; }
+
 .notif-panel {
   position: fixed;
   top: var(--header-h);

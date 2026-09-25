@@ -222,6 +222,33 @@ Whichever is chosen, the write still has to be made by whoever moves the stage �
 there is no server to do it — so it belongs in `setProductionStage` on the
 dashboard and `Api.setStage` on the phone, in the same commit.
 
+### The two apps watched different fields — **found and closed 24 Sep 2026**
+
+`changesSince` itself always agreed on both sides. What it was *fed* did not:
+the dashboard fed the "made" portion SAP's view of the line, the phone fed it
+the in-app `custom_production_stage`, which nothing has written since the floor
+moved to SAP on 11 Sep 2026. So a manager on the dashboard was told when a line
+was invoiced, and a rep on the phone was told nothing.
+
+Both now feed the line's SAP status from `lineStatusFromSap` (Pushed to SAP →
+Dispatched, per line) under the watcher's old key, so `stage_watch` itself did
+not change. This follows the release decision of 24 Sep 2026 — once approved,
+SAP reports the order. The stored snapshot key moved to `stageSeen2:` on both
+sides at the same time, so the first look after the update sets a fresh
+baseline instead of reporting every line of every previously-opened order as
+moved.
+
+### Which orders a list calls Dispatched — **found and closed 24 Sep 2026**
+
+Not a phone-against-dashboard difference but both against the release rule:
+the phone's manager order list, the dashboard's orders list and combined-orders
+tick, and the phone's duplicate-order check all read "Dispatched" from the
+in-app `custom_production_status`. An invoiced order therefore never showed as
+complete there. Both apps now use `orderProgress` — SAP's status once SAP has
+the order, the stored status only before — pinned by the `order_progress`
+cases in `fixtures/sap_order_state.json`. The rep's My Orders already did this
+inline; it now calls the same function.
+
 ---
 
 ## 8. UAE shares its customers; everywhere else does not — **built, 16 Aug 2026**
@@ -684,3 +711,213 @@ Also note `to_approve` is **not** `awaitingManager`. That predicate counts
 `Rejected` as still owing a decision, which is right for the header count
 because the rep will resubmit, and wrong for a filter a manager uses to find
 what they can act on now.
+
+## Stock without weights: kilograms on the dashboard, absent on the phone — **decided 24 September 2026**
+
+An item whose SAP master lacks belts-per-roll or weight-per-roll cannot be
+converted from kilograms (`stockFromKg` refuses, and still does). Until today
+both apps listed those items and said "weights not set" / "stock not set up".
+On 24 September 2026 that was 265 of 443 stocked items, about 34,760 kg —
+most of the list, and all of it unreadable.
+
+The instruction, and how each side carries it out:
+
+| Who | Item with both UDFs | Item missing either |
+|---|---|---|
+| Sales manager, dashboard Stock page | rolls + belts | **shown, in kilograms** (or its own unit if not Kg) |
+| Stock / production manager, dashboard | rolls + belts | not shown |
+| Everyone on the phone's stock list | rolls + belts | not shown |
+
+`client/src/domain/stockView.ts` (`stockReading`) and
+`app/lib/models/min_stock.dart` (`shownAsRollsAndBelts`) are the two sides.
+**This is a display rule, not a promise rule.** Neither app treats a
+kilogram figure as promisable: `shelfAvailable` still reports nothing for
+these items, the order screens on both sides still say "Stock not set up" on
+the line, and the split still sends the whole line to production. That is
+why the two apps can differ here without a fixture — nothing either one
+*commits* to has changed.
+
+**Why the phone never shows kilograms**, even to a manager holding it: a rep
+reads stock to decide what to promise, and a kilogram figure beside a roll
+count invites dividing it in your head and quoting the answer — the exact
+guess `stockFromKg` exists to refuse. The sales manager is shown it because
+they are the one who can get the two UDFs filled in on the SAP item, and the
+dashboard tells them how many items their reps cannot see.
+
+**The fix is data, not code.** Fill `U_BeltsPerRoll` and `U_WeightPerRoll` on
+the SAP item; the products sync (`Sync-HitechProductsToTreads.ps1`, not the
+stock sync) copies them to ERPNext, and the item appears on every screen as
+rolls and belts. If that upload stalls, this rule has hidden most of the
+catalogue from the field permanently — see the 17 September entry above.
+
+### Found at the same time: the dashboard's stock page had been blank since 18 September
+
+Not a divergence, but it is why this was noticed. The stock sync began
+carrying every finished-goods item on 18 September; the warehouse went from
+130 rows to 443; and the dashboard joined them to `Item` with one
+`name in (...)` over every code. Frappe Cloud refuses a request line over
+about 4 KB with a bare nginx 400 — measured: 240 codes pass, 250 fail — and
+the read's `.catch(() => [])` turned that into "SAP has nothing available to
+promise". The order pages lost their stock chips the same way. Fixed with
+`listDocsIn` in `client/src/api/client.ts`, which splits the list. The phone
+reads `Item` unfiltered and was never affected. **Any new `in` filter over a
+list that grows with the data must go through `listDocsIn`.**
+
+---
+
+## The rep's credit commitment — **built on both, 24 September 2026**
+
+An over-limit order now carries the customer's promise from the counter to the
+GM, and the GM's approval turns it into the rep's credit condition. **Pinned by
+`fixtures/credit_commitment.json`**, implemented in
+`app/lib/core/credit_commitment.dart` and `client/src/domain/creditCommitment.ts`.
+
+**The GM approves; the sales manager pushes to SAP** (second pass, the same
+day). The flow is:
+
+    rep raises it ─► Pending Approval ─► sales manager: Send to GM
+      ─► Pending GM Approval ─► GM approves (condition made)
+      ─► Pending Final Approval ("Approved by GM") ─► sales manager: Push to SAP
+      ─► PO Approved - Ready for SAP ─► SAP
+
+`Pending Final Approval` was already an option on `custom_po_status` and nothing
+used it; the SAP sync's gate is an exact match on `PO Approved - Ready for SAP`,
+so a GM approval cannot reach SAP by any path. Whose approval it was is in
+`custom_gm_approved_by` / `custom_gm_approved_on`.
+
+| | `app/` (Flutter) | `client/` (React) |
+|---|---|---|
+| Rep writes the commitment when the order will escalate | yes — required, on Send for Approval, and carried by an unsent draft | n/a — see below |
+| Sales manager sees it, may comment | yes — order review | yes — order review |
+| Sales manager may approve an over-limit order before the GM has | **no** — Send to GM or Reject | **no** — Send to GM or Reject |
+| GM sees it and every comment, may edit, comments, approves the credit | yes — GM queue and order review | yes — `/gm/orders/:id` |
+| GM pushes to SAP | **never** | **never** |
+| GM approval makes the condition, reworded but never dropped | yes | yes |
+| Sales manager sees "Approved by GM" and pushes, at the GM's rates | yes — Push to SAP on the review | yes — Push to SAP on the review |
+| GM may withdraw the approval before the push (closes the condition) | yes — Withdraw approval | yes — Withdraw approval… |
+| Editing a GM-approved order sends it back to the GM | yes | yes |
+| Rep sees the condition with the comments | yes — My Conditions | n/a, reps have no login here |
+
+**The dashboard does not capture a commitment, and that is not drift.** Reps
+raise orders on the phone. The dashboard's `TakeOrderPage` still runs on the
+fixture-era Redux path: `createOrder` in `client.ts` posts a mock-shaped object
+that cannot become a real Sales Order. If that page is ever wired to ERPNext it
+must ask for the commitment exactly as the phone does — `commitmentRequired`
+and `commitmentProblem` are already there to call.
+
+**What changed that was not asked for, and why:**
+
+- **The sales manager's approval gate moved into the API on both sides.**
+  `Api.approveSalesOrderPO` / `escalateSalesOrderPOToGM` (phone) and
+  `Api.sales.decideOrder` (dashboard) re-read the order and the customer and
+  refuse a sales manager's approval of an over-limit order. Before this, only
+  the button was swapped; a stale screen could still approve one.
+- **Editing an escalated order keeps it with the GM.** The dashboard's
+  `saveOrderLines` reset every edit to `Pending Approval`, which would have
+  thrown an order the GM was editing out of their own queue and into the sales
+  manager's — who may not approve it. The phone's edit already left the status
+  alone unless the order had been approved.
+- **The GM's condition dialog is one widget on the phone**
+  (`widgets/gm_condition_dialog.dart`), used by the queue and the review, and
+  backing out of it no longer counts as "approve, no condition".
+- **The dashboard GM opens no team screen.** `screensForUser` gives the GM
+  nothing; the sidebar and the routes both read it.
+
+**What is weaker, and was accepted:**
+
+- **No Server Script behind any of it.** Like every rule here it is enforced in
+  both clients and nowhere else; ERPNext will accept a `Pending GM Approval →
+  PO Approved` write from anyone with Sales Order write access. This is the
+  obvious first candidate for a Server Script now that the plan allows one — a
+  Before Save on Sales Order that refuses `PO Approved - Ready for SAP` on an
+  over-limit order unless the stored status was `Pending Final Approval`, and
+  refuses `Pending Final Approval` unless the user holds `Higher Management`
+  (which only the GM does).
+- **A condition that fails to save after an approval is offered as a retry,
+  not guaranteed.** The approval stands either way — the older rule, kept
+  deliberately.
+- **The condition exists before the order is in SAP.** It is made at the GM's
+  approval, which is the credit decision, so the rep can start on the promise
+  at once. The gaps that opens are closed in code: a re-approval after an edit
+  reuses the open condition rather than making a second, and a GM rejection —
+  including withdrawing an approval before the push — closes it. The sales
+  manager cannot reject a GM-approved order, so no other path leaves one
+  orphaned.
+- **Comments are not editable or deletable** by the managers who wrote them
+  (`Manna Credit Comment` grants Sales Manager read + create only). A comment is
+  part of the record the GM decided on.
+
+### The GM's follow-up — **dashboard only, 25 September 2026**
+
+After the GM approves, the order leaves "Escalated to you" and lands in a
+separate **Follow-up** view (`/follow-up`, and `/follow-up/:orderId` for one
+order): every order the GM approved, what SAP has made of it (SAP order number,
+status, invoice), its condition, and the whole conversation. The GM closes or
+sends back conditions there and may add notes at any stage. Pinned in
+`fixtures/credit_commitment.json` → `follow_up`; the sorting is
+`client/src/domain/followUp.ts`, tested on its own.
+
+| | `app/` (Flutter) | `client/` (React) |
+|---|---|---|
+| Rep's answer is written to the order's thread (`author_role` Sales Rep) as well as to the condition | yes — My Conditions and the customer screen | n/a, reps have no login here |
+| GM's send-back note is written to the thread | yes | yes |
+| Follow-up view | no — the GM follows up on the dashboard | yes |
+| Rep reads the thread under the condition | yes, their own answers as "You" | n/a |
+| Rep's own order screen shows where the follow-up stands | yes — a two-line card (status, due, message count) linking to that order's row on My Conditions, scrolled to and outlined; the conversation itself stays there | n/a |
+
+**Why the phone has no follow-up screen, and that is not drift:** the GM's
+follow-up is desk work — reading SAP numbers, invoices and a conversation —
+and the GM was given the dashboard for it. The shared parts (who writes under
+which role, who may add a note) are in the fixture, so if the phone gets one it
+starts from the same rules.
+
+**Schema, 25 Sep 2026:** `Manna Credit Comment.author_role` gained `Sales Rep`,
+and Sales User gained **create** on the doctype (still no write or delete), so a
+rep's answer can reach the order.
+
+## Production status is SAP's; the stage picker is gone from both apps — **decided 25 September 2026**
+
+Until today a production manager moved each order line through its
+product's stage cycle by hand (a dropdown on the dashboard's production
+order page and a "Move to stage" picker on the phone's), writing
+`custom_production_stage` on the line and rolling `custom_production_status`
+up onto the order. **Removed from both apps**, on instruction: the status
+comes from SAP's own sales order → invoice loop and nobody sets it in the
+app.
+
+Both sides now read, from `sapOrderState` (pinned by `sap_order_state.json`):
+
+| | Order | Line |
+|---|---|---|
+| SAP has it, not invoiced | Pushed to SAP | Pushed to SAP |
+| Invoiced | Dispatched | Dispatched once *its own* invoice exists |
+| SAP cancelled it | Cancelled in SAP | Cancelled in SAP |
+
+Where: `client/src/features/production/ProductionOrderPage.tsx`,
+`app/lib/screens/production/production_order_detail_screen.dart`, and the
+rep's `app/lib/screens/orders/order_detail_screen.dart` item card, which had
+still been printing the raw stage ("Being made: Curing") beside a SAP-fed
+production section that could contradict it. The writers are deleted:
+`setProductionStage` and the fixture-era `setItemStage` (dashboard, plus the
+unreachable `ProductionBoard` / `ProductionOrderModal` that used it) and
+`Api.setItemStage` / `Api.setProductionStatus` (phone).
+
+**Old stage values stay in the database** and nothing displays them. The
+pure stage functions (`domain/production.ts` / `core/production_stages.dart`
+and `production_progress.json`, `rollUp` / `Api.rollUpStage`) are left in
+place and still tested; no screen uses them for status any more. Delete them
+from both sides in one commit if Dispatch Planning is not coming back — its
+parked "record a dispatch" code (`client.ts`) still writes
+`custom_production_stage = Dispatched` and would start again if the page were
+re-enabled.
+
+### The production queue differs between the apps — a scope difference, not a rule
+
+- **Dashboard** (24 Sep): lists orders **SAP has** (a SAP sales-order number),
+  cancelled ones kept and marked; weekly filter by the week raised.
+- **Phone**: still lists orders at `PO Approved - Ready for SAP`, as before,
+  now with SAP's status on each row and cancelled ones marked.
+
+Nothing is promised or priced off either list. Bring the phone into line if
+asked — use `inProductionQueue` / `queueState`'s rule (`reachedSap`), not a
+new one.

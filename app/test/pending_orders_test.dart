@@ -44,6 +44,26 @@ void main() {
       expect(all.first.deliveryDate, '2026-08-20');
     });
 
+    test("the rep's commitment on an over-limit order survives the wait for "
+        'signal', () async {
+      // Asked at the counter, sent later. Losing it on the way would send the
+      // GM an over-limit order with nothing to weigh — the thing it exists to
+      // prevent (shared/fixtures/credit_commitment.json).
+      await PendingOrders.save(
+        customer: 'CUST-001',
+        customerName: 'Renjith Tyres',
+        deliveryDate: '2026-08-20',
+        items: _items(),
+        commitment: 'Cheque for 50,000 on Friday',
+        commitmentDue: '2026-09-30',
+      );
+      final d = (await PendingOrders.all()).single;
+      expect(d.commitment, 'Cheque for 50,000 on Friday');
+      expect(d.commitmentDue, '2026-09-30');
+      // And through a failed send, which rewrites the draft with its reason.
+      expect(d.withError('No signal').commitment, 'Cheque for 50,000 on Friday');
+    });
+
     test('a draft has no order number, because there is no order', () async {
       final d = await _save();
       expect(d.id, startsWith('draft-'));

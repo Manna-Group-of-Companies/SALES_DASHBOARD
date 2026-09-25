@@ -1,0 +1,108 @@
+{
+  "about": "Rates for Manna Treads' dealers and for Hi-Tech Pretreads' price list, in SAP. A dealer's price for an item (in MANNA_TREADS_LIVE) = the item's Manna Treads Price List 01 price minus the dealer's rupees-off for the item's quality (an SAP item property); SAP holds it as a fixed special price ('Without Price List', PriceListNum 0). Hi-Tech Pretreads' Price List 01 price for the same item (in HITECH_PRETREADS_LIVE) = Manna Treads' price minus the inter-company margin. Every price and discount is GST-inclusive as it stands. Read by client/src/domain/__tests__/dealerRates.test.ts and sap-pricing/Test-RupeeRules.ps1.",
+  "why": "A discount is a fixed number of rupees per kg, not a percentage: when the list price moves, the rupees stay the same. SAP cannot hold 'list minus rupees', and a percentage cannot carry whole rupees because SAP keeps it to two decimals and recomputes the price from it (Rs 3 off 175 = 1.7143%, kept as 1.71%, shown as 172.01). So SAP gets the price itself, recomputed whenever a list price or a rule changes, and delivered as DTW files (decided 25 Sep 2026). Also 25 Sep 2026: the dealers are Manna Treads' customers, and Hi-Tech bills Manna Treads a fixed number of rupees per kg below Manna Treads' own price, so Manna Treads' price list is the master and Hi-Tech's follows it. The real margin is kept in ERPNext (SAP Pricing Control.intercompany_margin), not here, because this repository is public: the cases use 12 as an example.",
+  "rules": {
+    "price_is_list_minus_rupees": "dealer price = Manna Treads' list price - rupees off, rounded to the paisa, half away from zero",
+    "hitech_is_treads_minus_margin": "Hi-Tech's list price for an item = Manna Treads' list price for the same item - the margin, rounded to the paisa. The same item means its twin: the Hi-Tech item with the same code AND the same name (the snapshot says which)",
+    "no_gst_arithmetic": "every price and discount is GST-inclusive as it stands: nothing is ever multiplied or divided by a GST rate",
+    "percent_is_a_by_product": "the percentage is (list - price) / list x 100 from the ROUNDED price, for display only; it is never read back as the rule",
+    "refusals": "no list price, rupees off of zero or less, a discount or margin not less than the price, or no margin set: no price is produced and the row is reported",
+    "one_quality_per_item": "an item carrying two qualities that one dealer has rules for is a conflict: no price is produced for that dealer and item",
+    "quality_change_moves_every_item": "a list-price change is made per TYPE x QUALITY (HOT - Black Pearl, PCTR - Black Pearl, BONDING GUM - Black Pearl), in rupees, on Manna Treads' list, and moves every item of that type and quality by the same rupees - and so each twin's Hi-Tech price by the same rupees. Two types of one quality can move by different rupees. Dealer discounts stay per quality",
+    "item_kind": "the type is read from the item's type field, then its name: GUM means BONDING GUM (looked for first - gum is never a tread), PRECURED or PCTR means PCTR, HOT means HOT, anything else OTHER",
+    "check": "a dealer price is OK when SAP holds exactly the rule's price as a fixed price, DRIFT when the price differs, KIND when it is still a percentage of a price list, MISSING when SAP has none. A Hi-Tech price is OK when it is exactly Manna Treads' price less the margin, DRIFT when not, MISSING when the twin has no price. Items with no twin are counted, not checked"
+  },
+  "special_price": [
+    { "why": "the user's own example: Rs 1 off 10", "list": 10, "rupees": 1, "price": 9, "percent": 10 },
+    { "why": "the list becomes 12: still Rs 1 off, not 10.80", "list": 12, "rupees": 1, "price": 11, "percent": 8.333333 },
+    { "why": "precured Black Pearl, dealer A", "list": 200, "rupees": 5, "price": 195, "percent": 2.5 },
+    { "why": "hot Black Pearl, dealer B", "list": 190, "rupees": 8, "price": 182, "percent": 4.210526 },
+    { "why": "a price with paise keeps its paise, and no GST is added or taken off", "list": 207.62, "rupees": 5, "price": 202.62, "percent": 2.408246 },
+    { "why": "half a paisa rounds away from zero", "list": 155, "rupees": 8.475, "price": 146.53, "percent": 5.464516 }
+  ],
+  "refused": [
+    { "why": "discount as big as the list price", "list": 10, "rupees": 10, "error": "not less than the list price" },
+    { "why": "no list price in SAP", "list": 0, "rupees": 1, "error": "no list price" },
+    { "why": "a zero discount is not a rule", "list": 10, "rupees": 0, "error": "more than zero" }
+  ],
+  "hitech_price": [
+    { "why": "Hi-Tech's price is Manna Treads' less the margin", "treads": 200, "margin": 12, "hitech": 188 },
+    { "why": "paise stay paise", "treads": 207.62, "margin": 12, "hitech": 195.62 },
+    { "why": "no GST arithmetic: 245 less 12 is 233", "treads": 245, "margin": 12, "hitech": 233 }
+  ],
+  "hitech_refused": [
+    { "why": "no Manna Treads price", "treads": 0, "margin": 12, "error": "no Manna Treads price" },
+    { "why": "a margin as big as the price", "treads": 12, "margin": 12, "error": "not less than" },
+    { "why": "no margin set", "treads": 200, "margin": 0, "error": "margin" }
+  ],
+  "rounding": [
+    { "why": "half a paisa rounds up", "value": 146.525, "expect": 146.53 },
+    { "why": "below half stays", "value": 146.524, "expect": 146.52 },
+    { "why": "whole rupees are untouched", "value": 172, "expect": 172 }
+  ],
+  "item_kind": [
+    { "why": "a precured tread, by its type", "type": "PRECURED", "name": "TREAD RUBBER PRECURED BLACK PEARL 120", "kind": "PCTR" },
+    { "why": "PCTR in the name is precured", "type": "", "name": "PCTR 240 MSP 133 MG", "kind": "PCTR" },
+    { "why": "a hot tread, by its name", "type": "", "name": "TREAD RUBBER HOT BLACK PEARL 32*12", "kind": "HOT" },
+    { "why": "bonding gum", "type": "", "name": "BONDING GUM -BLACK PEARL", "kind": "BONDING GUM" },
+    { "why": "a type that does not say falls back to the name", "type": "FINISHED", "name": "TREAD RUBBER PRECURED PLATINUM 150", "kind": "PCTR" },
+    { "why": "anything else", "type": "", "name": "CUSHION COMPOUND", "kind": "OTHER" }
+  ],
+  "quality_change": {
+    "why": "HOT - Black Pearl +5 and PCTR - Black Pearl +3: the two types of one quality move by their own rupees on Manna Treads' list, nothing else moves, each dealer keeps their rupees, and each twin's Hi-Tech price follows at the margin",
+    "margin": 12,
+    "items": [
+      { "code": "BP-PRE", "type": "PRECURED", "props": [1], "listPrice": 185, "twin": "BP-PRE" },
+      { "code": "BP-HOT", "type": "HOT", "props": [1], "listPrice": 175, "twin": "BP-HOT" },
+      { "code": "PT-PRE", "type": "PRECURED", "props": [2], "listPrice": 175, "twin": "PT-PRE" },
+      { "code": "BP-GUM", "type": "BONDING GUM", "props": [1], "listPrice": 150, "twin": "BP-GUM" }
+    ],
+    "hitech": [
+      { "code": "BP-PRE", "listPrice": 173 },
+      { "code": "BP-HOT", "listPrice": 163 },
+      { "code": "PT-PRE", "listPrice": 163 },
+      { "code": "BP-GUM", "listPrice": 138 }
+    ],
+    "changes": [ { "kind": "HOT", "propertyNo": 1, "rupees": 5 }, { "kind": "PCTR", "propertyNo": 1, "rupees": 3 } ],
+    "rules": [
+      { "cardCode": "A", "propertyNo": 1, "rupeesOff": 5 },
+      { "cardCode": "A", "propertyNo": 2, "rupeesOff": 3 },
+      { "cardCode": "B", "propertyNo": 1, "rupeesOff": 8 }
+    ],
+    "expect_list": { "BP-PRE": 188, "BP-HOT": 180, "PT-PRE": 175, "BP-GUM": 150 },
+    "expect_dealer": { "A|BP-PRE": 183, "A|BP-HOT": 175, "A|PT-PRE": 172, "A|BP-GUM": 145, "B|BP-PRE": 180, "B|BP-HOT": 172, "B|BP-GUM": 142 },
+    "expect_hitech": { "BP-PRE": 176, "BP-HOT": 168, "PT-PRE": 163, "BP-GUM": 138 },
+    "expect_hitech_changing": [ "BP-HOT", "BP-PRE" ]
+  },
+  "check": {
+    "why": "one of each result, counted the same way by the screen and by the office server",
+    "margin": 12,
+    "items": [
+      { "code": "BP", "props": [1], "listPrice": 190, "twin": "BP" },
+      { "code": "BP2", "props": [1], "listPrice": 180, "twin": "BP2" },
+      { "code": "PT", "props": [2], "listPrice": 175, "twin": "PT" },
+      { "code": "PT2", "props": [2], "listPrice": 155, "twin": null },
+      { "code": "BOTH", "props": [1, 2], "listPrice": 150, "twin": null }
+    ],
+    "hitech": [
+      { "code": "BP", "listPrice": 178 },
+      { "code": "BP2", "listPrice": 170 },
+      { "code": "PT", "listPrice": null }
+    ],
+    "rules": [
+      { "cardCode": "A", "propertyNo": 1, "rupeesOff": 5 },
+      { "cardCode": "A", "propertyNo": 2, "rupeesOff": 3 }
+    ],
+    "special": [
+      { "card": "A", "item": "BP", "price": 185, "priceList": 0 },
+      { "card": "A", "item": "BP2", "price": 170, "priceList": 0 },
+      { "card": "A", "item": "PT", "price": 172, "priceList": 1 }
+    ],
+    "expect_dealer": { "BP": "OK", "BP2": "DRIFT", "PT": "KIND", "PT2": "MISSING" },
+    "expect_dealer_counts": { "OK": 1, "DRIFT": 1, "MISSING": 1, "KIND": 1 },
+    "expect_hitech": { "BP": "OK", "BP2": "DRIFT", "PT": "MISSING" },
+    "expect_hitech_counts": { "OK": 1, "DRIFT": 1, "MISSING": 1 },
+    "expect_no_twin": 2,
+    "expect_conflicts": 1
+  }
+}

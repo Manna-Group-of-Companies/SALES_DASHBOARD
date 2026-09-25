@@ -1,46 +1,58 @@
 // What SAP says about an order, and what the app does with it.
 //
-// From 11 September 2026 the manufacturing floor lives in SAP. An approved
-// order becomes a SAP Sales Order; SAP links it to a production order and
-// moves it through stages; a SAP Delivery Order eventually carries several
-// orders out together. Neither app owns any of that any more — they report it.
+// An approved order becomes a SAP Sales Order, and an A/R invoice raised
+// against it is what says it has gone. The app reports those two facts and
+// nothing in between:
 //
-// WHY THE STAGE IS FREE TEXT AND THE STATUS IS NOT
+//     Not Started  ->  Pushed to SAP  ->  Dispatched
+//     (no SAP no.)     (SAP has it)       (invoiced)
 //
-// The stage list belongs to the factory and has to change without an app
-// release, so `custom_sap_production_stage` is never an enum here. Screens
-// print it as SAP wrote it. This file is the only place a stage becomes
-// behaviour, mapping it onto the four values `custom_production_status` has
-// always carried — so every screen built against those keeps working.
+// WHY THERE IS NO PRODUCTION STAGE
 //
-// THE ONE THAT ROUNDS IN THE SAFE DIRECTION
+// Decided 24 September 2026 for the initial release. Under MRP one production
+// order pools the demand of many sales orders, and SAP does not record which
+// order a pooled production order is for — MRP-created orders carry no
+// sales-order link at all, and the link table has no quantity column. Any
+// per-order stage would be an allocation guess dressed up as a fact, so the
+// release reports only what SAP records. `custom_sap_production_order` and
+// `custom_sap_production_stage` still exist in ERPNext and may hold old
+// values; nothing here reads them.
 //
-// A stage nobody has mapped means the floor has started and we do not know how
-// far. That is `In Production`, never `Ready`. Calling an unknown stage Ready
-// would tell a rep an order is made when it is halfway through a press.
+// WHY A DELIVERY IS NOT DISPATCH
+//
+// The floor posts a delivery before it invoices. Dispatch is the invoice, so a
+// delivered-but-uninvoiced order still reads Pushed to SAP. Also decided
+// 24 September 2026.
+//
+// The function names are older than this rule — `productionStatusFromSap`
+// predates the removal of stages — and are kept so the screens calling them
+// did not have to change.
 //
 // Pinned by `shared/fixtures/sap_order_state.json`; the TypeScript twin is
 // `client/src/domain/sapOrderState.ts`.
 import 'package:manna_field_sales/core/order_rules.dart';
 
+const String kSapNotStarted = 'Not Started';
+const String kSapPushed = 'Pushed to SAP';
+const String kSapDispatched = 'Dispatched';
+
 /// What SAP has told us about one order. All of it optional; none of it ours.
 class SapOrderState {
   final String? salesOrder;
   final String? salesOrderStatus;
-  final String? productionOrder;
-  final String? productionStage;
-  final String? deliveryOrder;
-  final String? deliveryDate;
+
+  /// The invoice that completed the order. The sync writes it only once every
+  /// line has been invoiced, so a partly-invoiced order leaves it blank.
+  final String? invoice;
+  final String? invoiceDate;
   final String? syncedAt;
   final String? syncError;
 
   const SapOrderState({
     this.salesOrder,
     this.salesOrderStatus,
-    this.productionOrder,
-    this.productionStage,
-    this.deliveryOrder,
-    this.deliveryDate,
+    this.invoice,
+    this.invoiceDate,
     this.syncedAt,
     this.syncError,
   });
@@ -49,10 +61,8 @@ class SapOrderState {
   factory SapOrderState.fromOrder(Map<String, dynamic> o) => SapOrderState(
         salesOrder: o['custom_sap_sales_order'] as String?,
         salesOrderStatus: o['custom_sap_sales_order_status'] as String?,
-        productionOrder: o['custom_sap_production_order'] as String?,
-        productionStage: o['custom_sap_production_stage'] as String?,
-        deliveryOrder: o['custom_sap_delivery_order'] as String?,
-        deliveryDate: o['custom_sap_delivery_date'] as String?,
+        invoice: o['custom_sap_invoice'] as String?,
+        invoiceDate: o['custom_sap_invoice_date'] as String?,
         syncedAt: o['custom_sap_synced_at'] as String?,
         syncError: o['custom_sap_sync_error'] as String?,
       );
@@ -60,33 +70,21 @@ class SapOrderState {
 
 /// What SAP has told us about one LINE of an order.
 class SapLineState {
-  final String? productionOrder;
-  final String? productionStage;
+  /// The invoice that carried THIS line. Blank means this line has not gone.
+  final String? invoice;
+  final String? invoiceDate;
 
-  /// The delivery that carried THIS line. Blank means this line has not gone.
-  final String? deliveryOrder;
-  final String? deliveryDate;
-
-  const SapLineState({
-    this.productionOrder,
-    this.productionStage,
-    this.deliveryOrder,
-    this.deliveryDate,
-  });
+  const SapLineState({this.invoice, this.invoiceDate});
 
   /// Straight off a row of the order's `items` table.
   factory SapLineState.fromLine(Map<String, dynamic> l) => SapLineState(
-        productionOrder: l['custom_sap_production_order'] as String?,
-        productionStage: l['custom_sap_production_stage'] as String?,
-        deliveryOrder: l['custom_sap_delivery_order'] as String?,
-        deliveryDate: l['custom_sap_delivery_date'] as String?,
+        invoice: l['custom_sap_invoice'] as String?,
+        invoiceDate: l['custom_sap_invoice_date'] as String?,
       );
 
-  /// Whether SAP has said anything about this line yet.
-  bool get hasSap =>
-      _clean(productionOrder).isNotEmpty ||
-      _clean(productionStage).isNotEmpty ||
-      _clean(deliveryOrder).isNotEmpty;
+  /// Whether SAP has said anything about this line of its own — which, with
+  /// no production stages, means whether it has been invoiced.
+  bool get hasSap => _clean(invoice).isNotEmpty;
 }
 
 String _clean(String? v) {
@@ -96,75 +94,68 @@ String _clean(String? v) {
   return s == 'null' ? '' : s;
 }
 
-/// Stages meaning the floor has NOT begun.
-///
-/// Deliberately short. Everything unrecognised counts as started, because the
-/// error that costs money is claiming progress that has not happened.
-const Set<String> _notStarted = {'', 'planned', 'open', 'not started', 'pending'};
-
-/// Stages meaning the floor has finished with it.
-const Set<String> _finished = {'finished', 'closed', 'completed', 'ready'};
-
-/// The four-value status the screens act on.
-///
-/// Delivery beats stage: a delivery order is the later fact, and an order can
-/// sit at "Curing" in a stale production record and still have shipped.
-String productionStatusFromSap(SapOrderState s) {
-  if (_clean(s.deliveryOrder).isNotEmpty) return 'Dispatched';
-  final stage = _clean(s.productionStage).toLowerCase();
-  if (_finished.contains(stage)) return 'Ready';
-  if (_notStarted.contains(stage)) return 'Not Started';
-  return 'In Production';
-}
-
 /// Whether SAP has taken the order at all.
 bool reachedSap(SapOrderState s) => _clean(s.salesOrder).isNotEmpty;
 
+/// The order's status from its own fields.
+///
+/// The invoice is checked first because it is the later fact: an order with an
+/// invoice has gone, whatever else is or is not filled in.
+String productionStatusFromSap(SapOrderState s) {
+  if (_clean(s.invoice).isNotEmpty) return kSapDispatched;
+  if (reachedSap(s)) return kSapPushed;
+  return kSapNotStarted;
+}
+
+/// What an order LIST shows as the order's progress.
+///
+/// SAP's status once SAP has the order (or an invoice exists); before that the
+/// stored in-app `custom_production_status`, which is what every order placed
+/// before the floor moved to SAP carries. Never a mix: an in-app Dispatched on
+/// an order SAP has not invoiced is not dispatch. An order is complete exactly
+/// when this reads [kSapDispatched].
+///
+/// Fixture: `order_progress`. The TypeScript twin is `orderProgress`.
+String orderProgress(SapOrderState s, dynamic storedProductionStatus) {
+  if (reachedSap(s) || _clean(s.invoice).isNotEmpty) {
+    return productionStatusFromSap(s);
+  }
+  final stored = _clean(
+      storedProductionStatus == null ? null : '$storedProductionStatus');
+  return stored.isEmpty ? kSapNotStarted : stored;
+}
+
 /// One line's status.
 ///
-/// SAP raises a production order per item, so a four-item order has four
-/// stages and an order-level stage hides which item is holding it up.
+/// THE INVOICE IS THE LINE'S OWN, NOT THE ORDER'S
 ///
-/// THE DELIVERY IS THE LINE'S OWN, NOT THE ORDER'S
-///
-/// A delivery need not carry the whole order: dropping a row from it is how the
-/// floor ships what is ready and leaves the rest open, which is exactly what
-/// happened to SAP order 381 on 16 Sep 2026 — three lines shipped, one stayed
-/// open. Reading the order's delivery here would mark that fourth line
-/// Dispatched while it sat unmade in the factory, the same lie as calling an
-/// unmapped stage Ready.
-///
-/// Everything else defers to [productionStatusFromSap], so a line and an order
-/// cannot drift apart on the rules they share.
-String lineStatusFromSap(SapLineState line) =>
-    productionStatusFromSap(SapOrderState(
-      productionStage: line.productionStage,
-      deliveryOrder: line.deliveryOrder,
-    ));
+/// An order can be invoiced in parts, so a line is Dispatched only when THAT
+/// line was invoiced. A line has no SAP number of its own, though: it is Pushed
+/// to SAP when its [order] is, which is why the order is passed in.
+String lineStatusFromSap(SapLineState line, {SapOrderState? order}) {
+  if (line.hasSap) return kSapDispatched;
+  if (order != null && reachedSap(order)) return kSapPushed;
+  return kSapNotStarted;
+}
 
 const Map<String, int> _rank = {
-  'Not Started': 0,
-  'In Production': 1,
-  'Ready': 2,
-  'Dispatched': 3,
+  kSapNotStarted: 0,
+  kSapPushed: 1,
+  kSapDispatched: 2,
 };
 
 /// The order's status, rolled up from its lines: the least advanced one wins.
 ///
-/// An order is Ready only when every line is. Rounding the other way would tell
-/// a rep an order is made while one item is still in a press — the same error
-/// the unknown-stage rule exists to prevent.
+/// An order is Dispatched only when every line has been invoiced. A
+/// partly-invoiced order is still open, and calling it Dispatched would close
+/// it in a rep's mind while an item is outstanding.
 ///
-/// With no line carrying SAP state at all, falls back to the order's own.
-/// Not short-circuited on the order's delivery: a partly-delivered order is
-/// still open, and saying Dispatched would close it in a rep's mind while a
-/// line is outstanding. It reaches Dispatched only when every line has.
+/// With no lines at all, falls back to the order's own fields.
 String orderStatusFromLines(List<SapLineState> lines, SapOrderState order) {
-  final known = lines.where((l) => l.hasSap).toList();
-  if (known.isEmpty) return productionStatusFromSap(order);
-  return known
-      .map(lineStatusFromSap)
-      .reduce((worst, s) => (_rank[s] ?? 1) < (_rank[worst] ?? 1) ? s : worst);
+  if (lines.isEmpty) return productionStatusFromSap(order);
+  return lines
+      .map((l) => lineStatusFromSap(l, order: order))
+      .reduce((worst, s) => (_rank[s] ?? 0) < (_rank[worst] ?? 0) ? s : worst);
 }
 
 /// True when SAP has the order but nothing has reconciled it recently.
@@ -177,21 +168,17 @@ bool sapStale(SapOrderState s, DateTime now, {int hours = 24}) {
   return now.difference(t).inHours > hours;
 }
 
-/// One line a rep can read: where the order is and when it leaves.
+/// One line a rep can read: which invoice, when, and the SAP order number.
 ///
 /// Null when there is nothing worth saying, so a caller renders nothing rather
 /// than an empty row.
 String? sapSummary(SapOrderState s) {
   final bits = <String>[];
-  final stage = _clean(s.productionStage);
-  final delivery = _clean(s.deliveryOrder);
-  final date = _clean(s.deliveryDate);
-
-  if (delivery.isNotEmpty) {
-    bits.add('Delivery $delivery');
-    if (date.isNotEmpty) bits.add('due $date');
-  } else if (stage.isNotEmpty) {
-    bits.add(stage);
+  final invoice = _clean(s.invoice);
+  final date = _clean(s.invoiceDate);
+  if (invoice.isNotEmpty) {
+    bits.add('Invoice $invoice');
+    if (date.isNotEmpty) bits.add(date);
   }
   final so = _clean(s.salesOrder);
   if (so.isNotEmpty) bits.add('SAP $so');
@@ -212,10 +199,10 @@ const String _kSapCancelled = 'bost_cancelled';
 /// and an app that goes on calling it Approved is telling a rep to expect goods
 /// nobody is making.
 ///
-/// `bost_Cancelled` is a SAP enum, not a stage name, so it is stable in a way
-/// the stage list deliberately is not. The sync folds SAP's separate
-/// `Cancelled = tYES` flag into the same value — see `Resolve-SoStatus` in
-/// `Sync-SapOrders.ps1` — so this one check covers both ways SAP says it.
+/// `bost_Cancelled` is a SAP enum, so it is stable. The sync folds SAP's
+/// separate `Cancelled = tYES` flag into the same value — see
+/// `Resolve-SoStatus` in `Sync-SapOrders.ps1` — so this one check covers both
+/// ways SAP says it.
 ///
 /// Found on 18 September 2026: SAP order 399 had been cancelled and ERPNext had
 /// recorded it correctly for days. Nothing read it, so the order still showed
@@ -229,7 +216,6 @@ bool cancelledInSap(SapOrderState s) =>
 ///
 /// One function rather than the same check on every screen, which is how the
 /// two apps drift. Cancellation outranks the approval status because it is the
-/// later fact and the terminal one — the same reasoning that puts a delivery
-/// above a stage in [productionStatusFromSap].
+/// later fact and the terminal one.
 String orderApprovalLabel(dynamic rawPoStatus, SapOrderState sap) =>
     cancelledInSap(sap) ? 'Cancelled in SAP' : approvalLabel(rawPoStatus);

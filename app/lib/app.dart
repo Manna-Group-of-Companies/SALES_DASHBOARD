@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/screens/auth/login_screen.dart';
+import 'package:manna_field_sales/widgets/sync_all_button.dart';
 
 class MannaApp extends StatelessWidget {
   const MannaApp({super.key});
@@ -10,6 +11,11 @@ class MannaApp extends StatelessWidget {
     return MaterialApp(
       title: 'Manna Field Sales',
       debugShowCheckedModeBanner: false,
+      // The Sync button on every screen — see widgets/sync_all_button.dart for
+      // why it is placed here rather than in fifty AppBars.
+      scaffoldMessengerKey: SapSyncAll.messengerKey,
+      navigatorObservers: [SapSyncAll.observer],
+      builder: (context, child) => SyncAllOverlay(child: child ?? const SizedBox.shrink()),
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(

@@ -675,3 +675,84 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+
+/* --- The rep's commitment on an over-limit order, and the thread under it --- */
+.commit { margin-bottom: 14px; }
+.commit__quote {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--warn);
+  border-radius: 0 var(--r) var(--r) 0;
+  background: var(--warn-soft);
+}
+.commit__words { white-space: pre-wrap; line-height: 1.45; }
+.commit__quote .commit__words { font-size: 15px; font-weight: 600; }
+.commit__meta { margin-top: 4px; font-size: 11.5px; color: var(--text-3); }
+.commit__thread { list-style: none; margin: 12px 0 0; padding: 0; }
+.commit__item { padding: 8px 0 8px 12px; border-left: 2px solid var(--border); }
+.commit__item + .commit__item { margin-top: 2px; }
+.commit__item .commit__meta { margin: 0 0 2px; }
+.commit__add { display: flex; gap: 8px; align-items: flex-end; margin-top: 12px; }
+.commit__add .textarea { flex: 1; min-width: 0; }
+@media (max-width: 560px) {
+  .commit__add { flex-direction: column; align-items: stretch; }
+}
+
+/* A commitment preview on a GM queue card: two lines, then the order. */
+.gm__commit {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--warn);
+  background: var(--warn-soft);
+  font-size: 12.5px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.gm__commit--none { border-left-color: var(--border-strong); background: var(--surface-2); color: var(--text-3); }
+
+/* The GM's decision: the condition the rep will owe, then the two buttons. */
+.gmdecide__due { max-width: 200px; }
+
+/* --- The GM's follow-up: every order they approved, after the approval --- */
+.fu__table td { vertical-align: top; }
+.fu__link { font-weight: 600; }
+.fu__cond { max-width: 260px; }
+.fu__clip {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+/* A rep's answer waiting on the GM is the row to see first. */
+.fu__row--answered td:first-child { box-shadow: inset 3px 0 0 var(--hue-blue-2); }
+
+.fu__grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 14px; align-items: start; }
+.fu__main, .fu__side { display: grid; gap: 14px; min-width: 0; }
+.fu__main > .card, .fu__side > .card { margin-bottom: 0; }
+@media (max-width: 900px) {
+  .fu__grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Things that happened, rather than things somebody said. */
+.fu__event--approved .commit__words,
+.fu__event--condition .commit__words,
+.fu__event--closed .commit__words { color: var(--text-2); font-style: italic; }
+.fu__event--answer { border-left-color: var(--hue-blue-2); }
+.fu__event--commitment { border-left-color: var(--warn); }
+.fu__tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: var(--r-full);
+  background: var(--hue-blue-soft);
+  color: var(--hue-blue-2);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}

@@ -15,6 +15,11 @@ class Approval {
   double custLimit;
   double orderTotal;
   bool escalate;
+
+  /// The rep's commitment on an over-limit order, and when they said it would
+  /// be met — see `core/credit_commitment.dart`. Null on anything else.
+  dynamic commitment;
+  dynamic commitmentDue;
   Approval(this.title, this.name, this.rep, this.party, this.amount, this.kind,
       {this.lat,
         this.lng,
@@ -22,6 +27,8 @@ class Approval {
         this.custOutstanding = 0,
         this.custLimit = 0,
         this.orderTotal = 0,
-        this.escalate = false});
+        this.escalate = false,
+        this.commitment,
+        this.commitmentDue});
 }
 

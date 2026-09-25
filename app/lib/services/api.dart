@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 
 import 'package:manna_field_sales/core/app_version.dart';
 import 'package:manna_field_sales/core/attendance_rules.dart';
@@ -10,6 +10,7 @@ import 'package:manna_field_sales/core/auth_store.dart';
 import 'package:manna_field_sales/core/capture_rules.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/credit.dart';
+import 'package:manna_field_sales/core/credit_commitment.dart';
 import 'package:manna_field_sales/core/expenses.dart';
 import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
@@ -18,6 +19,7 @@ import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/core/trip_totals.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/proximity.dart';
+import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/trip_rules.dart';
@@ -608,7 +610,7 @@ class Api {
     final team = Session.I.teamReps;
     if (team.isEmpty) return Future.value([]);
     const waiting =
-        '["Pending Approval","Pending Rate Approval","PO Uploaded - Pending Approval"]';
+        '["Pending Approval","Pending Rate Approval","PO Uploaded - Pending Approval","Pending Final Approval"]';
     return _list('Sales Order',
         fields:
         '["name","customer","custom_sales_person","grand_total","custom_po_status","custom_po_number"]',
@@ -646,7 +648,8 @@ class Api {
               '"transaction_date","delivery_date","custom_po_status",'
               '"custom_rate_approved","custom_production_status",'
               '"custom_production_finish_date","custom_proforma_status",'
-              '"custom_combined_order"]',
+              '"custom_combined_order","custom_sap_sales_order",'
+              '"custom_sap_sales_order_status","custom_sap_invoice"]',
           filters: '[["custom_sales_person","in",${_inList(team)}],'
               '["transaction_date",">=","$from"],'
               '["transaction_date","<=","$to"]]',
@@ -931,6 +934,10 @@ class Api {
     }
     final created = '${r.data['data']['name']}';
 
+    // Created already approved, so it goes to SAP exactly as an approved order
+    // does — see approveSalesOrderPO.
+    _askSapForApprovedOrder(created);
+
 
     return created;
   }
@@ -1021,11 +1028,63 @@ class Api {
    * always the net figure, so they still price correctly.
    */
 
+  /// Whether this login may take [decision] on [order] as stored, by the rule
+  /// in `core/credit_commitment.dart` the dashboard also enforces.
+  ///
+  /// The customer is only read when the answer depends on it — a sales
+  /// manager's approve or escalate — and if it cannot be read the decision is
+  /// refused. A retry costs a tap; an over-limit order sent to SAP on nobody's
+  /// authority costs the credit decision the GM exists to make.
+  static Future<void> _checkOrderDecision(
+      Map<String, dynamic> order, String decision) async {
+    final role = orderRoleOf(
+        isGM: Session.I.isGM, isManager: Session.I.isManager);
+    var overLimit = false;
+    // Once the GM has approved, the credit is decided: the push does not
+    // depend on the customer's figures, so they are not read.
+    final gmApproved = '${order['custom_po_status'] ?? ''}' == kPoFinalApproval;
+    if (role == 'sales_manager' && decision != 'reject' && !gmApproved) {
+      Map<String, dynamic>? customer;
+      try {
+        customer = await getCustomerDoc('${order['customer']}');
+      } catch (_) {
+        // Refused below rather than guessed at.
+      }
+      if (customer == null) {
+        throw Exception("Could not read the customer's credit position, so "
+            'this was not saved. Try again.');
+      }
+      overLimit = overCreditLimit(customer, _toNum(order['grand_total']));
+    }
+    final acts = orderActions(
+        role: role, poStatus: order['custom_po_status'], overLimit: overLimit);
+    final allowed = switch (decision) {
+      'approve' => acts.approve,
+      'gm_approve' => acts.gmApprove,
+      'escalate' => acts.escalate,
+      _ => acts.reject,
+    };
+    if (!allowed) {
+      throw Exception(decision == 'approve' && role == 'general_manager'
+          ? kGmDoesNotPush
+          : decision == 'approve' && overLimit
+              ? kSalesManagerCannotApprove
+              : 'This order is not yours to decide in its current state. '
+                  'Refresh it to see where it is.');
+    }
+  }
+
   static Future<void> approveSalesOrderPO(String name, bool approve) async {
     final body = <String, dynamic>{
       'custom_po_status': approve ? 'PO Approved - Ready for SAP' : 'Rejected',
       'custom_rate_approved': approve ? 1 : 0,
     };
+
+    // Asked of the order as stored, not of what the screen loaded, and never
+    // swallowed by the fallback below: a sales manager may not approve an
+    // over-limit order however they reached this call.
+    final stored = await getOrder(name);
+    await _checkOrderDecision(stored, approve ? 'approve' : 'reject');
 
     // Approval is per line as well as per order. Stamping each line is what
     // lets the app tell an approved price from one the rep added afterwards,
@@ -1033,7 +1092,7 @@ class Api {
     // whose other rates are frozen.
     if (approve) {
       try {
-        final order = await getOrder(name);
+        final order = stored;
         final items = (order['items'] as List?) ?? [];
         body['items'] = [
           for (final raw in items)
@@ -1049,7 +1108,24 @@ class Api {
       }
     }
 
+    // A rejection means any GM approval no longer stands, so its stamp goes.
+    if (!approve) {
+      body['custom_gm_approved_by'] = '';
+      body['custom_gm_approved_on'] = null;
+    }
+
     await _put('Sales Order', name, body);
+
+    // An approval is what puts an order in front of the factory, so it asks
+    // SAP to pick it up at once. Until 24 Sep 2026 only the dashboard did
+    // this and a phone approval waited for a 15-minute sweep; the sweep is
+    // gone, so without this a phone-approved order would never reach SAP.
+    if (approve) _askSapForApprovedOrder(name);
+
+    // A GM who rejects — including one withdrawing their own approval before
+    // the push — leaves nothing owed. Closing is the GM's act alone, and this
+    // is the GM acting. Best-effort: the rejection already stands.
+    if (!approve && Session.I.isGM) await _closeOrderConditions(name);
   }
 
   static Future<void> releaseProforma(String name, bool approve) => _put(
@@ -1286,10 +1362,133 @@ class Api {
   static Future<void> upsertOutstandingLimit(String rep, double amount) =>
       _put('Sales Person', rep, {'custom_outstanding_limit': amount});
 
-  // Escalation: manager approved but rep is over their outstanding limit ->
-  // needs General Manager approval before it can go to SAP.
-  static Future<void> escalateSalesOrderPOToGM(String name) =>
-      _put('Sales Order', name, {'custom_po_status': 'Pending GM Approval'});
+  // Escalation: the order takes the customer past their credit limit, so it
+  // needs the General Manager before it can go to SAP. Checked against the
+  // order as stored, like approval — see [_checkOrderDecision].
+  static Future<void> escalateSalesOrderPOToGM(String name) async {
+    await _checkOrderDecision(await getOrder(name), 'escalate');
+    await _put(
+        'Sales Order', name, {'custom_po_status': 'Pending GM Approval'});
+  }
+
+  /// The GM's approval of an escalated order, and the condition it makes.
+  ///
+  /// **It does not push to SAP.** Asked for 24 Sep 2026: the order moves to
+  /// [kPoFinalApproval] ("Approved by GM") and back to the sales manager,
+  /// whose [approveSalesOrderPO] is the push. Nothing is locked and SAP is not
+  /// asked; the sync only takes `PO Approved - Ready for SAP`.
+  ///
+  /// With the rep's commitment on the order the condition is required — the
+  /// GM may reword it but not drop it — and that is refused here, before
+  /// anything is written, so no approved order loses its promise on the way.
+  ///
+  /// The condition is written AFTER the approval and cannot undo it: an
+  /// approval the GM believes they gave, reversed because a condition would
+  /// not save, is the worse failure. Returns whether it landed — null when
+  /// there was none to write — so the screen can say so.
+  static Future<bool?> approveEscalatedOrder(
+    String name, {
+    String? condition,
+    String? dueDateIso,
+  }) async {
+    final stored = await getOrder(name);
+    await _checkOrderDecision(stored, 'gm_approve');
+    final problem = approvalConditionProblem(
+        stored['custom_credit_commitment'], condition);
+    if (problem != null) throw Exception(problem);
+
+    await _put('Sales Order', name, {
+      'custom_po_status': kPoFinalApproval,
+      // Whose approval the sales manager is acting on when they push.
+      'custom_gm_approved_by': Session.I.salesPersonLabel ??
+          Session.I.salesPerson ??
+          Session.I.email,
+      'custom_gm_approved_on': nowStamp(),
+    });
+    await OfflineCache.clear();
+
+    final terms = (condition ?? '').trim();
+    if (terms.isEmpty) return null;
+    return _upsertOrderCondition(
+      salesOrder: name,
+      customer: '${stored['customer']}',
+      salesPerson: '${stored['custom_sales_person']}',
+      condition: terms,
+      // `due_date` is mandatory on the doctype, so an empty one falls back to
+      // what the GM was offered rather than failing the save.
+      dueDateIso: (dueDateIso ?? '').isNotEmpty
+          ? dueDateIso!
+          : defaultConditionDue(
+              stored['custom_credit_commitment_due'], serverNow()),
+    );
+  }
+
+  /// Conditions made from one order, whatever their state.
+  static Future<List<Map<String, dynamic>>> _orderConditions(String order) =>
+      _list('Manna Credit Condition',
+          fields: '["name","status"]',
+          filters: '[["sales_order","=","$order"]]');
+
+  /// One condition per order, however many times the GM approves it.
+  ///
+  /// An order the GM approved and someone then edited goes back to the GM,
+  /// who approves it again. A second condition for the same order would have
+  /// the rep owing the same promise twice, so a live one is reused: reworded
+  /// and redated while the rep has not answered it, left alone once they
+  /// have. The dashboard does the same in `upsertOrderCondition`.
+  static Future<bool> _upsertOrderCondition({
+    required String salesOrder,
+    required String customer,
+    required String salesPerson,
+    required String condition,
+    required String dueDateIso,
+  }) async {
+    try {
+      final live = (await _orderConditions(salesOrder))
+          .where((c) => '${c['status']}' != 'Closed')
+          .toList();
+      if (live.isNotEmpty) {
+        final c = live.first;
+        if ('${c['status']}' == 'Open') {
+          await _put('Manna Credit Condition', '${c['name']}', {
+            'condition': condition,
+            'due_date': dueDateIso,
+            'set_by': Session.I.salesPersonLabel ??
+                Session.I.salesPerson ??
+                Session.I.email,
+            'set_on': nowStamp(),
+          });
+        }
+        return true;
+      }
+    } catch (_) {
+      // Could not look — fall through and make one. A duplicate the GM can
+      // close beats an approval with no condition behind it.
+    }
+    final made = await addCreditCondition(
+      customer: customer,
+      salesPerson: salesPerson,
+      condition: condition,
+      dueDateIso: dueDateIso,
+      salesOrder: salesOrder,
+    );
+    return made != null;
+  }
+
+  /// Close whatever is still owed on an order the GM has rejected.
+  static Future<void> _closeOrderConditions(String salesOrder) async {
+    try {
+      final live = (await _orderConditions(salesOrder))
+          .where((c) => '${c['status']}' != 'Closed');
+      for (final c in live) {
+        await decideCondition('${c['name']}',
+            closed: true,
+            note: 'The GM rejected the order, so nothing is owed on it.');
+      }
+    } catch (e) {
+      debugPrint('Rejected $salesOrder, but could not close its condition: $e');
+    }
+  }
 
   static Future<void> escalateLeadOrderPOToGM(String name) =>
       _put('Lead Order', name, {'status': 'Pending GM Approval'});
@@ -1298,7 +1497,8 @@ class Api {
   static Future<List<Map<String, dynamic>>> getPendingGMSalesOrderPOs() =>
       _list('Sales Order',
           fields:
-          '["name","customer","custom_sales_person","grand_total","custom_po_status"]',
+          '["name","customer","custom_sales_person","grand_total","custom_po_status",'
+          '"custom_credit_commitment","custom_credit_commitment_due"]',
           filters: '[["custom_po_status","=","Pending GM Approval"]]',
           orderBy: 'creation desc');
 
@@ -1846,10 +2046,12 @@ class Api {
                 fields:
                     '["name","customer","grand_total","transaction_date","delivery_date","custom_proforma_status","custom_proforma_required","custom_order_placed_at","custom_po_status","custom_production_status","custom_production_finish_date","custom_combined_order","custom_duplicate_of","custom_duplicate_ignored","custom_edit_count","docstatus",'
                     // What SAP says about it: the order number that proves it
-                    // reached the factory, where it is on the floor, and which
-                    // delivery is carrying it out.
-                    '"custom_sap_sales_order","custom_sap_production_stage",'
-                    '"custom_sap_delivery_order","custom_sap_delivery_date",'
+                    // reached the factory, and the invoice that says it has
+                    // gone. These two fields MUST exist in ERPNext before this
+                    // build ships - Frappe rejects an unknown field in a list
+                    // query, and this list is the rep's whole order history.
+                    '"custom_sap_sales_order",'
+                    '"custom_sap_invoice","custom_sap_invoice_date",'
                     '"custom_sap_synced_at","custom_sap_sync_error"]',
                 filters: _mineFilter('custom_sales_person'),
                 limit: 50),
@@ -2058,6 +2260,8 @@ class Api {
     required bool returnForApproval,
     String? deliveryDate,
     bool isLead = false,
+    String? commitment,
+    String? commitmentDue,
   }) async {
     final ref = OrderRef(orderName, isLead: isLead);
 
@@ -2074,15 +2278,33 @@ class Api {
      * at this point would change the ERPNext document, show the rep a new
      * quantity, and leave the factory building the old one.
      */
+    var storedStatus = '';
     if (!isLead) {
       final stored = await getOrder(orderName);
       if (orderApproved(stored)) throw Exception(orderLockReason(stored));
+      storedStatus = '${stored['custom_po_status'] ?? ''}';
     }
 
     final body = <String, dynamic>{
       'items': items,
     };
     if (deliveryDate != null) body['delivery_date'] = deliveryDate;
+    // An order the GM approved and anybody then changes is no longer the
+    // money the GM approved. It goes back to them and the approval is cleared,
+    // the same as the dashboard's `saveOrderLines`.
+    if (storedStatus == kPoFinalApproval) {
+      body['custom_po_status'] = 'Pending GM Approval';
+      body['custom_gm_approved_by'] = '';
+      body['custom_gm_approved_on'] = null;
+    }
+    // Only ever added, never cleared by an edit: an edit that takes the order
+    // over the limit asks for one, and one already given stands.
+    if (!isLead && (commitment ?? '').trim().isNotEmpty) {
+      body['custom_credit_commitment'] = commitment!.trim();
+      if ((commitmentDue ?? '').isNotEmpty) {
+        body['custom_credit_commitment_due'] = commitmentDue;
+      }
+    }
     if (returnForApproval) {
       body['custom_rate_approved'] = 0;
       if (isLead) {
@@ -2191,33 +2413,91 @@ class Api {
   // -------- The SAP credit-limit refresh --------
   //
   // Frappe Cloud cannot reach the SAP LAN, so nothing here speaks to SAP. The
-  // button raises a flag on the `SAP Sync Control` Single; a poller on the
-  // on-prem Windows box picks it up within about two minutes, runs the sync
-  // and writes the outcome back.
+  // button raises a flag on the `SAP Sync Control` Single; a watcher on the
+  // office server reads the flags every 15 seconds, runs the sync and writes
+  // the outcome back. From 24 Sep 2026 nothing runs on a timer.
   //
-  // The cooldown lives in the `manna_sap_request_sync` Server Script, not
-  // here. The SAP Service Layer licence pool is tiny and logging in inside the
-  // window takes it down for 20-30 minutes for everybody. This file only
-  // reports the refusal; the server makes it.
+  // Every request is accepted. Inside the short cooldown after a run, or while
+  // one is running, the flag is still raised and the run follows as soon as it
+  // may — a tap is delayed, never dropped. The cooldown is kept by the office
+  // poller, where nothing on a phone can reach it.
 
-  /// The sync state. Polled every 10 seconds while a run is in flight.
+  /// The sync state. Polled every 3 seconds while a run is in flight.
   static Future<Map<String, dynamic>> sapSyncStatus() async {
     final r = await Session.I.dio.post('/api/method/manna_sap_get_status');
     final m = r.data is Map ? r.data['message'] : null;
     return m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
   }
 
-  /// Ask for a refresh.
+  /// Ask for a refresh. Always queued: `message` is the sentence to show, and
+  /// says when a request that has to wait will run (`reason` is `running` or
+  /// `cooldown` then, empty when it starts now).
   ///
-  /// A refusal is a normal answer, not an error: `ok` false with a reason of
-  /// `in_progress` or `cooldown`. Only Accounts Manager, Sales Manager and
-  /// System Manager may ask at all — anyone else gets a 403 from the script,
-  /// which is why the button is not offered to a rep in the first place.
+  /// Only the Manna Treads team, and System Manager, may ask — the script
+  /// tests the Sales Person's company, not a role, and throws for anyone else,
+  /// which is why the button is offered only to [Session.isTreadsUnit].
   static Future<Map<String, dynamic>> requestSapSync() async {
     final r = await Session.I.dio.post('/api/method/manna_sap_request_sync');
     final m = r.data is Map ? r.data['message'] : null;
     if (m is Map) return Map<String, dynamic>.from(m);
     throw Exception(_frappeError(r));
+  }
+
+  // -------- The SAP order sync and the stock fetch --------
+  //
+  // The same mechanism as the credit refresh above: each raises a flag on its
+  // own ERPNext Single and a watcher on the office server, checking every 15
+  // seconds, runs whichever sync is flagged. From 24 September 2026 nothing
+  // syncs on a timer — these, pressed from the Sync button on every screen,
+  // and an approval raising the order flag, are the only way SAP is read.
+  //
+  // Every request script always raises its flag, even inside the cooldown:
+  // the poller defers a flagged run until the cooldown has passed, so a press
+  // is delayed, never dropped. The dashboard's twins are in client.ts.
+
+  /// Ask for the order sync: push approved orders, pull invoices. Anyone may.
+  static Future<Map<String, dynamic>> requestOrderSync() async {
+    final r = await Session.I.dio.post('/api/method/manna_sap_order_request_sync');
+    final m = r.data is Map ? r.data['message'] : null;
+    if (m is Map) return Map<String, dynamic>.from(m);
+    throw Exception(_frappeError(r));
+  }
+
+  /// Where the order sync has got to: `status` and `sync_requested`.
+  static Future<Map<String, dynamic>> orderSyncStatus() async {
+    final r = await Session.I.dio.get('/api/method/manna_sap_order_get_status');
+    final m = r.data is Map ? r.data['message'] : null;
+    return m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
+  }
+
+  /// Ask for a stock fetch from SAP. Offered to the Treads team only, like the
+  /// credit refresh: the stock lands in Manna Treads' warehouse.
+  static Future<Map<String, dynamic>> requestStockSync() async {
+    final r = await Session.I.dio.post('/api/method/manna_stock_request_sync');
+    final m = r.data is Map ? r.data['message'] : null;
+    if (m is Map) return Map<String, dynamic>.from(m);
+    throw Exception(_frappeError(r));
+  }
+
+  /// Where the stock fetch has got to. `status` reads Queued while a request
+  /// is waiting, so it answers "still going?" on its own.
+  static Future<Map<String, dynamic>> stockSyncStatus() async {
+    final r = await Session.I.dio.post('/api/method/manna_stock_get_status');
+    final m = r.data is Map ? r.data['message'] : null;
+    return m is Map ? Map<String, dynamic>.from(m) : <String, dynamic>{};
+  }
+
+  /// Raise the order flag after an order becomes approved, without holding
+  /// the caller up.
+  ///
+  /// The approval is already saved and must stand whether this lands or not,
+  /// so it is not awaited. But nothing sweeps approved orders up on a timer any
+  /// more, so a failure is logged rather than eaten: the order then waits for
+  /// the next press of Sync. The dashboard does the same in `decideOrder`.
+  static void _askSapForApprovedOrder(String what) {
+    unawaited(requestOrderSync().then<void>((_) {}).catchError((Object e) {
+      debugPrint('$what: approved, but SAP could not be asked to pick it up - press Sync. $e');
+    }));
   }
 
   /// Every condition this rep owes, across all their customers.
@@ -2244,13 +2524,53 @@ class Api {
 
   /// The rep's answer. Moves it to Awaiting Review — the rep says what they
   /// did, the GM decides whether that settles it.
-  static Future<void> respondToCondition(String name, String response) async {
+  ///
+  /// The answer is also written to the order's thread (25 Sep 2026), so it
+  /// arrives on the order in the GM's follow-up and every answer is kept —
+  /// the condition's `response` only ever holds the latest. Best-effort after
+  /// the answer itself is saved: the rep must not be told their answer failed
+  /// when it reached the condition.
+  static Future<void> respondToCondition(String name, String response,
+      {String? salesOrder, String? customer}) async {
     await _put('Manna Credit Condition', name, {
       'response': response,
       'responded_on': nowStamp(),
       'status': 'Awaiting Review',
     });
+    await _postThreadComment(
+        salesOrder: salesOrder,
+        customer: customer,
+        role: 'rep',
+        text: response);
     await OfflineCache.clear();
+  }
+
+  /// One entry on an order's thread, as `role`. Swallows its own failure —
+  /// every caller has already saved the thing that matters.
+  static Future<void> _postThreadComment({
+    required String? salesOrder,
+    required String? customer,
+    required String role,
+    required String text,
+  }) async {
+    final order = (salesOrder ?? '').trim();
+    final authorRole = commentAuthorRole(role);
+    if (order.isEmpty || order == 'null' || authorRole == null) return;
+    try {
+      await Session.I.dio.post(_res('Manna Credit Comment'), data: {
+        'sales_order': order,
+        if ((customer ?? '').isNotEmpty && customer != 'null')
+          'customer': customer,
+        'author': Session.I.salesPersonLabel ??
+            Session.I.salesPerson ??
+            Session.I.email,
+        'author_role': authorRole,
+        'posted_on': nowStamp(),
+        'comment': text.trim(),
+      });
+    } catch (e) {
+      debugPrint('Saved, but could not add it to the order thread: $e');
+    }
   }
 
   /// The GM's decision. [closed] false sends it back to the rep.
@@ -2258,8 +2578,15 @@ class Api {
   /// Only the GM closes one. The person under an obligation declaring it
   /// satisfied is not accountability, and this is the door that enforces it —
   /// the screen hides the button, and there is no Server Script behind it.
+  ///
+  /// A note given when sending one back also goes on the order's thread, so
+  /// the rep reads why under the condition — the card only ever showed a
+  /// note on closing (credit_commitment.json → follow_up).
   static Future<void> decideCondition(String name,
-      {required bool closed, String? note}) async {
+      {required bool closed,
+      String? note,
+      String? salesOrder,
+      String? customer}) async {
     if (!Session.I.isGM) {
       throw Exception('Only the general manager can close a credit condition.');
     }
@@ -2269,7 +2596,123 @@ class Api {
       'closed_by': closed ? (Session.I.salesPersonLabel ?? Session.I.salesPerson ?? Session.I.email) : '',
       'closed_on': closed ? nowStamp() : '',
     });
+    if (!closed && note != null && note.trim().isNotEmpty) {
+      await _postThreadComment(
+          salesOrder: salesOrder,
+          customer: customer,
+          role: 'general_manager',
+          text: 'Sent back: ${note.trim()}');
+    }
     await OfflineCache.clear();
+  }
+
+  // -------- Comments on the rep's commitment --------
+  //
+  // While an over-limit order waits, the sales manager and the GM may add what
+  // they know beside the rep's commitment. The GM reads them before deciding,
+  // and the rep reads them under the condition the approval makes. One
+  // `Manna Credit Comment` each, so two managers writing at once cannot
+  // overwrite each other. The dashboard's twins are in client.ts.
+
+  /// `_list` with an `in` filter over a list that grows with the data.
+  ///
+  /// Frappe Cloud refuses a request line over about 4 KB with a bare nginx
+  /// 400 before Frappe is consulted — the dashboard's stock page went blank on
+  /// exactly that on 18 September 2026 (see `listDocsIn` in client.ts). Order
+  /// names are about twenty characters each once quoted, so sixty to a request
+  /// stays well clear.
+  static Future<List<Map<String, dynamic>>> _listIn(
+      String doctype, String field, List<String> values,
+      {required String fields, String orderBy = 'creation desc'}) async {
+    final ids = values.where((s) => s.isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return const [];
+    const size = 60;
+    final chunks = [
+      for (var i = 0; i < ids.length; i += size)
+        ids.sublist(i, i + size < ids.length ? i + size : ids.length),
+    ];
+    final pages = await Future.wait([
+      for (final chunk in chunks)
+        _list(doctype,
+            fields: fields,
+            filters: '[["$field","in",${_inList(chunk)}]]',
+            orderBy: orderBy),
+    ]);
+    return [for (final p in pages) ...p];
+  }
+
+  /// Every comment on these orders, oldest first — a conversation reads
+  /// forwards. Chunks come back each in order but not with each other, so the
+  /// sort is done here, on the naming series, which only ever counts up.
+  static Future<List<Map<String, dynamic>>> creditComments(
+      List<String> salesOrders) async {
+    final rows = await _listIn('Manna Credit Comment', 'sales_order', salesOrders,
+        fields: '["name","sales_order","customer","author","author_role",'
+            '"posted_on","comment"]',
+        orderBy: 'creation asc');
+    return [...rows]..sort((a, b) => '${a['name']}'.compareTo('${b['name']}'));
+  }
+
+  /// Who may comment is `orderActions(...).comment`, asked here of the order
+  /// as stored: the sales manager and the GM, until the order is approved.
+  static Future<void> addCreditComment({
+    required String salesOrder,
+    required String comment,
+  }) async {
+    final text = comment.trim();
+    if (text.isEmpty) throw Exception(kCommentEmpty);
+    final order = await getOrder(salesOrder);
+    final role =
+        orderRoleOf(isGM: Session.I.isGM, isManager: Session.I.isManager);
+    if (!orderActions(
+            role: role, poStatus: order['custom_po_status'], overLimit: false)
+        .comment) {
+      throw Exception('Comments close once an order is approved — anything '
+          'more belongs on the condition.');
+    }
+    final r = await Session.I.dio.post(_res('Manna Credit Comment'), data: {
+      'sales_order': salesOrder,
+      'customer': order['customer'],
+      'author': Session.I.salesPersonLabel ??
+          Session.I.salesPerson ??
+          Session.I.email,
+      'author_role':
+          role == 'general_manager' ? 'General Manager' : 'Sales Manager',
+      'posted_on': nowStamp(),
+      'comment': text,
+    });
+    if (r.statusCode != 200 && r.statusCode != 201) {
+      throw Exception(_frappeError(r));
+    }
+  }
+
+  /// The conditions made from one order, for the follow-up line on the
+  /// order's own screen. The conversation itself is read on My Conditions —
+  /// the order screen only says where things stand and links there.
+  static Future<List<Map<String, dynamic>>> conditionsForOrder(
+      String salesOrder) {
+    if (salesOrder.isEmpty) return Future.value(const []);
+    return _list('Manna Credit Condition',
+        fields: '["name","customer","sales_person","sales_order","condition",'
+            '"due_date","status","set_by","response","responded_on",'
+            '"close_note","closed_on"]',
+        filters: '[["sales_order","=","$salesOrder"]]',
+        orderBy: 'creation asc');
+  }
+
+  /// The rep's own words on each of these orders, keyed by order.
+  ///
+  /// The condition the GM approved may be reworded; this is what the rep
+  /// originally wrote, shown beside it so they can see what changed.
+  static Future<Map<String, String>> commitmentsFor(
+      List<String> salesOrders) async {
+    final rows = await _listIn('Sales Order', 'name', salesOrders,
+        fields: '["name","custom_credit_commitment"]');
+    return {
+      for (final r in rows)
+        if (hasCommitment(r['custom_credit_commitment']))
+          '${r['name']}': '${r['custom_credit_commitment']}'.trim(),
+    };
   }
 
   // -------- Duplicate orders, edit count, deletion --------
@@ -2292,7 +2735,8 @@ class Api {
   }) async {
     if (customer.isEmpty) return {};
     final heads = await _list('Sales Order',
-        fields: '["name","custom_production_status","docstatus"]',
+        fields: '["name","custom_production_status","docstatus",'
+            '"custom_sap_sales_order","custom_sap_invoice"]',
         filters: '[["customer","=","$customer"]]',
         orderBy: 'creation desc',
         limit: 40);
@@ -2302,12 +2746,13 @@ class Api {
       if (out.length >= 10) break;
       final name = '${h['name']}';
       if (name == excluding) continue;
-      // Cancelled is docstatus 2. Dispatched is done with. Both are filtered
-      // here rather than in the query: an unset production status reads back
-      // three different ways and a SQL "!=" would silently drop those rows,
-      // which are exactly the open orders this is looking for.
+      // Cancelled is docstatus 2. Dispatched is done with — which, once SAP
+      // has the order, means invoiced (see isOrderComplete). Both are filtered
+      // here rather than in the query: an unset status reads back three
+      // different ways and a SQL "!=" would silently drop those rows, which
+      // are exactly the open orders this is looking for.
       if (_toInt(h['docstatus']) == 2) continue;
-      if ('${h['custom_production_status'] ?? ''}' == kStageDispatched) continue;
+      if (isOrderComplete(h)) continue;
 
       try {
         final doc = await getOrder(name);
@@ -2845,8 +3290,17 @@ class Api {
     required String company,
     required List<Map<String, dynamic>> items,
     String? deliveryDate,
+    String? commitment,
+    String? commitmentDue,
   }) async {
     final body = {
+      // What the customer promised, in the rep's words, when this order takes
+      // them past their credit limit. The GM decides the order on it and the
+      // approval turns it into the rep's condition — credit_commitment.json.
+      if ((commitment ?? '').trim().isNotEmpty)
+        'custom_credit_commitment': commitment!.trim(),
+      if ((commitmentDue ?? '').isNotEmpty)
+        'custom_credit_commitment_due': commitmentDue,
       'customer': customer,
       'company': company,
       'custom_sales_person': Session.I.salesPerson,
@@ -2911,13 +3365,17 @@ class Api {
     required String company,
     required List<Map<String, dynamic>> items,
     required String deliveryDate,
+    String? commitment,
+    String? commitmentDue,
   }) async {
     await _requireRoute('Customer', customer);
     final name = await createSalesOrder(
         customer: customer,
         company: company,
         items: items,
-        deliveryDate: deliveryDate);
+        deliveryDate: deliveryDate,
+        commitment: commitment,
+        commitmentDue: commitmentDue);
 
     // Best-effort — see refreshDuplicateFlag.
     await refreshDuplicateFlag(name);
@@ -4140,10 +4598,15 @@ class Api {
   static Future<List<Map<String, dynamic>>> getApprovedPOsForProduction() async {
     final unit = Session.I.productionCompany;
     if (unit == null || unit.isEmpty) return [];
+    // The SAP fields are what the row's tick reads (orderProgress). Without
+    // them it fell back to the in-app custom_production_status, which only the
+    // stage picker wrote — removed 25 September 2026, so it would never move.
     final orders = await _list('Sales Order',
         fields: '["name","customer","grand_total","transaction_date",'
             '"delivery_date","custom_sales_person","custom_production_status",'
-            '"custom_production_finish_date","custom_changed_after_approval"]',
+            '"custom_production_finish_date","custom_changed_after_approval",'
+            '"custom_sap_sales_order","custom_sap_sales_order_status",'
+            '"custom_sap_invoice","custom_sap_invoice_date"]',
         filters:
             '[["custom_company","=","$unit"],["custom_po_status","=","PO Approved - Ready for SAP"]]',
         orderBy: 'transaction_date desc',
@@ -4227,11 +4690,17 @@ class Api {
   ///
   /// Derived, never stored. A separate "complete" flag would be one more thing
   /// that can disagree with the floor — ticked on an order still being made, or
-  /// left unticked on one long gone. The order-level status is already rolled
-  /// up from the lines, so completion is read from it rather than kept beside
-  /// it.
+  /// left unticked on one long gone.
+  ///
+  /// Once SAP has the order, dispatched means invoiced: the sync writes the
+  /// order's `custom_sap_invoice` only when every line has been. Before that,
+  /// the in-app status. See `orderProgress` and the `order_progress` cases in
+  /// shared/fixtures/sap_order_state.json — the dashboard's tick reads the same.
+  /// The order needs `custom_sap_sales_order` and `custom_sap_invoice` fetched.
   static bool isOrderComplete(Map<String, dynamic> order) =>
-      '${order['custom_production_status'] ?? ''}' == kStageDispatched;
+      orderProgress(SapOrderState.fromOrder(order),
+          order['custom_production_status']) ==
+      kSapDispatched;
 
   static Future<List<Map<String, dynamic>>> getCombinedOrders({
     String? customer,
@@ -4259,8 +4728,11 @@ class Api {
   /// not point back at it.
   static Future<List<Map<String, dynamic>>> ordersInCombined(String name) =>
       _list('Sales Order',
+          // The SAP pair is what OrderCompleteTick reads once SAP has the
+          // order; without it every row would fall back to the in-app status.
           fields: '["name","customer","customer_name","transaction_date",'
-              '"grand_total","custom_production_status","custom_sales_person"]',
+              '"grand_total","custom_production_status","custom_sales_person",'
+              '"custom_sap_sales_order","custom_sap_invoice"]',
           filters: '[["custom_combined_order","=","$name"]]',
           orderBy: 'transaction_date asc');
 
@@ -4268,34 +4740,6 @@ class Api {
   static Future<void> ungroupOrder(String orderName) async {
     await _put('Sales Order', orderName, {'custom_combined_order': ''});
     await OfflineCache.clear();
-  }
-
-  /// Moves one line along its process cycle.
-  ///
-  /// A line used to be two halves — the portion served off a shelf
-  /// reservation, and the portion being made — each moving along its own
-  /// sequence. Reservations are gone, so there is one line and one stage.
-  static Future<void> setItemStage({
-    required String orderName,
-    required String itemRowName,
-    required String stage,
-  }) async {
-    final order = await getOrder(orderName);
-    final items = ((order['items'] as List?) ?? [])
-        .map((e) => (e as Map).cast<String, dynamic>())
-        .toList();
-    for (final it in items) {
-      if ('${it['name']}' != itemRowName) continue;
-      it['custom_production_stage'] = stage;
-    }
-    await _put('Sales Order', orderName, {
-      'items': items,
-      // Rolled up to the order so the sales side can see it. Production moves
-      // stages per item; the manager's order list and review read the
-      // order-level field, and nothing was writing it — so an order in Curing
-      // still read "Not Started" to everyone outside the factory.
-      'custom_production_status': _rollUpStage(items),
-    });
   }
 
   /// One coarse status for a whole order, from its items' stages.
@@ -4658,17 +5102,6 @@ class Api {
   /// The production manager confirming they have seen a post-approval change.
   static Future<void> acknowledgeOrderChange(String orderName) =>
       _put('Sales Order', orderName, {'custom_changed_after_approval': 0});
-
-  static Future<void> setProductionStatus({
-    required String orderName,
-    required String status,
-    String? finishDate,
-  }) async {
-    await _put('Sales Order', orderName, {
-      'custom_production_status': status,
-      'custom_production_finish_date': finishDate,
-    });
-  }
 
   static Future<String> createRetreadProforma({
     required String customer,

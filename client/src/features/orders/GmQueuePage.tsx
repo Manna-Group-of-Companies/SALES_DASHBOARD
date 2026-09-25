@@ -6,9 +6,14 @@
  * because that is the whole reason the order arrived here — a GM opening this
  * screen is answering one question, and it should not need a click.
  *
- * "Open the order" gives the GM the same full review the sales manager gets,
- * where their three exemptions apply: they may edit past the 1 pm freeze, they
- * may edit an order that is not theirs, and they may change a rate the sales
+ * Under it, the rep's commitment: what the customer promised in exchange for
+ * the credit. That is the other half of the question, so it is on the card
+ * rather than a click away.
+ *
+ * "Review & decide" opens the GM's own review (`GmOrderPage`), not the sales
+ * manager's — that one offered the GM "Send to GM" on an order already
+ * escalated to them. There the three exemptions apply: they may edit past the
+ * 1 pm freeze, edit an order that is not theirs, and change a rate the sales
  * manager already locked. See `orderStatus.ts` for why all three exist.
  */
 
@@ -16,6 +21,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { SalesCustomer, TeamOrder } from '@/domain/types';
 import { creditPicture, PO_STATUS } from '@/domain/orderStatus';
+import { hasCommitment } from '@/domain/creditCommitment';
 import { formatDate } from '@/domain/orderRules';
 import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
@@ -24,7 +30,7 @@ import { Alert, Card, Empty, Input } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
-import { GmConditionsPanel } from './GmConditionsPanel';
+import { COND_AWAITING } from '@/domain/creditCondition';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import '@/components/common/status.css';
@@ -34,6 +40,12 @@ export function GmQueuePage() {
   const user = useAppSelector(selectUser);
 
   const [orders, setOrders] = useState<TeamOrder[]>([]);
+  /**
+   * What is waiting in Follow-up, said here so an approval does not simply
+   * vanish from the GM's view. The orders themselves live on that screen.
+   */
+  const [awaitingPush, setAwaitingPush] = useState(0);
+  const [answered, setAnswered] = useState(0);
   const [customers, setCustomers] = useState<SalesCustomer[]>([]);
   const [query, setQuery] = useState('');
   const [tick, setTick] = useState(0);
@@ -44,10 +56,16 @@ export function GmQueuePage() {
     let live = true;
     setLoading(true);
     setError(null);
-    Promise.all([Api.sales.listOrders(), Api.sales.listCustomers()])
-      .then(([o, c]) => {
+    Promise.all([
+      Api.sales.listOrders(),
+      Api.sales.listCustomers(),
+      Api.sales.listCreditConditions().catch(() => []),
+    ])
+      .then(([o, c, conds]) => {
         if (!live) return;
         setOrders(o.filter((x) => x.poStatus === PO_STATUS.pendingGm));
+        setAwaitingPush(o.filter((x) => x.poStatus === PO_STATUS.finalApproval).length);
+        setAnswered(conds.filter((k) => k.status === COND_AWAITING).length);
         setCustomers(c);
       })
       .catch((e: unknown) => {
@@ -132,11 +150,29 @@ export function GmQueuePage() {
         />
       </div>
 
-      {/* The other half of the loop: the terms set here have to be closable
-          here too, or a rep answers into silence. */}
-      <div style={{ marginBottom: 14 }}>
-        <GmConditionsPanel />
-      </div>
+      {/*
+        The other half of the loop lives in Follow-up: what the GM approved,
+        and the reps' answers to the conditions. Pointed at from here so an
+        answer waiting on the GM is seen from the screen they open first.
+      */}
+      {(answered > 0 || awaitingPush > 0) && (
+        <div style={{ marginBottom: 14 }}>
+          <Alert
+            tone={answered > 0 ? 'warn' : 'info'}
+            title={[
+              answered > 0 && `${answered} rep${answered === 1 ? ' has' : 's have'} answered a condition`,
+              awaitingPush > 0 && `${awaitingPush} approved order${awaitingPush === 1 ? '' : 's'} waiting for the sales manager to push`,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+            actions={
+              <Link to="/follow-up" className="btn btn--sm">
+                Open Follow-up
+              </Link>
+            }
+          />
+        </div>
+      )}
 
       {loading && <Empty icon="◔" title="Reading the queue…" />}
 
@@ -185,14 +221,23 @@ export function GmQueuePage() {
 
               <div className="gm__over">Over by {money(p.over, 0)}</div>
 
+              <div
+                className={hasCommitment(o.creditCommitment) ? 'gm__commit' : 'gm__commit gm__commit--none'}
+                title={o.creditCommitment}
+              >
+                {hasCommitment(o.creditCommitment)
+                  ? `“${o.creditCommitment}”`
+                  : 'No commitment from the rep'}
+              </div>
+
               <div className="ordrow__meta" style={{ marginTop: 8 }}>
                 {o.rep} · raised {formatDate(o.placedOn)}
                 {o.deliveryDate ? ` · deliver ${formatDate(o.deliveryDate)}` : ''}
               </div>
 
               <div className="loc__actions">
-                <Link to={`/orders/${o.id}`} className="btn btn--sm">
-                  Open the order
+                <Link to={`/gm/orders/${o.id}`} className="btn btn--sm btn--primary">
+                  Review &amp; decide
                 </Link>
               </div>
             </Card>
@@ -202,12 +247,14 @@ export function GmQueuePage() {
 
       {!loading && rows.length > 0 && (
         <p className="note" style={{ marginTop: 12 }}>
-          Inside the order you may change lines, quantities, the delivery date and the rate — even
-          past the 1 pm freeze and even on rates the sales manager already locked. Those exemptions
-          are yours alone: an escalation that arrived with no power to change anything would be a
-          rubber stamp.
+          Inside the order you may change lines, quantities and the rate — even past the 1 pm
+          freeze and even on rates the sales manager already locked — and add a comment beside the
+          rep's commitment. Approving makes the commitment the rep's condition, on their phone
+          until you close it, and sends the order back to the sales manager — who pushes it to
+          SAP. You do not push it yourself.
         </p>
       )}
+
     </div>
   );
 }

@@ -24,7 +24,7 @@
 //
 // 288 items hold about 37,260 kg in SAP with no belt data. They read 0 qty in
 // ERPNext today only because the FG import of 10 September 2026 withheld their
-// stock. On the next scheduled sync they become eligible to receive it.
+// stock. On the next stock sync they become eligible to receive it.
 //
 // Pinned by `shared/fixtures/stock_from_kg.json`, which the dashboard's suite
 // reads too. The TypeScript twin is `client/src/domain/stockFromKg.ts`.

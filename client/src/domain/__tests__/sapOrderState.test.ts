@@ -13,6 +13,7 @@ import {
   cancelledInSap,
   orderBucket,
   orderPill,
+  orderProgress,
   ORDER_BUCKET_LABEL,
   lineStatusFromSap,
   orderStatusFromLines,
@@ -22,106 +23,91 @@ import {
   sapSummary,
 } from '../sapOrderState';
 
-describe('SAP stage to production status', () => {
-  for (const c of cases.stage_to_status) {
+/** A fixture's raw ERPNext document, read the way `toOrderDetail` reads one. */
+function fromDoc(o: Record<string, string | undefined>) {
+  return {
+    salesOrder: o.custom_sap_sales_order,
+    salesOrderStatus: o.custom_sap_sales_order_status,
+    invoice: o.custom_sap_invoice,
+    invoiceDate: o.custom_sap_invoice_date,
+  };
+}
+
+describe('an order', () => {
+  for (const c of cases.order_status) {
     it(c.why, () => {
-      expect(
-        productionStatusFromSap({
-          productionStage: c.sap_stage,
-          salesOrder: c.sap_order,
-          deliveryOrder: c.delivery,
-        }),
-      ).toBe(c.expect);
+      expect(productionStatusFromSap({ salesOrder: c.sap_order, invoice: c.invoice })).toBe(c.expect);
     });
   }
 });
 
 describe('one line of an order', () => {
-  for (const c of cases.line_stage_to_status) {
+  for (const c of cases.line_status) {
     it(c.why, () => {
+      expect(lineStatusFromSap({ invoice: c.line_invoice }, { salesOrder: c.order_sap })).toBe(
+        c.expect,
+      );
+    });
+  }
+
+  it('without its order, an uninvoiced line cannot claim to be in SAP', () => {
+    expect(lineStatusFromSap({})).toBe('Not Started');
+  });
+});
+
+describe('what an order list shows', () => {
+  for (const c of cases.order_progress) {
+    it(c.why, () => {
+      expect(orderProgress({ salesOrder: c.sap_order, invoice: c.invoice }, c.stored)).toBe(c.expect);
+    });
+  }
+
+  it('a missing stored status is Not Started', () => {
+    expect(orderProgress({}, undefined)).toBe('Not Started');
+  });
+});
+
+describe('an order rolls up from its lines', () => {
+  for (const c of cases.order_rolls_up_from_lines as {
+    why: string;
+    order_sap: string;
+    order_invoice?: string;
+    line_invoices: string[];
+    expect: string;
+  }[]) {
+    it(c.why, () => {
+      const lines = c.line_invoices.map((invoice) => ({ invoice }));
       expect(
-        lineStatusFromSap({
-          productionStage: c.line_stage,
-          deliveryOrder: c.line_delivery,
-        }),
+        orderStatusFromLines(lines, { salesOrder: c.order_sap, invoice: c.order_invoice }),
       ).toBe(c.expect);
     });
   }
 });
 
-describe('an order rolls up from its lines', () => {
-  for (const c of cases.order_rolls_up_from_lines) {
+describe('the one line a rep reads', () => {
+  for (const c of cases.summary as {
+    why: string;
+    order: Record<string, string | undefined>;
+    expect: string | null;
+  }[]) {
     it(c.why, () => {
-      const lines = c.line_stages.map((s) => ({
-        productionOrder: s ? 'PO-1' : '',
-        productionStage: s,
-      }));
-      expect(orderStatusFromLines(lines, { salesOrder: 'SO-1001' })).toBe(c.expect);
+      expect(sapSummary(fromDoc(c.order))).toBe(c.expect);
     });
   }
-
-  for (const c of cases.order_rolls_up_from_deliveries) {
-    it(c.why, () => {
-      const lines = c.line_stages.map((s, i) => ({
-        productionOrder: 'PO-1',
-        productionStage: s,
-        deliveryOrder: c.line_deliveries[i],
-      }));
-      expect(orderStatusFromLines(lines, { salesOrder: 'SO-1001' })).toBe(c.expect);
-    });
-  }
-
-  it('a line SAP has not touched does not drag the order back', () => {
-    // Lines carrying nothing fall back to the order's own stage, rather than
-    // reporting Not Started over the top of a real one.
-    expect(
-      orderStatusFromLines([{}], { salesOrder: 'SO-1', productionStage: 'Curing' }),
-    ).toBe('In Production');
-  });
-
-  it('an order-level delivery no longer overrides an unshipped line', () => {
-    // The bug this replaced: order 381 had a delivery, so every line read
-    // Dispatched - including the one deliberately left off it.
-    expect(
-      orderStatusFromLines(
-        [
-          { productionOrder: 'PO-1', productionStage: 'Closed', deliveryOrder: 'DN-1' },
-          { productionOrder: 'PO-2', productionStage: 'Planned', deliveryOrder: '' },
-        ],
-        { salesOrder: 'SO-1', deliveryOrder: 'DN-1' },
-      ),
-    ).toBe('Not Started');
-  });
 });
 
 describe('the mistakes this mapping exists to prevent', () => {
-  it('an unmapped stage is never Ready', () => {
-    // Ready tells a rep the order is made. A stage nobody has mapped means the
-    // floor started and we do not know how far.
-    for (const stage of ['Zzz', 'Vulcanising', 'Trimming', 'Stage 7', '???']) {
-      expect(
-        productionStatusFromSap({ salesOrder: 'SO-1', productionStage: stage }),
-      ).toBe('In Production');
-    }
+  it("Frappe's string 'null' is not an invoice", () => {
+    // An unset field read back through naive interpolation. Treating it as an
+    // invoice would mark an order as gone that has not left.
+    expect(lineStatusFromSap({ invoice: 'null' }, { salesOrder: '412' })).toBe('Pushed to SAP');
   });
 
-  it('a delivery order outranks any stage', () => {
-    // The delivery is the later fact; a production record can be stale.
-    expect(
-      productionStatusFromSap({
-        salesOrder: 'SO-1',
-        productionStage: 'Curing',
-        deliveryOrder: 'DN-9',
-      }),
-    ).toBe('Dispatched');
-  });
-
-  it("Frappe's string 'null' is not a delivery order", () => {
-    // An unset Link read back through naive interpolation. Treating it as a
-    // delivery would mark an unmade order as shipped.
-    expect(
-      productionStatusFromSap({ salesOrder: 'SO-1', deliveryOrder: 'null' }),
-    ).toBe('Not Started');
+  it('a stale production stage from before 24 Sep 2026 is never read', () => {
+    // Fields the type no longer carries cannot reach the derivation at all;
+    // this pins that an order carrying one is judged on its invoice alone.
+    const doc = { custom_sap_sales_order: '412', custom_sap_production_stage: 'Closed' };
+    expect(productionStatusFromSap(fromDoc(doc))).toBe('Pushed to SAP');
   });
 
   it('not yet in SAP is not the same as failed', () => {
@@ -148,29 +134,6 @@ describe('staleness', () => {
 
   it('reconciled two days ago is stale', () => {
     expect(sapStale({ salesOrder: 'SO-1', syncedAt: '2026-09-10T08:00:00' }, now)).toBe(true);
-  });
-});
-
-describe('the one line a rep reads', () => {
-  it('leads with the delivery once there is one', () => {
-    expect(
-      sapSummary({
-        salesOrder: 'SO-1001',
-        productionStage: 'Curing',
-        deliveryOrder: 'DN-500',
-        deliveryDate: '2026-09-15',
-      }),
-    ).toBe('Delivery DN-500 · due 2026-09-15 · SAP SO-1001');
-  });
-
-  it('falls back to the stage before there is a delivery', () => {
-    expect(sapSummary({ salesOrder: 'SO-1001', productionStage: 'Curing' })).toBe(
-      'Curing · SAP SO-1001',
-    );
-  });
-
-  it('says nothing when there is nothing to say', () => {
-    expect(sapSummary({})).toBeNull();
   });
 });
 
@@ -288,27 +251,5 @@ describe('the four buckets a manager filters their team orders by', () => {
     for (const b of ['to_approve', 'approved', 'rejected', 'cancelled'] as const) {
       expect(ORDER_BUCKET_LABEL[b]).toBeTruthy();
     }
-  });
-});
-
-describe('a line whose production order was cancelled', () => {
-  /*
-   * `Select-LeastAdvancedPo` skips cancelled production orders, so a line whose
-   * only PO was cancelled has nothing covering it. The sync clears the stage;
-   * these assert that a cleared stage is what Not Started looks like, which is
-   * the half of the rule that lives in the apps.
-   */
-  it('reads Not Started once the sync has cleared its stage', () => {
-    expect(lineStatusFromSap({ productionStage: '', productionOrder: '' })).toBe('Not Started');
-  });
-
-  it('is indistinguishable from a line that never had one, which is the point', () => {
-    expect(lineStatusFromSap({})).toBe('Not Started');
-  });
-
-  it('but a delivered line stays Dispatched, cleared stage or not', () => {
-    // A cancelled production order after the goods have gone must not reopen
-    // the line; the delivery is the later fact.
-    expect(lineStatusFromSap({ productionStage: '', deliveryOrder: 'DN-9' })).toBe('Dispatched');
   });
 });

@@ -27,21 +27,17 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type {
-  ItemOption,
-  MinStockLine,
-  OrderDetail,
-  OrderLine,
-  SalesCustomer,
-} from '@/domain/types';
+import type { MinStockLine, OrderDetail, OrderLine, SalesCustomer } from '@/domain/types';
 import {
   isApproved,
+  isGeneralManager,
   statusPill,
   escalates,
   rateEditable,
   boundByCutoff,
   PO_STATUS,
 } from '@/domain/orderStatus';
+import { hasCommitment, orderActions } from '@/domain/creditCommitment';
 import {
   describeSplit,
   modeLabel,
@@ -52,7 +48,6 @@ import {
   splitOf,
   type Qty,
 } from '@/domain/minimumStock';
-import { orderLineValues } from '@/domain/productRules';
 import {
   changedLineIds,
   changesSince,
@@ -62,19 +57,20 @@ import {
   snapshotOf,
   stageText,
 } from '@/domain/stageWatch';
-import { lineStatusFromSap } from '@/domain/sapOrderState';
+import { lineStatusFromSap, reachedSap } from '@/domain/sapOrderState';
 import { pastCutoff, shortDate } from '@/domain/weeks';
 import { serverNow } from '@/domain/serverClock';
 import { formatDate } from '@/domain/orderRules';
-import { Api, type OrderLineWrite, type OrderSyncState } from '@/api/client';
+import { Api, type OrderSyncState } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
-import { Alert, Button, Card, Empty, Input } from '@/components/ui';
+import { Alert, Button, Card, Empty, Field, Input, Textarea } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import { AgingBoxes } from '@/components/common/AgingBoxes';
 import { StatusPill } from '@/components/common/StatusPill';
-import { ItemPicker, asProduct } from './ItemPicker';
+import { CommitmentThread } from './CommitmentThread';
+import { OrderLinesEditor } from './OrderLinesEditor';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import './orders.css';
@@ -97,18 +93,6 @@ function dispatchedLabel(l: OrderLine): string {
   return parts.join(', ') || '—';
 }
 
-interface Draft {
-  id?: string;
-  item: ItemOption;
-  rolls: number;
-  looseBelts: number;
-  kg: number;
-  tins: number;
-  ratePerKg: number;
-  fulfilmentMode: string;
-  removed: boolean;
-}
-
 export function OrderDetailPage() {
   const { orderId = '' } = useParams();
   const user = useAppSelector(selectUser);
@@ -116,11 +100,13 @@ export function OrderDetailPage() {
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [customer, setCustomer] = useState<SalesCustomer | null>(null);
   const [pool, setPool] = useState<MinStockLine[]>([]);
-  const [items, setItems] = useState<ItemOption[]>([]);
-  const [itemsLoading, setItemsLoading] = useState(false);
   const [rateEdits, setRateEdits] = useState<Record<string, number>>({});
-  const [drafts, setDrafts] = useState<Draft[] | null>(null);
-  const [picking, setPicking] = useState(false);
+  /** Lines are open in the editor; the decision waits until they are saved. */
+  const [editing, setEditing] = useState(false);
+  /** A note for the GM, sent as a comment on the rep's commitment with Send to GM. */
+  const [gmNote, setGmNote] = useState('');
+  /** Bumped when this page posts a comment, so the thread re-reads. */
+  const [threadKey, setThreadKey] = useState(0);
   const [tick, setTick] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -157,8 +143,9 @@ export function OrderDetailPage() {
    * reloads immediately with what ERPNext has now, and says separately when
    * the floor was last read and whether a fresh read is on its way.
    *
-   * A refused request is a normal answer — inside the cooldown the script
-   * declines — so it is reported, never thrown.
+   * Every request is accepted. Straight after a run there is a short pause
+   * before the next may start; a request inside it waits rather than being
+   * dropped, and the note says so rather than promising "a moment".
    */
   const reload = useCallback(() => {
     setTick((t) => t + 1);
@@ -167,9 +154,11 @@ export function OrderDetailPage() {
       .then((s) => {
         setSyncState(s);
         setSyncNote(
-          s.accepted
-            ? 'Asked SAP for the latest. Refresh again in a moment to see it.'
-            : `SAP was read very recently — next refresh available ${s.cooldownUntil ?? 'shortly'}.`,
+          !s.accepted
+            ? 'Could not ask SAP for the latest — press Sync to try again.'
+            : s.afterCooldown
+              ? 'Queued — SAP was read a moment ago, so this runs in about a minute. Refresh again then to see it.'
+              : 'Asked SAP for the latest. Refresh again in a moment to see it.',
         );
       })
       .catch(() => {
@@ -195,7 +184,6 @@ export function OrderDetailPage() {
     setLoading(true);
     setError(null);
     setRateEdits({});
-    setDrafts(null);
     Api.sales
       .getOrder(orderId)
       .then(async (o) => {
@@ -204,13 +192,16 @@ export function OrderDetailPage() {
 
         // Diff before the snapshot is overwritten, then record what is now on
         // screen. Keyed on the child row name, which survives an edit.
-        // The made portion's movement now comes from SAP, so that is what the
-        // "moved since you last looked" notice reports. Fed in under the old key
-        // so the watcher itself is unchanged — only the source of truth moved.
+        // The made portion's movement comes from SAP, so that is what the
+        // "moved since you last looked" notice reports: the line's SAP status,
+        // Pushed to SAP -> Dispatched, since there are no production stages
+        // from 24 Sep 2026. Fed in under the old key so the watcher itself is
+        // unchanged — only the source of truth moved.
+        const orderSap = { salesOrder: o.sapSalesOrder, invoice: o.sapInvoice };
         const rows = o.lines.map((l) => ({
           name: l.id,
           item_name: l.itemName,
-          custom_production_stage: l.sapProductionStage,
+          custom_production_stage: lineStatusFromSap({ invoice: l.sapInvoice }, orderSap),
           custom_stock_stage: l.stockStage,
         }));
         setStageNews(changesSince(loadSeen(o.id), rows));
@@ -233,21 +224,6 @@ export function OrderDetailPage() {
       live = false;
     };
   }, [orderId, tick]);
-
-  const loadItems = async (): Promise<ItemOption[]> => {
-    if (items.length) return items;
-    setItemsLoading(true);
-    try {
-      const list = await Api.sales.listItemOptions();
-      setItems(list);
-      return list;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not read the item master.');
-      return [];
-    } finally {
-      setItemsLoading(false);
-    }
-  };
 
   /*
    * The customer as the credit helpers want it — raw ERPNext field names, the
@@ -281,7 +257,6 @@ export function OrderDetailPage() {
    * order nobody has looked at from one that has already been turned down.
    */
   const rejected = (order?.poStatus ?? '').trim() === PO_STATUS.rejected;
-  const editing = drafts !== null;
 
   /**
    * Whether the line-up may still be changed.
@@ -335,17 +310,39 @@ export function OrderDetailPage() {
     setBusy(decision);
     setError(null);
     try {
+      /*
+       * The note goes first. If it lands and the escalation does not, the
+       * manager presses Send again and the note is already there; the other
+       * way round would leave the GM deciding without it.
+       */
+      if (decision === 'escalate' && gmNote.trim()) {
+        await Api.sales.addCreditComment({
+          salesOrder: order.id,
+          comment: gmNote,
+          role: user?.role,
+          author: user?.name || user?.id || 'Sales Manager',
+        });
+        setGmNote('');
+        setThreadKey((k) => k + 1);
+      }
       const saved = await Api.sales.decideOrder({
         id: order.id,
         decision,
-        rateEdits: decision === 'approve' ? rateEdits : undefined,
+        // A rate the manager corrected travels to the GM with the order rather
+        // than being dropped on the way. Only an approval locks it.
+        rateEdits: decision === 'reject' ? undefined : rateEdits,
         role: user?.role,
       });
       setOrder(saved);
       setRateEdits({});
       setDone(
         decision === 'approve'
-          ? { text: 'Approved. Every rate on this order is now final.', tone: 'ok' }
+          ? {
+              text: gmApproved
+                ? 'Pushed to SAP on the GM’s approval. Every rate on this order is now final.'
+                : 'Approved. Every rate on this order is now final.',
+              tone: 'ok',
+            }
           : decision === 'reject'
             ? { text: 'Rejected. The rep can correct the prices and resubmit.', tone: 'danger' }
             : { text: 'Sent to the General Manager.', tone: 'ok' },
@@ -379,137 +376,6 @@ export function OrderDetailPage() {
     }
   };
 
-  const startEditing = async () => {
-    if (!order) return;
-    const master = await loadItems();
-    const byCode = new Map(master.map((i) => [i.code, i]));
-    const next: Draft[] = [];
-    const orphans: string[] = [];
-    for (const l of order.lines) {
-      const item = byCode.get(l.itemCode);
-      if (!item) {
-        orphans.push(l.itemCode);
-        continue;
-      }
-      next.push({
-        id: l.id,
-        item,
-        rolls: l.rolls,
-        looseBelts: l.looseBelts,
-        kg: item.category === 'BG' ? l.totalWeight : 0,
-        tins: item.category === 'VS' ? l.qty : 0,
-        ratePerKg: l.ratePerKg,
-        fulfilmentMode: l.fulfilmentMode ?? '',
-        removed: false,
-      });
-    }
-    if (orphans.length) {
-      setError(
-        `${orphans.length} line(s) could not be opened for editing because their item is missing or disabled in the master: ${orphans.join(', ')}. Editing here would drop them, so the editor was not opened.`,
-      );
-      return;
-    }
-    setDrafts(next);
-  };
-
-  const saveLines = async () => {
-    if (!order || !drafts) return;
-    const kept = drafts.filter((d) => !d.removed);
-    if (kept.length === 0) {
-      setError('An order needs at least one line. Reject the order instead of emptying it.');
-      return;
-    }
-    setBusy('lines');
-    setError(null);
-    try {
-      const lines: OrderLineWrite[] = kept.map((d) => {
-        const v = orderLineValues(asProduct(d.item), {
-          rolls: d.rolls,
-          looseBelts: d.looseBelts,
-          kg: d.kg,
-          tins: d.tins,
-          ratePerKg: d.ratePerKg,
-        });
-        return {
-          id: d.id,
-          itemCode: d.item.code,
-          category: d.item.category,
-          rolls: d.rolls,
-          looseBelts: d.looseBelts,
-          ratePerKg: d.ratePerKg,
-          /*
-           * The item's OWN stock UOM, never one derived from its category.
-           *
-           * `uomFor('VS')` returns "L", which is a fine label for a person but
-           * is not a UOM record on this site — the vulcanising solution items
-           * carry `stock_uom: "Litre"`. Writing "L" made ERPNext reject the
-           * entire save with "Could not find Row #2: UOM: L", so a manager
-           * could not change a quantity on any order containing solution.
-           *
-           * An item's own stock UOM is always valid by construction, so this
-           * cannot drift again when a new family is added.
-           */
-          uom: d.item.uom,
-          fulfilmentMode: d.fulfilmentMode,
-          ...v,
-        };
-      });
-      await Api.sales.saveOrderLines({ orderId: order.id, lines });
-      setDrafts(null);
-      setDone({
-        text: 'Lines saved, and the stock re-held to match. Anything on the shelf has been booked to this order; only what the shelf has not got is left for production. The order went back for approval and every rate reopened, because the money changed.',
-        tone: 'ok',
-      });
-      // A full reload, not the saved document. Saving also moves the holds, and
-      // the returned order carries none of that — the stock column would keep
-      // showing the position from before the edit.
-      reload();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not save the lines.');
-    } finally {
-      setBusy(null);
-    }
-  };
-
-
-  const patch = (idx: number, change: Partial<Draft>) =>
-    setDrafts((cur) => cur?.map((d, i) => (i === idx ? { ...d, ...change } : d)) ?? cur);
-
-  const addItem = (item: ItemOption) => {
-    setPicking(false);
-    setDrafts((cur) => [
-      ...(cur ?? []),
-      {
-        item,
-        rolls: item.category === 'PCTR' || item.category === 'CTR' ? 1 : 0,
-        looseBelts: 0,
-        kg: item.category === 'BG' ? 5 : 0,
-        tins: item.category === 'VS' ? 1 : 0,
-        ratePerKg: 0,
-        fulfilmentMode: '',
-        removed: false,
-      },
-    ]);
-  };
-
-  const draftTotal = useMemo(() => {
-    if (!drafts) return 0;
-    return drafts
-      .filter((d) => !d.removed)
-      .reduce(
-        (sum, d) =>
-          sum +
-          orderLineValues(asProduct(d.item), {
-            rolls: d.rolls,
-            looseBelts: d.looseBelts,
-            kg: d.kg,
-            tins: d.tins,
-            ratePerKg: d.ratePerKg,
-          }).amount,
-        0,
-      );
-  }, [drafts]);
-
   /*
    * Escalation is on the CUSTOMER's credit limit, not the rep's outstanding.
    * When it trips, the manager's Approve becomes Send to GM — they no longer
@@ -525,6 +391,19 @@ export function OrderDetailPage() {
 
   /** The GM is exempt from the 1 pm freeze and from the rate lock. */
   const role = user?.role;
+
+  /*
+   * What this login may do, from the same rule `Api.sales.decideOrder`
+   * re-checks. A sales manager meeting an over-limit order gets Send to GM
+   * and Reject — never Approve — and once it is with the GM, only a comment.
+   */
+  const acts = orderActions(role, order?.poStatus, overLimit);
+  const withGm = (order?.poStatus ?? '').trim() === PO_STATUS.pendingGm;
+  /**
+   * The GM approved the credit and handed it back: the sales manager's one
+   * move is Push to SAP, at the GM's figures.
+   */
+  const gmApproved = (order?.poStatus ?? '').trim() === PO_STATUS.finalApproval;
 
   const pill = statusPill(order?.poStatus);
 
@@ -663,6 +542,13 @@ export function OrderDetailPage() {
           </div>
 
           {/*
+            Straight under the credit picture it answers. The rep wrote it at
+            the counter; the sales manager reads it before sending the order
+            on, and may add to it.
+          */}
+          <CommitmentThread order={order} overLimit={overLimit} reloadKey={threadKey} />
+
+          {/*
             What production moved since this browser last had the order open.
             Above the lines, because it is the thing the reader did not know —
             and the rep is the one who has to ring the customer about it.
@@ -736,7 +622,11 @@ export function OrderDetailPage() {
                             <div className="tiny dim">{l.totalWeight} kg</div>
                           </td>
                           <td className="right">
-                            {!rateEditable(role, l.rateApproved) || (approved && boundByCutoff(role)) ? (
+                            {/* Read-only once the GM has approved: the push goes
+                                at the figures the GM approved. */}
+                            {!rateEditable(role, l.rateApproved) ||
+                            (approved && boundByCutoff(role)) ||
+                            gmApproved ? (
                               <span className="num">{money(l.ratePerKg, 2)}</span>
                             ) : (
                               <Input
@@ -805,42 +695,33 @@ export function OrderDetailPage() {
                                 </div>
                               )}
                               {/*
-                                What SAP says about THIS line. SAP raises one
-                                production order per item, so this is the only
-                                place that can say which item is holding the
-                                order back — the order-level stage is a roll-up
-                                of the least advanced line and hides that.
+                                What SAP says about THIS line: Pushed to SAP
+                                until the line itself is invoiced, then
+                                Dispatched with its invoice. Per line, because
+                                an order can be invoiced in parts.
 
-                                The status is derived, never string-matched
-                                here: the stage list belongs to the factory and
-                                changes without a release.
+                                Derived, never string-matched here — see
+                                domain/sapOrderState.ts.
                               */}
-                              {(l.sapProductionOrder || l.sapProductionStage || l.sapDeliveryOrder) && (
+                              {reachedSap({ salesOrder: order.sapSalesOrder }) && (
                                 <div className="stagecell__sap">
                                   <span className="stagecell__part">SAP</span>
                                   <b>
-                                    {lineStatusFromSap({
-                                      productionOrder: l.sapProductionOrder,
-                                      productionStage: l.sapProductionStage,
-                                      deliveryOrder: l.sapDeliveryOrder,
-                                    })}
+                                    {lineStatusFromSap(
+                                      { invoice: l.sapInvoice },
+                                      { salesOrder: order.sapSalesOrder },
+                                    )}
                                   </b>
-                                  <div className="tiny dim">
-                                    {[
-                                      l.sapDeliveryOrder && `Delivery ${l.sapDeliveryOrder}`,
-                                      l.sapDeliveryOrder && l.sapDeliveryDate && `leaves ${l.sapDeliveryDate}`,
-                                      !l.sapDeliveryOrder && l.sapProductionStage,
-                                      l.sapProductionOrder && `PO ${l.sapProductionOrder}`,
-                                    ]
-                                      .filter(Boolean)
-                                      .join(' · ')}
-                                  </div>
+                                  {l.sapInvoice && (
+                                    <div className="tiny dim">
+                                      {[`Invoice ${l.sapInvoice}`, l.sapInvoiceDate].filter(Boolean).join(' · ')}
+                                    </div>
+                                  )}
                                 </div>
                               )}
                               {!l.stockStage &&
-                                !l.sapProductionOrder &&
-                                !l.sapProductionStage &&
-                                !l.sapDeliveryOrder && <span className="dim">—</span>}
+                                !reachedSap({ salesOrder: order.sapSalesOrder }) &&
+                                !l.sapInvoice && <span className="dim">—</span>}
                               {movedHere && <div className="stagecell__flag">moved</div>}
                               {/*
                                 Dispatch is separate from stage: a line can sit
@@ -977,216 +858,44 @@ export function OrderDetailPage() {
           )}
 
           {/* ------------------------------------- Block 6 — edit line-up --- */}
-          {!editing && (
-            <div className="line__edit-bar">
-              {approved ? (
-                <span className="note">
+          <OrderLinesEditor
+            order={order}
+            pool={pool}
+            disabled={!!busy}
+            lockedReason={
+              approved ? (
+                <>
                   This order is approved and is with the factory. It cannot be changed here
                   {order.sapSalesOrder ? ` — quote SAP order ${order.sapSalesOrder}` : ''}. To drop
                   or reduce an item, ring the manufacturing team: anything already made is
                   delivered and the rest of the order stays open.
-                </span>
+                </>
               ) : frozenByCutoff ? (
-                <span className="note">
+                <>
                   Changes closed at 1 pm on {shortDate(order.deliveryDate)}, the required delivery
                   date.
-                </span>
-              ) : (
-                <>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={startEditing}
-                    loading={itemsLoading}
-                    disabled={!!busy}
-                  >
-                    Add / Remove / Requantify
-                  </Button>
-                  <span className="note grow">
-                    {order.deliveryDate
-                      ? `Open until 1 pm on ${shortDate(order.deliveryDate)}.`
-                      : 'No delivery date set, so this order stays open to changes.'}
-                  </span>
                 </>
-              )}
-            </div>
-          )}
-
-          {editing && drafts && (
-            <>
-              <Card title="Editing lines" flush>
-                <div className="scroll-x">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Item</th>
-                        <th className="right">Quantity</th>
-                        <th className="right">Weight</th>
-                        <th className="right">Rate / kg</th>
-                        <th className="right">Amount</th>
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {drafts.map((d, i) => {
-                        const v = orderLineValues(asProduct(d.item), {
-                          rolls: d.rolls,
-                          looseBelts: d.looseBelts,
-                          kg: d.kg,
-                          tins: d.tins,
-                          ratePerKg: d.ratePerKg,
-                        });
-                        return (
-                          <tr
-                            key={d.id ?? `new-${i}`}
-                            className={d.removed ? 'line--removed' : d.id ? '' : 'line--dirty'}
-                          >
-                            <td>
-                              <div>{d.item.name}</div>
-                              <div className="mono tiny dim">
-                                {d.item.category}
-                                {d.item.beltsPerRoll ? ` · ${d.item.beltsPerRoll} belts/roll` : ''}
-                                {d.item.weightPerRoll ? ` · ${d.item.weightPerRoll} kg/roll` : ''}
-                              </div>
-                            </td>
-                            <td>
-                              <div className="line__qty">
-                                {(d.item.category === 'PCTR' || d.item.category === 'CTR') && (
-                                  <>
-                                    <label htmlFor={`rolls-${i}`}>Rolls</label>
-                                    <Input
-                                      id={`rolls-${i}`}
-                                      numeric
-                                      compact
-                                      type="number"
-                                      min={0}
-                                      disabled={d.removed}
-                                      value={d.rolls}
-                                      onChange={(e) => patch(i, { rolls: Number(e.target.value) || 0 })}
-                                    />
-                                  </>
-                                )}
-                                {d.item.category === 'PCTR' && (
-                                  <>
-                                    <label htmlFor={`belts-${i}`}>Belts</label>
-                                    <Input
-                                      id={`belts-${i}`}
-                                      numeric
-                                      compact
-                                      type="number"
-                                      min={0}
-                                      disabled={d.removed}
-                                      value={d.looseBelts}
-                                      onChange={(e) =>
-                                        patch(i, { looseBelts: Number(e.target.value) || 0 })
-                                      }
-                                    />
-                                  </>
-                                )}
-                                {d.item.category === 'BG' && (
-                                  <>
-                                    <label htmlFor={`kg-${i}`}>Kg</label>
-                                    <Input
-                                      id={`kg-${i}`}
-                                      numeric
-                                      compact
-                                      type="number"
-                                      min={0}
-                                      step={5}
-                                      disabled={d.removed}
-                                      value={d.kg}
-                                      onChange={(e) => patch(i, { kg: Number(e.target.value) || 0 })}
-                                    />
-                                  </>
-                                )}
-                                {d.item.category === 'VS' && (
-                                  <>
-                                    <label htmlFor={`tins-${i}`}>Tins</label>
-                                    <Input
-                                      id={`tins-${i}`}
-                                      numeric
-                                      compact
-                                      type="number"
-                                      min={0}
-                                      disabled={d.removed}
-                                      value={d.tins}
-                                      onChange={(e) => patch(i, { tins: Number(e.target.value) || 0 })}
-                                    />
-                                  </>
-                                )}
-                              </div>
-                            </td>
-                            <td className="right num">{v.totalWeight} kg</td>
-                            <td className="right">
-                              <Input
-                                numeric
-                                compact
-                                type="number"
-                                min={0}
-                                step="0.01"
-                                disabled={d.removed}
-                                aria-label={`Rate for ${d.item.name}`}
-                                value={d.ratePerKg}
-                                onChange={(e) => patch(i, { ratePerKg: Number(e.target.value) || 0 })}
-                              />
-                            </td>
-                            <td className="right num">{money(v.amount, 0)}</td>
-                            <td>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => patch(i, { removed: !d.removed })}
-                              >
-                                {d.removed ? 'Undo' : 'Remove'}
-                              </Button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
-
-              {picking && (
-                <ItemPicker
-                  items={items}
-                  pool={pool}
-                  loading={itemsLoading}
-                  onPick={addItem}
-                  onClose={() => setPicking(false)}
-                />
-              )}
-
-              <div className="line__edit-bar">
-                <Button size="sm" variant="ghost" onClick={() => setPicking((p) => !p)}>
-                  {picking ? 'Close list' : '+ Add item'}
-                </Button>
-                <span className="grow" />
-                <span className="note">
-                  New total <b>{money(draftTotal, 0)}</b>, was {money(order.total, 0)}
-                </span>
-                <Button onClick={saveLines} loading={busy === 'lines'} disabled={!!busy}>
-                  Save lines
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setDrafts(null);
-                    setPicking(false);
-                  }}
-                  disabled={!!busy}
-                >
-                  Cancel
-                </Button>
-              </div>
-              <p className="note">
-                Saving replaces the order's lines — anything marked Remove is deleted. Because the
-                money changes, the order goes back for approval and every rate reopens.
-              </p>
-            </>
-          )}
-
+              ) : null
+            }
+            openNote={
+              gmApproved
+                ? 'Changing the lines sends it back to the GM — they approved these figures, not new ones.'
+                : order.deliveryDate
+                  ? `Open until 1 pm on ${shortDate(order.deliveryDate)}.`
+                  : 'No delivery date set, so this order stays open to changes.'
+            }
+            onEditingChange={setEditing}
+            onError={setError}
+            onSaved={() => {
+              setDone({
+                text: 'Lines saved. The order went back for a decision and every rate reopened, because the money changed.',
+                tone: 'ok',
+              });
+              // A full reload, not the saved document: the stock column has to
+              // be re-read against the new quantities too.
+              reload();
+            }}
+          />
 
           {/* ------------------------------------------ Block 7 — decision --- */}
           {approved ? (
@@ -1224,34 +933,128 @@ export function OrderDetailPage() {
                 The rep can correct the prices and resubmit. Undo to decide this order again.
               </Alert>
             </div>
+          ) : isGeneralManager(role) ? (
+            /*
+             * The GM decides from their own review, which carries the
+             * condition the approval creates. Deciding here would approve
+             * without it, and the API would refuse an order with a commitment.
+             */
+            <div className="mt-16">
+              <Alert
+                tone="info"
+                title="Decide this from Escalated to you"
+                actions={
+                  <Link to={`/gm/orders/${order.id}`} className="btn btn--sm">
+                    Open the GM review
+                  </Link>
+                }
+              />
+            </div>
+          ) : gmApproved && acts.approve ? (
+            /*
+             * Back from the GM, approved. The GM decided the credit and does
+             * not push; the push is the sales manager's, and it is the only
+             * move left — refusing what the GM approved is the GM's call.
+             */
+            <Card title="Approved by the General Manager" className="mt-16">
+              <p style={{ marginTop: 0 }}>
+                <b>{order.gmApprovedBy || 'The GM'}</b> approved the credit on this order
+                {order.gmApprovedOn ? ` on ${formatDate(order.gmApprovedOn.slice(0, 10))}` : ''}
+                {hasCommitment(order.creditCommitment)
+                  ? ", on the rep's commitment above. It is now the rep's condition."
+                  : '.'}
+              </p>
+              <p className="note" style={{ marginBottom: 10 }}>
+                Pushing sends it to SAP at the rates shown and fixes every one of them. Read the
+                GM's comments above first.
+              </p>
+              <div className="lv__actions" style={{ justifyContent: 'flex-start', gap: 8 }}>
+                <Button
+                  variant="primary"
+                  onClick={() => decide('approve')}
+                  loading={busy === 'approve'}
+                  disabled={!!busy || editing}
+                >
+                  Push to SAP
+                </Button>
+              </div>
+              {editing && (
+                <p className="note" style={{ marginTop: 10 }}>
+                  Save or cancel your line edits first. Saving sends the order back to the GM.
+                </p>
+              )}
+            </Card>
+          ) : withGm && !acts.approve ? (
+            /*
+             * With the GM, this is no longer the sales manager's to decide —
+             * offering Send to GM again here used to re-escalate an order
+             * already escalated. They can still add what they know, above.
+             */
+            <div className="mt-16">
+              <Alert tone="info" title="With the General Manager">
+                This order takes the customer past their credit limit and is waiting for the GM's
+                decision. Anything you add to the rep's commitment above, the GM reads before
+                deciding.
+              </Alert>
+            </div>
           ) : (
             <Card title="Decision" className="mt-16">
               <p className="note" style={{ marginBottom: 10 }}>
-                {overLimit ? 'The General Manager decides this one.' : 'Approving fixes every rate on this order permanently.'}
+                {acts.escalate
+                  ? 'The General Manager decides this one.'
+                  : 'Approving fixes every rate on this order permanently.'}
               </p>
-              {overLimit && (
-                <div style={{ marginBottom: 10 }}>
-                  <Alert tone="warn" title="This order takes the customer past their credit limit">
-                    Approving sends it to the General Manager rather than finalising it.
-                  </Alert>
-                </div>
+              {acts.escalate && (
+                <>
+                  <div style={{ marginBottom: 10 }}>
+                    <Alert tone="warn" title="This order takes the customer past their credit limit">
+                      You cannot approve it to SAP. Send it to the General Manager with the rep's
+                      commitment, or reject it.
+                    </Alert>
+                  </div>
+                  <Field
+                    label="Note for the GM (optional)"
+                    hint="Saved as a comment beside the rep's commitment."
+                  >
+                    <Textarea
+                      rows={2}
+                      value={gmNote}
+                      onChange={(e) => setGmNote(e.target.value)}
+                      placeholder="What you know about this customer that the GM should weigh"
+                      disabled={!!busy || editing}
+                    />
+                  </Field>
+                </>
               )}
               <div className="lv__actions" style={{ justifyContent: 'flex-start', gap: 8 }}>
-                <Button
-                  onClick={() => decide(overLimit ? 'escalate' : 'approve')}
-                  loading={busy === 'approve' || busy === 'escalate'}
-                  disabled={!!busy || editing}
-                >
-                  {overLimit ? 'Send to GM' : 'Approve'}
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => decide('reject')}
-                  disabled={!!busy || editing}
-                >
-                  Reject
-                </Button>
-
+                {acts.approve && (
+                  <Button
+                    onClick={() => decide('approve')}
+                    loading={busy === 'approve'}
+                    disabled={!!busy || editing}
+                  >
+                    Approve
+                  </Button>
+                )}
+                {acts.escalate && (
+                  <Button
+                    onClick={() => decide('escalate')}
+                    loading={busy === 'escalate'}
+                    disabled={!!busy || editing}
+                  >
+                    Send to GM
+                  </Button>
+                )}
+                {acts.reject && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => decide('reject')}
+                    loading={busy === 'reject'}
+                    disabled={!!busy || editing}
+                  >
+                    Reject
+                  </Button>
+                )}
               </div>
               {editing && (
                 <p className="note" style={{ marginTop: 10 }}>

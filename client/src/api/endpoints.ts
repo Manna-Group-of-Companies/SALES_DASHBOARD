@@ -50,6 +50,15 @@ export const DOCTYPE = {
    */
   creditCondition: 'Manna Credit Condition',
 
+  /**
+   * A sales manager's or the GM's comment on the rep's credit commitment,
+   * while an over-limit order waits for a decision. One document per comment,
+   * so two managers writing at once cannot overwrite each other. Created on
+   * the live site 24 Sep 2026; Sales Manager may create, Sales User may read.
+   * See `shared/fixtures/credit_commitment.json`.
+   */
+  creditComment: 'Manna Credit Comment',
+
   leadOrder: 'Lead Order',
   /**
    * ERPNext's own per-item-per-warehouse stock row. Added 10 Sep 2026 with the
@@ -305,24 +314,41 @@ export const SALES_ORDER_FIELD = {
    */
   placedAt: 'custom_order_placed_at',
 
+  /**
+   * What the customer committed to, in the rep's words, on an order that
+   * takes them past their credit limit — and when they said it would be met.
+   * Written by the phone when the order is raised; becomes the rep's credit
+   * condition when the GM approves. Added 24 Sep 2026, see
+   * `shared/fixtures/credit_commitment.json`.
+   */
+  creditCommitment: 'custom_credit_commitment',
+  creditCommitmentDue: 'custom_credit_commitment_due',
+  /**
+   * Whose credit approval the sales manager is acting on when they push an
+   * over-limit order to SAP. Stamped by the GM's approval, which moves the
+   * order to `Pending Final Approval`; cleared if the order goes back to the
+   * GM. Added 24 Sep 2026.
+   */
+  gmApprovedBy: 'custom_gm_approved_by',
+  gmApprovedOn: 'custom_gm_approved_on',
+
   /*
    * --- what SAP says, from 11 September 2026 ------------------------------
    *
-   * The manufacturing floor moved to SAP. An approved order becomes a SAP
-   * Sales Order; SAP links a production order and moves it through stages; a
-   * SAP Delivery Order eventually carries several orders out together.
+   * An approved order becomes a SAP Sales Order, and an A/R invoice against it
+   * says it has gone. Production-order and delivery fields exist in ERPNext
+   * from before 24 Sep 2026 but are no longer read — see
+   * shared/fixtures/sap_order_state.json.
    *
    * All `allow_on_submit`, because the sync writes them AFTER approval and
    * submission — the trap `custom_production_stage` shipped with. All
-   * read-only in Desk: they are SAP's facts, and `sapDeliveryDate` in
-   * particular is a promise a rep repeats to a customer.
+   * read-only in Desk: they are SAP's facts.
    */
   sapSalesOrder: 'custom_sap_sales_order',
   sapSalesOrderStatus: 'custom_sap_sales_order_status',
-  sapProductionOrder: 'custom_sap_production_order',
-  sapProductionStage: 'custom_sap_production_stage',
-  sapDeliveryOrder: 'custom_sap_delivery_order',
-  sapDeliveryDate: 'custom_sap_delivery_date',
+  /** Set only once EVERY line has been invoiced; the per-line one is on the item. */
+  sapInvoice: 'custom_sap_invoice',
+  sapInvoiceDate: 'custom_sap_invoice_date',
   sapSyncedAt: 'custom_sap_synced_at',
   sapSyncError: 'custom_sap_sync_error',
 } as const;
@@ -381,26 +407,14 @@ export const SALES_ORDER_ITEM_FIELD = {
   agedBatch: 'custom_aged_batch',
 
   /*
-   * What SAP says about THIS line, created 15 Sep 2026.
-   *
-   * SAP raises one production order per item, so a four-item order has four
-   * stages. The order-level `custom_sap_production_stage` is only the roll-up
-   * and cannot say which item is holding the order back.
+   * The A/R invoice that carried THIS line. Blank means this line has not
+   * gone, even when other lines have — an order can be invoiced in parts.
    *
    * Written by the SAP order sync and nothing else — `read_only` in Desk,
    * `allow_on_submit` so it keeps working if orders are ever submitted.
-   * Distinct from `productionStage` above, which is the pre-SAP floor field.
    */
-  sapProductionOrder: 'custom_sap_production_order',
-  sapProductionStage: 'custom_sap_production_stage',
-  /*
-   * The delivery that carried THIS line. Blank means this line has not gone,
-   * even when the order carries a delivery number — a delivery can be raised
-   * for part of an order, which is how the floor ships what is ready and
-   * leaves the rest open.
-   */
-  sapDeliveryOrder: 'custom_sap_delivery_order',
-  sapDeliveryDate: 'custom_sap_delivery_date',
+  sapInvoice: 'custom_sap_invoice',
+  sapInvoiceDate: 'custom_sap_invoice_date',
 
   /**
    * Cumulative across every `Manna Dispatch` that has ever touched this line
@@ -1006,6 +1020,8 @@ export const USER_FIELD = {
    * was specified for this module and never created.
    */
   isGeneralManager: 'custom_is_general_manager',
+  /** Created 25 Sep 2026. Set on Mathews Alias (mathews.alias.01@gmail.com). */
+  isManagingDirector: 'custom_is_managing_director',
   isHr: 'custom_is_hr_manager',
   isProductionManager: 'custom_is_production_manager',
 

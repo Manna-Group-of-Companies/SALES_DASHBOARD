@@ -80,6 +80,9 @@ void main() {
         'Pending Rate Approval',
         'PO Uploaded - Pending Approval',
         'Pending GM Approval',
+        // Approved by the GM is not approved: the sales manager has still to
+        // push it to SAP.
+        'Pending Final Approval',
         'No PO Yet',
         '',
       ]) {

@@ -63,6 +63,8 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
           company: company,
           items: draft.items,
           deliveryDate: draft.deliveryDate,
+          commitment: draft.commitment,
+          commitmentDue: draft.commitmentDue,
         );
       },
       describe: humanError,

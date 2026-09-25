@@ -323,9 +323,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             over ? const Color(0xFFFFEBEE) : null),
       ]),
 
-      // Directly under the two figures it describes. A limit raised this
-      // morning does not reach here until the nightly job runs, and a rep
-      // being refused by a stale number has no other way to tell.
+      // Directly under the two figures it describes. A limit raised in SAP
+      // does not reach here until somebody syncs, and a rep being refused by
+      // a stale number has no other way to tell.
       const SapSyncBar(),
 
       // How old the debt is. Shown, never enforced: the credit rule is still

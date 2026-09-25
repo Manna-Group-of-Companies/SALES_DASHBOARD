@@ -34,3 +34,8 @@ logs/
 *.pem
 *.p12
 *.key
+
+# Real rupee-discount rules: which customer gets how much off. Commercial data,
+# and this repository is public. They live in ERPNext (SAP Dealer Rate Rule)
+# since 25 Sep 2026; this stays in case they are ever exported here.
+sap-pricing/rules.csv

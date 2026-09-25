@@ -42,6 +42,7 @@ export function StatusPill({
 
 const BOX: Record<TickState, string> = {
   complete: '☑',
+  in_sap: '⊟',
   ready: '⊟',
   in_production: '⊟',
   not_started: '☐',

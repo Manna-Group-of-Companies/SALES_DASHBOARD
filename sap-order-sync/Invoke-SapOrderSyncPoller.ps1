@@ -4,8 +4,11 @@
   Same shape as sap-credit-sync\Invoke-SapSyncPoller.ps1.
 
 .DESCRIPTION
-  Runs every ~2 minutes from Task Scheduler. Talks ONLY to ERPNext / Frappe Cloud
-  (never to SAP directly - Sync-SapOrders.ps1 does that).
+  Started by Invoke-FlagWatch.ps1 when the sync_requested flag is up - the
+  watcher checks it every 15 seconds. From 24 Sep 2026 that is the only way
+  this runs: there is no timed Poll or Force task any more (see
+  Register-FlagWatchTasks.ps1). Talks ONLY to ERPNext / Frappe Cloud (never to
+  SAP directly - Sync-SapOrders.ps1 does that). -Force still works by hand.
 
   Normal cycle:
     1. GET the "SAP Order Sync Control" single doc.

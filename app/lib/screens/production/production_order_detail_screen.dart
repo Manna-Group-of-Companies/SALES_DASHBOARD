@@ -10,13 +10,24 @@
 // name off the Customer record — not the copy stored on the order, which goes
 // stale the moment a customer is renamed — and this screen leads with it,
 // with the route underneath.
+//
+// THE STATUS IS SAP'S (25 September 2026)
+//
+// Each line had a "Move to stage" picker and a stage progress bar, and the
+// order rolled up from the lines. Removed on instruction: the status comes
+// from SAP's own sales order -> invoice loop, so nothing here sets it. The
+// order reads Pushed to SAP until SAP invoices it, Dispatched once it has,
+// Cancelled in SAP if SAP cancels it; each line reads Dispatched once the
+// invoice that carried it exists. Rules: core/sap_order_state.dart, pinned by
+// shared/fixtures/sap_order_state.json. The dashboard's production order page
+// was changed the same day and reads the same way.
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
-import 'package:manna_field_sales/core/production_stages.dart';
+import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -89,13 +100,40 @@ class _ProductionOrderDetailScreenState
     }
   }
 
-  Future<void> _setStage(Map<String, dynamic> item, String stage) => _run(
-      () => Api.setItemStage(
-            orderName: widget.orderName,
-            itemRowName: '${item['name']}',
-            stage: stage,
-          ),
-      'Stage updated.');
+  SapOrderState get _sap => SapOrderState.fromOrder(_order);
+
+  /// The order's reading. Cancellation first: it is the later fact.
+  String get _orderStatus {
+    if (cancelledInSap(_sap)) return 'Cancelled in SAP';
+    if (!reachedSap(_sap)) return 'Not in SAP yet';
+    return productionStatusFromSap(_sap);
+  }
+
+  /// One line's reading. A cancelled order's lines are cancelled with it.
+  String _lineStatus(Map<String, dynamic> it) {
+    if (cancelledInSap(_sap)) return 'Cancelled in SAP';
+    final s = lineStatusFromSap(SapLineState.fromLine(it), order: _sap);
+    return s == kSapNotStarted ? 'Not in SAP yet' : s;
+  }
+
+  static Color _statusColour(String s) {
+    if (s == 'Cancelled in SAP') return Colors.red.shade700;
+    if (s == kSapDispatched) return Colors.green.shade700;
+    if (s == kSapPushed) return const Color(0xFF1D4ED8);
+    return Colors.black54;
+  }
+
+  Widget _statusChip(String s) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+            color: _statusColour(s).withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(4)),
+        child: Text(s.toUpperCase(),
+            style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: _statusColour(s))),
+      );
 
   Future<void> _moveDelivery() async {
     final current =
@@ -218,6 +256,16 @@ class _ProductionOrderDetailScreenState
           // the spec in front of them and going back to check it.
           if (editCountLabel(_editCount).isNotEmpty)
             _kv('Changes', editCountLabel(_editCount)),
+          _kv('SAP order',
+              reachedSap(_sap) ? '${_sap.salesOrder}' : 'Not in SAP yet'),
+          if ((_sap.invoice ?? '').trim().isNotEmpty)
+            _kv('Invoice', '${_sap.invoice}'),
+          const SizedBox(height: 6),
+          Row(children: [
+            const Text('Status  ',
+                style: TextStyle(fontSize: 12, color: Colors.black54)),
+            _statusChip(_orderStatus),
+          ]),
           const SizedBox(height: 10),
           Row(children: [
             const Icon(Icons.event_available,
@@ -274,8 +322,8 @@ class _ProductionOrderDetailScreenState
   }
 
   Widget _itemCard(Map<String, dynamic> it) {
-    final stages = stagesForItem(it);
-    final current = '${it['custom_production_stage'] ?? ''}';
+    final status = _lineStatus(it);
+    final lineInvoice = '${it['custom_sap_invoice'] ?? ''}'.trim();
     final fromStock =
         '${it['custom_fulfilment_mode'] ?? ''}' == 'From Minimum Stock';
 
@@ -317,104 +365,18 @@ class _ProductionOrderDetailScreenState
                     fontSize: 11, fontWeight: FontWeight.w600)),
           ]),
           const Divider(height: 18),
-          // One track per line. There were three — a "from minimum stock"
-          // half, a "to be made" half, and a single fallback — because a line
-          // could be part-covered by a shelf reservation and each half ran its
-          // own cycle. There are no reservations now, so every line is one
-          // piece of work on its own product's cycle.
-          _stageTrack(
-            it,
-            title: 'Progress',
-            stages: stages,
-            current: current,
-            colour: const Color(0xFF7C3AED),
-          ),
+          // The line's status, from SAP. A stage progress bar and a "Move to
+          // stage" picker stood here until 25 September 2026 — see the header.
+          Row(children: [
+            _statusChip(status),
+            if (lineInvoice.isNotEmpty && lineInvoice != 'null') ...[
+              const SizedBox(width: 8),
+              Text('Invoice $lineInvoice',
+                  style: const TextStyle(fontSize: 11, color: Colors.black54)),
+            ],
+          ]),
         ]),
       ),
-    );
-  }
-
-  /// A line: what it is, where it has got to, and how to move it.
-  Widget _stageTrack(
-    Map<String, dynamic> it, {
-    required String title,
-    required List<String> stages,
-    required String current,
-    required Color colour,
-  }) {
-    // Counted against the stages the FLOOR works, not the stored sequence:
-    // Dispatch Planning owns `Dispatched` now, so measuring against it left a
-    // packed line — finished, as far as this screen's reader is concerned —
-    // showing "Stage 2 of 3" behind a half-empty bar. See `workPosition` in
-    // core/production_stages.dart.
-    final position = workPosition(stages, current);
-    final total = workTotal(stages);
-    final progress = workProgress(stages, current);
-    final done = workComplete(stages, current);
-    final dispatched = isDispatched(current);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(title,
-            style: TextStyle(
-                fontSize: 11.5, fontWeight: FontWeight.bold, color: colour)),
-        const SizedBox(height: 3),
-        Text(
-            position < 0
-                ? 'Stage "$current" is not in this cycle'
-                : 'Stage $position of $total  ·  '
-                    '${current.isEmpty ? kStageNotStarted : current}',
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: position < 0
-                    ? Colors.red.shade700
-                    : (done ? Colors.green : Colors.black87))),
-        const SizedBox(height: 4),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(3),
-          child: LinearProgressIndicator(
-            value: progress,
-            minHeight: 5,
-            backgroundColor: const Color(0xFFEEEEEE),
-            valueColor:
-                AlwaysStoppedAnimation(done ? Colors.green : colour),
-          ),
-        ),
-        const SizedBox(height: 8),
-        // Dispatched is never hand-picked here — Dispatch Planning is the
-        // only thing that writes it now, and only once a line's full ordered
-        // quantity has actually gone out. `stages` itself stays unfiltered
-        // above (index/progress/caption still need to recognise it); only
-        // the picker's own option list drops it. Once a track is actually
-        // DISPATCHED the picker is retired outright — moving it "back" would
-        // corrupt the cumulative-quantity invariant Dispatch Planning
-        // depends on, and `initialValue` must never be given a value absent
-        // from `items` or DropdownButtonFormField throws.
-        //
-        // Gated on `dispatched`, not on `done`: a packed line reads as
-        // complete to the floor, but Packed is still theirs to correct — it
-        // is only once the goods have physically gone that the stage stops
-        // being an opinion.
-        DropdownButtonFormField<String>(
-          initialValue:
-              (!dispatched && stages.contains(current)) ? current : null,
-          isExpanded: true,
-          decoration: const InputDecoration(
-              labelText: 'Move to stage',
-              border: OutlineInputBorder(),
-              isDense: true),
-          items: [
-            for (final s in stages)
-              if (s != kStageDispatched)
-                DropdownMenuItem(value: s, child: Text(s))
-          ],
-          onChanged: (_busy || dispatched)
-              ? null
-              : (v) => v == null ? null : _setStage(it, v),
-        ),
-      ]),
     );
   }
 

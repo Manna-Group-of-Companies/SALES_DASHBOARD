@@ -20,9 +20,13 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/credit.dart';
+import 'package:manna_field_sales/core/credit_commitment.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/sap_order_state.dart';
+import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/widgets/commitment_thread.dart';
+import 'package:manna_field_sales/widgets/gm_condition_dialog.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
@@ -135,8 +139,30 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   /// deciding on no information at all.
   bool get _escalates => !_isLead && _overLimit;
 
+  /// The GM has approved the credit and handed the order back: the sales
+  /// manager's one move is Push to SAP, and the credit figures no longer send
+  /// it anywhere else.
+  bool get _gmApproved =>
+      !_isLead && '${_order['custom_po_status']}' == kPoFinalApproval;
+
+  /// What this login may do to the order, by the rule the dashboard and
+  /// `Api.approveSalesOrderPO` also apply (credit_commitment.json). The GM
+  /// approves what reaches them rather than being offered "Send to GM" on an
+  /// order already escalated to them; a sales manager never approves an
+  /// over-limit order, and once it is with the GM does not decide it at all.
+  OrderActions get _acts => orderActions(
+      role: orderRoleOf(isGM: Session.I.isGM, isManager: Session.I.isManager),
+      poStatus: _order['custom_po_status'],
+      overLimit: _escalates);
+
   static double _num(dynamic v) =>
       v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
+
+  /// Frappe reads an unset field back as null, '' or the string 'null'.
+  static String _s(dynamic v) {
+    final s = '${v ?? ''}'.trim();
+    return s == 'null' ? '' : s;
+  }
   static int _int(dynamic v) =>
       v is num ? v.toInt() : (int.tryParse('${v ?? ''}') ?? 0);
 
@@ -191,6 +217,53 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
    * it edits the rate.
    */
 
+  /// The GM's approval of a customer order: on the rep's commitment, which
+  /// becomes their condition. The dialog is the confirmation. It does not
+  /// push to SAP — the order goes back to the sales manager, who does.
+  Future<void> _gmApprove() async {
+    final terms = await askGmCondition(context,
+        party: '${_customer['customer_name'] ?? _order['customer'] ?? ''}',
+        rep: '${_order['custom_sales_person'] ?? 'the rep'}',
+        commitment: _order['custom_credit_commitment'],
+        commitmentDue: _order['custom_credit_commitment_due']);
+    if (terms == null || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final saved = await Api.approveEscalatedOrder(widget.orderName,
+          condition: terms.condition, dueDateIso: terms.dueIso);
+      if (!mounted) return;
+      if (saved == false) {
+        // The approval stands, so the order will not come back to be approved
+        // again. The retry writes the condition alone, and outlives this
+        // screen because the messenger belongs to the app.
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          duration: const Duration(seconds: 12),
+          content: const Text('Approved, but the condition could not be saved.'),
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: () => Api.addCreditCondition(
+              customer: '${_order['customer']}',
+              salesPerson: '${_order['custom_sales_person']}',
+              condition: terms.condition,
+              dueDateIso: terms.dueIso,
+              salesOrder: widget.orderName,
+            ),
+          ),
+        ));
+      } else {
+        _snack(saved == true
+            ? 'Approved — back with the sales manager to push to SAP. The '
+                'condition is on the rep’s phone.'
+            : 'Approved — back with the sales manager to push to SAP.');
+      }
+      Navigator.pop(context, true);
+    } catch (e) {
+      _snack(humanError(e));
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _decide(bool approve) async {
     // A lead that cannot be invoiced cannot be approved. Refused here rather
     // than left to fail deep inside the conversion, so the manager is told
@@ -201,7 +274,30 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
       return;
     }
 
-    if (approve) {
+    if (approve && !_isLead && Session.I.isGM) return _gmApprove();
+
+    // Over the limit escalates — unless the GM has already approved it, when
+    // the only thing left is the push.
+    final escalating = approve && _escalates && !_gmApproved;
+
+    if (approve && _gmApproved) {
+      final by = _s(_order['custom_gm_approved_by']);
+      final who = by.isEmpty ? '' : ' ($by)';
+      final ok = await _confirm(
+        'Push this order to SAP?',
+        'The general manager$who approved the credit. Pushing sends it to SAP '
+            'at the rates shown and fixes every one of them.',
+      );
+      if (ok != true) return;
+    } else if (escalating) {
+      final ok = await _confirm(
+        'Send this order to the GM?',
+        'It takes the customer past their credit limit, so the general '
+            "manager decides it — with the rep's commitment and anything you "
+            'have added to it above.',
+      );
+      if (ok != true) return;
+    } else if (approve) {
       final ok = await _confirm(
         _isLead ? 'Approve and convert this lead?' : 'Approve this order?',
         [
@@ -230,14 +326,16 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
         if (mounted) Navigator.pop(context, true);
         return;
       }
-      if (approve && _escalates) {
+      if (escalating) {
         await Api.escalateSalesOrderPOToGM(widget.orderName);
         _snack('Sent to the GM — this takes the customer past their credit '
             'limit.');
       } else {
         await Api.approveSalesOrderPO(widget.orderName, approve);
         _snack(approve
-            ? 'Approved — rates are now final.'
+            ? (_gmApproved
+                ? 'Pushed to SAP on the GM’s approval — rates are now final.'
+                : 'Approved — rates are now final.')
             : 'Rejected ${widget.orderName}');
       }
       if (mounted) Navigator.pop(context, true);
@@ -323,6 +421,15 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
             ],
             const SizedBox(height: 12),
             _creditCard(),
+            // Straight under the credit picture it answers. Keyed on the
+            // order's `modified`, so a reload after an edit re-reads the thread.
+            if (!_isLead) ...[
+              const SizedBox(height: 12),
+              CommitmentThread(
+                  key: ValueKey('${_order['modified']}'),
+                  order: _order,
+                  overLimit: _escalates),
+            ],
             const SizedBox(height: 16),
             const Text('Lines', style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 2),
@@ -715,8 +822,44 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
         ]),
       );
     }
+    // A lead never escalates and has its own statuses, so it keeps the plain
+    // pair. Everything below is for customer orders.
+    final acts = _isLead
+        ? const OrderActions(approve: true, reject: true)
+        : _acts;
+    final isGm = Session.I.isGM && !_isLead;
+    // The single forward move, whoever holds it: the sales manager's approve
+    // (a push to SAP), their escalation, or the GM's approval of the credit.
+    final forward = acts.approve || acts.escalate || acts.gmApprove;
+    final by = _s(_order['custom_gm_approved_by']);
+    final on = _s(_order['custom_gm_approved_on']);
+    final approvedLine = [
+      if (by.isNotEmpty) by else 'The general manager',
+      'approved the credit',
+      if (on.length >= 10) 'on ${on.substring(0, 10)}',
+    ].join(' ');
+
+    if (!forward && !acts.reject) {
+      // With the GM, the sales manager no longer decides it. Offering "Send to
+      // GM" here used to re-escalate an order already escalated.
+      final withGm = '${_order['custom_po_status']}' == 'Pending GM Approval';
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: const Color(0xFFE3F2FD),
+            borderRadius: BorderRadius.circular(8)),
+        child: Text(
+            withGm
+                ? 'With the General Manager. This order takes the customer past '
+                    'their credit limit, so the GM decides it. Anything you add '
+                    'to the commitment above, the GM reads first.'
+                : 'Nothing on this order is yours to decide.',
+            style: const TextStyle(fontSize: 12.5)),
+      );
+    }
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      if (_escalates)
+      if (acts.escalate)
         Container(
           margin: const EdgeInsets.only(bottom: 8),
           padding: const EdgeInsets.all(8),
@@ -724,30 +867,72 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
               color: const Color(0xFFFFF3E0),
               borderRadius: BorderRadius.circular(6)),
           child: const Text(
-              'This order takes the customer past their credit limit. Approving '
-              'sends it to the General Manager rather than finalising it.',
+              'This order takes the customer past their credit limit. You '
+              'cannot approve it to SAP — send it to the General Manager with '
+              "the rep's commitment, or reject it.",
               style: TextStyle(fontSize: 12, color: Colors.deepOrange)),
         ),
-      const Text(
-          'Approving fixes every rate and discount on this order permanently.',
-          style: TextStyle(fontSize: 12, color: Colors.black54)),
+      // Back from the GM, approved: said plainly, because the push is now the
+      // sales manager's and the GM's name is what they are acting on.
+      if (_gmApproved)
+        Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+              color: const Color(0xFFE8F5E9),
+              borderRadius: BorderRadius.circular(6)),
+          child: Text(
+              isGm
+                  ? 'You approved the credit. It is back with the sales '
+                      'manager to push to SAP. You can still withdraw the '
+                      'approval until they do.'
+                  : '$approvedLine. Read their comments above, then push it '
+                      'to SAP.',
+              style: const TextStyle(fontSize: 12.5)),
+        ),
+      Text(
+          isGm
+              ? (_gmApproved
+                  ? 'Withdrawing rejects the order and closes its condition.'
+                  : 'Approving does not send it to SAP. It goes back to the '
+                      "sales manager to push, and makes the rep's commitment "
+                      'their condition.')
+              : _gmApproved
+                  ? 'Pushing sends it to SAP at the rates the GM approved and '
+                      'fixes every one of them.'
+                  : 'Approving fixes every rate on this order permanently.',
+          style: const TextStyle(fontSize: 12, color: Colors.black54)),
       const SizedBox(height: 8),
       Row(children: [
-        Expanded(
-            child: FilledButton.icon(
-                onPressed: _busy ? null : () => _decide(true),
-                icon: const Icon(Icons.check),
-                label: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Text(_escalates ? 'Send to GM' : 'Approve')))),
-        const SizedBox(width: 8),
-        Expanded(
-            child: OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                onPressed: _busy ? null : () => _decide(false),
-                icon: const Icon(Icons.close),
-                label: const Padding(
-                    padding: EdgeInsets.all(8), child: Text('Reject')))),
+        if (forward)
+          Expanded(
+              child: FilledButton.icon(
+                  onPressed: _busy ? null : () => _decide(true),
+                  icon: Icon(_gmApproved && !isGm
+                      ? Icons.cloud_upload
+                      : Icons.check),
+                  label: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Text(acts.gmApprove
+                          ? 'Approve'
+                          : acts.escalate
+                              ? 'Send to GM'
+                              : _gmApproved
+                                  ? 'Push to SAP'
+                                  : 'Approve')))),
+        if (forward && acts.reject) const SizedBox(width: 8),
+        if (acts.reject)
+          Expanded(
+              child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                  onPressed: _busy ? null : () => _decide(false),
+                  icon: const Icon(Icons.close),
+                  label: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Text(isGm && _gmApproved
+                          ? 'Withdraw approval'
+                          : 'Reject')))),
       ]),
     ]);
   }

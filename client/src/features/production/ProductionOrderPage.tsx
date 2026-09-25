@@ -7,44 +7,57 @@
  * when two customers sit on one round. `getOrderForProduction` now resolves
  * and keeps the name.
  *
- * The two writes here are the ones most likely to go wrong, and both are
- * shaped by ERPNext's field types rather than by preference:
+ * THE STATUS IS SAP'S (25 September 2026)
  *
- *   - **Setting a stage writes two fields of different types.** The line's
- *     `custom_production_stage` is free text and takes the fine stage name;
- *     the order's `custom_production_status` is a Select of four values and
- *     rejects anything else — taking the whole update down with it.
- *   - **Moving the delivery date captures the original once, and never again.**
- *     Without that capture the new date is just a number and nobody can see
- *     that it moved, or from what.
+ * Each line carried a stage picker here — the floor moved a line through its
+ * product's cycle and the order rolled up from the lines. Removed on
+ * instruction: the status comes from SAP's own sales order → invoice loop, so
+ * nothing on this screen sets it. The order reads Pushed to SAP until SAP
+ * invoices it, Dispatched once it has, and Cancelled in SAP if SAP cancels it;
+ * each line reads Dispatched once the invoice that carried it exists. The
+ * rules are `productionQueue.ts` and `sapOrderState.ts` (fixture-pinned).
+ *
+ * `custom_production_stage` / `custom_production_status` may still hold values
+ * written before that day. Nothing here reads them.
+ *
+ * The one write left is shaped by ERPNext rather than by preference: **moving
+ * the delivery date captures the original once, and never again.** Without
+ * that capture the new date is just a number and nobody can see that it
+ * moved, or from what.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { OrderLine, ProductionOrderRow } from '@/domain/types';
-import {
-  DISPATCHED,
-  tracksFor,
-  rollUp,
-  workComplete,
-  workPosition,
-  workProgress,
-  workTotal,
-  type StagedLine,
-} from '@/domain/production';
 import { modeLabel, modeTone, servedFrom } from '@/domain/minimumStock';
+import { lineStatusFromSap } from '@/domain/sapOrderState';
+import { queueState, QUEUE_STATE_LABEL, type QueueState } from '@/domain/productionQueue';
 import { formatDate } from '@/domain/orderRules';
 import { Api } from '@/api/client';
-import { Alert, Badge, Button, Card, Empty, Input, Select } from '@/components/ui';
+import { Alert, Badge, Button, Card, Empty, Input, type BadgeTone } from '@/components/ui';
 import { money } from '@/components/common/format';
-import { CompletionTick } from '@/components/common/StatusPill';
-import { RefreshButton } from '@/components/common/RefreshButton';
+import { ORDER_SYNC, SapSyncButton } from '@/components/common/SapSyncButton';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import '@/components/common/status.css';
 import './production.css';
 
 type Order = ProductionOrderRow & { lines: OrderLine[] };
+
+const STATE_TONE: Record<QueueState, BadgeTone> = {
+  in_sap: 'info',
+  dispatched: 'ok',
+  cancelled: 'danger',
+};
+
+/** One line's reading. A cancelled order's lines are cancelled with it. */
+function lineReading(line: OrderLine, order: Order): { text: string; tone: BadgeTone } {
+  if (queueState(order.sap) === 'cancelled') return { text: 'Cancelled in SAP', tone: 'danger' };
+  const s = lineStatusFromSap({ invoice: line.sapInvoice }, order.sap);
+  if (s === 'Dispatched') return { text: 'Dispatched', tone: 'ok' };
+  if (s === 'Pushed to SAP') return { text: 'Pushed to SAP', tone: 'info' };
+  return { text: 'Not in SAP yet', tone: 'neutral' };
+}
 
 export function ProductionOrderPage() {
   const { orderId = '' } = useParams();
@@ -88,33 +101,6 @@ export function ProductionOrderPage() {
       live = false;
     };
   }, [orderId, tick]);
-
-  /** What the order status will become once a stage is set — shown live. */
-  const impliedStatus = useMemo(() => (order ? rollUp(order.lines) : null), [order]);
-
-  const setStage = async (
-    line: OrderLine,
-    stage: string,
-    field: 'stockStage' | 'productionStage',
-  ) => {
-    if (!order) return;
-    setBusy(line.id + field);
-    setError(null);
-    try {
-      const saved = await Api.production.setStage({
-        orderId: order.id,
-        lineId: line.id,
-        stage,
-        field,
-      });
-      setOrder(saved);
-      setDone(`${line.itemName} → ${stage}. Order is now ${saved.productionStatus}.`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not save the stage.');
-    } finally {
-      setBusy(null);
-    }
-  };
 
   const moveDate = async () => {
     if (!order || !newDate) return;
@@ -161,7 +147,7 @@ export function ProductionOrderPage() {
           </div>
         </div>
         <div className="cal__nav">
-          <RefreshButton onClick={reload} loading={loading} />
+          <SapSyncButton target={ORDER_SYNC} onSynced={reload} />
           <Link to="/production" className="btn btn--ghost btn--sm">
             ← Queue
           </Link>
@@ -216,9 +202,25 @@ export function ProductionOrderPage() {
                   <td>{order.unit || '—'}</td>
                 </tr>
                 <tr>
+                  <td className="dim">SAP order</td>
+                  <td className="mono">{order.sap.salesOrder || 'Not in SAP yet'}</td>
+                </tr>
+                <tr>
                   <td className="dim">Status</td>
                   <td>
-                    <CompletionTick productionStatus={order.productionStatus} />
+                    {order.sap.salesOrder ? (
+                      <Badge tone={STATE_TONE[queueState(order.sap)]}>
+                        {QUEUE_STATE_LABEL[queueState(order.sap)].toUpperCase()}
+                      </Badge>
+                    ) : (
+                      <Badge tone="neutral">NOT IN SAP YET</Badge>
+                    )}
+                    {order.sap.invoice && (
+                      <span className="small" style={{ marginLeft: 8 }}>
+                        Invoice <b className="mono">{order.sap.invoice}</b>
+                        {order.sap.invoiceDate ? ` · ${formatDate(order.sap.invoiceDate)}` : ''}
+                      </span>
+                    )}
                   </td>
                 </tr>
               </tbody>
@@ -276,13 +278,8 @@ export function ProductionOrderPage() {
 
           <div className="prod__lines">
             {order.lines.map((l) => {
-              const staged: StagedLine = {
-                category: l.category,
-                fulfilmentMode: l.fulfilmentMode,
-                productionStage: l.productionStage,
-              };
-              const tracks = tracksFor(staged);
               const mode = servedFrom(l);
+              const reading = lineReading(l, order);
               return (
                 <Card key={l.id} title={l.itemName}>
                   <div className="prod__linetop">
@@ -308,88 +305,28 @@ export function ProductionOrderPage() {
                   */}
 
                   {/*
-                    One track. There were two when a line was split between the
-                    shelf and the plant — the shelf half only picked and packed,
-                    the made half running the family cycle — and the list shape
-                    survives that.
+                    The line's status, from SAP. A stage track with a picker
+                    stood here until 25 September 2026 — see the header.
                   */}
-                  {tracks.map((t) => {
-                    /*
-                      Counted against the stages the FLOOR works, not the
-                      stored sequence: Dispatch Planning owns `Dispatched`
-                      now, so measuring against it left a packed line — which
-                      is finished, as far as this screen's reader is
-                      concerned — showing "Stage 2 of 3" behind a half-empty
-                      bar. See `workPosition` in domain/production.ts.
-                    */
-                    const pos = workPosition(t.sequence, t.stage);
-                    const unknown = pos < 0;
-                    const total = workTotal(t.sequence);
-                    const done = workComplete(t.sequence, t.stage);
-                    const pct = Math.round(workProgress(t.sequence, t.stage) * 100);
-                    const key = l.id + t.field;
-                    return (
-                      <div key={t.key} className={`track track--${t.key}`}>
-                        <div className="track__title">{t.title}</div>
-                        {unknown ? (
-                          <p className="prod__badstage">
-                            Stage &ldquo;{t.stage}&rdquo; is not in this product&rsquo;s cycle
-                          </p>
-                        ) : (
-                          <>
-                            <div className="prod__stagecap">
-                              Stage {pos} of {total} · {t.stage}
-                            </div>
-                            <div className="prod__bar">
-                              <div
-                                className={`prod__bar-fill ${done ? 'done' : ''}`}
-                                style={{ width: `${pct}%` }}
-                              />
-                            </div>
-                          </>
-                        )}
-                        <div className="prod__actions">
-                          {/*
-                            Dispatched is never hand-picked here — Dispatch
-                            Planning is the only thing that writes it now, and
-                            only once a line's full ordered quantity has
-                            actually gone out. Once a track reaches it, the
-                            picker is retired: moving it "back" from Dispatched
-                            would corrupt the cumulative-quantity invariant
-                            Dispatch Planning depends on.
-                          */}
-                          <Select
-                            value={unknown ? '' : t.stage}
-                            disabled={busy === key || t.stage === DISPATCHED}
-                            onChange={(e) => e.target.value && setStage(l, e.target.value, t.field)}
-                            aria-label={`${t.title} stage for ${l.itemName}`}
-                          >
-                            {unknown && <option value="">Set a stage from this cycle…</option>}
-                            {t.sequence
-                              .filter((s) => s !== DISPATCHED)
-                              .map((s) => (
-                                <option key={s} value={s}>
-                                  {s}
-                                </option>
-                              ))}
-                          </Select>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  <div className="prod__actions">
+                    <Badge tone={reading.tone}>{reading.text.toUpperCase()}</Badge>
+                    {l.sapInvoice && (
+                      <span className="small">
+                        Invoice <b className="mono">{l.sapInvoice}</b>
+                        {l.sapInvoiceDate ? ` · ${formatDate(l.sapInvoiceDate)}` : ''}
+                      </span>
+                    )}
+                  </div>
                 </Card>
               );
             })}
           </div>
 
-          {impliedStatus && (
-            <p className="note" style={{ marginTop: 12 }}>
-              The order reads <b>{impliedStatus}</b>, rolled up from its lines: Ready and
-              Dispatched are decided by the slowest line, In Production by the fastest, and a stage
-              that is not in a line's cycle counts as not started — errors always round down, so an
-              unrecognised stage can never make an order look shippable.
-            </p>
-          )}
+          <p className="note" style={{ marginTop: 12 }}>
+            The status comes from SAP: <b>Pushed to SAP</b> once SAP has the order,{' '}
+            <b>Dispatched</b> once SAP has invoiced it. Nothing here changes it — press <b>Sync</b>{' '}
+            in the header to fetch the latest from SAP.
+          </p>
         </>
       )}
 

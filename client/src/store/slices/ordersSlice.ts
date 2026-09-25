@@ -93,20 +93,6 @@ export const rejectOrder = createAsyncThunk(
   },
 );
 
-export const setItemStage = createAsyncThunk(
-  'orders/setStage',
-  async (
-    input: { orderId: string; itemId: string; stage: string; user: User },
-    { rejectWithValue },
-  ) => {
-    try {
-      return await Api.orders.setItemStage(input.orderId, input.itemId, input.stage, input.user);
-    } catch (e) {
-      return rejectWithValue(toApiError(e).message);
-    }
-  },
-);
-
 export const changeDeliveryDate = createAsyncThunk(
   'orders/changeDeliveryDate',
   async (

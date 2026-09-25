@@ -42,6 +42,7 @@
 }
 .tick--complete { color: var(--hue-green); font-weight: 600; }
 .tick--ready { color: var(--hue-amber); }
+.tick--in_sap,
 .tick--in_production,
 .tick--not_started { color: var(--text-3); }
 

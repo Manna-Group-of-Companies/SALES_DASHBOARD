@@ -95,10 +95,21 @@ import {
   RATE_FALLBACK,
   type VehicleChange,
 } from '@/domain/trips';
-import { allItemsReady, firstStage, isTerminalStage, stageLabel } from '@/domain/processStages';
+import { allItemsReady, firstStage, isTerminalStage } from '@/domain/processStages';
 import { round2 } from '@/domain/productRules';
 
-import { frappeNow, noteServerDate } from '@/domain/serverClock';
+import { frappeNow, noteServerDate, serverNow } from '@/domain/serverClock';
+import { OUTSTANDING_FIELD, overCreditLimit } from '@/domain/credit';
+import {
+  approvalConditionProblem,
+  COMMENT_EMPTY,
+  commentAuthorRole,
+  mayAddFollowUpNote,
+  defaultConditionDue,
+  GM_DOES_NOT_PUSH,
+  orderActions,
+  SALES_MANAGER_CANNOT_APPROVE,
+} from '@/domain/creditCommitment';
 import { stockFromKg, type StockFromKg } from '@/domain/stockFromKg';
 import {
   COND_CLOSED,
@@ -409,6 +420,49 @@ export async function listDocs<T>(doctype: string, options: ListOptions = {}): P
   }
 }
 
+/**
+ * Codes per request in `listDocsIn`. Item codes run to about 16 characters
+ * once quoted and URL-encoded, so 100 of them is about 1.6 KB — well inside
+ * the limit below even with a long field list beside it.
+ */
+const IN_CHUNK = 100;
+
+/**
+ * `listDocs` with an `in` filter over a list that may be long.
+ *
+ * Frappe Cloud refuses a request line over about 4 KB with a bare nginx
+ * `400 Bad Request`, before Frappe or the login is ever consulted — measured
+ * 24 September 2026: 240 item codes pass, 250 fail. The stock page joined
+ * every warehouse row to its Item in one `name in (...)` and worked while the
+ * warehouse held 130 rows; the sync began carrying every finished-goods item
+ * on 18 September, the warehouse reached 443, and the page went blank with
+ * nothing on screen to say why.
+ *
+ * So the list is split and the requests run side by side. The caller's other
+ * filters go on every chunk.
+ */
+export async function listDocsIn<T>(
+  doctype: string,
+  field: string,
+  values: string[],
+  options: ListOptions = {},
+): Promise<T[]> {
+  const unique = [...new Set(values)];
+  if (!unique.length) return [];
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += IN_CHUNK) chunks.push(unique.slice(i, i + IN_CHUNK));
+  const pages = await Promise.all(
+    chunks.map((chunk) =>
+      listDocs<T>(doctype, {
+        ...options,
+        filters: [...(options.filters ?? []), [field, 'in', chunk]],
+        limit: 0,
+      }),
+    ),
+  );
+  return pages.flat();
+}
+
 export async function getDoc<T>(doctype: string, name: string): Promise<T> {
   const { data } = await http.get<{ data: T }>(resourceUrl(doctype, name));
   return data.data;
@@ -600,9 +654,12 @@ async function fetchCurrentUser(): Promise<User> {
     Boolean(myToken) && (salesPerson ?? '').trim().toLowerCase().startsWith(myToken);
 
   let role: Role | null = null;
+  // The Managing Director comes first: their login is the rates screen and
+  // nothing else, so no other flag on the same user may take them elsewhere.
   // The GM outranks the rest: they are who the other roles escalate to, and
   // they carry exemptions nobody else does.
-  if (isSet(u[USER_FIELD.isGeneralManager])) role = 'general_manager';
+  if (isSet(u[USER_FIELD.isManagingDirector])) role = 'managing_director';
+  else if (isSet(u[USER_FIELD.isGeneralManager])) role = 'general_manager';
   else if (isSet(u[USER_FIELD.isHr])) role = 'hr';
   else if (isSet(u[USER_FIELD.isStockManager])) role = 'stock_manager';
   else if (isSet(u[USER_FIELD.isProductionManager])) role = 'production_manager';
@@ -1340,38 +1397,6 @@ async function rejectOrder(orderId: string, reason: string, user: User): Promise
 
   // As with approval, the rejection reason goes back to the rep through the
   // field-sales app — there is nobody here left to tell.
-  return updated;
-}
-
-/** Move one line along its process cycle (3.2). */
-async function setItemStage(
-  orderId: string,
-  itemId: string,
-  stage: string,
-  user: User,
-): Promise<Order> {
-  const updated = await persistOrder(orderId, (o) => {
-    const item = o.items.find((i) => i.id === itemId);
-    if (!item) throw new Error('That line is no longer on this order.');
-    item.stage = stage;
-    item.stageUpdatedAt = nowIso();
-    if (o.status === 'approved') o.status = 'in_production';
-    o.timeline.push(
-      timelineEntry(user, `${item.itemName} → ${stageLabel(item.category, stage)}`),
-    );
-  });
-
-  const moved = updated.items.find((i) => i.id === itemId);
-  emit({
-    kind: 'stage_advanced',
-    title: `${updated.orderNo} moved on`,
-    body: moved
-      ? `A line reached ${stageLabel(moved.category, stage)}.`
-      : 'A line moved to the next stage.',
-    audience: ['sales_manager'],
-    orderId,
-  });
-
   return updated;
 }
 
@@ -2822,7 +2847,18 @@ function toTeamOrder(r: Record<string, unknown>): TeamOrder {
     ratesApproved: Number(r[SALES_ORDER_FIELD.ratesApproved]) === 1,
     sapSalesOrder: str(r[SALES_ORDER_FIELD.sapSalesOrder]),
     sapSalesOrderStatus: str(r[SALES_ORDER_FIELD.sapSalesOrderStatus]),
+    sapInvoice: str(r[SALES_ORDER_FIELD.sapInvoice]),
+    // Frappe reads an unset field back as the string 'null' on some paths,
+    // which would print literally as the rep's commitment.
+    creditCommitment: notNull(str(r[SALES_ORDER_FIELD.creditCommitment])),
+    creditCommitmentDue: notNull(str(r[SALES_ORDER_FIELD.creditCommitmentDue]))?.slice(0, 10),
+    gmApprovedBy: notNull(str(r[SALES_ORDER_FIELD.gmApprovedBy])),
+    gmApprovedOn: notNull(str(r[SALES_ORDER_FIELD.gmApprovedOn])),
   };
+}
+
+function notNull(s: string | undefined): string | undefined {
+  return s === 'null' ? undefined : s;
 }
 
 /** One order with its lines, for the approval screen. */
@@ -2844,12 +2880,10 @@ function toOrderDetail(doc: Record<string, unknown>): OrderDetail {
     changedAfterApproval: Number(doc.custom_changed_after_approval) === 1,
     placedAt: str(doc.custom_order_placed_at),
     lines: items.map(toOrderLine),
-    sapSalesOrder: str(doc.custom_sap_sales_order),
-    sapSalesOrderStatus: str(doc.custom_sap_sales_order_status),
-    sapProductionOrder: str(doc.custom_sap_production_order),
-    sapProductionStage: str(doc.custom_sap_production_stage),
-    sapDeliveryOrder: str(doc.custom_sap_delivery_order),
-    sapDeliveryDate: str(doc.custom_sap_delivery_date),
+    sapSalesOrder: str(doc[SALES_ORDER_FIELD.sapSalesOrder]),
+    sapSalesOrderStatus: str(doc[SALES_ORDER_FIELD.sapSalesOrderStatus]),
+    sapInvoice: str(doc[SALES_ORDER_FIELD.sapInvoice]),
+    sapInvoiceDate: str(doc[SALES_ORDER_FIELD.sapInvoiceDate]),
     sapSyncedAt: str(doc.custom_sap_synced_at),
     sapSyncError: str(doc.custom_sap_sync_error),
   };
@@ -2880,19 +2914,24 @@ function toOrderLine(r: Record<string, unknown>): OrderLine {
     dispatchedRolls: n(SALES_ORDER_ITEM_FIELD.dispatchedRolls),
     dispatchedLooseBelts: n(SALES_ORDER_ITEM_FIELD.dispatchedLooseBelts),
     dispatchShortReason: str(r[SALES_ORDER_ITEM_FIELD.dispatchShortReason]),
-    sapProductionOrder: str(r[SALES_ORDER_ITEM_FIELD.sapProductionOrder]),
-    sapProductionStage: str(r[SALES_ORDER_ITEM_FIELD.sapProductionStage]),
-    sapDeliveryOrder: str(r[SALES_ORDER_ITEM_FIELD.sapDeliveryOrder]),
-    sapDeliveryDate: str(r[SALES_ORDER_ITEM_FIELD.sapDeliveryDate]),
+    sapInvoice: str(r[SALES_ORDER_ITEM_FIELD.sapInvoice]),
+    sapInvoiceDate: str(r[SALES_ORDER_ITEM_FIELD.sapInvoiceDate]),
   };
 }
 
-export type OrderDecision = 'approve' | 'reject' | 'escalate';
+/**
+ * What a decision is.
+ *
+ * `approve` is the sales manager's push to SAP. `gmApprove` is the GM's
+ * approval of the credit, which sends the order back to the sales manager at
+ * `Pending Final Approval` — the GM never pushes (credit_commitment.json).
+ */
+export type OrderDecision = 'approve' | 'gmApprove' | 'reject' | 'escalate';
 
 /**
  * Decide an order.
  *
- * Approving writes THREE things, not one:
+ * Approving to SAP writes THREE things, not one:
  *
  *   - `custom_po_status` to the approved string,
  *   - `custom_rate_approved = 1` on the order, and
@@ -2901,6 +2940,10 @@ export type OrderDecision = 'approve' | 'reject' | 'escalate';
  * The per-line stamp is the only way the app can later tell a price that was
  * signed off from one the rep typed afterwards. Skipping it silently unlocks
  * every rate on the order.
+ *
+ * The GM's approval locks nothing and pushes nothing. It saves any rate the GM
+ * moved, stamps who approved and when, makes the rep's condition, and hands
+ * the order back to the sales manager.
  *
  * The lines are re-read here rather than taken from the screen: a rep may have
  * edited the order since it was opened, and re-sending a stale `items` array
@@ -2913,20 +2956,97 @@ async function decideSalesOrder(input: {
   rateEdits?: Record<string, number>;
   /** Whose decision this is. Only the GM may move an already-approved price. */
   role?: string;
-}): Promise<OrderDetail> {
+  /**
+   * The GM's terms, when approving. Required when the order carries the rep's
+   * commitment — the approval turns it into their condition — and optional
+   * otherwise, as it always was.
+   */
+  condition?: { text: string; dueDate: string };
+  /** Who is deciding, as a display name, for `set_by` and `custom_gm_approved_by`. */
+  by?: string;
+}): Promise<OrderDetail & { conditionSaved?: boolean }> {
   const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.id);
   const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
 
   const approving = input.decision === 'approve';
+  const gmApproving = input.decision === 'gmApprove';
+  const isGm = input.role === 'general_manager';
+  const storedStatus = str(doc[SALES_ORDER_FIELD.poStatus]);
+
+  /*
+   * Who may take this decision, asked of the order and the customer AS
+   * STORED — not of what the page loaded — and through the same
+   * `orderActions` the page draws its buttons from. There is no Server Script
+   * on this site, so the page hiding Approve from a sales manager is not what
+   * stops them; this is.
+   *
+   * The customer is only read when the answer depends on it: a sales
+   * manager's approve or escalate on an order the GM has not approved. If it
+   * cannot be read the decision is refused, because the failure that costs
+   * least is a retry, not an over-limit order sent to SAP on nobody's
+   * authority.
+   */
+  let overLimit = false;
+  if (
+    input.role === 'sales_manager' &&
+    input.decision !== 'reject' &&
+    storedStatus !== PO_STATUS.finalApproval
+  ) {
+    const customerId = str(doc[SALES_ORDER_FIELD.customer]);
+    const [party] = customerId
+      ? await listDocs<Record<string, unknown>>(DOCTYPE.customer, {
+          fields: Object.values(OUTSTANDING_FIELD),
+          filters: [['name', '=', customerId]],
+          limit: 1,
+        }).catch(() => [])
+      : [];
+    if (!party) {
+      throw new Error(
+        "Could not read the customer's credit position, so this was not saved. Try again.",
+      );
+    }
+    overLimit = overCreditLimit(party, Number(doc[SALES_ORDER_FIELD.total]) || 0);
+  }
+  const allowed = orderActions(input.role, storedStatus, overLimit);
+  if (!allowed[input.decision]) {
+    throw new Error(
+      approving && isGm
+        ? GM_DOES_NOT_PUSH
+        : approving && overLimit
+          ? SALES_MANAGER_CANNOT_APPROVE
+          : 'This order is not yours to decide in its current state. Refresh it to see where it is.',
+    );
+  }
+
+  /*
+   * With the rep's commitment on the order, the GM's approval makes it their
+   * condition — reworded if the GM likes, but not dropped. Refused before
+   * anything is written, so there is never an approved order whose promise
+   * went missing on the way.
+   */
+  const commitment = notNull(str(doc[SALES_ORDER_FIELD.creditCommitment]));
+  if (gmApproving) {
+    const problem = approvalConditionProblem(commitment, input.condition?.text);
+    if (problem) throw new Error(problem);
+  }
+
   const status =
     input.decision === 'approve'
-      ? 'PO Approved - Ready for SAP'
-      : input.decision === 'reject'
-        ? 'Rejected'
-        : 'Pending GM Approval';
+      ? PO_STATUS.approved
+      : input.decision === 'gmApprove'
+        ? PO_STATUS.finalApproval
+        : input.decision === 'reject'
+          ? PO_STATUS.rejected
+          : PO_STATUS.pendingGm;
+
+  /*
+   * Pushing an order the GM approved goes at the GM's figures. The sales
+   * manager's screen shows them read-only; this is what holds if it did not.
+   */
+  const rateEdits = storedStatus === PO_STATUS.finalApproval && !isGm ? undefined : input.rateEdits;
 
   const nextItems = items.map((l) => {
-    const edited = input.rateEdits?.[String(l.name)];
+    const edited = rateEdits?.[String(l.name)];
     const next: Record<string, unknown> = { ...l };
 
     /*
@@ -2978,8 +3098,9 @@ async function decideSalesOrder(input: {
       amount: round2(qty * perUnitBefore),
     });
 
-    // Only approval locks a rate. A rejection leaves the prices editable so
-    // the rep can fix what was wrong with them.
+    // Only the push to SAP locks a rate. A rejection leaves the prices
+    // editable so the rep can fix what was wrong with them, and the GM's
+    // approval leaves them to the sales manager's push.
     if (approving) next[SALES_ORDER_ITEM_FIELD.rateApproved] = 1;
     return next;
   });
@@ -2988,27 +3109,143 @@ async function decideSalesOrder(input: {
     [SALES_ORDER_FIELD.poStatus]: status,
     [SALES_ORDER_FIELD.ratesApproved]: approving ? 1 : 0,
     items: nextItems,
+    /*
+     * Whose approval the sales manager is acting on. Stamped by the GM's
+     * approval, kept through the push as the record, and cleared by a
+     * rejection or a fresh escalation — either means the approval no longer
+     * stands.
+     */
+    ...(gmApproving
+      ? {
+          [SALES_ORDER_FIELD.gmApprovedBy]: input.by || 'General Manager',
+          [SALES_ORDER_FIELD.gmApprovedOn]: frappeNow(),
+        }
+      : approving
+        ? {}
+        : { [SALES_ORDER_FIELD.gmApprovedBy]: '', [SALES_ORDER_FIELD.gmApprovedOn]: null }),
   });
 
   /*
-   * An approval is what puts an order in front of the factory, so ask for the
-   * push straight away rather than leaving it to the next timed sweep.
+   * The push is what puts an order in front of the factory, so it raises the
+   * order flag itself. From 24 Sep 2026 there is no timed sweep: this request,
+   * or somebody pressing Sync, is the only thing that pushes an approved order
+   * to SAP. The GM's approval does not raise it — the order is not approved
+   * until the sales manager pushes.
    *
    * Nothing here talks to SAP — Frappe Cloud has no route to that LAN. This
-   * raises the same flag the Refresh button raises, and the on-prem watcher
-   * picks it up within about two minutes. Without it an approved order waits
-   * up to fifteen for the unprompted sweep.
+   * raises the same flag the header's Sync button raises, and the on-prem
+   * watcher picks it up within 15 seconds. The Server Script always raises it,
+   * even inside the cooldown, so an approval is never dropped for timing.
    *
    * Deliberately not awaited for correctness: the approval is already saved
-   * and must stand whether or not the request lands. A refused request (the
-   * cooldown) or an unreachable script is not an approval failure, so it is
-   * swallowed — the sweep will collect the order regardless.
+   * and must stand whether or not the request lands. If the request itself
+   * fails the order waits for the next press of Sync — nothing sweeps it up
+   * any more — which is why the failure is logged, not silently eaten. The
+   * phone does the same in `approveSalesOrderPO`.
    */
   if (approving) {
-    void requestOrderSync().catch(() => undefined);
+    void requestOrderSync().catch((e: unknown) => {
+      console.warn('Approved, but could not ask SAP to pick it up — press Sync.', e);
+    });
   }
 
-  return toOrderDetail(saved);
+  /*
+   * The GM's terms become the rep's condition at the GM's approval — that is
+   * the credit decision, and the rep can start on the promise straight away.
+   * Written after the approval and never able to undo it: an approval the GM
+   * believes they gave, reversed because a condition would not save, is the
+   * worse failure. The page is told whether it landed so it can offer to save
+   * it again.
+   */
+  let conditionSaved: boolean | undefined;
+  const terms = input.condition?.text.trim();
+  if (gmApproving && terms) {
+    conditionSaved = await upsertOrderCondition({
+      salesOrder: input.id,
+      customer: str(doc[SALES_ORDER_FIELD.customer]) ?? '',
+      salesPerson: str(doc[SALES_ORDER_FIELD.rep]) ?? '',
+      condition: terms,
+      // `due_date` is mandatory on the doctype, so an emptied date field falls
+      // back to what the GM was offered rather than failing the save.
+      dueDate:
+        input.condition?.dueDate ||
+        defaultConditionDue(str(doc[SALES_ORDER_FIELD.creditCommitmentDue]), serverNow()),
+      setBy: input.by || 'General Manager',
+    });
+  }
+
+  /*
+   * A GM who rejects — including one withdrawing their own approval before the
+   * push — leaves nothing owed. Closing is the GM's act alone, and this is the
+   * GM acting, so the rule in credit_condition.json holds.
+   */
+  if (input.decision === 'reject' && isGm) {
+    await closeOrderConditions(input.id, input.by || 'General Manager');
+  }
+
+  return { ...toOrderDetail(saved), conditionSaved };
+}
+
+/**
+ * One condition per order, however many times the GM approves it.
+ *
+ * An order the GM approved and someone then edited goes back to the GM, who
+ * approves it again. A second condition for the same order would have the rep
+ * owing the same promise twice, so a live one is reused: reworded and redated
+ * while the rep has not answered it, left alone once they have.
+ */
+async function upsertOrderCondition(input: {
+  salesOrder: string;
+  customer: string;
+  salesPerson: string;
+  condition: string;
+  dueDate: string;
+  setBy: string;
+}): Promise<boolean> {
+  try {
+    const live = (await listCreditConditions({ salesOrder: input.salesOrder })).filter(
+      (c) => c.status !== COND_CLOSED,
+    );
+    if (live.length) {
+      const c = live[0];
+      if (c.status === COND_OPEN) {
+        await updateDoc(DOCTYPE.creditCondition, c.id, {
+          condition: input.condition,
+          due_date: input.dueDate,
+          set_by: input.setBy,
+          set_on: frappeNow(),
+        });
+      }
+      return true;
+    }
+  } catch {
+    // Could not look — fall through and make one. A duplicate the GM can
+    // close beats an approval with no condition behind it.
+  }
+  const made = await addCreditCondition({ ...input });
+  return made !== null;
+}
+
+/** Close whatever is still owed on an order the GM has rejected. Best-effort. */
+async function closeOrderConditions(salesOrder: string, by: string): Promise<void> {
+  try {
+    const live = (await listCreditConditions({ salesOrder })).filter(
+      (c) => c.status !== COND_CLOSED,
+    );
+    await Promise.all(
+      live.map((c) =>
+        decideCreditCondition({
+          id: c.id,
+          action: 'close',
+          role: 'general_manager',
+          note: 'The GM rejected the order, so nothing is owed on it.',
+          by,
+        }),
+      ),
+    );
+  } catch (e) {
+    console.warn('Rejected, but could not close the condition on it — close it by hand.', e);
+  }
 }
 
 /**
@@ -3047,32 +3284,32 @@ async function undoOrderRejection(orderId: string): Promise<OrderDetail> {
  * hand-typed snapshot from 10 September and every pool row held a minimum of
  * zero, so the target was never a target and the shelf was a week stale. The
  * warehouse is the shelf now, and `Sync-HitechStockToTreads.ps1` refreshes it
- * from SAP every five minutes at *available to promise* — on hand, less what
- * SAP has committed to open orders.
+ * from SAP at *available to promise* — on hand, less what
+ * SAP has committed to open orders — whenever somebody presses Sync (there is
+ * no timer from 24 Sep 2026, so the shelf is as fresh as the last press).
  */
 async function listMinimumStock(): Promise<MinStockLine[]> {
-  const stock = await listWarehouseStock().catch(() => [] as WarehouseStock[]);
-  const codes = stock.map((s) => s.itemCode);
-  if (!codes.length) return [];
-
-  // The belts-per-roll figure, which `WarehouseStock` uses for the conversion
-  // but does not carry out. The split needs it: a belt is cut from a roll, and
-  // without the pack size a line for one belt is sent to production while
-  // whole rolls sit on the shelf.
-  const items = await listDocs<Record<string, unknown>>(DOCTYPE.item, {
-    fields: ['name', ITEM_FIELD.beltsPerRoll],
-    filters: [['name', 'in', codes]],
-    limit: 0,
-  }).catch(ifMissing<Record<string, unknown>[]>([], DOCTYPE.item));
-  const perRoll = new Map(
-    items.map((i) => [String(i.name), Number(i[ITEM_FIELD.beltsPerRoll]) || 0]),
-  );
+  /*
+   * A failure propagates. It was caught here and turned into an empty list,
+   * and when the warehouse read began failing on 18 September the stock page
+   * said "SAP has nothing available to promise" over 384 stocked items. The
+   * callers that can live without stock — the order page — catch it
+   * themselves; the stock page shows the error.
+   */
+  const stock = await listWarehouseStock();
 
   return stock.map((s) => ({
     itemCode: s.itemCode,
+    itemName: s.itemName,
+    itemGroup: s.itemGroup,
+    kg: s.kg,
+    uom: s.uom,
     availableRolls: s.converted.known ? s.converted.rolls : 0,
     availableBelts: s.converted.known ? s.converted.looseBelts : 0,
-    beltsPerRoll: perRoll.get(s.itemCode) ?? 0,
+    // The split needs it: a belt is cut from a roll, and without the pack size
+    // a line for one belt is sent to production while whole rolls sit on the
+    // shelf.
+    beltsPerRoll: s.beltsPerRoll,
     // `stockFromKg` refuses to divide when an item has no weights, and that
     // refusal is carried through rather than flattened to a zero. The screens
     // say "not set up" for those, which is a different sentence from "none
@@ -3330,6 +3567,20 @@ async function saveOrderLines(input: {
     };
   });
 
+  /*
+   * An order already with the GM stays with the GM, and one the GM approved
+   * goes back to them.
+   *
+   * The GM edits escalated orders before deciding them — that is half of why
+   * the escalation reaches them — and sending every such edit back to
+   * `Pending Approval` dropped the order out of their own queue and into the
+   * sales manager's, who may not approve it (credit_commitment.json). An order
+   * the GM has approved and somebody then changes is no longer the money the
+   * GM approved, so the approval is cleared and it is theirs again.
+   */
+  const stored = str(doc[SALES_ORDER_FIELD.poStatus]);
+  const toGm = stored === PO_STATUS.pendingGm || stored === PO_STATUS.finalApproval;
+
   const saved = await updateDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.orderId, {
     items,
     /*
@@ -3338,8 +3589,11 @@ async function saveOrderLines(input: {
      * total nobody signed off — the exact failure `custom_changed_after_approval`
      * exists to catch.
      */
-    [SALES_ORDER_FIELD.poStatus]: 'Pending Approval',
+    [SALES_ORDER_FIELD.poStatus]: toGm ? PO_STATUS.pendingGm : PO_STATUS.pending,
     [SALES_ORDER_FIELD.ratesApproved]: 0,
+    ...(stored === PO_STATUS.finalApproval
+      ? { [SALES_ORDER_FIELD.gmApprovedBy]: '', [SALES_ORDER_FIELD.gmApprovedOn]: null }
+      : {}),
   });
   /*
    * Saving the order used to be followed by a second pass that brought this
@@ -3700,6 +3954,13 @@ async function approveLeadOrder(input: {
   });
   const salesOrderId = String(so.name);
 
+  // Created already approved, so it goes to SAP exactly as an approved order
+  // does — see the same request in `decideOrder`. Without it, now that nothing
+  // syncs on a timer, this order would sit unseen until somebody pressed Sync.
+  void requestOrderSync().catch((e: unknown) => {
+    console.warn('Converted, but could not ask SAP to pick it up — press Sync.', e);
+  });
+
   /*
    * 3. Write back to the lead order.
    *
@@ -3755,17 +4016,41 @@ async function listCombinedOrders(input: { from?: string; to?: string } = {}): P
 
 // -------------------------------------------------------------- production ---
 
+/** What the sync wrote back about the order, in `SapOrderState`'s shape. */
+function sapOf(r: Record<string, unknown>): ProductionOrderRow['sap'] {
+  return {
+    salesOrder: str(r[SALES_ORDER_FIELD.sapSalesOrder]),
+    salesOrderStatus: str(r[SALES_ORDER_FIELD.sapSalesOrderStatus]),
+    invoice: str(r[SALES_ORDER_FIELD.sapInvoice]),
+    invoiceDate: (str(r[SALES_ORDER_FIELD.sapInvoiceDate]) ?? '').slice(0, 10) || undefined,
+    syncedAt: str(r[SALES_ORDER_FIELD.sapSyncedAt]),
+  };
+}
+
 /**
- * The production queue — **with the customer removed before it is returned**.
+ * The production queue: every order SAP has, cancelled ones included.
  *
- * Production must never see who the order is for. The customer is used here
- * only to resolve a route, and is then dropped: it is not returned to the
- * caller in any field, so no screen can render it and no search can match it
- * even by accident.
+ * Until 24 September 2026 this listed every order at `PO Approved - Ready for
+ * SAP`, whether or not SAP had ever received it, and six of the seven rows on
+ * the floor's screen that day were sync-test orders. It lists what SAP holds
+ * now — the sales-order number the sync writes back — so an order appears the
+ * moment it reaches SAP and not before. An order SAP cancels stays, and the
+ * screen marks it; see `domain/productionQueue.ts`.
+ *
+ * `since` bounds the read to recent orders (the screen offers 13 weeks) so the
+ * queue does not grow for ever. It is a coarse bound, a day either way does
+ * not matter; the week itself is picked on the server's clock by the screen.
+ *
+ * The customer has been shown to production since 19 Aug 2026 — dispatch
+ * needs to know whose goods are whose.
  */
-async function listProductionQueue(unit?: string): Promise<ProductionOrderRow[]> {
-  const filters: Filter[] = [[SALES_ORDER_FIELD.poStatus, '=', PO_STATUS.approved]];
+async function listProductionQueue(
+  unit?: string,
+  since?: string,
+): Promise<ProductionOrderRow[]> {
+  const filters: Filter[] = [[SALES_ORDER_FIELD.sapSalesOrder, 'is', 'set']];
   if (unit) filters.push([SALES_ORDER_FIELD.unit, '=', unit]);
+  if (since) filters.push([SALES_ORDER_FIELD.placedOn, '>=', since]);
 
   const rows = await listDocs<Record<string, unknown>>(DOCTYPE.salesOrder, {
     fields: ['name', ...Object.values(SALES_ORDER_FIELD)],
@@ -3812,6 +4097,7 @@ async function listProductionQueue(unit?: string): Promise<ProductionOrderRow[]>
       changedAfterApproval: Number(r[SALES_ORDER_FIELD.changedAfterApproval]) === 1,
       editCount: Number(r[SALES_ORDER_FIELD.editCount]) || 0,
       combinedOrder: str(r[SALES_ORDER_FIELD.combinedOrder]),
+      sap: sapOf(r),
     };
   });
 }
@@ -3845,57 +4131,9 @@ async function getOrderForProduction(
     changedAfterApproval: Number(doc[SALES_ORDER_FIELD.changedAfterApproval]) === 1,
     editCount: Number(doc[SALES_ORDER_FIELD.editCount]) || 0,
     combinedOrder: str(doc[SALES_ORDER_FIELD.combinedOrder]),
+    sap: sapOf(doc),
     lines: items.map(toOrderLine),
   };
-}
-
-/**
- * Set one line's production stage, and roll the order up to match.
- *
- * Two fields of different types are written together, and getting them the
- * wrong way round is fatal: the line's `custom_production_stage` is free text
- * and takes the fine stage name, while the order's `custom_production_status`
- * is a Select of four values and rejects anything else — taking the whole
- * update down with it, including the line change that was the point.
- */
-async function setProductionStage(input: {
-  orderId: string;
-  lineId: string;
-  stage: string;
-  /**
-   * Which half of the line moved. `stockStage` is the portion coming off the
-   * shelf; `productionStage` is the portion being made. A split line has both
-   * and they finish separately.
-   */
-  field?: 'stockStage' | 'productionStage';
-}): Promise<ProductionOrderRow & { lines: OrderLine[] }> {
-  const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.orderId);
-  const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
-
-  const target =
-    input.field === 'stockStage'
-      ? SALES_ORDER_ITEM_FIELD.stockStage
-      : SALES_ORDER_ITEM_FIELD.productionStage;
-
-  const nextItems = items.map((l) =>
-    String(l.name) === input.lineId ? { ...l, [target]: input.stage } : l,
-  );
-
-  // The roll-up used to weigh both halves of a split line, which meant reading
-  // the live reservations first. A line has one half now.
-  const status = rollUp(
-    nextItems.map((l) => ({
-      category: str(l[SALES_ORDER_ITEM_FIELD.category]),
-      fulfilmentMode: str(l[SALES_ORDER_ITEM_FIELD.fulfilmentMode]),
-      productionStage: str(l[SALES_ORDER_ITEM_FIELD.productionStage]),
-    })),
-  );
-
-  await updateDoc(DOCTYPE.salesOrder, input.orderId, {
-    items: nextItems,
-    [SALES_ORDER_FIELD.productionStatus]: status,
-  });
-  return getOrderForProduction(input.orderId);
 }
 
 /**
@@ -4080,7 +4318,7 @@ export interface SaveDispatchDraftInput {
 /**
  * Create or overwrite a Draft. Every add/remove/quantity/vehicle/date change
  * on the planning screen calls this — the whole line list is always written
- * back, the same read-mutate-write convention `setProductionStage` uses for
+ * back, the same read-mutate-write convention the order-line writers use for
  * order items — so a draft is persisted to ERPNext on every edit rather than
  * living only in the browser tab, and survives a refresh from the Draft tab.
  */
@@ -4231,7 +4469,7 @@ async function combineDispatchedOrders(
  * Lock a Draft. What actually left is captured per line here — defaulting to
  * planned in the UI, editable down at this last moment — added to each Sales
  * Order Item's running total, and the order's own status recomputed exactly
- * as `setProductionStage` recomputes it.
+ * as the stage picker (removed 25 Sep 2026) used to — with `rollUp`.
  *
  * Refuses a line whose remaining quantity (re-derived from a **freshly**
  * fetched order, never the draft's possibly-stale planned number) cannot
@@ -5439,22 +5677,241 @@ async function decideCreditCondition(input: {
     input.id,
     body,
   );
+
+  /*
+   * Why it was sent back goes on the order's thread, where the rep reads it
+   * under the condition on their phone — the condition card only ever showed
+   * a note on closing. A closing note stays on the condition, which already
+   * shows it (credit_commitment.json → follow_up). Best-effort: the decision
+   * itself is saved.
+   */
+  const order = notNull(str(current.sales_order));
+  if (input.action === 'reopen' && order && input.note?.trim()) {
+    await createDoc(DOCTYPE.creditComment, {
+      sales_order: order,
+      customer: str(current.customer),
+      author: input.by,
+      author_role: commentAuthorRole('general_manager'),
+      posted_on: frappeNow(),
+      comment: `Sent back: ${input.note.trim()}`,
+    }).catch((e: unknown) => console.warn('Sent back, but the note did not reach the thread.', e));
+  }
   return toCreditCondition(doc);
+}
+
+/*
+ * --- the GM's follow-up ------------------------------------------------------
+ *
+ * Every order the GM approved, what SAP has made of it, its condition, and
+ * the conversation — asked for 25 Sep 2026. See `domain/followUp.ts` for how
+ * the screen sorts them and `credit_commitment.json` → `follow_up` for the
+ * rules both apps share.
+ */
+
+export interface FollowUp {
+  order: TeamOrder & { sapInvoice?: string; sapInvoiceDate?: string; placedAt?: string };
+  conditions: CreditCondition[];
+  /** The rep's latest answer on the thread, if they have given one. */
+  lastAnswer?: CreditComment;
+  commentCount: number;
+}
+
+/**
+ * Every order the GM approved, plus any order a condition points at.
+ *
+ * `custom_gm_approved_by` is what marks one: the GM's approval stamps it and a
+ * rejection or an edit clears it, so it holds exactly the approvals that still
+ * stand, before and after the push. Conditions are read too, so an order whose
+ * approval predates the stamp — or was withdrawn with its condition closed —
+ * still shows its history rather than vanishing.
+ */
+async function listFollowUps(): Promise<FollowUp[]> {
+  const fields = ['name', ...Object.values(SALES_ORDER_FIELD)];
+  const [approved, conditions] = await Promise.all([
+    listDocs<Record<string, unknown>>(DOCTYPE.salesOrder, {
+      fields,
+      filters: [[SALES_ORDER_FIELD.gmApprovedBy, 'is', 'set']],
+      orderBy: `${SALES_ORDER_FIELD.gmApprovedOn} desc`,
+      limit: 0,
+    }),
+    listCreditConditions(),
+  ]);
+
+  const have = new Set(approved.map((r) => String(r.name)));
+  const missing = [
+    ...new Set(conditions.map((c) => c.salesOrder).filter((id) => id && !have.has(id))),
+  ];
+  const extra = missing.length
+    ? await listDocsIn<Record<string, unknown>>(DOCTYPE.salesOrder, 'name', missing, { fields })
+    : [];
+  const rows = [...approved, ...extra];
+
+  const comments = await listCreditComments(rows.map((r) => String(r.name))).catch(
+    () => [] as CreditComment[],
+  );
+
+  return rows.map((r) => {
+    const id = String(r.name);
+    const mine = comments.filter((c) => c.salesOrder === id);
+    const answers = mine.filter((c) => c.authorRole === commentAuthorRole('rep'));
+    return {
+      order: {
+        ...toTeamOrder(r),
+        sapInvoice: notNull(str(r[SALES_ORDER_FIELD.sapInvoice])),
+        sapInvoiceDate: notNull(str(r[SALES_ORDER_FIELD.sapInvoiceDate])),
+        placedAt: notNull(str(r[SALES_ORDER_FIELD.placedAt])),
+      },
+      conditions: conditions.filter((c) => c.salesOrder === id),
+      lastAnswer: answers[answers.length - 1],
+      commentCount: mine.length,
+    };
+  });
+}
+
+/**
+ * The GM's note on an order they approved, at any stage — after SAP has it
+ * too. It reaches the rep under the condition on their phone.
+ */
+async function addFollowUpNote(input: {
+  salesOrder: string;
+  comment: string;
+  role: string | undefined;
+  author: string;
+}): Promise<CreditComment> {
+  const text = input.comment.trim();
+  if (!text) throw new Error(COMMENT_EMPTY);
+  if (!mayAddFollowUpNote(input.role)) {
+    throw new Error('Only the general manager adds follow-up notes.');
+  }
+  const [order] = await listDocs<Record<string, unknown>>(DOCTYPE.salesOrder, {
+    fields: ['name', SALES_ORDER_FIELD.customer],
+    filters: [['name', '=', input.salesOrder]],
+    limit: 1,
+  });
+  if (!order) throw new Error('That order could not be found.');
+  const doc = await createDoc<Record<string, unknown>>(DOCTYPE.creditComment, {
+    sales_order: input.salesOrder,
+    customer: str(order[SALES_ORDER_FIELD.customer]),
+    author: input.author,
+    author_role: commentAuthorRole(input.role),
+    posted_on: frappeNow(),
+    comment: text,
+  });
+  return toCreditComment(doc);
+}
+
+/*
+ * --- comments on the rep's commitment ----------------------------------------
+ *
+ * While an over-limit order waits, the sales manager and the GM may add what
+ * they know beside the rep's commitment — "they paid late twice this year",
+ * "take the cheque before loading". The GM reads them before deciding, and the
+ * rep reads them under the condition the approval makes.
+ *
+ * One document each, not a text field appended to, so two managers writing at
+ * once cannot overwrite each other. Who may write is `orderActions(...).comment`
+ * from `domain/creditCommitment.ts`, asked here against the order as stored.
+ */
+
+export interface CreditComment {
+  id: string;
+  salesOrder: string;
+  customer: string;
+  author: string;
+  /** 'Sales Manager' or 'General Manager'. */
+  authorRole: string;
+  comment: string;
+  postedOn: string;
+}
+
+const COMMENT_FIELDS = [
+  'name',
+  'sales_order',
+  'customer',
+  'author',
+  'author_role',
+  'posted_on',
+  'comment',
+];
+
+function toCreditComment(r: Record<string, unknown>): CreditComment {
+  const s = (v: unknown): string => notNull(str(v)) ?? '';
+  return {
+    id: s(r.name),
+    salesOrder: s(r.sales_order),
+    customer: s(r.customer),
+    author: s(r.author),
+    authorRole: s(r.author_role),
+    comment: s(r.comment),
+    postedOn: s(r.posted_on),
+  };
+}
+
+/**
+ * Every comment on these orders, oldest first — a conversation reads forwards.
+ *
+ * Through `listDocsIn`, because the list of orders is the caller's and may
+ * grow. Chunks come back each in order but not with each other, so the sort
+ * is done here — on the naming series, which only ever counts up.
+ */
+async function listCreditComments(salesOrders: string[]): Promise<CreditComment[]> {
+  const rows = await listDocsIn<Record<string, unknown>>(
+    DOCTYPE.creditComment,
+    'sales_order',
+    salesOrders.filter(Boolean),
+    { fields: COMMENT_FIELDS, orderBy: 'creation asc' },
+  );
+  return rows.map(toCreditComment).sort((a, b) => a.id.localeCompare(b.id));
+}
+
+async function addCreditComment(input: {
+  salesOrder: string;
+  comment: string;
+  role: string | undefined;
+  /** A display name, like `set_by` on a condition. */
+  author: string;
+}): Promise<CreditComment> {
+  const text = input.comment.trim();
+  if (!text) throw new Error(COMMENT_EMPTY);
+
+  const [order] = await listDocs<Record<string, unknown>>(DOCTYPE.salesOrder, {
+    fields: ['name', SALES_ORDER_FIELD.poStatus, SALES_ORDER_FIELD.customer],
+    filters: [['name', '=', input.salesOrder]],
+    limit: 1,
+  });
+  if (!order) throw new Error('That order could not be found.');
+  // Whether the order is over the limit does not change who may comment.
+  if (!orderActions(input.role, str(order[SALES_ORDER_FIELD.poStatus]), false).comment) {
+    throw new Error(
+      'Comments close once an order is approved — anything more belongs on the condition.',
+    );
+  }
+
+  const doc = await createDoc<Record<string, unknown>>(DOCTYPE.creditComment, {
+    sales_order: input.salesOrder,
+    customer: str(order[SALES_ORDER_FIELD.customer]),
+    author: input.author,
+    author_role: commentAuthorRole(input.role),
+    posted_on: frappeNow(),
+    comment: text,
+  });
+  return toCreditComment(doc);
 }
 
 /*
  * --- the SAP credit-limit refresh -------------------------------------------
  *
  * Frappe Cloud cannot reach the SAP LAN, so nothing here talks to SAP. The
- * button raises a flag on a Single doc; a poller on the on-prem Windows box
- * picks it up within about two minutes, runs the sync, and writes the outcome
- * back. See the two Server Scripts `manna_sap_request_sync` and
- * `manna_sap_get_status` on the live site.
+ * button raises a flag on a Single doc; a watcher on the office server reads
+ * the flags every 15 seconds, runs the sync, and writes the outcome back. See
+ * the two Server Scripts `manna_sap_request_sync` and `manna_sap_get_status`
+ * on the live site. From 24 Sep 2026 nothing runs on a timer.
  *
- * The cooldown is enforced in the Server Script, not here. The SAP Service
- * Layer licence pool is tiny and logging in inside the window takes it down
- * for 20-30 minutes, so the refusal has to be somewhere a browser console
- * cannot reach. What this file does is explain the refusal, not make it.
+ * Every request is accepted. Inside the short cooldown after a run, or while
+ * one is running, the flag is still raised and the run follows as soon as it
+ * may, so a press is delayed, never dropped. The cooldown itself is kept by
+ * the office poller, where a browser console cannot talk past it; `message`
+ * says how long the wait will be.
  */
 
 export type SapSyncStatus =
@@ -5476,8 +5933,12 @@ export interface SapSyncState {
 }
 
 export interface SapSyncRequestResult {
+  /** True for every request since 24 Sep 2026; kept for an older script. */
   ok: boolean;
-  /** 'in_progress' or 'cooldown' when ok is false. */
+  /**
+   * Why the run will not start straight away: 'running' (it follows the run in
+   * flight) or 'cooldown' (it follows the pause). Empty when it starts now.
+   */
   reason?: string;
   retryAt?: string;
   message: string;
@@ -5504,11 +5965,8 @@ async function getSapSyncStatus(): Promise<SapSyncState> {
 }
 
 /**
- * Ask for a refresh.
- *
- * A refusal is a normal answer, not an error — the script returns ok:false
- * with a reason for both "already running" and "still in cooldown", and the
- * caller shows the message rather than treating it as a failure.
+ * Ask for a refresh. Always queued; `message` is the sentence to show, and
+ * says when a request that has to wait will run.
  */
 async function requestSapSync(): Promise<SapSyncRequestResult> {
   const { data } = await http.post<{ message: Record<string, unknown> }>(
@@ -5524,13 +5982,45 @@ async function requestSapSync(): Promise<SapSyncRequestResult> {
 }
 
 /*
+ * --- the SAP stock refresh ---------------------------------------------------
+ *
+ * The credit refresh's twin, against a different SAP company: stock is
+ * HITECH_PRETREADS_LIVE, credit is MANNA_TREADS_LIVE, and the two have their
+ * own control doc (`Hitech Stock Fetch Control`) and their own poller
+ * (`Invoke-HitechFetchPoller.ps1`) so that one being down never holds up the
+ * other. The Server Scripts answer in the credit refresh's keys, so the same
+ * mapper reads both.
+ */
+
+async function getStockSyncStatus(): Promise<SapSyncState> {
+  const { data } = await http.post<{ message: Record<string, unknown> }>(
+    '/api/method/manna_stock_get_status',
+  );
+  return toSapSyncState(data.message ?? {});
+}
+
+async function requestStockSync(): Promise<SapSyncRequestResult> {
+  const { data } = await http.post<{ message: Record<string, unknown> }>(
+    '/api/method/manna_stock_request_sync',
+  );
+  const m = data.message ?? {};
+  return {
+    ok: Boolean(m.ok),
+    reason: str(m.reason),
+    retryAt: str(m.retry_at),
+    message: str(m.message) ?? '',
+  };
+}
+
+/*
  * --- the SAP order sync ------------------------------------------------------
  *
  * The same shape as the credit refresh above and for the same reason: Frappe
- * Cloud has no route to the SAP LAN, so a manager pressing Refresh — in the
+ * Cloud has no route to the SAP LAN, so a manager pressing Sync — in the
  * office or anywhere else — can only raise a flag. A watcher inside the office
- * sees it, logs into SAP, pulls production and delivery state onto the orders,
- * and writes the outcome back here.
+ * sees it, logs into SAP, pushes approved orders, pulls SAP's edits and the
+ * invoices onto the orders, and writes the outcome back here. An approval
+ * raises the same flag (`decideOrder`, `approveLeadOrder`).
  *
  * So the button is honest about being a request, not an action: the manager is
  * told when the floor was last read, not that it has just been read.
@@ -5569,16 +6059,23 @@ async function getOrderSyncState(): Promise<OrderSyncState> {
 /**
  * Ask the on-prem watcher to re-read SAP.
  *
- * A refusal is a normal answer: inside the cooldown the script declines and
- * says when it will next accept. The cooldown lives in the Server Script, not
- * here, so a browser console cannot talk past it.
+ * Always accepted since 24 Sep 2026 — an approval raises this flag, and a
+ * refusal would strand the order. `afterCooldown` says the run waits out the
+ * short pause after the last one before it starts; the office poller keeps
+ * that pause, so a browser console cannot talk past it.
  */
-async function requestOrderSync(): Promise<OrderSyncState & { accepted: boolean }> {
+async function requestOrderSync(): Promise<
+  OrderSyncState & { accepted: boolean; afterCooldown: boolean }
+> {
   const { data } = await http.post<{ message: Record<string, unknown> }>(
     '/api/method/manna_sap_order_request_sync',
   );
   const m = data.message ?? {};
-  return { ...toOrderSyncState(m), accepted: Boolean(m.accepted) };
+  return {
+    ...toOrderSyncState(m),
+    accepted: Boolean(m.accepted),
+    afterCooldown: Number(m.after_cooldown ?? 0) === 1,
+  };
 }
 
 /*
@@ -5591,7 +6088,7 @@ async function requestOrderSync(): Promise<OrderSyncState & { accepted: boolean 
  * SAP holds the stock as weight. Rolls and belts are derived by
  * `domain/stockFromKg.ts`, which refuses to divide when an item has no
  * weights — 288 items hold about 37,260 kg in SAP with none, and they become
- * eligible to receive it on the next scheduled sync.
+ * eligible to receive it on the next stock sync.
  */
 
 export interface WarehouseStock {
@@ -5601,6 +6098,8 @@ export interface WarehouseStock {
   /** The item's own UOM. 1,639 of the new items are Kg; 17 are not. */
   uom: string;
   kg: number;
+  /** From the item master; 0 when unset. */
+  beltsPerRoll: number;
   /** Rolls and belts, or an explicit refusal to guess. */
   converted: StockFromKg;
 }
@@ -5608,9 +6107,10 @@ export interface WarehouseStock {
 /**
  * Everything in the finished-goods warehouse, with weights attached.
  *
- * Two reads and a join in memory rather than one request per item: there are
- * 130 bin rows against 2,318 items, and a lookup per row would be 130 round
- * trips to a shared Frappe instance.
+ * Two reads and a join in memory rather than one request per item. The Item
+ * read goes through `listDocsIn`: the warehouse held 130 rows when this was
+ * written and 443 by 24 September 2026, and one `name in (...)` over 443 codes
+ * is a URL Frappe Cloud refuses outright.
  */
 async function listWarehouseStock(
   warehouse: string = FG_WAREHOUSE,
@@ -5627,19 +6127,22 @@ async function listWarehouseStock(
   });
   if (!bins.length) return [];
 
-  const items = await listDocs<Record<string, unknown>>(DOCTYPE.item, {
-    fields: [
-      'name',
-      'item_name',
-      'item_group',
-      'stock_uom',
-      ITEM_FIELD.weightPerBelt,
-      ITEM_FIELD.beltsPerRoll,
-      ITEM_FIELD.weightPerRoll,
-    ],
-    filters: [['name', 'in', bins.map((b) => String(b[BIN_FIELD.itemCode]))]],
-    limit: 0,
-  });
+  const items = await listDocsIn<Record<string, unknown>>(
+    DOCTYPE.item,
+    'name',
+    bins.map((b) => String(b[BIN_FIELD.itemCode])),
+    {
+      fields: [
+        'name',
+        'item_name',
+        'item_group',
+        'stock_uom',
+        ITEM_FIELD.weightPerBelt,
+        ITEM_FIELD.beltsPerRoll,
+        ITEM_FIELD.weightPerRoll,
+      ],
+    },
+  );
   const byCode = new Map(items.map((i) => [String(i.name), i]));
 
   return bins.map((b) => {
@@ -5653,6 +6156,7 @@ async function listWarehouseStock(
       itemGroup: String(item?.item_group ?? ''),
       uom,
       kg,
+      beltsPerRoll: Number(item?.[ITEM_FIELD.beltsPerRoll] ?? 0) || 0,
       converted: stockFromKg({
         kg,
         weightPerRoll: Number(item?.[ITEM_FIELD.weightPerRoll] ?? 0),
@@ -5699,7 +6203,6 @@ export const Api = {
     updateItems: updateOrderItems,
     approve: approveOrder,
     reject: rejectOrder,
-    setItemStage,
     changeDeliveryDate,
     acknowledgeChange,
     dispatch: dispatchOrder,
@@ -5747,11 +6250,17 @@ export const Api = {
     listWarehouseStock,
     getSapSyncStatus,
     requestSapSync,
+    getStockSyncStatus,
+    requestStockSync,
     getOrderSyncState,
     requestOrderSync,
     listCreditConditions,
     addCreditCondition,
     decideCreditCondition,
+    listCreditComments,
+    addCreditComment,
+    listFollowUps,
+    addFollowUpNote,
     listCustomers: listSalesCustomers,
     listOrders: listTeamOrders,
     getOrder: getSalesOrder,
@@ -5781,7 +6290,6 @@ export const Api = {
   production: {
     listQueue: listProductionQueue,
     getOrder: getOrderForProduction,
-    setStage: setProductionStage,
     moveDeliveryDate,
     acknowledgeChange: acknowledgeProductionChange,
     listDispatchableLines,
