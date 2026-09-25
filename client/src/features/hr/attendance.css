@@ -137,6 +137,12 @@
    must never be partly covered by the control that replaces it. */
 .odo__photoadd { margin-top: 6px; display: flex; justify-content: flex-end; gap: 6px; }
 
+/* A photo the rep sent that reached the trip but not this leg. Dashed so it
+   never reads as the leg's own evidence until HR has attached it. */
+.odo__strays { display: flex; flex-direction: column; gap: 8px; }
+.odo__stray .odo__photo { border-style: dashed; }
+.odo__stray .odo__photoadd { justify-content: space-between; align-items: center; }
+
 .odo__data { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .odo__table td:first-child { color: var(--text-2); }
 .odo__table .input { max-width: 120px; }

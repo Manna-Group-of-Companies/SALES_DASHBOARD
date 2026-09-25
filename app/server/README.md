@@ -108,3 +108,17 @@ does not survive.
 ## Schema
 
 Everything the app reads and writes is listed in [SCHEMA.md](SCHEMA.md).
+
+### `trip_odometer_photos.py` and `file_odometer_photo.py`
+
+Written 25 Sep 2026, after scripting came back. **Not installed yet** — creating
+Server Scripts from an agent session was refused, so they wait for someone to
+paste them into Desk (Server Script → New, the header of each file says which
+DocType and event). Together they stop an odometer photo from being stored on a
+Trip without reaching its leg, which is why HR saw "No photo" beside photos the
+reps had sent. Both only act on a rep saving or uploading to their **own**
+trip, so nothing HR does is changed by them.
+
+Until they are installed, the HR odometer page still finds these photos (it
+lists each trip's unlinked `start_odo…`/`end_odo…` files) and offers "Use this
+photo".
