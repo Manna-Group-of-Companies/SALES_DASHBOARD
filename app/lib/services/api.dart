@@ -3215,20 +3215,75 @@ class Api {
     String? docname,
     String filename = 'bill.jpg',
   }) async {
+    // A name nobody else has, so the file can be found again if the reply is
+    // lost. On a weak signal Frappe often stores the photo and the answer never
+    // reaches the phone; the leg was then saved with no link and HR saw
+    // "No photo" beside a file that was sitting on the Trip all along (Sep 2026:
+    // TRP-00427, 00481, 00521, 00523, 00555).
+    final dot = filename.lastIndexOf('.');
+    final stem = dot > 0 ? filename.substring(0, dot) : filename;
+    final ext = dot > 0 ? filename.substring(dot) : '.jpg';
+    final unique = '${stem}_${DateTime.now().millisecondsSinceEpoch}$ext';
+
     final map = <String, dynamic>{
-      'file': await MultipartFile.fromFile(filePath, filename: filename),
+      'file': await MultipartFile.fromFile(filePath, filename: unique),
       'is_private': 1,
     };
     if (doctype != null) map['doctype'] = doctype;
     if (docname != null) map['docname'] = docname;
-    final r =
-    await Session.I.dio.post('/api/method/upload_file', data: FormData.fromMap(map));
-    if (r.statusCode == 200 || r.statusCode == 201) {
-      final d = r.data;
-      if (d is Map && d['message'] is Map) {
-        return d['message']['file_url'] as String?;
+
+    Object? failure;
+    try {
+      // The session-wide 20 s receive timeout is meant for JSON. A photo on one
+      // bar of signal can take longer than that just to leave the phone, and
+      // Frappe then stores it after the phone has already given up and saved
+      // the leg without it (TRP-00615: 14 s late, TRP-00630: 32 s). Two minutes
+      // each way; the dialog shows "Uploading…" for all of it.
+      final r = await Session.I.dio.post('/api/method/upload_file',
+          data: FormData.fromMap(map),
+          options: Options(
+            sendTimeout: const Duration(minutes: 2),
+            receiveTimeout: const Duration(minutes: 2),
+          ));
+      if (r.statusCode == 200 || r.statusCode == 201) {
+        final d = r.data;
+        if (d is Map && d['message'] is Map) {
+          final url = d['message']['file_url'] as String?;
+          if (url != null && url.isNotEmpty) return url;
+        }
+      }
+    } catch (e) {
+      failure = e;
+    }
+
+    // No usable answer. Before calling it a failure, ask whether the server
+    // kept the file anyway. Only possible when it was attached to a document.
+    if (doctype != null && docname != null) {
+      final stemOnly = unique.substring(0, unique.length - ext.length);
+      // Up to ~20 s: long enough for a file still being written when the
+      // reply was lost. One that lands later still reaches the leg — the
+      // manna_file_odometer_photo Server Script links it (app/server/).
+      for (var i = 0; i < 5; i++) {
+        try {
+          final rows = await _list('File',
+              fields: '["file_url"]',
+              filters: jsonEncode([
+                ['attached_to_doctype', '=', doctype],
+                ['attached_to_name', '=', docname],
+                ['file_name', 'like', '$stemOnly%'],
+              ]),
+              limit: 1);
+          if (rows.isNotEmpty) {
+            final url = rows.first['file_url'] as String?;
+            if (url != null && url.isNotEmpty) return url;
+          }
+        } catch (_) {
+          // Still no signal — try again shortly, then give up honestly.
+        }
+        await Future<void>.delayed(const Duration(seconds: 4));
       }
     }
+    if (failure != null) throw failure;
     return null;
   }
 

@@ -4865,6 +4865,76 @@ async function removeLegPhoto(input: Omit<UploadLegPhotoInput, 'file'>): Promise
 }
 
 /**
+ * An odometer photo the rep sent that reached the Trip but not a leg.
+ *
+ * The phone uploads a photo first and writes its url onto the leg after. When
+ * the upload outlives the phone's patience — one bar of signal, a 20-second
+ * timeout — Frappe still stores the file, attached to the Trip, and the leg is
+ * saved without it. HR then saw "No photo" beside a picture that was sitting
+ * in the Trip's attachments all along (Sep 2026: TRP-00290, 00307, 00615,
+ * 00630 and others). Ending the wrong leg and deleting it strands a photo the
+ * same way.
+ */
+export interface StrayOdometerPhoto {
+  tripId: string;
+  url: string;
+  slot: 'start' | 'end';
+  /** When ERPNext stored it — for telling two candidates apart. */
+  uploadedAt: string;
+}
+
+/**
+ * Every odometer photo uploaded since `sinceIso` that no leg of its trip uses.
+ *
+ * Recognised by the phone's own file names, `start_odo…` and `end_odo…`,
+ * which is also what says which slot it was taken for. A photo HR deleted off a
+ * leg comes back here too, because deleting keeps the file — it is offered,
+ * never attached, so that costs one ignored suggestion and nothing more.
+ */
+async function listStrayOdometerPhotos(trips: Trip[], sinceIso: string): Promise<StrayOdometerPhoto[]> {
+  const rows = await listDocs<Record<string, unknown>>(DOCTYPE.file, {
+    fields: ['file_url', 'file_name', 'attached_to_name', 'creation'],
+    filters: [
+      ['attached_to_doctype', '=', DOCTYPE.trip],
+      ['creation', '>=', sinceIso],
+      ['file_name', 'like', '%odo%'],
+    ],
+    orderBy: 'creation desc',
+    limit: 0,
+  });
+
+  const linked = new Map<string, Set<string>>();
+  for (const t of trips) {
+    const urls = new Set<string>();
+    for (const l of t.legs) {
+      if (l.startOdometerPhoto) urls.add(l.startOdometerPhoto);
+      if (l.endOdometerPhoto) urls.add(l.endOdometerPhoto);
+    }
+    linked.set(t.id, urls);
+  }
+
+  const out: StrayOdometerPhoto[] = [];
+  for (const r of rows) {
+    const tripId = str(r.attached_to_name);
+    const url = str(r.file_url);
+    const name = str(r.file_name) ?? '';
+    const slot = name.startsWith('start_odo') ? 'start' : name.startsWith('end_odo') ? 'end' : null;
+    const onTrip = tripId ? linked.get(tripId) : undefined;
+    // A trip outside the list is one this caller is not showing.
+    if (!tripId || !url || !slot || !onTrip || onTrip.has(url)) continue;
+    out.push({ tripId, url, slot, uploadedAt: str(r.creation) ?? '' });
+  }
+  return out;
+}
+
+/** Put a photo that is already on the Trip onto one of its legs. */
+async function attachStrayLegPhoto(
+  input: Omit<UploadLegPhotoInput, 'file'> & { fileUrl: string },
+): Promise<Trip> {
+  return setLegPhoto(input.tripId, input.legId, input.slot, input.fileUrl);
+}
+
+/**
  * Point one of a leg's photo fields at `fileUrl` ('' to clear it).
  *
  * The same whole-array re-send as `verifyLeg`, read immediately before the
@@ -5669,6 +5739,8 @@ export const Api = {
     changeLegVehicle,
     uploadLegPhoto,
     removeLegPhoto,
+    listStrayOdometerPhotos,
+    attachStrayLegPhoto,
   },
 
   sales: {

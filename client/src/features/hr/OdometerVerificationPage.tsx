@@ -30,7 +30,7 @@ import {
 } from '@/domain/trips';
 import { formatDate, todayIso } from '@/domain/orderRules';
 import { shiftIso } from '@/domain/attendance';
-import { Api } from '@/api/client';
+import { Api, type StrayOdometerPhoto } from '@/api/client';
 import {
   Alert,
   Badge,
@@ -57,6 +57,8 @@ export function OdometerVerificationPage() {
   const today = todayIso();
   const [trips, setTrips] = useState<Trip[]>([]);
   const [rates, setRates] = useState<TripRates | null>(null);
+  /** Photos the reps sent that reached a trip but none of its legs. */
+  const [strays, setStrays] = useState<StrayOdometerPhoto[]>([]);
   const [filter, setFilter] = useState<Filter>('todo');
   const [person, setPerson] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -65,10 +67,14 @@ export function OdometerVerificationPage() {
   const load = () => {
     setLoading(true);
     setError(null);
-    Promise.all([Api.trips.list(shiftIso(today, -WINDOW_DAYS), today), Api.trips.getRates()])
-      .then(([t, r]) => {
+    const from = shiftIso(today, -WINDOW_DAYS);
+    Promise.all([Api.trips.list(from, today), Api.trips.getRates()])
+      .then(async ([t, r]) => {
+        // A failure here costs the suggestions, not the page.
+        const s = await Api.trips.listStrayOdometerPhotos(t, from).catch(() => []);
         setTrips(t);
         setRates(r);
+        setStrays(s);
       })
       .catch((e: unknown) =>
         setError(e instanceof Error ? e.message : 'Could not read trips from ERPNext.'),
@@ -79,6 +85,24 @@ export function OdometerVerificationPage() {
   useEffect(load, [today]);
 
   /**
+   * Stray photos by trip, minus any that a leg has since been given.
+   *
+   * Recomputed from `trips` rather than trusted from the load, so a photo
+   * attached a moment ago stops being offered without a refresh.
+   */
+  const straysByTrip = useMemo(() => {
+    const out = new Map<string, StrayOdometerPhoto[]>();
+    for (const trip of trips) {
+      const used = new Set(
+        trip.legs.flatMap((l) => [l.startOdometerPhoto, l.endOdometerPhoto]).filter(Boolean),
+      );
+      const mine = strays.filter((p) => p.tripId === trip.id && !used.has(p.url));
+      if (mine.length) out.set(trip.id, mine);
+    }
+    return out;
+  }, [trips, strays]);
+
+  /**
    * Everyone with something to check, with their outstanding count.
    *
    * Built from the unfiltered set so the dropdown does not shrink as you work
@@ -87,11 +111,11 @@ export function OdometerVerificationPage() {
   const peopleWithWork = useMemo(() => {
     const counts = new Map<string, number>();
     for (const trip of trips) {
-      const n = trip.legs.filter(needsCheck).length;
+      const n = trip.legs.filter((l) => needsCheck(l) || canRecover(straysByTrip.get(trip.id), l)).length;
       if (n) counts.set(trip.person, (counts.get(trip.person) ?? 0) + n);
     }
     return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [trips]);
+  }, [trips, straysByTrip]);
 
   /**
    * Legs worth a human look, newest first, each with its parent trip.
@@ -110,6 +134,13 @@ export function OdometerVerificationPage() {
           out.push({ trip, leg });
           continue;
         }
+        // A leg whose photo reached the trip but not the leg is work too:
+        // without this it has "no photo", so needsCheck skips it, and HR
+        // never learns there is a picture to attach.
+        if (filter === 'todo' && canRecover(straysByTrip.get(trip.id), leg)) {
+          out.push({ trip, leg });
+          continue;
+        }
         if (!needsCheck(leg)) continue;
         if (filter === 'flagged' && !leg.notVerified) continue;
         if (filter === 'todo' && leg.notVerified && !awaitingCorrection(leg)) continue;
@@ -117,7 +148,7 @@ export function OdometerVerificationPage() {
       }
     }
     return out.sort((a, b) => b.trip.date.localeCompare(a.trip.date));
-  }, [trips, filter, person]);
+  }, [trips, filter, person, straysByTrip]);
 
   /** How many of the shown legs are still missing one or both photos. */
   const missingPhotos = useMemo(
@@ -221,6 +252,7 @@ export function OdometerVerificationPage() {
               trip={trip}
               leg={leg}
               rates={rates}
+              strays={straysByTrip.get(trip.id) ?? []}
               onSaved={onSaved}
               onError={setError}
             />
@@ -231,16 +263,25 @@ export function OdometerVerificationPage() {
   );
 }
 
+/** An empty photo slot on this leg that one of its trip's strays could fill. */
+function canRecover(strays: StrayOdometerPhoto[] | undefined, leg: TripLeg): boolean {
+  if (!leg.hasOdometer || !strays) return false;
+  return strays.some((p) => (p.slot === 'start' ? !leg.startOdometerPhoto : !leg.endOdometerPhoto));
+}
+
 function LegCard({
   trip,
   leg,
   rates,
+  strays,
   onSaved,
   onError,
 }: {
   trip: Trip;
   leg: TripLeg;
   rates: TripRates;
+  /** This trip's photos that no leg uses — offered for an empty slot. */
+  strays: StrayOdometerPhoto[];
   onSaved: (t: Trip) => void;
   onError: (m: string) => void;
 }) {
@@ -270,6 +311,23 @@ function LegCard({
       onSaved(updated);
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not upload the photo.');
+    } finally {
+      setUploading(null);
+    }
+  };
+
+  const attachStray = async (slot: 'start' | 'end', fileUrl: string) => {
+    setUploading(slot);
+    try {
+      const updated = await Api.trips.attachStrayLegPhoto({
+        tripId: trip.id,
+        legId: leg.id,
+        slot,
+        fileUrl,
+      });
+      onSaved(updated);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not attach the photo.');
     } finally {
       setUploading(null);
     }
@@ -374,6 +432,8 @@ function LegCard({
             disabled={uploading !== null}
             onPick={(file) => addPhoto('start', file)}
             onDelete={() => setConfirmingDelete('start')}
+            strays={strays.filter((p) => p.slot === 'start')}
+            onUseStray={(url) => attachStray('start', url)}
           />
           <Photo
             label="End photo"
@@ -382,6 +442,8 @@ function LegCard({
             disabled={uploading !== null}
             onPick={(file) => addPhoto('end', file)}
             onDelete={() => setConfirmingDelete('end')}
+            strays={strays.filter((p) => p.slot === 'end')}
+            onUseStray={(url) => attachStray('end', url)}
           />
         </div>
 
@@ -563,6 +625,8 @@ function Photo({
   disabled,
   onPick,
   onDelete,
+  strays,
+  onUseStray,
 }: {
   label: string;
   src?: string;
@@ -570,6 +634,9 @@ function Photo({
   disabled: boolean;
   onPick: (file: File) => void;
   onDelete: () => void;
+  /** Photos of this kind on the trip that no leg uses, newest first. */
+  strays: StrayOdometerPhoto[];
+  onUseStray: (url: string) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -581,6 +648,34 @@ function Photo({
         <a href={src} target="_blank" rel="noreferrer" className="odo__photo">
           <img src={src} alt={label} loading="lazy" />
         </a>
+      ) : strays.length > 0 ? (
+        // The rep did send one: it reached the trip, not the leg. Shown, not
+        // attached — HR confirms it is this leg's dial before it counts.
+        <div className="odo__strays">
+          <div className="note">
+            The rep sent {strays.length === 1 ? 'this photo' : 'these photos'}, but{' '}
+            {strays.length === 1 ? 'it was' : 'they were'} not linked to the leg.
+          </div>
+          {strays.map((p) => (
+            <div key={p.url} className="odo__stray">
+              <a href={p.url} target="_blank" rel="noreferrer" className="odo__photo">
+                <img src={p.url} alt={`${label} (not linked)`} loading="lazy" />
+              </a>
+              <div className="odo__photoadd">
+                <span className="dim">{p.uploadedAt.slice(0, 16)}</span>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => onUseStray(p.url)}
+                  loading={busy}
+                  disabled={disabled}
+                >
+                  Use this photo
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
       ) : (
         <div className="odo__photo is-empty">No photo</div>
       )}

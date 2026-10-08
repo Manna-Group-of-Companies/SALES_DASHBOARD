@@ -1,33 +1,28 @@
-// Which order a booking points at, and who an order is for.
+// Which order a document points at, and who an order is for.
 //
-// The bug this guards against is quiet and expensive: a lead order's booking
-// written into `sales_order`, where it either fails a link check or — worse —
-// silently holds stock against nothing. Exactly one of the two fields is ever
-// set, and that choice is made here rather than at each call site.
+// A customer's order lives in `Sales Order`, a lead's in `Lead Order`. The
+// choice is made here rather than at each call site, so a lead order is never
+// looked up — or linked — as a Sales Order.
+//
+// `field` and `filter` went with `Manna Stock Reservation` in b5f645f: SAP owns
+// the booking now, and nothing in ERPNext holds stock against an order.
 
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:manna_field_sales/models/order_ref.dart';
 
 void main() {
-  group('Where a booking points', () {
-    test('a customer order books against sales_order', () {
+  group('Where an order lives', () {
+    test('a customer order lives in Sales Order', () {
       const ref = OrderRef('SAL-ORD-2026-00123');
       expect(ref.isLead, isFalse);
-      expect(ref.field, 'sales_order');
       expect(ref.doctype, 'Sales Order');
     });
 
-    test('a lead order books against lead_order', () {
+    test('a lead order lives in Lead Order', () {
       const ref = OrderRef.lead('LO-00042');
       expect(ref.isLead, isTrue);
-      expect(ref.field, 'lead_order');
       expect(ref.doctype, 'Lead Order');
-    });
-
-    test('the filter matches the field it is stored in', () {
-      expect(const OrderRef('SO-1').filter, '["sales_order","=","SO-1"]');
-      expect(const OrderRef.lead('LO-1').filter, '["lead_order","=","LO-1"]');
     });
 
     test('the two never collide, even on the same name', () {
