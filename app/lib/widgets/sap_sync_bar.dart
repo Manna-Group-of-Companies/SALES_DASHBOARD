@@ -2,11 +2,12 @@
 //
 // WHY IT SITS WITH THE CREDIT FIGURES
 //
-// The limit and the outstanding above it come from SAP on a nightly job. A
-// limit raised this morning is not visible until tomorrow, and a rep standing
-// in the shop has no way of knowing whether the number they are being refused
-// by is today's. Saying when it was last synced answers that; the button acts
-// on the answer.
+// The limit and the outstanding above it are copied from SAP, and from
+// 24 September 2026 only when somebody asks — this button, or the Sync button
+// on every screen; nothing runs on a timer. A limit raised in SAP this morning
+// is not here until someone does, and a rep standing in the shop has no way of
+// knowing whether the number they are being refused by is today's. Saying when
+// it was last synced answers that; the button acts on the answer.
 //
 // WHO SEES THE BUTTON
 //
@@ -27,20 +28,19 @@
 // Everyone else still sees the freshness line, because knowing the figure is
 // three days old is useful even when you cannot do anything about it.
 //
-// THE COOLDOWN IS NO LONGER A RECOVERY DELAY
+// THE COOLDOWN SPACES RUNS; IT NEVER REFUSES ONE
 //
 // It was 25 minutes because leaked Service Layer sessions aged out at SAP's
 // 30-minute idle timeout and a login inside that window returned HTTP 500. The
 // sync script now always logs out in a finally, and on 9 September 2026 SAP was
 // verified handling back-to-back logins and six consecutive runs with no gap,
-// each under ten seconds. It is 2 minutes now, purely so the every-2-minute
-// poller and a double-tap cannot stack logins.
+// each under ten seconds. It is 2 minutes now, purely so a double-tap cannot
+// stack logins.
 //
-// The refusal still lives in the Server Script, where nothing on a phone can
-// reach it. Greying the button here is a courtesy, not the control — and the
-// countdown reads the server's `cooldown_until`, never a timer started when
-// this screen opened, because a phone clock would drift from the one enforcing
-// the rule.
+// Since 24 September 2026 a tap inside it is queued, not refused: the office
+// poller runs it as soon as the pause is over, and the Server Script's message
+// says how long that is. So the button stays live. The pause is kept on the
+// office server, where nothing on a phone can reach it.
 
 import 'dart:async';
 
@@ -48,6 +48,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/sync_scope.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 /// Statuses where a run is in flight.
@@ -71,8 +72,8 @@ class _SapSyncBarState extends State<SapSyncBar> {
   void initState() {
     super.initState();
     _read();
-    // Once a second, so the countdown and "12 minutes ago" stay honest without
-    // asking the server anything.
+    // Once a second, so "12 minutes ago" stays honest without asking the
+    // server anything.
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
@@ -123,8 +124,14 @@ class _SapSyncBarState extends State<SapSyncBar> {
         if (!_busy.contains('${s['status']}')) {
           t.cancel();
           _poll = null;
-          final msg = '${s['last_result_message'] ?? ''}'.trim();
-          _snack(msg.isEmpty ? 'SAP sync ${s['status']}.' : msg);
+          // A plain sentence, not the server's run summary: reps asked for
+          // the fetch summary to go (11 Oct 2026).
+          final st = '${s['status']}';
+          _snack(st == 'Success'
+              ? 'Credit figures reloaded from SAP.'
+              : st == 'Failed'
+                  ? 'Could not reload from SAP. Try again in a minute.'
+                  : 'SAP sync $st.');
         }
       } catch (_) {
         // Leave the loop running; a single dropped poll on a phone in a shop
@@ -141,10 +148,11 @@ class _SapSyncBarState extends State<SapSyncBar> {
   Future<void> _request() async {
     setState(() => _asking = true);
     try {
+      // Always queued; the server's message says when it will run.
       final r = await Api.requestSapSync();
       _snack('${r['message'] ?? 'Requested.'}');
       await _read();
-      if (r['ok'] == true) _startPolling();
+      _startPolling();
     } catch (e) {
       _snack(humanError(e));
     } finally {
@@ -166,12 +174,6 @@ class _SapSyncBarState extends State<SapSyncBar> {
     return '$d day${d == 1 ? '' : 's'} ago';
   }
 
-  String _mmss(int seconds) {
-    final s = seconds < 0 ? 0 : seconds;
-    return '${(s ~/ 60).toString().padLeft(2, '0')}:'
-        '${(s % 60).toString().padLeft(2, '0')}';
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_loading) return const SizedBox.shrink();
@@ -179,62 +181,35 @@ class _SapSyncBarState extends State<SapSyncBar> {
     final status = '${_s['status'] ?? 'Idle'}';
     final running = _busy.contains(status);
 
-    final coolIso = '${_s['cooldown_until'] ?? ''}';
-    final coolUntil = coolIso.isEmpty || coolIso == 'null'
-        ? null
-        : DateTime.tryParse(coolIso);
-    final coolLeft =
-        coolUntil == null ? 0 : coolUntil.difference(DateTime.now()).inSeconds;
-    final cooling = coolLeft > 0;
-
     // Mirrors the Server Script: the Manna Treads book, whether this login is
-    // a rep in it or the manager over it. Anyone else would only ever get
-    // "Not permitted", and a button that always fails is worse than no button.
-    final mayAsk = Session.I.isTreadsUnit;
+    // a rep in it or the manager over it — and the GM, since 25 Sep 2026 (see
+    // core/sync_scope.dart). Anyone else would only ever get "Not permitted",
+    // and a button that always fails is worse than no button.
+    final mayAsk = syncsForSession(Session.I).contains(SyncKind.credit);
 
-    final rows = int.tryParse('${_s['last_rows_changed'] ?? 0}') ?? 0;
-    final note = '${_s['last_result_message'] ?? ''}'.trim();
-
+    // Only the freshness line and the button. The last run's summary used to
+    // sit beneath them; it was removed on 11 Oct 2026 as not wanted by reps.
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 2, 4, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              const Icon(Icons.sync, size: 14, color: Colors.black45),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  'From SAP: ${_relative('${_s['last_sync_at'] ?? ''}')}',
-                  style:
-                      const TextStyle(fontSize: 12, color: Colors.black54),
-                ),
-              ),
-              if (mayAsk)
-                TextButton(
-                  onPressed:
-                      (running || cooling || _asking) ? null : _request,
-                  style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      minimumSize: const Size(0, 32)),
-                  child: Text(
-                    running
-                        ? 'Fetching…'
-                        : cooling
-                            ? 'Next in ${_mmss(coolLeft)}'
-                            : 'Reload',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-            ],
+          const Icon(Icons.sync, size: 14, color: Colors.black45),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'From SAP: ${_relative('${_s['last_sync_at'] ?? ''}')}',
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
+            ),
           ),
-          if (mayAsk && note.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(left: 20, top: 2),
+          if (mayAsk)
+            TextButton(
+              onPressed: (running || _asking) ? null : _request,
+              style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 32)),
               child: Text(
-                rows > 0 ? '$note · $rows changed' : note,
-                style: const TextStyle(fontSize: 11, color: Colors.black45),
+                running ? 'Fetching…' : 'Reload',
+                style: const TextStyle(fontSize: 12),
               ),
             ),
         ],

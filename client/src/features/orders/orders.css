@@ -426,10 +426,11 @@
  * (money, status, production, week grouping) and a table would force each into
  * a column that is empty most of the time.
  */
+/* The work count, inline in the page header's sub line. */
 .orders__count {
-  font-size: 13px;
+  font-size: inherit;
   font-weight: 600;
-  margin: 4px 0 12px;
+  margin: 0;
 }
 .orders__count.warn { color: var(--hue-amber); }
 .orders__count.ok { color: var(--hue-green); }
@@ -442,15 +443,17 @@
 
 .ordrow {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-lg);
   background: var(--surface);
-  padding: 10px 12px;
+  padding: 12px 14px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
+  box-shadow: var(--shadow-1);
+  transition: border-color 0.12s, background 0.12s;
 }
-.ordrow:hover { background: var(--surface-2); }
+.ordrow:hover { background: var(--surface-2); border-color: var(--accent-border); }
 .ordrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .ordrow__top {
@@ -470,7 +473,8 @@
 .ordrow__party a { color: inherit; text-decoration: none; }
 .ordrow__party a:hover { text-decoration: underline; }
 
-.ordrow__meta { font-size: 11.5px; color: var(--text-3); }
+.ordrow__meta { font-size: 12px; color: var(--text-3); }
+.ordrow__top > b.num { font-size: 15px; font-weight: 650; white-space: nowrap; }
 
 .ordrow__status {
   display: flex;
@@ -638,11 +642,11 @@
 /* The plain sentence under the columns, for the reading that looks like a bug
    and is not one. */
 .stockpos__why {
-  margin-top: 5px;
-  max-width: 260px;
+  margin-top: 4px;
+  max-width: 220px;
   font-size: 11px;
   line-height: 1.4;
-  color: var(--hue-amber);
+  color: var(--text-3);
 }
 
 /* --- What production moved since the reader last looked --- */
@@ -675,3 +679,342 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+
+/* --- The rep's commitment on an over-limit order, and the thread under it --- */
+.commit { margin-bottom: 14px; }
+.commit__quote {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--warn);
+  border-radius: 0 var(--r) var(--r) 0;
+  background: var(--warn-soft);
+}
+.commit__words { white-space: pre-wrap; line-height: 1.45; }
+.commit__quote .commit__words { font-size: 15px; font-weight: 600; }
+.commit__meta { margin-top: 4px; font-size: 11.5px; color: var(--text-3); }
+.commit__thread { list-style: none; margin: 12px 0 0; padding: 0; }
+.commit__item { padding: 8px 0 8px 12px; border-left: 2px solid var(--border); }
+.commit__item + .commit__item { margin-top: 2px; }
+.commit__item .commit__meta { margin: 0 0 2px; }
+.commit__add { display: flex; gap: 8px; align-items: flex-end; margin-top: 12px; }
+.commit__add .textarea { flex: 1; min-width: 0; }
+@media (max-width: 560px) {
+  .commit__add { flex-direction: column; align-items: stretch; }
+}
+
+/* A commitment preview on a GM queue card: two lines, then the order. */
+.gm__commit {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--warn);
+  background: var(--warn-soft);
+  font-size: 12.5px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.gm__commit--none { border-left-color: var(--border-strong); background: var(--surface-2); color: var(--text-3); }
+
+/* The GM's decision: the condition the rep will owe, then the two buttons. */
+.gmdecide__due { max-width: 200px; }
+
+/* --- The GM's follow-up: every order they approved, after the approval --- */
+.fu__table td { vertical-align: top; }
+.fu__link { font-weight: 600; }
+.fu__cond { max-width: 260px; }
+.fu__clip {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+/* A rep's answer waiting on the GM is the row to see first. */
+.fu__row--answered td:first-child { box-shadow: inset 3px 0 0 var(--hue-blue-2); }
+
+.fu__grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 14px; align-items: start; }
+.fu__main, .fu__side { display: grid; gap: 14px; min-width: 0; }
+.fu__main > .card, .fu__side > .card { margin-bottom: 0; }
+@media (max-width: 900px) {
+  .fu__grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Things that happened, rather than things somebody said. */
+.fu__event--approved .commit__words,
+.fu__event--condition .commit__words,
+.fu__event--closed .commit__words { color: var(--text-2); font-style: italic; }
+.fu__event--answer { border-left-color: var(--hue-blue-2); }
+.fu__event--commitment { border-left-color: var(--warn); }
+.fu__tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: var(--r-full);
+  background: var(--hue-blue-soft);
+  color: var(--hue-blue-2);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* --- Team orders, order review, lead review, combined orders --- */
+
+.orders__search { min-width: 240px; flex: 1; max-width: 360px; }
+@media (max-width: 640px) {
+  .orders__search { min-width: 0; max-width: none; width: 100%; }
+}
+
+/* Header actions on the order review: SAP sync time, status, refresh, back. */
+.ordhead__actions { flex-wrap: wrap; justify-content: flex-end; }
+
+/* The credit figures inside the credit alert: four facts in one row. */
+.credit__figs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  color: var(--text-2);
+}
+.credit__figs b { color: var(--text); font-weight: 600; }
+
+/* Lines on the review: several stacked facts per cell, so read from the top. */
+.ordlines td { vertical-align: top; }
+
+/* Under the order total, while a typed rate is not yet saved. */
+.order__was {
+  margin: 2px 4px 0;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* The decision card. */
+.decide__warn { margin-bottom: 12px; }
+.decide__fact { margin: 0 0 12px; color: var(--text-2); }
+.decide__fact b { color: var(--text); }
+.decide__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.decide__bar:first-child { margin-top: 0; }
+.decide__hint { font-size: 12px; color: var(--text-3); margin-left: 4px; }
+.decide__hint.is-warn { color: var(--warn); font-weight: 600; }
+
+/* The line editor: its bar, the lock reason, and the running total. */
+.line__editor { margin-top: 12px; }
+.line__edit-bar .note { font-size: 12px; color: var(--text-3); }
+.line__edit-bar .line__locknote { font-size: 12.5px; color: var(--text-2); line-height: 1.45; }
+.line__newtotal { font-size: 13px; white-space: nowrap; }
+.line__newtotal b { font-size: 15px; font-weight: 650; }
+
+/* A combined order whose members this login cannot see. */
+.comb__none { margin: 6px 0 0; font-size: 12px; color: var(--text-3); }
+
+/* The details a lead still needs before it can become a customer. */
+.lead__gaps { margin: 4px 0 0; padding-left: 18px; }
+
+/* The picker's result count. */
+.pick__foot { font-size: 11.5px; color: var(--text-3); text-align: right; }
+
+/* Product row: stock chip under the name, and the over-stock warning. */
+.prow__stock { margin-top: 6px; }
+.prow__oversold {
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+/* --- Credit bar: owed, this order, and where the limit falls (8 Oct 2026) --- */
+.cbar { margin-top: 4px; }
+.cbar__track {
+  position: relative;
+  display: flex;
+  height: 12px;
+  margin-top: 22px;
+  border-radius: var(--r-full);
+  background: var(--surface-3);
+}
+.cbar--compact .cbar__track { height: 9px; margin-top: 26px; }
+.cbar__seg { height: 100%; }
+.cbar__seg:first-child { border-radius: var(--r-full) 0 0 var(--r-full); }
+.cbar__seg--owed { background: var(--text-3); }
+.cbar__seg--order {
+  background: var(--accent);
+  border-radius: 0 var(--r-full) var(--r-full) 0;
+}
+.cbar__seg--order.is-over {
+  background: repeating-linear-gradient(135deg, var(--danger) 0 6px, color-mix(in srgb, var(--danger) 70%, transparent) 6px 12px);
+}
+.cbar__limit {
+  position: absolute;
+  top: -5px;
+  bottom: -5px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text);
+  border-radius: 1px;
+}
+.cbar__limit-label {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.cbar__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.cbar__key {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 3px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+.cbar__key--owed { background: var(--text-3); }
+.cbar__key--order { background: var(--accent); }
+.cbar__key--order.is-over { background: var(--danger); }
+.cbar__usage { margin-left: auto; font-weight: 650; color: var(--text); }
+.cbar__usage.is-over { color: var(--danger); }
+
+/* --- The GM's queue cards (8 Oct 2026) --- */
+.gmq__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.gmq {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.gmq__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px 0;
+}
+.gmq__customer { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.gmq__sub { margin-top: 2px; font-size: 12px; color: var(--text-3); }
+.gmq__wait {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.gmq__wait.is-long { background: var(--warn-soft); color: var(--warn); }
+.gmq__figures {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+.gmq__fig-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.gmq__fig-value { margin-top: 2px; font-size: 16px; font-weight: 650; }
+.gmq__fig-value.is-over { color: var(--danger); }
+.gmq__body { padding: 4px 16px 0; }
+.gmq__aging {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 12px;
+}
+.gmq__age {
+  padding: 5px 8px;
+  border-radius: var(--r);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  min-width: 0;
+}
+.gmq__age span { display: block; font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.03em; }
+.gmq__age b { display: block; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gmq__age.is-late { background: var(--danger-soft); border-color: var(--danger-border); }
+.gmq__age.is-late b { color: var(--danger); }
+.gmq .gm__commit { margin: 12px 0 0; border-radius: 0 var(--r) var(--r) 0; }
+.gmq__due { margin-top: 4px; font-size: 11.5px; color: var(--text-3); }
+.gmq__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* --- The GM's review: the case on the left, credit and decision on the right --- */
+.gmrev {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+  grid-template-areas:
+    'main credit'
+    'main decision';
+  grid-template-rows: auto 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.gmrev__main { grid-area: main; min-width: 0; }
+.gmrev__credit { grid-area: credit; min-width: 0; }
+.gmrev__decision { grid-area: decision; min-width: 0; position: sticky; top: 14px; }
+.gmrev .card { margin-bottom: 14px; }
+.gmrev__credit > .card, .gmrev__decision > .card { margin-bottom: 0; }
+.gmrev__decision > .card { border-top: 3px solid var(--accent); }
+.gmrev__credit .aging__boxes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 1100px) {
+  .gmrev {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'credit' 'main' 'decision';
+    grid-template-rows: none;
+  }
+  .gmrev__decision { position: static; }
+  .gmrev__credit .aging__boxes { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+.gmrev__figs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+.gmrev__figs dt { font-size: 11px; color: var(--text-3); }
+.gmrev__figs dd { margin: 1px 0 0; font-size: 15px; font-weight: 600; }
+.gmrev__figs .is-over { color: var(--danger); }
+.gmrev__rate { width: 104px; margin-left: auto; }
+.gmrev td.num { white-space: nowrap; }
+.gmrev__decision .field + .field { margin-top: 12px; }
+.gmrev__decision .lv__actions { margin-top: 14px; }
+.fu__grid td.num { white-space: nowrap; }

@@ -19,9 +19,9 @@
  * asking again how much actually left: it asked a question the planner had
  * already answered with the stepper, and made them say the same number twice.
  *
- * Lines carry the customer as well as the route: a van is loaded per
- * customer, and a route does not say whose pallet is whose when two
- * customers sit on one round.
+ * Lines carry the order, the route and the rep — not the customer, which
+ * production does not see (26 Sep 2026, see `ProductionOrderRow`). The order
+ * number says whose pallet is whose; it is what the van is loaded against.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -55,8 +55,6 @@ interface DraftLine {
   itemCode: string;
   itemName: string;
   route: string;
-  /** Whose goods these are — the van is loaded per customer, not per route. */
-  customerName: string;
   plannedRolls: number;
   plannedLooseBelts: number;
 }
@@ -76,7 +74,6 @@ function toDraftLines(d: Dispatch): DraftLine[] {
     itemCode: l.itemCode,
     itemName: l.itemName,
     route: l.route,
-    customerName: l.customerName,
     plannedRolls: l.plannedRolls,
     plannedLooseBelts: l.plannedLooseBelts,
   }));
@@ -219,8 +216,8 @@ export function DispatchPlanningPage() {
       g.rows.push(row);
       groups.set(l.salesOrder, g);
     }
-    return [...groups.entries()].sort(([, a], [, b]) =>
-      a.head.customerName.localeCompare(b.head.customerName),
+    return [...groups.entries()].sort(
+      ([ida, a], [idb, b]) => a.head.route.localeCompare(b.head.route) || ida.localeCompare(idb),
     );
   }, [readyLines, stagedQty, stagedElsewhere]);
 
@@ -382,7 +379,6 @@ export function DispatchPlanningPage() {
             itemCode: l.itemCode,
             itemName: l.itemName,
             route: l.route,
-            customerName: l.customerName,
             plannedRolls: rolls,
             plannedLooseBelts: belts,
           },
@@ -434,7 +430,7 @@ export function DispatchPlanningPage() {
           dispatchedLooseBelts: l.plannedLooseBelts,
         })),
       });
-      setDone(`${vehicle || 'The vehicle'} dispatched — ${lines.length} line(s) sent.`);
+      setDone(`Dispatched${vehicle ? `: ${vehicle}` : ''} · ${lines.length} line(s)`);
       // Closed, not reopened: the van has gone, and the next one is a
       // deliberate act rather than something the screen assumes.
       closePanel();
@@ -451,13 +447,7 @@ export function DispatchPlanningPage() {
   return (
     <div>
       <div className="page-head">
-        <div className="grow">
-          <div className="page-head__title">Dispatch planning</div>
-          <div className="page-head__sub">
-            Bundle ready order lines onto one vehicle and date — what is left to send, and who
-            it is going to
-          </div>
-        </div>
+        <div className="page-head__title grow">Dispatch Planning</div>
         <div className="cal__nav">
           {unit && <span className="small dim">{unit}</span>}
           <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
@@ -476,13 +466,12 @@ export function DispatchPlanningPage() {
       )}
 
       <div style={{ marginBottom: 14 }}>
-      <Card title={draftOpen ? 'This dispatch' : 'No dispatch open'}>
+      <Card title={draftOpen ? 'Current dispatch' : 'Dispatch'}>
         {!draftOpen ? (
           <div className="prod__actions">
             <Button variant="primary" onClick={startNew}>
-              🚚 Start a new dispatch
+              New dispatch
             </Button>
-            <span className="note">Or pick up an unfinished one from the tab below.</span>
           </div>
         ) : (
           <>
@@ -507,17 +496,14 @@ export function DispatchPlanningPage() {
             </div>
 
             {lines.length === 0 ? (
-              <Empty icon="🚚" title="Nothing added yet">
-                Add lines from the Ready to add tab below.
-              </Empty>
+              <Empty title="No lines added" />
             ) : (
               <div className="table-wrap">
                 <table className="table">
                   <thead>
                     <tr>
-                      <th>Customer</th>
-                      <th>Route</th>
                       <th>Order</th>
+                      <th>Route</th>
                       <th>Item</th>
                       <th className="right">Planned</th>
                       <th />
@@ -526,9 +512,8 @@ export function DispatchPlanningPage() {
                   <tbody>
                     {lines.map((l) => (
                       <tr key={l.salesOrderItem}>
-                        <td className="small strong">{l.customerName}</td>
+                        <td className="mono small strong">{l.salesOrder}</td>
                         <td className="small">{l.route}</td>
-                        <td className="mono small">{l.salesOrder}</td>
                         <td className="small">{l.itemName}</td>
                         <td className="right num">
                           {qtyText(l.plannedRolls, l.plannedLooseBelts)}
@@ -551,16 +536,12 @@ export function DispatchPlanningPage() {
                 loading={dispatching}
                 disabled={!draftId || lines.length === 0 || !vehicle || !dispatchDate}
                 onClick={() => void dispatchNow()}
-                title={
-                  !vehicle || !dispatchDate
-                    ? 'Set a vehicle and date first'
-                    : 'Send these lines on this vehicle'
-                }
+                title={!vehicle || !dispatchDate ? 'Set a vehicle and date first' : undefined}
               >
                 Dispatch
               </Button>
               <Button variant="danger" disabled={saving} onClick={() => void cancelDispatch()}>
-                Cancel this dispatch
+                Cancel dispatch
               </Button>
             </div>
           </>
@@ -573,20 +554,19 @@ export function DispatchPlanningPage() {
           <Tabs tabs={tabs} active={view} onChange={setView} />
         </div>
 
-        {loading && <Empty icon="◔" title="Reading…" />}
+        {loading && <Empty icon="◔" title="Loading…" />}
 
         {!loading && view === 'ready' && (
           readyByOrder.length === 0 ? (
-            <Empty icon="✓" title="Nothing ready to add">
-              {/*
-                Says which of the reasons it is. "Nothing ready" on its own
-                sent people looking for a broken screen when the real answer
-                was that no line had reached Packed yet.
-              */}
-              {readyLines.length === 0
-                ? 'No order line has reached Ready yet — a line becomes dispatchable once production packs it.'
-                : 'Every ready line is already staged, either on this dispatch or on an unfinished one.'}
-            </Empty>
+            /*
+              Says which of the reasons it is. "Nothing ready" on its own
+              sent people looking for a broken screen when the real answer
+              was that no line had reached Packed yet.
+            */
+            <Empty
+              icon="✓"
+              title={readyLines.length === 0 ? 'No lines ready' : 'All ready lines are staged'}
+            />
           ) : (
             <div style={{ padding: '10px 14px' }}>
               {readyByOrder.map(([orderId, g], groupIndex) => {
@@ -597,7 +577,7 @@ export function DispatchPlanningPage() {
                   /*
                    * A rule between orders. Two orders' tables sat flush
                    * against one another and read as one long list, so a line
-                   * belonging to the next customer down looked like part of
+                   * belonging to the next order down looked like part of
                    * the order above it — which is how something gets loaded
                    * onto the wrong van. None above the first: a line at the
                    * top of a list separates it from nothing.
@@ -613,19 +593,18 @@ export function DispatchPlanningPage() {
                   }
                 >
                   {/*
-                    One heading per order: who it is for, where it goes, who
+                    One heading per order: which order, where it goes, who
                     sold it, and whether the whole thing is on the van yet.
                     The rep is here because the floor rings that person when a
                     line has to go short.
                   */}
                   <div className="row gap-2" style={{ alignItems: 'baseline', marginBottom: 6 }}>
-                    <span className="strong">{g.head.customerName}</span>
-                    <span className="mono tiny dim">{orderId}</span>
-                    {done && <Badge tone="ok">fully added</Badge>}
+                    <span className="strong mono">{orderId}</span>
+                    {done && <Badge tone="ok">Fully added</Badge>}
                   </div>
                   <div className="tiny dim" style={{ marginBottom: 6 }}>
                     {g.head.route}
-                    {g.head.rep ? ` · sold by ${g.head.rep}` : ''}
+                    {g.head.rep ? ` · Sold by ${g.head.rep}` : ''}
                   </div>
 
                   <div className="table-wrap">
@@ -751,9 +730,7 @@ export function DispatchPlanningPage() {
 
         {!loading && view === 'drafts' && (
           drafts.length === 0 ? (
-            <Empty icon="🗂" title="Nothing unfinished">
-              Every dispatch has either gone out or been cancelled.
-            </Empty>
+            <Empty title="No unfinished dispatches" />
           ) : (
             <div className="table-wrap">
               <table className="table">

@@ -23,6 +23,10 @@ import {
   AGING_MISMATCH,
   AGING_NOT_SYNCED,
   AGING_NO_DATA,
+  OVERDUE_TOLERANCE,
+  overduePastTerms,
+  pastTermsPhrase,
+  paymentTermsOf,
   type CustomerRow,
 } from '@/domain/credit';
 import { money } from './format';
@@ -74,6 +78,19 @@ export function AgingBoxes({
       )}
 
       {a.mismatch && <p className="aging__warn">{AGING_MISMATCH}</p>}
+
+      {/*
+        Payment terms (11 Oct 2026). Unlike the four boxes, being overdue past
+        the terms DOES send an order to the GM — so it is said in words, with
+        the term it is measured against.
+      */}
+      {overduePastTerms(customer) > OVERDUE_TOLERANCE ? (
+        <p className="aging__warn">Overdue: {pastTermsPhrase(customer)}. Orders go to the GM.</p>
+      ) : paymentTermsOf(customer) ? (
+        <p className="tiny dim" style={{ margin: '6px 0 0' }}>
+          Payment terms: {paymentTermsOf(customer)}. Nothing overdue past them.
+        </p>
+      ) : null}
     </div>
   );
 }

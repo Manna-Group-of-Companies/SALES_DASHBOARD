@@ -235,8 +235,10 @@ Plus two `before_save` hooks on `Sales Order`:
 1. **Rate lock (2.2)** — if `custom_approved_at` is set, reject any change to
    `custom_final_rate` on any row. This is the invariant the whole workflow rests
    on; it should not be defensible only in JavaScript.
-2. **Edit freeze (3.3)** — reject item changes after 1:00 PM local on
-   `custom_revised_delivery_date or delivery_date`.
+2. **Edit lock** — reject item changes once the order is approved, sent to
+   the GM (except by the GM), or approved by the GM
+   (`shared/fixtures/order_locked_after_approval.json`). This replaced a
+   1:00 PM delivery-day freeze, dropped on 11 Oct 2026.
 3. **Immutable creation timestamp (1.7, 3.2)** — reject any write to `creation`.
 
 Until these exist, the app is safe through its own UI but not against a

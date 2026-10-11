@@ -10,8 +10,8 @@
 /// Who an order is being taken for.
 ///
 /// A customer and a lead are the same thing to the order screen: same product
-/// families, same rolls-and-belts arithmetic, same stock, same 1 pm edit
-/// window. The difference surfaces once — at approval, where a lead has to be
+/// families, same rolls-and-belts arithmetic, same stock, same approval edit
+/// lock. The difference surfaces once — at approval, where a lead has to be
 /// complete enough to invoice and gets converted.
 ///
 /// Wrapping the two here is what keeps that difference from leaking into every

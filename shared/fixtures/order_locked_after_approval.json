@@ -5,9 +5,32 @@
 
   "why": "This is the honest position rather than a new restriction. Sync-SapOrders.ps1 has only ever CREATED a SAP order - there is no code path in the repository or the sync that updates one - so an edit saved after approval changed the ERPNext document, showed the rep a new quantity, and left the factory building the old one. Refusing the edit is strictly better than pretending it landed.",
 
-  "no_seniority_exemption": "The GM exemption that applies to the 1 pm cutoff does NOT apply here. It exists because escalations arrive at the GM and an escalation with no power to act is a rubber stamp - but that is about approving, not about editing an order the factory is working to. No seniority makes an app edit reach SAP.",
+  "no_seniority_exemption": "The GM may trim an order while it is with them, because an escalation with no power to act is a rubber stamp. That is about deciding, not about editing an order the factory is working to: once it is approved nobody changes it, the GM included. No seniority makes an app edit reach SAP.",
 
   "checked_as_stored": "Every gate is re-checked against the order as STORED at the moment of the write, never against what the screen loaded. A manager can approve while a rep sits on the edit screen. There is no Server Script on this site to catch it afterwards.",
+
+  "escalation": "Decided 26 September 2026 (the user). Rates come from SAP and nobody types them, so what is left to change is quantities, items and the delivery date - and those stop at the decision that settles the order. Within the credit limit that is the sales manager's approval (the rule above). Over the limit: the rep and the sales manager may change the order until the sales manager sends it to the GM; while it is with the GM only the GM may change it (they may trim it before approving - the user chose 'GM only'); once the GM has approved it nobody changes it - the sales manager pushes it to SAP as approved, or the GM withdraws by rejecting. A rejected order is open again: the rep is meant to fix it and send it back.",
+
+  "no_time_cutoff": "Decided 11 October 2026 (the user). There used to be a second gate on top of the status: after 1 pm on the delivery date nobody but the GM could change an order. It is gone from both apps and from every message. The status alone decides: an order is open until the sales manager approves it or sends it to the GM, and the delivery date, past or future, has no say.",
+
+  "roles": "rep = the rep who raised it; sales_manager = the manager whose team the rep is on; general_manager = the GM. Any other role is refused, as orderActions refuses it (credit_commitment.json).",
+
+  "messages": {
+    "with_gm": "This order is with the general manager. Only they can change it now.",
+    "gm_approved": "The general manager approved this order as it stands, so it can no longer be changed. The sales manager pushes it to SAP, or the general manager rejects it."
+  },
+
+  "by_role": [
+    { "why": "raised and waiting for the sales manager - open to all three", "po_status": "Pending Approval", "rep": true, "sales_manager": true, "general_manager": true },
+    { "why": "never sent for approval - open", "po_status": "", "rep": true, "sales_manager": true, "general_manager": true },
+    { "why": "an old order waiting on its rates - still undecided, so open", "po_status": "Pending Rate Approval", "rep": true, "sales_manager": true, "general_manager": true },
+    { "why": "the legacy PO-upload queue - still undecided, so open", "po_status": "PO Uploaded - Pending Approval", "rep": true, "sales_manager": true, "general_manager": true },
+    { "why": "rejected - open again, so the rep can fix it and send it back", "po_status": "Rejected", "rep": true, "sales_manager": true, "general_manager": true },
+    { "why": "escalated to the GM - the rep and the sales manager are locked out; the GM may trim it before deciding", "po_status": "Pending GM Approval", "rep": false, "sales_manager": false, "general_manager": true },
+    { "why": "approved by the GM and back with the sales manager to push - nobody changes it, the GM included", "po_status": "Pending Final Approval", "rep": false, "sales_manager": false, "general_manager": false },
+    { "why": "approved and with the factory - shut for everyone, as before", "po_status": "PO Approved - Ready for SAP", "rep": false, "sales_manager": false, "general_manager": false },
+    { "why": "stored with stray spaces - read as the status it is", "po_status": " Pending GM Approval ", "rep": false, "sales_manager": false, "general_manager": true }
+  ],
 
   "fields": {
     "po_status": "custom_po_status",
@@ -19,7 +42,7 @@
 
   "can_edit": [
     {
-      "why": "the ordinary case: raised, not yet approved, in the edit window, owned by this rep",
+      "why": "the ordinary case: raised, not yet approved, owned by this rep",
       "order": { "custom_po_status": "Pending Approval", "docstatus": 0 },
       "expect": true
     },
@@ -47,6 +70,11 @@
       "why": "an order with no status at all has never been approved, so it is open",
       "order": { "docstatus": 0 },
       "expect": true
+    },
+    {
+      "why": "a delivery date already past does not lock it - only a decision does (the 1 pm cutoff was dropped 11 Oct 2026)",
+      "order": { "custom_po_status": "Pending Approval", "delivery_date": "2020-01-01", "docstatus": 0 },
+      "expect": true
     }
   ],
 
@@ -66,8 +94,13 @@
       "expect_excludes": ["SAP order "]
     },
     {
-      "why": "an unapproved order in the window is not locked at all",
+      "why": "an unapproved order is not locked at all",
       "order": { "custom_po_status": "Pending Approval" },
+      "expect_empty_for_owner": true
+    },
+    {
+      "why": "nor is one whose delivery date has passed - no reason mentions a time of day",
+      "order": { "custom_po_status": "Pending Approval", "delivery_date": "2020-01-01" },
       "expect_empty_for_owner": true
     }
   ],

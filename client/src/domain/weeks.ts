@@ -100,28 +100,14 @@ export function shiftWeek(week: Week, by: number): Week {
   return weekOf(addDays(fromIso(week.start), 7 * by));
 }
 
-/**
- * The moment an order freezes: 13:00 on its delivery date.
- *
- * Returns null when there is no delivery date, which means **permanently
- * open** rather than shut. An order without a date is a data problem, and
- * refusing to let anyone touch it makes that problem permanent.
+/*
+ * `editCutoff` and `pastCutoff` stood here until 11 Oct 2026: 13:00 on the
+ * delivery date, after which nobody but the GM could change an order. The
+ * cutoff is gone — approval alone ends editing
+ * (order_locked_after_approval.json).
  */
-export function editCutoff(deliveryDate: string | undefined | null): Date | null {
-  if (!deliveryDate) return null;
-  const d = fromIso(deliveryDate);
-  if (Number.isNaN(d.getTime())) return null;
-  d.setHours(13, 0, 0, 0);
-  return d;
-}
 
-/** Whether the 13:00 cut-off has passed. No delivery date never closes. */
-export function pastCutoff(deliveryDate: string | undefined | null, now: Date): boolean {
-  const cutoff = editCutoff(deliveryDate);
-  return cutoff !== null && now.getTime() >= cutoff.getTime();
-}
-
-/** "08/08/2026" — for the sentence that explains a closed order. */
+/** "08/08/2026" — for dates written out in a sentence. */
 export function shortDate(iso: string | undefined | null): string {
   if (!iso) return '—';
   const d = fromIso(iso);

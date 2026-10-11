@@ -17,7 +17,6 @@ import { USE_MOCK, MIN_STOCK_POLL_MS } from '@/api/config';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import {
   selectActiveEmployees,
-  selectFreezingSoon,
   selectPendingAcks,
   selectPendingApproval,
   selectPendingLeave,
@@ -32,17 +31,20 @@ import { loadCatalog } from '@/store/slices/catalogSlice';
 import { loadHr } from '@/store/slices/hrSlice';
 import { signOut } from '@/store/slices/authSlice';
 import { onDbChange } from '@/api/mock/db';
-import { Button } from '@/components/ui';
+import { Button, Icon, type IconName } from '@/components/ui';
 import { initials } from '@/components/common/format';
 import { useTheme } from '@/app/theme';
 import { NotificationPanel } from '@/features/notifications/NotificationPanel';
 import { ToastHost } from '@/features/notifications/ToastHost';
+import { SyncAllButton } from './SyncAllButton';
+import { Api } from '@/api/client';
+import { COND_AWAITING } from '@/domain/creditCondition';
 import './layout.css';
 
 interface NavItem {
   to: string;
   label: string;
-  icon: string;
+  icon: IconName;
   roles: Role[];
   /**
    * Sales screens are gated on the team this login manages, not on the role.
@@ -68,29 +70,35 @@ export function AppShell() {
 
   const myOrders = useAppSelector(selectVisibleOrders);
   const awaitingApproval = useAppSelector(selectPendingApproval);
-  const freezingSoon = useAppSelector(selectFreezingSoon);
   const headcount = useAppSelector(selectActiveEmployees).length;
   const pendingLeave = useAppSelector(selectPendingLeave);
 
   const [navOpen, setNavOpen] = useState(false);
   const [theme, toggleTheme] = useTheme();
+  // Bumped by the header's Sync button to remount the page, so it re-reads
+  // what SAP just wrote. See SyncAllButton for why that waits for a click.
+  const [pageKey, setPageKey] = useState(0);
 
   // HR works on an entirely different set of records — loading the product
   // catalogue and the order book for them would be pure waste.
   const isHr = user?.role === 'hr';
+  // Nor for the accountant (26 Sep 2026): his screen reads its own orders, and
+  // his ERPNext role, Accounts User, cannot read Bin — the stock poll would
+  // fail every minute.
+  const isAccountant = user?.role === 'accountant';
 
   // Initial load for whoever just signed in.
   useEffect(() => {
     if (!user) return;
     if (isHr) {
       void dispatch(loadHr());
-    } else {
+    } else if (!isAccountant) {
       void dispatch(loadCatalog(user.salesPerson));
       void dispatch(loadOrders(undefined));
       void dispatch(refreshMinStock());
     }
     void dispatch(loadNotifications(user));
-  }, [dispatch, user, isHr]);
+  }, [dispatch, user, isHr, isAccountant]);
 
   // Keep the shared stock ledger fresh so one rep's booking shows up on
   // another rep's screen (1.2). In mock mode the storage event makes this
@@ -99,11 +107,11 @@ export function AppShell() {
     if (!user) return;
     const id = setInterval(() => {
       if (isHr) void dispatch(loadHr());
-      else void dispatch(refreshMinStock());
+      else if (!isAccountant) void dispatch(refreshMinStock());
       void dispatch(loadNotifications(user));
     }, MIN_STOCK_POLL_MS);
     return () => clearInterval(id);
-  }, [dispatch, user, isHr]);
+  }, [dispatch, user, isHr, isAccountant]);
 
   // Mock mode only: react immediately when another tab writes to the shared DB.
   useEffect(() => {
@@ -111,36 +119,63 @@ export function AppShell() {
     return onDbChange(() => {
       if (isHr) {
         void dispatch(loadHr());
-      } else {
+      } else if (!isAccountant) {
         void dispatch(refreshMinStock());
         void dispatch(loadOrders(undefined));
       }
       void dispatch(loadNotifications(user));
     });
-  }, [dispatch, user, isHr]);
+  }, [dispatch, user, isHr, isAccountant]);
 
   useEffect(() => {
     setNavOpen(false);
   }, [location.pathname]);
+
+  /*
+   * How many reps have answered a condition and are waiting on the GM — the
+   * badge on Follow-up, which is how an answer typed on a phone "arrives".
+   * Re-read on every page change: the GM closing one should clear it without
+   * a reload, and one small list is cheap.
+   */
+  const [repAnswers, setRepAnswers] = useState(0);
+  useEffect(() => {
+    if (user?.role !== 'general_manager') return;
+    let live = true;
+    Api.sales
+      .listCreditConditions()
+      .then((rows) => live && setRepAnswers(rows.filter((c) => c.status === COND_AWAITING).length))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [user?.role, location.pathname]);
 
   if (!user) return null;
 
   const items: NavItem[] = [
     // No sales-side dashboard: every role opens on the screen it works in, so
     // "/" only ever redirects. HR keeps its people overview.
-    { to: '/', label: 'HR Dashboard', icon: '◫', roles: ['hr'], group: 'Overview' },
+    { to: '/', label: 'HR Dashboard', icon: 'grid', roles: ['hr'], group: 'Overview' },
 
-    { to: '/gm', label: 'Escalated to You', icon: '⚖', roles: ['general_manager'], group: 'Overview' },
-    { to: '/customers', label: 'Customers', icon: '👥', roles: ['sales_manager', 'general_manager'], screen: 'customers', group: 'Sales' },
-    { to: '/leads', label: 'Leads', icon: '🌱', roles: ['sales_manager'], screen: 'leads', group: 'Sales' },
-    { to: '/orders', label: 'Team Orders', icon: '📄', roles: ['sales_manager', 'general_manager'], screen: 'orders', count: myOrders.length, group: 'Sales' },
-    { to: '/locations', label: 'Location Checks', icon: '📍', roles: ['sales_manager'], screen: 'locations', group: 'Sales' },
-    { to: '/team/regularizations', label: 'Attendance Corrections', icon: '🕓', roles: ['sales_manager'], screen: 'regularizations', group: 'Sales' },
-    { to: '/approvals', label: 'Approvals', icon: '✔', roles: ['sales_manager'], screen: 'approvals', count: awaitingApproval.length, urgent: awaitingApproval.length > 0, group: 'Sales' },
-    { to: '/combined', label: 'Combined Orders', icon: '⑃', roles: ['sales_manager'], screen: 'combined', group: 'Sales' },
+    // The GM's two screens — see `screensForUser`. What waits on their
+    // decision, and what their decisions set in motion (25 Sep 2026).
+    { to: '/gm', label: 'Escalated to You', icon: 'inbox', roles: ['general_manager'], group: 'Overview' },
+    { to: '/follow-up', label: 'Follow-up', icon: 'listChecks', roles: ['general_manager'], count: repAnswers, urgent: repAnswers > 0, group: 'Overview' },
+    // The MD's one screen (25 Sep 2026): quality-wise rates for Hi-Tech Pretreads.
+    { to: '/rates', label: 'Rates & Dealer Prices', icon: 'rupee', roles: ['managing_director'], group: 'Overview' },
+    // The accountant's one screen: every order at Hi-Tech with its real customer (8 Oct 2026).
+    { to: '/manna-treads', label: 'Orders at Hi-Tech', icon: 'file', roles: ['accountant'], group: 'Accounts' },
+    { to: '/customers', label: 'Customers', icon: 'users', roles: ['sales_manager'], screen: 'customers', group: 'Sales' },
+    { to: '/leads', label: 'Leads', icon: 'userPlus', roles: ['sales_manager'], screen: 'leads', group: 'Sales' },
+    { to: '/orders', label: 'Team Orders', icon: 'clipboard', roles: ['sales_manager'], screen: 'orders', count: myOrders.length, group: 'Sales' },
+    { to: '/locations', label: 'Location Checks', icon: 'pin', roles: ['sales_manager'], screen: 'locations', group: 'Sales' },
+    { to: '/team/regularizations', label: 'Attendance Corrections', icon: 'clock', roles: ['sales_manager'], screen: 'regularizations', group: 'Sales' },
+    { to: '/approvals', label: 'Approvals', icon: 'checkCircle', roles: ['sales_manager'], screen: 'approvals', count: awaitingApproval.length, urgent: awaitingApproval.length > 0, group: 'Sales' },
+    { to: '/combined', label: 'Combined Orders', icon: 'layers', roles: ['sales_manager'], screen: 'combined', group: 'Sales' },
 
-    { to: '/production', label: 'Production Queue', icon: '⚙', roles: ['production_manager'], group: 'Production' },
-    { to: '/production/dispatch', label: 'Dispatch Planning', icon: '🚚', roles: ['production_manager'], group: 'Production' },
+    { to: '/production', label: 'Production Queue', icon: 'factory', roles: ['production_manager'], group: 'Production' },
+    // Dispatch Planning was here. Parked on 24 September 2026 on instruction —
+    // SAP's invoice is dispatch for now. The page is kept; see routes.tsx.
 
     /*
       One stock screen now, reached two ways. There were four entries —
@@ -157,20 +192,20 @@ export function AppShell() {
       and without that a stock manager would be locked out of the only stock
       page left in the app. Exactly one of the two shows for any login.
     */
-    { to: '/stock', label: 'Stock', icon: '📦', roles: ['sales_manager', 'general_manager'], screen: 'stock', group: 'Sales' },
-    { to: '/stock', label: 'Stock', icon: '📦', roles: ['production_manager', 'stock_manager'], group: 'Stock' },
+    { to: '/stock', label: 'Stock', icon: 'package', roles: ['sales_manager'], screen: 'stock', group: 'Sales' },
+    { to: '/stock', label: 'Stock', icon: 'package', roles: ['production_manager', 'stock_manager'], group: 'Stock' },
 
-    { to: '/hr/employees', label: 'Employees', icon: '🧑', roles: ['hr'], count: headcount, group: 'People' },
-    { to: '/hr/leave', label: 'Leave Requests', icon: '🗓', roles: ['hr'], count: pendingLeave.length, urgent: pendingLeave.length > 0, group: 'People' },
-    { to: '/hr/regularizations', label: 'Regularizations', icon: '🕓', roles: ['hr'], group: 'People' },
-    { to: '/hr/calendar', label: 'Monthly Calendar', icon: '📅', roles: ['hr'], group: 'People' },
-    { to: '/hr/odometer', label: 'Odometer Check', icon: '🛞', roles: ['hr'], group: 'People' },
-    { to: '/hr/trips', label: 'Trips & Routes', icon: '🗺', roles: ['hr'], group: 'People' },
+    { to: '/hr/employees', label: 'Employees', icon: 'user', roles: ['hr'], count: headcount, group: 'People' },
+    { to: '/hr/leave', label: 'Leave Requests', icon: 'calendarMinus', roles: ['hr'], count: pendingLeave.length, urgent: pendingLeave.length > 0, group: 'People' },
+    { to: '/hr/regularizations', label: 'Regularizations', icon: 'clock', roles: ['hr'], group: 'People' },
+    { to: '/hr/calendar', label: 'Monthly Calendar', icon: 'calendar', roles: ['hr'], group: 'People' },
+    { to: '/hr/odometer', label: 'Odometer Check', icon: 'gauge', roles: ['hr'], group: 'People' },
+    { to: '/hr/trips', label: 'Trips & Routes', icon: 'map', roles: ['hr'], group: 'People' },
 
-    { to: '/reports/expenses', label: 'Monthly Expenses', icon: '🧾', roles: ['hr'], group: 'Reports' },
-    { to: '/reports/summary', label: 'Range Summary', icon: '📈', roles: ['hr'], group: 'Reports' },
+    { to: '/reports/expenses', label: 'Monthly Expenses', icon: 'receipt', roles: ['hr'], group: 'Reports' },
+    { to: '/reports/summary', label: 'Range Summary', icon: 'chart', roles: ['hr'], group: 'Reports' },
 
-    { to: '/import', label: 'Data Import', icon: '⬆', roles: ['sales_manager', 'stock_manager'], group: 'Admin' },
+    { to: '/import', label: 'Data Import', icon: 'upload', roles: ['sales_manager', 'stock_manager'], group: 'Admin' },
   ];
 
   /*
@@ -183,20 +218,21 @@ export function AppShell() {
    * and without this he would have no route to his own reps.
    */
   const visible = items.filter((i) => {
-    /*
-     * It runs the other way too. The GM manages no team, so a team-only test
-     * hid every screen their own `roles` already name — Customers, Team
-     * Orders, Stock and Combined all list `general_manager` and none of them
-     * appeared.
-     */
+    // `canOpenAs` is role-aware as well as team-aware: it gives the GM no team
+    // screen at all, so the GM's sidebar is the escalation queue alone.
     if (i.screen) return canOpenAs(user.role, user.managedTeam, i.screen);
     return i.roles.includes(user.role);
   });
   const groups = [...new Set(visible.map((i) => i.group))];
 
   // Matched against the visible items, not all of them: "/" is the Dashboard
-  // for most roles and the HR Dashboard for HR.
-  const title = visible.find((i) => i.to === location.pathname)?.label ?? 'Sales';
+  // for most roles and the HR Dashboard for HR. A page under a nav item — the
+  // GM's review of one order — takes its parent's name rather than "Sales".
+  const title =
+    (
+      visible.find((i) => i.to === location.pathname) ??
+      visible.find((i) => i.to !== '/' && location.pathname.startsWith(`${i.to}/`))
+    )?.label ?? 'Sales';
 
   return (
     <div className="shell">
@@ -222,10 +258,8 @@ export function AppShell() {
                     end={item.to === '/'}
                     className={({ isActive }) => `navlink ${isActive ? 'is-active' : ''}`}
                   >
-                    <span className="navlink__icon" aria-hidden>
-                      {item.icon}
-                    </span>
-                    <span className="grow">{item.label}</span>
+                    <Icon name={item.icon} className="navlink__icon" />
+                    <span className="navlink__label grow">{item.label}</span>
                     {item.count != null && item.count > 0 && (
                       <span className={`navlink__badge ${item.urgent ? '' : 'navlink__badge--muted'}`}>
                         {item.count}
@@ -244,10 +278,18 @@ export function AppShell() {
               <div className="user-chip__name">{user.name}</div>
               <div className="user-chip__role">{ROLE_LABEL[user.role]}</div>
             </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              iconOnly
+              className="user-chip__out"
+              onClick={() => dispatch(signOut())}
+              aria-label="Sign out"
+              title="Sign out"
+            >
+              <Icon name="logout" />
+            </Button>
           </div>
-          <Button size="sm" variant="ghost" block onClick={() => dispatch(signOut())}>
-            Sign out
-          </Button>
         </div>
       </nav>
 
@@ -262,17 +304,28 @@ export function AppShell() {
             onClick={() => setNavOpen((v) => !v)}
             aria-label="Toggle navigation"
           >
-            ☰
+            <Icon name="menu" size={18} />
           </Button>
-          <div className="grow">
+          <div className="header__lead grow">
             <div className="header__title">{title}</div>
-            {freezingSoon.length > 0 && user.role !== 'production_manager' && (
-              <div className="header__sub">
-                ⏳ {freezingSoon.length} order{freezingSoon.length === 1 ? '' : 's'} freeze within 24
-                hours
-              </div>
-            )}
+            {/* An "N orders freeze within 24 hours" line stood here until
+                11 Oct 2026. The 1 pm cutoff it counted down to is gone:
+                approval alone ends editing. */}
           </div>
+
+          {/* HR's records never come from SAP, so there is nothing to sync for them.
+              The MD's rates screen has its own "Sync from SAP", for prices. The
+              accountant's has its own order sync, and this one would reload the
+              order book and stock he does not load. */}
+          {!isHr && user.role !== 'managing_director' && !isAccountant && (
+            <SyncAllButton
+              onSettled={() => {
+                void dispatch(loadOrders(undefined));
+                void dispatch(refreshMinStock());
+              }}
+              onReload={() => setPageKey((k) => k + 1)}
+            />
+          )}
 
           <button
             className="bell"
@@ -280,15 +333,16 @@ export function AppShell() {
             aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
             title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
           >
-            {theme === 'dark' ? '☀' : '☾'}
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={17} />
           </button>
 
           <button
-            className={`bell ${pendingAcks.length ? 'bell--urgent' : ''}`}
+            className={`bell ${pendingAcks.length ? 'bell--urgent' : ''} ${panelOpen ? 'is-active' : ''}`}
             onClick={() => dispatch(togglePanel())}
             aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`}
+            title="Notifications"
           >
-            🔔
+            <Icon name="bell" size={17} />
             {unread > 0 && <span className="bell__count">{unread > 99 ? '99+' : unread}</span>}
           </button>
         </header>
@@ -299,21 +353,19 @@ export function AppShell() {
         */}
         {user.role === 'production_manager' && pendingAcks.length > 0 && (
           <div className="ack-banner">
-            <span aria-hidden style={{ fontSize: 16 }}>
-              ⚠️
-            </span>
+            <Icon name="alert" className="ack-banner__icon" />
             <span className="ack-banner__text grow">
-              {pendingAcks.length} order change{pendingAcks.length === 1 ? '' : 's'} after approval
-              need{pendingAcks.length === 1 ? 's' : ''} your acknowledgement.
+              {pendingAcks.length} post-approval order change{pendingAcks.length === 1 ? '' : 's'}{' '}
+              awaiting acknowledgement
             </span>
             <Button size="sm" variant="danger" onClick={() => dispatch(togglePanel(true))}>
-              Review now
+              Review
             </Button>
           </div>
         )}
 
         <main className="content">
-          <Outlet />
+          <Outlet key={pageKey} />
         </main>
       </div>
 

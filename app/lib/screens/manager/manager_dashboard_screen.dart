@@ -33,10 +33,10 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
         _orders = _countOrders();
       });
 
-  /// What the approvals inbox holds — everything except orders.
+  /// What the approvals inbox holds — everything except orders. (No proforma
+  /// releases since 26 Sep 2026: the GM's approval unlocks a held proforma.)
   Future<int> _countPending() async {
     final r = await Future.wait([
-      Api.getPendingProformaReleases(),
       Api.getPendingLocationVerifications(),
       Api.getPendingSiteVerifications(),
       Api.getPendingLeadLocationVerifications(),

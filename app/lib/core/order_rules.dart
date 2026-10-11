@@ -1,39 +1,90 @@
 // When an order can still be changed, and by whom.
 //
 // An order stays fully open — lines added, lines deleted, quantities changed —
-// until 1 pm on the day the customer wants it delivered. That is the last
-// moment the factory can still act on a change, so it is the deadline rather
-// than anything measured from when the order was raised.
-//
-// Judged against the server's clock, for the same reason attendance is: a rep
-// controls the phone's clock, and this deadline decides whether a change is
-// allowed. Without a server script the backend cannot re-check it, so the
-// clock the app trusts is the only defence there is — see the note at the
-// bottom of this file.
+// until the decision that settles it: the sales manager's approval, or their
+// sending it to the GM. The status alone decides. There used to be a second
+// gate, 1 pm on the delivery date; it was dropped on 11 October 2026 because
+// approval, not the calendar, is when the factory takes the order
+// (order_locked_after_approval.json, `no_time_cutoff`).
 
-import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
 
-/// The hour of the delivery date after which an order is frozen.
-const int kOrderEditCutoffHour = 13;
+/// What the rep and the sales manager are told once an order is with the GM.
+const String kEditLockWithGm =
+    'This order is with the general manager. Only they can change it now.';
 
-/// The moment an order stops being editable: 1 pm on its required delivery
-/// date. Null when the order has no delivery date, which is treated as
-/// permanently open rather than permanently shut — an order without a date is
-/// a data problem, and refusing to let anyone fix it would make that worse.
-DateTime? orderEditDeadline(dynamic deliveryDate) {
-  final s = '${deliveryDate ?? ''}';
-  if (s.length < 10) return null;
-  final d = DateTime.tryParse(s.substring(0, 10));
-  if (d == null) return null;
-  return DateTime(d.year, d.month, d.day, kOrderEditCutoffHour);
+/// What everyone is told once the GM has approved an order.
+const String kEditLockGmApproved =
+    'The general manager approved this order as it stands, so it can no '
+    'longer be changed. The sales manager pushes it to SAP, or the general '
+    'manager rejects it.';
+
+/// Whether an order at [poStatus] may be changed by [role] — `rep`,
+/// `sales_manager` or `general_manager` — as far as its approval goes.
+///
+/// Decided 26 Sep 2026 (order_locked_after_approval.json, `by_role`). Rates
+/// come from SAP, so what is left to change is quantities, items and the
+/// delivery date, and those stop at the decision that settles the order:
+///  - undecided (and Rejected, which the rep is meant to fix): all three;
+///  - escalated to the GM: the GM only — they may trim it before deciding;
+///  - approved by the GM, or approved and pushed to SAP: nobody.
+/// Any other role is refused, as `orderActions` refuses it. Ownership is
+/// [canEditOrder]'s, on top of this.
+///
+/// The statuses are the stored Select values, spelled out as the rest of this
+/// file spells them.
+bool statusAllowsEdit(dynamic poStatus, String role) {
+  if (role != 'rep' && role != 'sales_manager' && role != 'general_manager') {
+    return false;
+  }
+  switch ('${poStatus ?? ''}'.trim()) {
+    case 'PO Approved - Ready for SAP':
+    case 'Pending Final Approval':
+      return false;
+    case 'Pending GM Approval':
+      return role == 'general_manager';
+    default:
+      return true;
+  }
 }
 
-/// Whether the cutoff has passed.
-bool orderEditWindowOpen(dynamic deliveryDate) {
-  final deadline = orderEditDeadline(deliveryDate);
-  if (deadline == null) return true;
-  return ServerClock.I.now().isBefore(deadline);
+/// The role this login changes orders as, for [statusAllowsEdit]. A manager
+/// editing their own order is locked at exactly the same points as a rep, so
+/// the distinction only matters for the GM.
+String editRole() => Session.I.isGM
+    ? 'general_manager'
+    : (Session.I.isManager ? 'sales_manager' : 'rep');
+
+/// What a lead order is told once it is approved.
+const String kEditLockLeadApproved =
+    'This lead order is approved and has gone to the factory as a customer '
+    'order. It cannot be changed here — to drop or reduce an item, ring the '
+    'manufacturing team.';
+
+/// Whether [order] is a Lead Order, whose approval lives in `status` rather
+/// than `custom_po_status`.
+bool isLeadOrderDoc(Map<String, dynamic> order) =>
+    '${order['doctype'] ?? ''}' == 'Lead Order' ||
+    (order['custom_po_status'] == null && order.containsKey('lead'));
+
+/// The approval status the edit rules read, in Sales Order terms.
+///
+/// A Lead Order keeps its state in `status`, so without this every lead
+/// order read as undecided and stayed open after approval (found in review,
+/// 26 Sep 2026). Signed off — `Approved` (it has become a Sales Order already
+/// with the factory), `PO Uploaded`, `PO Approved - Ready for SAP`,
+/// `Converted` — reads as approved; `Pending GM Approval` as itself; the rest
+/// as it stands.
+String editStatusOf(Map<String, dynamic> order) {
+  if (!isLeadOrderDoc(order)) return '${order['custom_po_status'] ?? ''}'.trim();
+  final s = '${order['status'] ?? ''}'.trim();
+  const signedOff = {
+    'Approved',
+    'PO Uploaded',
+    'PO Approved - Ready for SAP',
+    'Converted',
+  };
+  return signedOff.contains(s) ? 'PO Approved - Ready for SAP' : s;
 }
 
 /// Whether this login may change [order].
@@ -41,6 +92,9 @@ bool orderEditWindowOpen(dynamic deliveryDate) {
 /// The rep who raised it, and the manager whose team they are on. A manager
 /// needs it because a customer who rings the office to change an order should
 /// not have to wait for their rep to come back into signal.
+///
+/// Both only until the order is escalated to the GM, and the GM only until
+/// they approve it — see [statusAllowsEdit].
 bool canEditOrder(Map<String, dynamic> order) {
   /*
    * APPROVAL IS THE END OF EDITING, FOR EVERYONE. Decided 17 September 2026.
@@ -57,17 +111,18 @@ bool canEditOrder(Map<String, dynamic> order) {
    * and left SAP building the old one. Refusing the edit is strictly better
    * than pretending it landed.
    *
-   * The GM exemption below stops here too. It exists because escalations
-   * arrive at the GM and an escalation with no power to act is a rubber stamp
-   * — but that is about approving, not about editing an order the factory is
-   * already working to. There is no seniority that makes an app edit reach
-   * SAP.
+   * The GM's licence to trim an escalated order stops here too. It exists
+   * because an escalation with no power to act is a rubber stamp — but that
+   * is about deciding, not about editing an order the factory is already
+   * working to. There is no seniority that makes an app edit reach SAP.
    */
   if (orderApproved(order)) return false;
 
-  if (Session.I.isGM) return true;
+  // Escalation and the GM's approval (26 Sep 2026), and a lead order's own
+  // approval, read off `status` (editStatusOf).
+  if (!statusAllowsEdit(editStatusOf(order), editRole())) return false;
 
-  if (!orderEditWindowOpen(order['delivery_date'])) return false;
+  if (Session.I.isGM) return true;
 
   // A Sales Order names the rep in `custom_sales_person`; a Lead Order, which
   // is our own doctype, uses the plain `sales_person`. Both are the same
@@ -121,6 +176,11 @@ bool canDeleteOrder(Map<String, dynamic> order) {
   final po = '${order['custom_po_status'] ?? ''}';
   if (po == 'PO Approved - Ready for SAP') return false;
 
+  // No narrower than editing on escalation (26 Sep 2026): with the GM it is
+  // the GM's to decide, and once the GM has approved it nobody throws it
+  // away — the order would vanish from the queue mid-decision.
+  if (!statusAllowsEdit(editStatusOf(order), editRole())) return false;
+
   if (Session.I.isGM) return true;
 
   final owner =
@@ -144,13 +204,14 @@ String orderLockReason(Map<String, dynamic> order) {
         'team — anything already made will be delivered and the rest of the '
         'order stays open.';
   }
-  if (!orderEditWindowOpen(order['delivery_date'])) {
-    final d = orderEditDeadline(order['delivery_date']);
-    if (d == null) return 'This order can no longer be changed.';
-    return 'Changes closed at 1 pm on '
-        '${d.day.toString().padLeft(2, '0')}/'
-        '${d.month.toString().padLeft(2, '0')}/${d.year}, '
-        'the required delivery date.';
+  final po = editStatusOf(order);
+  if (isLeadOrderDoc(order) && po == 'PO Approved - Ready for SAP') {
+    return kEditLockLeadApproved;
+  }
+  if (po == 'Pending Final Approval') return kEditLockGmApproved;
+  if (po == 'Pending GM Approval' &&
+      !statusAllowsEdit(po, editRole())) {
+    return kEditLockWithGm;
   }
   // A Sales Order names the rep in `custom_sales_person`; a Lead Order, which
   // is our own doctype, uses the plain `sales_person`. Both are the same
@@ -182,6 +243,10 @@ String approvalLabel(dynamic rawStatus) {
       return 'Waiting for rate approval';
     case 'Pending GM Approval':
       return 'Escalated to GM';
+    // The GM approved the credit; the sales manager has still to push it to
+    // SAP. Not "Approved" — nothing has reached the factory yet.
+    case 'Pending Final Approval':
+      return 'Approved by GM';
     case 'Rejected':
       return 'Rejected';
     case '':
@@ -255,9 +320,8 @@ bool ratesLocked(Map<String, dynamic> order) =>
 
 // A note on what this does and does not guarantee.
 //
-// Every check here runs on the phone. With Server Scripts the backend re-ran
-// the deadline on every write and a modified client could not get past it; the
-// site's plan no longer allows that, so these rules bind the app alone. They
-// stop an honest rep from making a change the factory cannot act on. They do
-// not stop a determined one. If that distinction ever starts to matter, the
-// deadline needs to move back to a Before Save script.
+// Every check here runs on the phone, and the dashboard repeats it; nothing on
+// the server re-runs it. They stop an honest rep from making a change the
+// factory cannot act on. They do not stop a determined one. If that
+// distinction ever starts to matter, the status gate belongs in a Before Save
+// Server Script, which the site's plan has allowed since 7 September 2026.

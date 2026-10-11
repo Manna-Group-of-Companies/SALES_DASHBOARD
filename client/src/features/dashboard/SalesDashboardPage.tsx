@@ -18,20 +18,14 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Order } from '@/domain/types';
-import {
-  effectiveDeliveryDate,
-  formatDate,
-  formatFreezeCountdown,
-  freezeUrgency,
-  todayIso,
-} from '@/domain/orderRules';
+import { formatDate, todayIso } from '@/domain/orderRules';
 import { orderTotal } from '@/domain/productRules';
 import { useAppSelector } from '@/store/hooks';
 import { selectOrders, selectPendingApproval, selectUser } from '@/store/selectors';
 import { Alert, Badge, Button, Card, Empty } from '@/components/ui';
-import { greeting, money, moneyShort } from '@/components/common/format';
+import { money, moneyShort } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
-import { daysWaiting, plural } from './dashboardRules';
+import { daysWaiting } from './dashboardRules';
 import '@/components/layout/layout.css';
 import './dashboard.css';
 
@@ -47,21 +41,12 @@ export function SalesDashboardPage() {
     [pending],
   );
 
-  /**
-   * Orders whose 1 PM edit deadline lands inside the next day. After it passes
-   * nothing on the order can be changed, so this is the only genuinely
-   * time-critical thing on the page.
+  /*
+   * A "freezing within 24 hours" alert, tile and card stood here until
+   * 11 October 2026, counting down to 1 PM on each delivery date. That cutoff
+   * is gone — approval alone ends editing (order_locked_after_approval.json) —
+   * so the queue below is now the only time-critical thing on the page.
    */
-  const freezing = useMemo(
-    () =>
-      orders
-        .filter(
-          (o) =>
-            freezeUrgency(o) === 'imminent' && o.status !== 'rejected' && o.status !== 'grouped',
-        )
-        .sort((a, b) => effectiveDeliveryDate(a).localeCompare(effectiveDeliveryDate(b))),
-    [orders],
-  );
 
   const live = useMemo(
     () =>
@@ -85,36 +70,17 @@ export function SalesDashboardPage() {
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">
-            {greeting()}, {user.name.split(' ')[0]}
-          </div>
+          <div className="page-head__title">Dashboard</div>
           <div className="page-head__sub">
             {/* `todayIso` is local time — `toISOString` is UTC and would read
                 as yesterday for most of the Indian evening. */}
-            {formatDate(todayIso())} ·{' '}
-            {waiting.length
-              ? `${waiting.length} ${plural(waiting.length, 'order')} waiting on you`
-              : 'Nothing waiting on you'}
+            {user.name} · {formatDate(todayIso())}
           </div>
         </div>
       </div>
 
       {/* --- what cannot wait --------------------------------------------- */}
       <div className="stack gap-3" style={{ marginBottom: 16 }}>
-        {freezing.length > 0 && (
-          <Alert
-            tone="warn"
-            title={`${freezing.length} ${plural(freezing.length, 'order')} freeze within a day`}
-            actions={
-              <Button size="sm" onClick={() => navigate('/orders')}>
-                Open orders
-              </Button>
-            }
-          >
-            After 1:00 PM on the delivery date nothing on the order can be changed — by anyone.
-            The soonest is {freezing[0]!.orderNo}, {formatFreezeCountdown(freezing[0]!)}.
-          </Alert>
-        )}
         {oldest && oldestDays >= 3 && (
           <Alert
             tone="danger"
@@ -133,49 +99,38 @@ export function SalesDashboardPage() {
       {/* --- tiles -------------------------------------------------------- */}
       <div className="tiles">
         <Tile
-          label="Waiting on you"
+          label="Awaiting approval"
           value={String(waiting.length)}
           tone={waiting.length ? 'warn' : undefined}
           // Deliberately all-time, not this week — see the note at the top.
-          foot={oldest ? `Oldest ${oldestDays}d` : 'Queue is clear'}
+          foot={oldest ? `Oldest ${oldestDays}d` : undefined}
           onClick={() => navigate('/approvals')}
         />
         <Tile
-          label="Value awaiting approval"
+          label="Value awaiting"
           value={moneyShort(waitingValue)}
-          foot={waiting.length ? `Across ${waiting.length} ${plural(waiting.length, 'order')}` : '—'}
           onClick={() => navigate('/approvals')}
         />
         <Tile
           label="Live orders"
           value={String(live.length)}
-          foot="Approved, in production or dispatched"
-          onClick={() => navigate('/orders')}
-        />
-        <Tile
-          label="Freezing within a day"
-          value={String(freezing.length)}
-          tone={freezing.length ? 'alert' : undefined}
-          foot={freezing.length ? 'Edit now or never' : 'Nothing urgent'}
           onClick={() => navigate('/orders')}
         />
       </div>
 
-      <div className="cols cols--sidebar">
+      <div className="stack gap-3">
         {/* --- the queue, read-only -------------------------------------- */}
         <Card
-          title="Longest waiting"
+          title="Longest Waiting"
           actions={
             <Button size="sm" variant="ghost" onClick={() => navigate('/approvals')}>
-              Approvals queue →
+              View all
             </Button>
           }
           flush
         >
           {waiting.length === 0 ? (
-            <Empty icon="✓" title="Nothing is waiting for a decision">
-              Orders raised in the field-sales app land here for approval.
-            </Empty>
+            <Empty icon="✓" title="No orders awaiting approval" />
           ) : (
             <table className="table">
               <thead>
@@ -192,29 +147,6 @@ export function SalesDashboardPage() {
                 ))}
               </tbody>
             </table>
-          )}
-        </Card>
-
-        {/* --- freeze watch ---------------------------------------------- */}
-        <Card title="Freeze watch">
-          {freezing.length === 0 ? (
-            <Empty icon="🕐" title="No deadline inside a day">
-              Every live order still has more than 24 hours of edit window left.
-            </Empty>
-          ) : (
-            <div className="stack gap-2">
-              {freezing.slice(0, 6).map((o) => (
-                <button
-                  key={o.id}
-                  className="linkrow"
-                  onClick={() => navigate(`/orders/${o.id}`)}
-                >
-                  <span className="mono small">{o.orderNo}</span>
-                  <span className="small dim">{formatDate(effectiveDeliveryDate(o))}</span>
-                  <Badge tone="warn">{formatFreezeCountdown(o)}</Badge>
-                </button>
-              ))}
-            </div>
           )}
         </Card>
       </div>

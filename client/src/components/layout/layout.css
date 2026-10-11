@@ -18,49 +18,57 @@
 .sidebar__brand {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
   height: var(--header-h);
-  padding: 0 16px;
+  padding: 0 18px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .sidebar__logo {
-  width: 27px; height: 27px;
-  border-radius: var(--r-sm);
+  width: 28px; height: 28px;
+  border-radius: var(--r);
   background: var(--accent);
   color: var(--text-inverse);
   display: grid;
   place-items: center;
   font-weight: 700;
-  font-size: 12px;
-  letter-spacing: -0.02em;
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
   flex-shrink: 0;
 }
-.sidebar__name { font-size: 13px; font-weight: 600; line-height: 1.15; }
-.sidebar__sub { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; }
+.sidebar__name { font-size: 13.5px; font-weight: 650; line-height: 1.2; letter-spacing: -0.01em; }
+.sidebar__sub {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
+}
 
 .sidebar__nav {
   flex: 1;
   overflow-y: auto;
-  padding: 10px 8px;
+  padding: 8px 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
 .sidebar__group {
-  padding: 12px 8px 4px;
-  font-size: 10px;
+  padding: 14px 10px 6px;
+  font-size: 10.5px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
   color: var(--text-3);
 }
 
 .navlink {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 9px;
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 10px;
   border-radius: var(--r);
   color: var(--text-2);
   font-size: 13px;
@@ -68,22 +76,28 @@
   text-decoration: none;
   transition: background 0.1s, color 0.1s;
 }
+.navlink + .navlink { margin-top: 1px; }
 .navlink:hover { background: var(--surface-3); color: var(--text); text-decoration: none; }
 .navlink.is-active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-.navlink__icon { width: 16px; text-align: center; font-size: 14px; flex-shrink: 0; }
+.navlink__icon { width: 16px; height: 16px; flex-shrink: 0; color: var(--text-3); }
+.navlink:hover .navlink__icon { color: var(--text-2); }
+.navlink.is-active .navlink__icon { color: var(--accent); }
+.navlink__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .navlink__badge {
-  min-width: 18px; height: 18px;
-  padding: 0 5px;
+  min-width: 20px; height: 18px;
+  padding: 0 6px;
   border-radius: var(--r-full);
   background: var(--danger);
   color: var(--text-inverse);
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 .navlink__badge--muted { background: var(--surface-3); color: var(--text-2); }
+.navlink.is-active .navlink__badge--muted { background: var(--surface); color: var(--accent); }
 
 .sidebar__footer {
   border-top: 1px solid var(--border);
@@ -104,13 +118,32 @@
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 20px;
+  gap: 8px;
+  padding: 0 24px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-.header__title { font-size: 15px; font-weight: 600; }
-.header__sub { font-size: 12px; color: var(--text-3); }
+.header__lead { min-width: 0; }
+/* Where you are, said quietly: the page's own heading is the title. */
+.header__title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.header__sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--warn);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* The sidebar is permanent on desktop, so the toggle only exists on narrow
    screens where it slides off-canvas. */
@@ -119,23 +152,36 @@
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 24px;
 }
 .content--flush { padding: 0; }
+/* An alert placed straight into a page is spaced from whatever follows it. */
+.content > div > .alert { margin-bottom: 14px; }
 
 .page-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
-  margin-bottom: 16px;
+  min-height: 34px;
+  margin-bottom: 20px;
   flex-wrap: wrap;
 }
-.page-head__title { font-size: 19px; font-weight: 650; letter-spacing: -0.015em; }
-.page-head__sub { font-size: 13px; color: var(--text-2); margin-top: 2px; }
+.page-head > .grow { min-width: 0; }
+/* With a subtitle and several actions, a phone wraps the actions under the title
+   instead of squeezing the title into a column one word wide. */
+.page-head > .grow { flex: 1 1 260px; }
+.page-head__title {
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.018em;
+  color: var(--text);
+}
+.page-head__sub { font-size: 13px; color: var(--text-2); margin-top: 3px; }
 
 /* --------------------------------------------------------------- user --- */
 .avatar {
-  width: 28px; height: 28px;
+  width: 30px; height: 30px;
   border-radius: 50%;
   background: var(--accent-soft);
   color: var(--accent);
@@ -143,6 +189,7 @@
   place-items: center;
   font-size: 11px;
   font-weight: 700;
+  letter-spacing: 0.02em;
   flex-shrink: 0;
 }
 .avatar--lg { width: 34px; height: 34px; font-size: 12px; }
@@ -150,35 +197,45 @@
 .user-chip {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: 9px;
+  padding: 4px 2px 4px 6px;
   border-radius: var(--r);
-  cursor: pointer;
   border: 1px solid transparent;
   background: none;
   width: 100%;
   text-align: left;
 }
-.user-chip:hover { background: var(--surface-3); }
-.user-chip__name { font-size: 12px; font-weight: 600; line-height: 1.2; }
-.user-chip__role { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.04em; }
+.user-chip__name {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.user-chip__role { font-size: 11px; color: var(--text-3); line-height: 1.3; }
+.user-chip__out { flex-shrink: 0; }
 
-/* ------------------------------------------------------ notifications --- */
+/* ------------------------------------------------------ header buttons --- */
+/* Icon buttons in the header: quiet until pointed at. */
 .bell {
   position: relative;
   width: 34px; height: 34px;
   border-radius: var(--r);
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-2);
   cursor: pointer;
   display: grid;
   place-items: center;
-  font-size: 15px;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
-.bell:hover { background: var(--surface-3); }
+.bell:hover { background: var(--surface-3); color: var(--text); }
+.bell.is-active { background: var(--surface-3); color: var(--text); }
 .bell__count {
   position: absolute;
-  top: -5px; right: -5px;
+  top: 1px; right: 1px;
   min-width: 17px; height: 17px;
   padding: 0 4px;
   border-radius: var(--r-full);
@@ -186,11 +243,25 @@
   color: var(--text-inverse);
   font-size: 10px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
   display: grid;
   place-items: center;
   border: 2px solid var(--surface);
 }
-.bell--urgent { animation: pulse-ring 1.8s infinite; border-color: var(--danger); }
+.bell--urgent { animation: pulse-ring 1.8s infinite; border-color: var(--danger); color: var(--danger); }
+
+/* The header's Sync button and the line of status beside it. */
+.sync-all { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sync-all__status {
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+.sync-all__status.is-warn { color: var(--warn); }
+.sync-all .sync-all__btn:disabled { opacity: 1; cursor: progress; color: var(--text-2); }
 
 .notif-panel {
   position: fixed;
@@ -211,28 +282,42 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 14px;
+  min-height: 50px;
+  padding: 8px 12px 8px 16px;
   border-bottom: 1px solid var(--border);
+  font-size: 14px;
 }
 .notif-panel__list { flex: 1; overflow-y: auto; }
 
 .notif {
   display: flex;
   gap: 10px;
-  padding: 11px 14px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
+  transition: background 0.1s;
 }
 .notif:hover { background: var(--surface-2); }
 .notif.is-unread { background: var(--accent-soft); }
 .notif.is-unread:hover { background: var(--accent-soft); filter: brightness(0.98); }
 .notif.needs-ack {
   background: var(--danger-soft);
-  border-left: 3px solid var(--danger);
+  box-shadow: inset 3px 0 0 var(--danger);
 }
-.notif__icon { font-size: 15px; flex-shrink: 0; line-height: 1.3; }
-.notif__title { font-size: 13px; font-weight: 600; line-height: 1.3; }
-.notif__body { font-size: 12px; color: var(--text-2); line-height: 1.4; margin-top: 2px; }
+/* One dot per item, coloured by severity. */
+.notif__icon {
+  width: 8px; height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--border-strong);
+}
+.notif__icon--info { background: var(--accent); }
+.notif__icon--warning { background: var(--warn); }
+.notif__icon--critical { background: var(--danger); }
+.notif:not(.is-unread):not(.needs-ack) .notif__icon { opacity: 0.45; }
+.notif__title { font-size: 13px; font-weight: 600; line-height: 1.35; }
+.notif__body { font-size: 12.5px; color: var(--text-2); line-height: 1.45; margin-top: 2px; }
 .notif__meta { font-size: 11px; color: var(--text-3); margin-top: 4px; }
 
 /* -------------------------------------------------------------- toast --- */
@@ -245,22 +330,30 @@
   flex-direction: column;
   gap: 8px;
   pointer-events: none;
+  max-width: calc(100vw - 32px);
 }
 .toast {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
+  gap: 10px;
   min-width: 260px;
   max-width: 400px;
-  padding: 11px 13px;
+  padding: 11px 10px 11px 14px;
   border-radius: var(--r);
   background: var(--surface);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   box-shadow: var(--shadow-3);
   font-size: 13px;
+  line-height: 1.45;
   pointer-events: auto;
   animation: slide-in-right 0.18s ease-out;
 }
+.toast__icon { display: flex; padding-top: 1px; flex-shrink: 0; }
+.toast .btn--icon { margin: -4px 0 -4px auto; }
+.toast--success .toast__icon { color: var(--ok); }
+.toast--warning .toast__icon { color: var(--warn); }
+.toast--critical .toast__icon { color: var(--danger); }
+.toast--info .toast__icon { color: var(--accent); }
 .toast--success { border-left: 3px solid var(--ok); }
 .toast--warning { border-left: 3px solid var(--warn); }
 .toast--critical { border-left: 3px solid var(--danger); }
@@ -270,49 +363,63 @@
 .ack-banner {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 11px 16px;
+  gap: 10px;
+  padding: 10px 24px;
   background: var(--danger-soft);
   border-bottom: 1px solid var(--danger-border);
   flex-shrink: 0;
 }
+.ack-banner__icon { color: var(--danger); }
 .ack-banner__text { font-size: 13px; font-weight: 500; }
 
 /* --------------------------------------------------------------- grid --- */
+/*
+ * One compact row of headline numbers. `auto-fill` keeps every tile the same
+ * width whatever the count, so three tiles do not stretch across a wide screen.
+ */
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 12px;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 .tile {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  padding: 13px 15px;
+  padding: 14px 16px;
   box-shadow: var(--shadow-1);
+  min-width: 0;
+  transition: border-color 0.12s, box-shadow 0.12s;
 }
+.tile[role='button']:hover { border-color: var(--border-strong); box-shadow: var(--shadow-2); }
 .tile__label {
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   color: var(--text-3);
 }
 .tile__value {
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 650;
+  line-height: 1.25;
   letter-spacing: -0.02em;
-  margin-top: 3px;
+  margin-top: 6px;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
-.tile__foot { font-size: 11px; color: var(--text-2); margin-top: 3px; }
-.tile.is-alert { border-color: var(--danger-border); background: var(--danger-soft); }
-.tile.is-warn { border-color: var(--warn-border); background: var(--warn-soft); }
+.tile__foot { font-size: 11.5px; color: var(--text-3); margin-top: 4px; }
+/* Tone colours the number and the edge, not the whole tile. */
+.tile.is-alert { border-color: var(--danger-border); }
+.tile.is-alert .tile__value { color: var(--danger); }
+.tile.is-warn { border-color: var(--warn-border); }
+.tile.is-warn .tile__value { color: var(--warn); }
 
 .cols { display: grid; gap: 16px; }
 .cols--2 { grid-template-columns: 1fr 1fr; }
 .cols--sidebar { grid-template-columns: 1fr 320px; }
+.cols > * { min-width: 0; }
 
 @media (max-width: 1100px) {
   .cols--2, .cols--sidebar { grid-template-columns: 1fr; }
@@ -329,6 +436,23 @@
     transform: translateX(-100%);
     transition: transform 0.18s ease;
   }
-  .sidebar.is-open { transform: none; }
-  .content { padding: 14px; }
+  .sidebar.is-open { transform: none; box-shadow: var(--shadow-3); }
+  .header { padding: 0 16px 0 10px; gap: 6px; }
+  /* No sidebar to say where you are, so the bar does. */
+  .header__title { font-size: 14px; font-weight: 600; color: var(--text); }
+  .content { padding: 16px; }
+  .ack-banner { padding: 10px 16px; }
+  .page-head { margin-bottom: 16px; }
+  .page-head__title { font-size: 18px; }
+}
+
+@media (max-width: 600px) {
+  .sync-all__status { max-width: 110px; }
+  .sync-all__label { display: none; }
+  .sync-all__btn { width: 34px; padding: 0; }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .tile { padding: 12px 13px; }
+  .tile__value { font-size: 18px; }
+  .toast-host { left: 16px; right: 16px; bottom: 16px; }
+  .toast { min-width: 0; max-width: none; }
 }

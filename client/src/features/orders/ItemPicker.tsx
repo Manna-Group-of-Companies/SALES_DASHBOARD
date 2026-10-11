@@ -173,7 +173,7 @@ export function ItemPicker({
       <div className="pick__head">
         <Input
           autoFocus
-          placeholder="Search the item master — code, name or SAP code…"
+          placeholder="Search by code, name or SAP code"
           value={query}
           onChange={(e) => narrow(() => setQuery(e.target.value))}
           aria-label="Search items"
@@ -221,13 +221,9 @@ export function ItemPicker({
         )}
       </div>
 
-      {loading && <Empty icon="◔" title="Reading the item master…" />}
+      {loading && <Empty icon="◔" title="Loading items…" />}
 
-      {!loading && results.length === 0 && (
-        <Empty icon="—" title="No item matches">
-          {items.length} sellable items were read from ERPNext. Clear the filters or the search.
-        </Empty>
-      )}
+      {!loading && results.length === 0 && <Empty icon="—" title="No matching items" />}
 
       {!loading && results.length > 0 && (
         <div className="pick__list">
@@ -267,9 +263,7 @@ export function ItemPicker({
                   */}
                   {knowStock && s && (
                     <span className="tiny dim num pick__stock">
-                      {s.weightsKnown
-                        ? `in stock ${qtyLabel(free)}`
-                        : 'weights not set on the item master'}
+                      {s.weightsKnown ? `In stock: ${qtyLabel(free)}` : 'Weights not set'}
                     </span>
                   )}
                 </span>
@@ -283,32 +277,32 @@ export function ItemPicker({
                         tone={!s.weightsKnown ? 'neutral' : has(free) ? 'ok' : 'warn'}
                         title={
                           !s.weightsKnown
-                            ? 'SAP holds this in kilograms and the item master has no weight per roll, so how many rolls that is cannot be worked out.'
+                            ? 'No roll weight in the item master'
                             : has(free)
-                              ? `${qtyLabel(free)} available to promise — SAP has already taken every open order off this figure.`
-                              : 'Stocked in SAP, but nothing is left to promise.'
+                              ? `${qtyLabel(free)} available to promise, net of open orders`
+                              : 'Stocked in SAP, none available to promise'
                         }
                       >
                         {!s.weightsKnown
-                          ? 'not set up'
+                          ? 'Not set up'
                           : has(free)
                             ? `${qtyLabel(free)} free`
-                            : 'none free'}
+                            : 'None free'}
                       </Badge>
                     ) : (
-                      <Badge tone="neutral" title="Not stocked — this line would be made to order">
-                        to make
+                      <Badge tone="neutral" title="Not stocked, made to order">
+                        To make
                       </Badge>
                     ))}
 
                   {blocked ? (
                     <Badge tone="warn" title={blocked}>
-                      no weights
+                      No weights
                     </Badge>
                   ) : i.category === 'VS' ? (
                     <span className="tiny dim">{i.packLitres} L tin</span>
                   ) : i.category === 'BG' ? (
-                    <span className="tiny dim">by the kg</span>
+                    <span className="tiny dim">Per kg</span>
                   ) : (
                     <span className="tiny dim num">
                       {i.beltsPerRoll ? `${i.beltsPerRoll} belts/roll · ` : ''}
@@ -329,16 +323,19 @@ export function ItemPicker({
           className="btn btn--ghost btn--sm pick__more"
           onClick={() => setShown((n) => n + PAGE)}
         >
-          Show {Math.min(PAGE, results.length - visible.length)} more — {visible.length} of{' '}
-          {results.length}
+          Show {Math.min(PAGE, results.length - visible.length)} more ({visible.length} of{' '}
+          {results.length})
         </button>
       )}
 
+      {/*
+        An item marked "No weights" has nothing in its master to price against
+        — it would bill at zero — so it cannot be added until the master is
+        fixed. Its badge carries the reason on hover.
+      */}
       {!loading && results.length > 0 && (
         <p className="note pick__foot">
-          Showing {visible.length} of {results.length} matching, from {items.length} sellable items.
-          An item marked “no weights” has nothing in its master to price against — it would bill at
-          zero, so it cannot be added until the master is fixed.
+          {visible.length} of {results.length} items
         </p>
       )}
     </div>

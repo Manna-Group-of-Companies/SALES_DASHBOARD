@@ -127,7 +127,15 @@ export function describeChange(c: StageChange): string {
 
 // ------------------------------------------------------------- storage ---
 
-const STORE_PREFIX = 'stageSeen:';
+/*
+ * v2 from 24 Sep 2026, when the made portion started being fed the line's SAP
+ * status instead of a production stage. A baseline taken under the old values
+ * would report every line of every order opened before as "moved" on its first
+ * look after the update; a new key makes that first look set the baseline
+ * instead, which is what a never-opened order already does. Same key as the
+ * phone's.
+ */
+const STORE_PREFIX = 'stageSeen2:';
 
 /**
  * Per browser, per order. Deliberately **not** shared between devices: it is a

@@ -14,6 +14,7 @@
 
 import { tickState, TICK_LABEL, type TickState } from '@/domain/orderStatus';
 import { cancelledInSap, orderPill } from '@/domain/sapOrderState';
+import { Icon, type IconName } from '@/components/ui';
 import './status.css';
 
 /**
@@ -40,11 +41,12 @@ export function StatusPill({
   );
 }
 
-const BOX: Record<TickState, string> = {
-  complete: '☑',
-  ready: '⊟',
-  in_production: '⊟',
-  not_started: '☐',
+const BOX: Record<TickState, IconName> = {
+  complete: 'checkCircle',
+  in_sap: 'halfCircle',
+  ready: 'halfCircle',
+  in_production: 'halfCircle',
+  not_started: 'circle',
 };
 
 /**
@@ -69,7 +71,7 @@ export function CompletionTick({
   const state = tickState(productionStatus);
   return (
     <span className={`tick tick--${state}`}>
-      <span aria-hidden="true">{BOX[state]}</span>
+      <Icon name={BOX[state]} size={14} />
       {TICK_LABEL[state]}
     </span>
   );

@@ -15,33 +15,72 @@ The apps do not push to SAP and do not compute floor state. They report it.
    submitted** — neither app has ever submitted a Sales Order; approval is a
    field write and the order stays `docstatus = 0`. See `DIVERGENCES.md`.
 2. **The sync creates a Sales Order in SAP** and writes its DocNum back to
-   `custom_sap_sales_order`.
-3. SAP links a production order and moves it through stages. The sync copies
-   the DocNum and the current stage back.
-4. A SAP **Delivery Order** eventually carries several orders out together. The
-   sync writes its DocNum and ship date onto **every order it carries**.
+   `custom_sap_sales_order`. The apps now show the order as **Pushed to SAP**.
+3. SAP is the record from here. A line the factory reduces or drops in SAP is
+   reduced or removed in ERPNext by the sync's line reconcile.
+4. An **A/R invoice** is raised against the order, possibly in parts. The sync
+   writes it onto each line it carried, and onto the order once every line is
+   invoiced. The apps now show it as **Dispatched**.
+5. **Stage two (26 September 2026) — switched off 8 October 2026.** Once Hi-Tech has closed the order, the
+   accountant approves it on the dashboard and the sync creates the matching
+   Sales Order in **`MANNA_TREADS_LIVE`**, to the end customer, for what Hi-Tech
+   actually delivered. See *Stage two — Manna Treads sales orders* below.
+
+**Changed 24 September 2026:** production orders and deliveries no longer drive
+anything. Under MRP one production order pools the demand of many sales orders
+and SAP does not record which order it is for — MRP-created orders carry no
+sales-order link, and the link table has no quantity column — so a per-order
+production stage would be a guess. And the floor delivers before it invoices,
+so a delivery is not dispatch. See `fixtures/sap_order_state.json`.
+
+**When it runs — changed 24 September 2026.** Nothing syncs on a timer. The
+sync runs when somebody presses **Sync** (on every screen of both apps), or
+when an order becomes approved. See `sap-order-sync/README.md` → *When it
+runs*. That puts one obligation on **both** apps, and it is a shared rule:
+
+> **Anything that makes a Sales Order `PO Approved - Ready for SAP` must then
+> call `manna_sap_order_request_sync`.** Otherwise the order never reaches SAP
+> until somebody happens to press Sync.
+
+Today that is two places on each side: approving an order (`decideOrder` /
+`approveSalesOrderPO`) and converting a lead order, which creates the Sales
+Order already approved (`approveLeadOrder` / `_salesOrderFromLeadOrder`). The
+request is fire-and-forget — the approval stands whether it lands or not — and
+a failure is logged, because nothing sweeps the order up afterwards.
 
 ---
 
 ## The fields
 
-All nine are on `Sales Order`, all `allow_on_submit = 1`, all read-only in
-Desk. Created 11 September 2026 and verified live.
+On `Sales Order`, all `allow_on_submit = 1`, all read-only in Desk.
 
 | field | type | written by | means |
 |---|---|---|---|
 | `custom_sap_sales_order` | Data | sync, step 2 | SAP's DocNum. The proof it reached the factory. |
-| `custom_sap_sales_order_status` | Data | sync | SAP's own words. Shown verbatim, never parsed. |
-| `custom_sap_production_order` | Data | sync, step 3 | SAP's production order DocNum. |
-| `custom_sap_production_stage` | Data | sync, step 3 | SAP's stage name, free text. |
-| `custom_sap_delivery_order` | Data | sync, step 4 | SAP's delivery DocNum. |
-| `custom_sap_delivery_date` | Date | sync, step 4 | When that delivery ships. |
+| `custom_sap_sales_order_status` | Data | sync | SAP's own words. Shown verbatim, never parsed — except `bost_Cancelled`. |
+| `custom_sap_invoice` | Data | sync, step 4 | The invoice that **completed** the order. Set only once every line is invoiced. |
+| `custom_sap_invoice_date` | Date | sync, step 4 | That invoice's posting date. |
 | `custom_sap_synced_at` | Datetime | sync, every pass | When this order was last reconciled. |
 | `custom_sap_sync_error` | Small Text | sync, on failure | Why the last push or pull failed. |
 
+And on `Sales Order Item`, per line:
+
+| field | type | written by | means |
+|---|---|---|---|
+| `custom_sap_invoice` | Data | sync, step 4 | The invoice that carried **this** line. |
+| `custom_sap_invoice_date` | Date | sync, step 4 | That invoice's posting date. |
+
 `custom_sap_section` is a Section Break, for the Desk form only.
 
-**`allow_on_submit` is set on all eight, and kept set.** Today it is inert —
+Stage two added three more line fields and seven order fields on 26 September
+2026 — listed under *Stage two — Manna Treads sales orders* below.
+
+**No longer written or read (24 Sep 2026):** `custom_sap_production_order`,
+`custom_sap_production_stage`, `custom_sap_delivery_order` and
+`custom_sap_delivery_date`, on both the order and the line. They stay in
+ERPNext with whatever they last held. Nothing may act on them.
+
+**`allow_on_submit` is set on every field above, and kept set.** Today it is inert —
 the apps do not submit Sales Orders, so the sync writes to drafts and Frappe
 would take these fields either way. It stays because the flag is the trap
 `custom_production_stage` originally shipped without: the day anything does
@@ -52,18 +91,18 @@ life of the document.
 
 ## What you must NOT write
 
-**`custom_production_status`.** The apps derive it from the stage and the
-delivery, in `shared/fixtures/sap_order_state.json`. Writing it as well gives
-two sources for one answer, and they will disagree the first time a delivery
-lands before a stage update.
+**`custom_production_status`.** The apps derive the status from the SAP order
+number and the invoice, in `shared/fixtures/sap_order_state.json`. Writing it
+as well gives two sources for one answer.
+
+**The order-level `custom_sap_invoice` on a partial invoice.** It is what takes
+an order out of the sync's polling. Set it on the first invoice and the rest of
+the order is never followed again.
 
 **Anything on an order that has not been approved.** `custom_po_status ==
 "PO Approved - Ready for SAP"` is the gate, together with `docstatus < 2` (any
 live order — draft or, if that ever changes, submitted — but never a Frappe
 cancel). An order that has not passed the gate has no business in SAP.
-
-**`custom_sap_delivery_date` from anywhere but a delivery order.** It is a date
-a rep repeats to a customer.
 
 ---
 
@@ -75,9 +114,11 @@ a rep repeats to a customer.
    normal state and is shown differently from a failure — that distinction only
    works if you clear it.
 
-2. **Write the delivery onto every order it carries**, not just the first. A
-   rep whose order is on somebody else's delivery has no other way to learn
-   when it ships.
+2. **Resolve a pooled invoice line by line**, not invoice by invoice. One
+   invoice can carry lines from several orders, and a line may be based on the
+   order (`BaseType 17`) or on a delivery (`BaseType 15`) that must be followed
+   back to its own base. A rep whose order is on somebody else's invoice has no
+   other way to learn it has gone.
 
 3. **Percent-encode doctype names with spaces** in REST paths
    (`Sales%20Order`). An unencoded space returns an empty body, not an error,
@@ -91,26 +132,29 @@ a rep repeats to a customer.
 
 ---
 
-## How a stage becomes a status
+## How an order gets its status
 
-The apps map SAP's free-text stage onto the four values every screen already
-acts on. The full table is `shared/fixtures/sap_order_state.json`, read by
-both test suites. In short:
+Three values, from two facts. The full table is
+`shared/fixtures/sap_order_state.json`, read by both test suites.
 
-- a **delivery order** means `Dispatched`, whatever the stage says — the
-  delivery is the later fact, and a production record can be stale;
-- `Finished`, `Closed`, `Completed`, `Ready` mean `Ready`;
-- empty, `Planned`, `Open`, `Pending` mean `Not Started`;
-- **anything else means `In Production`**.
+- no SAP order number: **Not Started**;
+- SAP has the order, not invoiced: **Pushed to SAP**;
+- invoiced: **Dispatched**.
 
-That last one is deliberate. A stage nobody has mapped means the floor has
-started and we do not know how far. Calling it `Ready` would tell a rep an
-order is made when it is halfway through a press, so the unknown case rounds
-towards "in progress" and never towards "done".
+Per line, a line is Dispatched only when **that** line was invoiced, and the
+order rolls up to its least advanced line — a partly-invoiced order is still
+Pushed to SAP. `bost_Cancelled` outranks all of it.
 
-**You can add stages in SAP freely.** A new one shows up verbatim on the rep's
-screen and counts as In Production without an app release. Only stages that
-should read as *finished* or *not begun* need a line adding to the fixture.
+An order **list** (and the completion tick, and the phone's duplicate-order
+check) shows this status once SAP has the order, and the stored in-app
+`custom_production_status` only before — `orderProgress` on both sides, cases
+`order_progress`. An in-app Dispatched on an order SAP has not invoiced is not
+dispatch. A list query must therefore fetch `custom_sap_sales_order` and
+`custom_sap_invoice`, or every order silently falls back to the in-app status.
+
+*Superseded 24 Sep 2026:* the stage-to-status table that used to be here —
+`Finished`/`Closed` → Ready, unknown stage → In Production, delivery →
+Dispatched — is gone with the production-order link.
 
 ---
 
@@ -149,12 +193,24 @@ There is no `DeliveredQuantity` on a Service Layer order line to separate them �
 checked against the live DB, the quantity fields are `Quantity`,
 `RemainingOpenQuantity` and `LineStatus`, and that is all.
 
-So the reconcile takes the item codes a delivery note actually carried, which
-PASS B already has in `$dnByEntryItem`. Closed **with** a delivery is finished
-and left alone. Closed **without** one is the factory dropping an item, and the
-ERPNext row goes.
+So the reconcile takes the item codes a delivery note **or an A/R invoice**
+actually carried, which PASS B has in `$dnByEntryItem` and `$invByEntryItem`.
+Closed **with** either is finished and left alone. Closed **without** either is
+the factory dropping an item, and the ERPNext row goes.
+
+Invoices were added on 24 September 2026, when the invoice became the dispatch
+signal: a line invoiced straight from the order has no delivery at all, and
+without invoices in the set it would read as dropped and be deleted — a line
+the customer has already been billed for.
 
 Getting this backwards deletes the lines the customer has already been sent.
+
+**A cancelled delivery is not a delivery — fixed 26 September 2026.** SAP
+keeps a cancelled delivery (`Cancelled = tYES`, `CancelStatus = csYes`) and
+posts a reversal beside it (`CancelStatus = csCancellation`, lines `BaseType
+15`). The scan never asked, so a cancelled delivery counted as "shipped" here,
+and a line the factory then closed to drop it was kept. The delivery scan now
+selects `Cancelled,CancelStatus` and counts only `csNo`.
 
 ### Five things it refuses to do
 
@@ -250,7 +306,227 @@ ERPNext `SAL-ORD-2026-00143`, raised by Test Rep → SAP DocNum **407**
 
 ---
 
+## Stage two — Manna Treads sales orders — added 26 September 2026
+
+> **Switched off 8 October 2026, on the user's instruction** ("for now, we
+> cannot send the sales orders to Manna Treads from the accountant view"). The
+> release carries only the Hi-Tech order sync and the accountant's read-only
+> view, *Orders at Hi-Tech*: every order at Hi-Tech with its real customer and
+> Hi-Tech's SO number, showing the delivery's contents once any delivery exists
+> and the sales order until then (`client/src/domain/accountantView.ts`).
+>
+> - The Server Script `manna_mt_so_request` is **disabled** on the site, so
+>   nothing can mark an order requested; PASS C therefore finds nothing to do.
+> - The dashboard no longer offers *Create in Manna Treads*. The request code
+>   stays in `client/src/api/mannaTreads.ts`, and PASS C stays in the sync.
+> - To switch it back on: re-enable the script and restore the button. The
+>   sync's own switch is `manna_treads.enabled` in `config.json` (default on).
+>
+> Everything below describes the path as built, for when it returns.
+
+Decided by the user on 26 September 2026. Hi-Tech (`HITECH_PRETREADS_LIVE`)
+makes and delivers every app order and bills Manna Treads, CardCode `10118`.
+Manna Treads then bills the **end customer**, for what Hi-Tech actually
+delivered — which is not always what was ordered. The accountant (Jineesh, the
+dashboard role `accountant`) sees each order Hi-Tech has **closed**, grouped by
+customer, with only what Hi-Tech delivered, and approves it. The office order
+sync then creates a Sales Order in **`MANNA_TREADS_LIVE`** to the end customer,
+through the Service Layer — the user's explicit choice of a second write path,
+"just as how the order is pushed to Hi-Tech on manager approval".
+
+The commercial boundary is unchanged: nothing about the end customer ever goes
+to Hi-Tech. This is Manna Treads billing its own customer in its own company.
+
+**The rule** is `fixtures/manna_treads_reorder.json` — its `rules` block is the
+specification — implemented by the dashboard (TypeScript) and by
+`Get-MtReorderPlan` in the sync, and both test suites read that file. Bill what
+was **delivered**, line by line; only an order with no delivery at all is
+billed on what was **invoiced**; never both. A line with nothing is left out.
+The price is the approved `amount / custom_total_weight`, which is
+GST-inclusive, so the SAP line carries it **net of GST** with the tax code.
+
+### The fields
+
+On `Sales Order Item`, written by the sync's PASS B, all `read_only`,
+`allow_on_submit`, `no_copy`:
+
+| field | type | means |
+|---|---|---|
+| `custom_hitech_delivered_kg` | Float (3) | kg on Hi-Tech delivery notes with `CancelStatus = csNo`, drawn from this line |
+| `custom_hitech_invoiced_kg` | Float (3) | kg on Hi-Tech A/R invoice lines drawn **straight** from this line (`BaseType 17`); cancelled invoices excluded; a line invoiced from a delivery is not counted here |
+| `custom_hitech_delivery_refs` | Small Text | `DN 4 (18-09-2026), DN 7 (20-09-2026)` |
+
+On `Sales Order`:
+
+| field | type | written by | means |
+|---|---|---|---|
+| `custom_mt_so_requested` | Check | **`manna_mt_so_request` only** | the accountant approved it |
+| `custom_mt_so_requested_by` / `_at` | Data / Datetime | `manna_mt_so_request` | who, when |
+| `custom_mt_sales_order` | Data | sync, PASS C | the Manna Treads DocNum |
+| `custom_mt_sales_order_entry` | Data | sync, PASS C | its DocEntry — DocNum is not unique in SAP |
+| `custom_mt_sync_error` | Small Text | sync, PASS C (cleared by the request script) | why it was not created |
+| `custom_mt_synced_at` | Datetime | sync, PASS C | when PASS C last wrote to it |
+
+And `User.custom_is_accountant` (Check) is how the dashboard recognises the
+accountant, the way `custom_is_managing_director` recognises the MD.
+
+### The request — `manna_mt_so_request`
+
+`POST /api/method/manna_mt_so_request`, form field `orders` = a JSON array of
+Sales Order names. Accountant or System Manager only. Per order it re-checks
+that the order is in SAP, Hi-Tech-closed, not cancelled, has a Manna Treads
+customer code and no Manna Treads order yet; then sets
+`custom_mt_so_requested = 1` / `_by` / `_at`, clears `custom_mt_sync_error`, and
+raises `SAP Order Sync Control.sync_requested`. Returns
+`{ results: [{ order, ok, message }], flag_raised }`.
+
+### What the sync does — PASS C
+
+After PASS A and B, for the rule's **queued** orders only —
+`custom_mt_so_requested = 1`, no `custom_mt_sales_order`, **no
+`custom_mt_sync_error`**, `custom_sap_sales_order` set, **`custom_po_status`
+exactly the PASS A gate** and `docstatus < 2` — inside a named system mutex so
+two runs cannot both post (a run that finds it held skips PASS C with a WARN):
+
+1. Before the Manna Treads login: re-read and plan with the rule, and work out
+   — not yet act on — what refuses it, the first that applies:
+   **not asked for by an approver** (`custom_mt_so_requested_by` not in
+   `manna_treads.approvers`, by default the accountant alone); **another live
+   ERPNext order on the same Hi-Tech SO** (a Desk *Duplicate* copies
+   `custom_sap_sales_order`; one Hi-Tech order is billed once); **an item on
+   two lines** (PASS B cannot split Hi-Tech's kilos between them, so the order
+   would post short); **Hi-Tech's own order, read by the Hi-Tech session this
+   run, not backing the recorded kilos** — not found, its `NumAtCard` naming
+   another order, not closed now, dated before the scan windows, an item it
+   sent on two of its lines or on a line this order lacks, kilos recorded for
+   an item not on it, or recorded kilos that differ from what it shows now;
+   the rule's state (not closed, cancelled, nothing delivered); another
+   unit's order; no customer code; a line with no price; **delivered, and
+   part invoiced straight from the order** (the rule's `delivery_wins` would
+   leave those kilos unbilled); **an item not on the allowlist**
+   (`manna_treads.item_allowlist`, by default exactly the ten SYNC TEST items
+   `I-14636`..`I-14645`). The Hi-Tech session therefore logs in whenever PASS
+   C has a queued order.
+2. Only if a queued order is left: **its own Service Layer session** to
+   `MANNA_TREADS_LIVE`, opened after the Hi-Tech session has logged out — never
+   two of the five SAP seats at once — and logged out in a `finally`.
+3. **The `NumAtCard` lookup comes first.** One live Manna Treads order
+   carrying the ERPNext name is **adopted** whatever step 1 said (a previous
+   run posted it and failed to write it back); two are refused as a
+   duplicate; none, and step 1's refusal stands.
+4. Otherwise validate the customer (exists, live, **its `CardName` the ERPNext
+   `customer_name`**, billed in Kerala) and every
+   item (exists, live, a sales item, **and the same product: its Manna Treads
+   `ItemName` equals the ERPNext line's `item_name`**, spacing and case
+   aside), then `POST /Orders`: CardCode = `Customer.custom_bp_code`, dated
+   **today**, NumAtCard = the ERPNext name, **Series 189**, branch 1,
+   **DiscountPercent 0 on the header and every line**, warehouse `01`,
+   `CG+SG@18`, location 2, one line per billable line at the net price. The
+   details are in `sap-order-sync/README.md` → *Stage two*.
+
+**A refusal is the order's, a transient failure is the run's.** Every refusal
+above — and SAP refusing the POST itself (HTTP 4xx with an SAP error body) —
+writes the reason (plain words, at most 250 characters) into
+`custom_mt_sync_error` with `custom_mt_synced_at`, **leaves
+`custom_mt_so_requested = 1`**, and does **not** fail the run. The order is
+then *failed* in the fixture's terms: the dashboard shows it with the reason
+and **Try again**, which calls `manna_mt_so_request`, which clears the error.
+The sync never retries a failed order by itself. A transient failure — no
+response, a timeout, a login failure, HTTP 5xx or the empty-body 500, any SAP
+read, any ERPNext read or write, or stale kilos on an order PASS B was due to
+refresh this run — writes **nothing** on the order, leaves it queued for the
+next run, and fails the run (exit 1). Stale kilos on an order nothing will
+refresh (retired, closed at Hi-Tech) are a refusal.
+
+**PASS B keeps following an order it has retired while Hi-Tech's SO is still
+open** — every line invoiced (`custom_sap_invoice` set) but the SAP status not
+`bost_Close` / `bost_Cancelled`, `custom_company = "Manna Treads"`, no Manna
+Treads order yet. For those it refreshes only `custom_sap_sales_order_status`
+and the three `custom_hitech_*` kilo fields (kilos first; a failed kilo write
+holds the status back a run), so a short-delivered order invoiced before
+Hi-Tech closed it still becomes *ready*. **On every PASS B order the kilos are
+written before the header**; if any kilo write fails, the header holds back
+the SAP status (so the order does not read *ready* on stale kilos) and, on the
+pass that would retire it, the order-level invoice. And PASS B writes **no**
+kilos to an order when the Hi-Tech SO's `NumAtCard` names another ERPNext
+order — they are that order's.
+
+### Things that will bite you
+
+1. **`qty` is rolls**, whatever the UOM says. Ordered kilos are
+   `custom_total_weight`; billed kilos are the two Hi-Tech fields above.
+2. **Delivered and invoiced are never added — and an order with both is
+   refused.** `custom_hitech_invoiced_kg` counts only invoice lines drawn
+   straight from the order, so an invoice drawn from a delivery is never
+   counted twice. But that also means that on an order with any delivery,
+   `custom_hitech_invoiced_kg` is always goods that left *without* one, which
+   the fixture's `delivery_wins` leaves unbilled. The sync refuses such an
+   order (*"Hi-Tech invoiced ... straight from its order without a delivery,
+   and delivered the rest ..."*) until the rule itself is decided — fixture
+   and both implementations, one commit.
+3. **The approved rate includes GST.** `220` gross is `UnitPrice 186.440678`
+   under `CG+SG@18`. Sending the gross rate bills the customer 18% high.
+4. **Items do not map yet, and the same code can be a different product.**
+   Real item codes differ between the two companies and there is no mapping;
+   at least one Hi-Tech code exists in Manna Treads SAP as a different tread.
+   Only the SYNC TEST items `I-14636`..`I-14645` were created as the same
+   product in both (names checked equal in both companies, 26 Sep 2026), and
+   they are the whole default allowlist. Any other item is refused by name —
+   *"I-11688 is not set up for Manna Treads sales orders yet."* — and an
+   allowed item whose Manna Treads name differs from ERPNext's is refused
+   naming both. Widening `manna_treads.item_allowlist` is a decision, not a
+   config tidy-up.
+5. **A customer billed outside Kerala is refused.** `CG+SG@18` is the
+   intra-state split; out of state is IGST, and the sync does not guess a tax
+   code.
+6. **Only `manna_mt_so_request` is meant to set `custom_mt_so_requested` —
+   and the sync checks who it names.** The field and `_by` are permlevel 0, so
+   REST can set them without the script's role check. PASS C acts only when
+   `custom_mt_so_requested_by` is one of `manna_treads.approvers` (the sync's
+   ERPNext user cannot read `User` or `Has Role`). That catches the flag set
+   by anything else, not a forger who also sets `_by`: for that, the three
+   request fields belong at permlevel 1 (System Manager write; read for the
+   Manna Treads screen's roles and *SAP Sync Bot*).
+7. **The gate is PASS A's, never wider.** An order at `Pending Final Approval`
+   or `Pending GM Approval` reaches neither company.
+8. **Rounding is the dashboard's, to the paisa.** Both sides take the value
+   to 15 significant figures and round the *decimal* half away from zero
+   (`roundTo` / `Get-RoundedHalfUp`); the fixture case "half-paisa midpoints
+   round UP" pins it. Rounding the raw double keyed `6029.70 / 60 kg` into SAP
+   at 100.49 where the accountant approved 100.50.
+9. **GST is fixed: 18%, and the approved rate includes it** — the fixture's
+   `gst_percent`, the dashboard's `GST_PERCENT`, the sync's `Get-MtGstPercent`.
+   It is not a config key.
+10. **An item on two lines is refused, not posted short.** PASS B matches
+    Hi-Tech's kilos to a row by item code, so an item on two rows gets none on
+    either, and the rule would leave both out as "nothing delivered". The
+    sync refuses the order — *"I-xxxxx is on two lines of this order;
+    Hi-Tech's kilos cannot be split between them - raise it in SAP by hand."*
+    The dashboard cannot see this and shows it as the sync's error.
+11. **The same on Hi-Tech's side.** An item Hi-Tech sent on two of its lines,
+    or on a line the ERPNext order does not have (added at the factory), gets
+    no kilos from PASS B — so PASS C checks Hi-Tech's own order, read that
+    very run, against every kilo recorded, and refuses rather than post
+    short (*"Hi-Tech delivered I-14641 (25 kg) on a line this order cannot be
+    matched to - raise it in SAP by hand."*).
+12. **One Hi-Tech order is billed once.** `custom_sap_sales_order` and its
+    status are copied by a Desk *Duplicate* (`no_copy = 0`), and PASS B finds
+    the Hi-Tech order by `DocNum`. PASS C refuses an order whose Hi-Tech SO is
+    on any other live ERPNext order, or whose `NumAtCard` names another order;
+    PASS B writes no kilos in the second case. Setting `no_copy = 1` on
+    `custom_sap_sales_order` and `custom_sap_sales_order_status` closes the
+    Desk route. Note the one legitimate clash this also stops: two Hi-Tech
+    series restarting their numbers, so two different SOs share a `DocNum` —
+    raise that one by hand.
+
+---
+
 ## A production order linked by hand — fixed 18 September 2026
+
+> **Superseded 24 September 2026.** The sync no longer reads production orders
+> at all (see *The flow* above), so this fix and its code are gone. The section
+> is kept because its measurement still stands and explains the decision: the
+> factory's production orders almost never carry a sales-order link.
 
 **The symptom.** SAP order 406 had a **Released** production order against its
 I-14637 line. The PWA showed the order as Not Started. The sync was not

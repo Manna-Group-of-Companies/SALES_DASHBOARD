@@ -236,11 +236,13 @@ Check the reasons in this order and use the first that matches:
 | 1 | line's `custom_production_stage == "Dispatched"` | `this line has been dispatched` |
 | 2 | order `custom_production_status == "Dispatched"` | `the order is complete` |
 | 3 | `custom_po_status == "PO Approved - Ready for SAP"` | `the order is approved and production is working to it` |
-| 4 | past 13:00 on `delivery_date` | `changes closed at 1 pm on the delivery date` |
+
+(A fourth reason, past 13:00 on `delivery_date`, was dropped on 11 Oct 2026
+along with the 1 pm cutoff.)
 
 **Approval is the real lock.** Where a line is served from only matters at the
 moment production receives the order, and that moment is approval. The other
-three are backstops for states that should not be reachable without it — each
+two are backstops for states that should not be reachable without it — each
 would otherwise mean releasing a reservation against goods the floor has already
 acted on, at worst stock that is physically on a van.
 
@@ -258,20 +260,21 @@ Right-aligned, bold: `Order total    Rs {total}`
 
 ### Block 6 — Edit the line-up
 
-If editing is open (see the 1 pm rule below): a button
+If editing is open (see the edit rule below): a button
 **"Add / Remove / Requantify"**.
 
 If closed: no button, just the reason in grey — e.g.
-*"Changes closed at 1 pm on 08/08/2026, the required delivery date."* or
+*"This order is with the general manager. Only they can change it now."* or
 *"Only {rep} or their manager can change this order."*
 
-**The 1 pm rule.** An order freezes at **13:00 on its `delivery_date`**.
+**The edit rule** (`shared/fixtures/order_locked_after_approval.json`). The
+approval status alone decides; the delivery date has no say. The 1 pm
+delivery-day cutoff this section used to describe was dropped on 11 Oct 2026.
 
-- No delivery date → **permanently open**, not shut. An order without a date is
-  a data problem and refusing to let anyone fix it makes it worse.
-- Judged against the **server clock** (`Date` HTTP response header), never the
-  browser's.
-- Who may edit before then: the rep who raised it, **or** their manager. A
+- Open until the sales manager approves the order or sends it to the GM.
+- With the GM: only the GM may change it. Approved by the GM, or approved and
+  sent to SAP: nobody. Rejected: open again, for the rep to fix and resend.
+- Who may edit while it is open: the rep who raised it, **or** their manager. A
   manager needs it because a customer who rings the office should not have to
   wait for their rep to come back into signal.
 
@@ -342,17 +345,18 @@ raises always reads as **new production**.
 
 ## A3. Approvals inbox
 
-**Everything the manager owes a decision on except orders.** Two queues in one
-list. Two places to look was two places to miss one — so orders are *not* here,
-and these two are *only* here.
+**Everything the manager owes a decision on except orders.** One queue since
+26 Sep 2026: sites. The proforma credit release was retired — a proforma held on
+credit now unlocks when the GM approves the order. Two places to look was two
+places to miss one — so orders are *not* here, and sites are *only* here.
 
 | Card title | Source | Filter |
 |---|---|---|
-| Proforma credit release | `Sales Order` | `custom_proforma_status = "Pending Release Approval"`, team |
+| ~~Proforma credit release~~ — retired 26 Sep 2026; the GM's approval of the order unlocks a held proforma (`shared/fixtures/proforma_release.json`) | | |
 | Site: {site name} ({owner}) | `Customer Site` | pending, team |
 
-Each card carries: title, document id, the rep, the party, an amount (proforma
-only), and for a site **the captured photo and a map link** to the coordinates.
+Each card carries: title, document id, the rep, the party, and for a site
+**the captured photo and a map link** to the coordinates.
 The manager is verifying that a photograph matches a place — they need both.
 
 ### Customer and lead locations are NOT approved
@@ -385,7 +389,6 @@ approving.
 
 | Type | Approve writes | Reject writes |
 |---|---|---|
-| `proforma` | `custom_proforma_status: "Released"` | `custom_proforma_status: "Blocked - Credit"` |
 | `site` | verified + verified coordinates | back to not captured |
 
 Rejecting a site must set its status back to not-captured so the rep captures

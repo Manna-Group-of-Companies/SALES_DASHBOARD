@@ -83,10 +83,7 @@ export function ImportPage() {
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">Data import</div>
-          <div className="page-head__sub">
-            Load the product master and customer GST/address details from Excel
-          </div>
+          <div className="page-head__title">Data Import</div>
         </div>
         <Segmented
           ariaLabel="What to import"
@@ -131,7 +128,7 @@ export function ImportPage() {
               <div className="dropzone__title">
                 Drop the {kind === 'products' ? 'product' : 'customer'} sheet here
               </div>
-              <div className="small muted">or click to choose a .xlsx / .xls / .csv file</div>
+              <div className="small muted">or click to choose · .xlsx, .xls, .csv</div>
               {busy && <div className="small" style={{ marginTop: 8 }}>Reading…</div>}
               <input
                 ref={fileInput}
@@ -146,28 +143,18 @@ export function ImportPage() {
             </div>
           </Card>
 
-          <Card title="Expected columns">
-            <p className="small muted" style={{ marginBottom: 10 }}>
-              Column names are matched loosely — case, spacing and common synonyms are all handled.
-            </p>
+          <Card title="Columns">
             {kind === 'products' ? (
               <ul className="col-list">
-                <li><b>Item Code</b>, <b>Item Name</b>, <b>Category</b> — required on every row</li>
-                <li>Category accepts PCTR / CTR / BG / VS or the full name</li>
-                <li>
-                  <b>Avg Weight Per Roll</b> + <b>Belts Per Roll</b> — required for PCTR.
-                  Despite its name, that column holds the weight of one <b>belt</b>;
-                  the roll weight is the two multiplied together.
-                </li>
-                <li><b>Weight Per Roll</b> — required for CTR</li>
-                <li><b>Tin Size</b> — must be 10 or 30 for VS</li>
+                <li><b>Item Code</b>, <b>Item Name</b>, <b>Category</b> (PCTR / CTR / BG / VS) — required</li>
+                <li><b>Avg Weight Per Roll</b> (one belt) + <b>Belts Per Roll</b> — PCTR</li>
+                <li><b>Weight Per Roll</b> — CTR</li>
+                <li><b>Tin Size</b> (10 or 30) — VS</li>
                 <li>Rate, Size, HSN Code — optional</li>
               </ul>
             ) : (
               <ul className="col-list">
-                <li><b>Customer Name</b> — required</li>
-                <li><b>Address</b> and <b>GSTIN</b> — required, they print on the proforma</li>
-                <li>GSTIN is checked against the 15-character format</li>
+                <li><b>Customer Name</b>, <b>Address</b>, <b>GSTIN</b> — required</li>
                 <li>Destination, State, Phone, Email, Credit Limit, Reps — optional</li>
               </ul>
             )}
@@ -177,7 +164,7 @@ export function ImportPage() {
               style={{ marginTop: 12 }}
               onClick={() => void Api.importer.downloadTemplate(kind)}
             >
-              Download blank template
+              Download template
             </Button>
           </Card>
         </div>
@@ -215,22 +202,16 @@ function ReviewStep({
         <Tile label="Rows in file" value={result.totalRows} />
         <Tile label="Ready to import" value={result.valid.length} tone="ok" />
         <Tile label="Rejected rows" value={rejected} tone={rejected ? 'alert' : undefined} />
-        <Tile label="Problems found" value={result.issues.length} tone={result.issues.length ? 'warn' : undefined} />
       </div>
 
       {result.issues.length > 0 && (
-        <Alert tone="warn" title={`${rejected} row${rejected === 1 ? '' : 's'} will be skipped`}>
-          The rows below are missing something the app needs. Fix them in the sheet and re-import —
-          everything else can be committed now.
-        </Alert>
+        <Alert tone="warn" title={`${rejected} row${rejected === 1 ? '' : 's'} will be skipped`} />
       )}
 
       <div className="cols cols--sidebar">
         <Card title={`Preview — ${fileName}`} flush>
           {result.valid.length === 0 ? (
-            <Empty icon="⚠" title="Nothing importable">
-              Every row had a problem. Fix the sheet and try again.
-            </Empty>
+            <Empty icon="⚠" title="No valid rows" />
           ) : (
             <div className="table-wrap" style={{ maxHeight: 460 }}>
               {result.kind === 'products' ? (
@@ -256,7 +237,7 @@ function ReviewStep({
       </div>
 
       <div className="row gap-2" style={{ justifyContent: 'flex-end' }}>
-        <Button onClick={onCancel}>Choose a different file</Button>
+        <Button onClick={onCancel}>Choose another file</Button>
         <Button
           variant="primary"
           loading={busy}

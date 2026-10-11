@@ -11,10 +11,10 @@
 //
 // **SAP books the stock now.** A sales order in SAP commits its lines the
 // moment it is placed, and `Sync-HitechStockToTreads.ps1` writes back
-// *available to promise* — on hand, less everything SAP has committed —  every
-// five minutes. So the number a rep sees has already had every other rep's
-// orders taken out of it, including orders placed in SAP by people who have
-// never opened this app. An ERPNext reservation on top of that subtracted the
+// *available to promise* — on hand, less everything SAP has committed —
+// whenever somebody presses Sync (no timer from 24 Sep 2026). So the number a
+// rep sees has already had every other rep's orders taken out of it, including
+// orders placed in SAP by people who have never opened this app. An ERPNext reservation on top of that subtracted the
 // same roll a second time.
 //
 // That also settles the race the compare-and-swap existed to win. It is

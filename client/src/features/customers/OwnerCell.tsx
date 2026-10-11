@@ -31,7 +31,7 @@ export function OwnerCell({
   const [saving, setSaving] = useState(false);
 
   if (peers.length === 0) {
-    return owner ? <span className="dim">{owner}</span> : <Badge tone="warn">unassigned</Badge>;
+    return owner ? <span className="dim">{owner}</span> : <Badge tone="warn">Unassigned</Badge>;
   }
 
   const assign = async (value: string) => {

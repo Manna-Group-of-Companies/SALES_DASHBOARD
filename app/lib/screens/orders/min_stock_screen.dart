@@ -67,10 +67,11 @@ class _MinimumStockScreenState extends State<MinimumStockScreen> {
           }
           if (snap.hasError) return _message(humanError(snap.error));
 
-          final all = snap.data ?? [];
+          // Items with no roll weight are left off — see shownAsRollsAndBelts.
+          final all = shownAsRollsAndBelts(snap.data ?? const []);
           if (all.isEmpty) {
             return _message(
-                'Nothing is on the minimum stock list yet, or none of it is '
+                'Nothing is on the stock list yet, or none of it is '
                 'sold by your unit.');
           }
           final shown = _filter(all);
@@ -131,21 +132,8 @@ class _StockRow extends StatelessWidget {
     final unit = detail.category.stockUnit;
     final belts = s.availableLooseBelts;
 
-    // No weight-per-roll or belts-per-roll on the item master, so SAP's
-    // kilograms cannot be turned into rolls. Said plainly rather than shown as
-    // a zero — "not set up" and "we are out" want different things doing.
-    if (!s.weightsKnown) {
-      return ListTile(
-        leading: const Icon(Icons.help_outline, color: Colors.black26),
-        title: Text(detail.name,
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-        subtitle: const Text('Stock not set up for this item',
-            style: TextStyle(
-                fontSize: 12,
-                color: Colors.black45,
-                fontStyle: FontStyle.italic)),
-      );
-    }
+    // Only items with both weights reach here — the screen drops the rest, so
+    // every row has a real roll count and an empty one means "none left".
 
     // Empty is worth colouring because it changes what the rep can promise.
     // "Below the minimum" is deliberately not a state here any more — the rep

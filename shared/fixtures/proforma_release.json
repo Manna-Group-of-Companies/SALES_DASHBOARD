@@ -1,0 +1,122 @@
+{
+  "about": "When the rep may hand an order's proforma to the customer. Within the credit limit: straight away, as always. For an order that goes to the GM (the customer's outstanding plus this order goes past a credit limit that is set - the same test as credit.json's 'escalates'): once the GM has approved the credit, and not before. There is no separate sales-manager release any more. Both apps implement this file - app/lib/core/proforma_release.dart and client/src/domain/proformaRelease.ts - and both test suites read it.",
+  "why": "Asked for 26 September 2026. Rates now come from SAP and the rep cannot change them, so the proforma needs nobody's check on price. What is left is credit: a proforma for an order the GM has not agreed to fund would tell the customer something the company has not decided. The user chose to let the GM's credit approval unlock it rather than keep the sales manager's 'Proforma credit release' - which no live order had ever used (0 Pending Release Approval, 0 Released, 0 Blocked - Credit on 26 Sep 2026).",
+  "fields": {
+    "po_status": "Sales Order.custom_po_status",
+    "proforma_status": "Sales Order.custom_proforma_status",
+    "order_total": "the order's value, the same figure the escalation test uses"
+  },
+  "rules": {
+    "within_limit": "Not held. No limit set is not an escalation (credit.json), so it is not held either.",
+    "gm_approved": "An over-limit order is released once custom_po_status is 'Pending Final Approval' (Approved by GM) or 'PO Approved - Ready for SAP'. The sales manager cannot approve an over-limit order to SAP without the GM (credit_commitment.json), so the second only follows the first.",
+    "legacy_released": "custom_proforma_status 'Released' - the old sales-manager release - still counts. None exists on the live site; the case is kept so one written by an old build is not taken back.",
+    "blocked_credit_ignored": "'Blocked - Credit' was the sales manager refusing a release. The GM decides now, so it neither holds nor releases on its own.",
+    "rejected": "A rejected over-limit order stays held: the GM did not approve the credit, or withdrew it."
+  },
+  "messages": {
+    "held": "This order needs the general manager's credit approval. The proforma unlocks once the general manager approves the credit."
+  },
+  "cases": [
+    {
+      "why": "within the limit - the proforma is the rep's to give, as it always was",
+      "customer": { "custom_outstanding_balance": 20000, "custom_credit_limit": 100000 },
+      "order_total": 30000,
+      "po_status": "Pending Approval",
+      "proforma_status": "Ready",
+      "held": false
+    },
+    {
+      "why": "no credit limit set is not an escalation, so nothing holds the proforma",
+      "customer": { "custom_outstanding_balance": 500000, "custom_credit_limit": 0 },
+      "order_total": 30000,
+      "po_status": "Pending Approval",
+      "proforma_status": "Ready",
+      "held": false
+    },
+    {
+      "why": "within the limit but overdue past the payment terms - it escalates since 11 Oct 2026 (credit.json past_terms), so the proforma waits for the GM too",
+      "customer": { "custom_outstanding_balance": 20000, "custom_credit_limit": 100000, "custom_overdue_past_terms": 12000, "custom_payment_terms": "Net-30" },
+      "order_total": 30000,
+      "po_status": "Pending Approval",
+      "proforma_status": "Ready",
+      "held": true
+    },
+    {
+      "why": "already past the limit and just raised - held until the GM decides",
+      "customer": { "custom_outstanding_balance": 620000, "custom_credit_limit": 500000 },
+      "order_total": 40000,
+      "po_status": "Pending Approval",
+      "proforma_status": "Ready",
+      "held": true
+    },
+    {
+      "why": "this order is what takes the customer over - it escalates, so the proforma waits too",
+      "customer": { "custom_outstanding_balance": 90000, "custom_credit_limit": 100000 },
+      "order_total": 20000,
+      "po_status": "Pending Approval",
+      "proforma_status": "Ready",
+      "held": true
+    },
+    {
+      "why": "with the GM - not decided yet",
+      "customer": { "custom_outstanding_balance": 620000, "custom_credit_limit": 500000 },
+      "order_total": 40000,
+      "po_status": "Pending GM Approval",
+      "proforma_status": "Ready",
+      "held": true
+    },
+    {
+      "why": "the GM approved the credit - the proforma unlocks without anyone releasing it",
+      "customer": { "custom_outstanding_balance": 620000, "custom_credit_limit": 500000 },
+      "order_total": 40000,
+      "po_status": "Pending Final Approval",
+      "proforma_status": "Ready",
+      "held": false
+    },
+    {
+      "why": "pushed to SAP after the GM's approval - still released",
+      "customer": { "custom_outstanding_balance": 620000, "custom_credit_limit": 500000 },
+      "order_total": 40000,
+      "po_status": "PO Approved - Ready for SAP",
+      "proforma_status": "Sent",
+      "held": false
+    },
+    {
+      "why": "the GM rejected it, or withdrew the approval - held",
+      "customer": { "custom_outstanding_balance": 620000, "custom_credit_limit": 500000 },
+      "order_total": 40000,
+      "po_status": "Rejected",
+      "proforma_status": "Ready",
+      "held": true
+    },
+    {
+      "why": "released by a sales manager under the old rule - not taken back",
+      "customer": { "custom_outstanding_balance": 620000, "custom_credit_limit": 500000 },
+      "order_total": 40000,
+      "po_status": "Pending Approval",
+      "proforma_status": "Released",
+      "held": false
+    },
+    {
+      "why": "an old 'Blocked - Credit' does not outlive the GM's approval",
+      "customer": { "custom_outstanding_balance": 620000, "custom_credit_limit": 500000 },
+      "order_total": 40000,
+      "po_status": "Pending Final Approval",
+      "proforma_status": "Blocked - Credit",
+      "held": false
+    },
+    {
+      "why": "the outstanding is read the way the escalation reads it: the stored total, or the buckets when SAP left the total at zero",
+      "customer": {
+        "custom_outstanding_balance": 0,
+        "custom_outstanding_0_30": 60000,
+        "custom_outstanding_30_60": 50000,
+        "custom_credit_limit": 100000
+      },
+      "order_total": 5000,
+      "po_status": "Pending Approval",
+      "proforma_status": "Ready",
+      "held": true
+    }
+  ]
+}

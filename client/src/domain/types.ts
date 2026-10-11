@@ -20,9 +20,23 @@ export type Role =
   | 'general_manager'
   | 'production_manager'
   | 'stock_manager'
-  | 'hr';
+  | 'hr'
+  /**
+   * The Managing Director (25 Sep 2026): quality-wise list prices and dealer
+   * prices for Hi-Tech Pretreads in SAP, handed over as DTW files. From
+   * `User.custom_is_managing_director`.
+   */
+  | 'managing_director'
+  /**
+   * The accountant (26 Sep 2026): approves each order Hi-Tech has finished to
+   * be raised again in Manna Treads' SAP, to the end customer, for what was
+   * delivered. From `User.custom_is_accountant`. No order-book actions.
+   */
+  | 'accountant';
 
 export const ROLE_LABEL: Record<Role, string> = {
+  managing_director: 'Managing Director',
+  accountant: 'Accountant',
   sales_manager: 'Sales Manager',
   general_manager: 'General Manager',
   production_manager: 'Production Manager',
@@ -269,6 +283,14 @@ export interface SalesCustomer {
   outstanding30_60: number;
   outstanding60_90: number;
   outstanding90Plus: number;
+  /**
+   * Overdue past the customer's SAP payment terms, the term's name, and how
+   * many days the oldest overdue invoice is late (11 Oct 2026). Written by the
+   * SAP credit sync; read through `domain/credit.ts`.
+   */
+  overduePastTerms: number;
+  paymentTerms?: string;
+  overdueDays: number;
   locationStatus?: LocationStatus;
   latitude: number;
   longitude: number;
@@ -308,7 +330,26 @@ export interface TeamOrder {
    * to behaviour - see `cancelledInSap`.
    */
   sapSalesOrderStatus?: string;
+  /**
+   * The SAP invoice that completed the order — written only once every line
+   * has been invoiced. What makes a list show it Dispatched; see `orderProgress`.
+   */
+  sapInvoice?: string;
   route?: string;
+  /**
+   * What the customer committed to, in the rep's words, when the order took
+   * them past their credit limit. Empty on an order that never needed one.
+   * See `domain/creditCommitment.ts`.
+   */
+  creditCommitment?: string;
+  /** When the rep said it would be met. Optional; the GM may change it. */
+  creditCommitmentDue?: string;
+  /**
+   * The GM whose approval moved this order to `Pending Final Approval`, and
+   * when. The sales manager reads it before pushing to SAP.
+   */
+  gmApprovedBy?: string;
+  gmApprovedOn?: string;
 }
 
 /** Where a captured location stands. */
@@ -426,25 +467,14 @@ export interface OrderLine {
   dispatchShortReason?: string;
 
   /**
-   * What SAP says about THIS line: the production order covering it and where
-   * that order is on the floor.
+   * The A/R invoice that carried THIS line, and its posting date.
    *
-   * SAP raises one production order per item, so the order-level stage is only
-   * a roll-up and cannot say which item is holding an order back. Free text —
-   * the stage list belongs to the factory. Turn it into behaviour only through
-   * `domain/sapOrderState.ts`, never by comparing strings on a screen.
+   * Blank means this line has not gone — even when other lines have. An order
+   * can be invoiced in parts. Turn it into a status only through
+   * `domain/sapOrderState.ts`, never by testing it on a screen.
    */
-  sapProductionOrder?: string;
-  sapProductionStage?: string;
-  /**
-   * The delivery that carried THIS line, and when it ships.
-   *
-   * Blank means this line has not gone — even when the order carries a
-   * delivery number. A delivery can be raised for part of an order, which is
-   * how the floor ships what is ready and leaves the rest open.
-   */
-  sapDeliveryOrder?: string;
-  sapDeliveryDate?: string;
+  sapInvoice?: string;
+  sapInvoiceDate?: string;
 }
 
 /** A lead order — the pre-customer equivalent of a Sales Order. */
@@ -485,20 +515,21 @@ export interface LeadOrderLine {
  * it in CSS, and not to leave it on the object where a search box could match
  * it. The customer is resolved to a `route` at the API boundary and dropped.
  */
+/**
+ * One order as production sees it: the order, the rep who sold it, the route
+ * — and NOT the customer (26 Sep 2026, the user: "only orders and the sales
+ * rep, like SAP"). The customer was withheld until 19 Aug 2026, shown from
+ * then for dispatch planning (whose pallet is whose on a van), and is withheld
+ * again now that dispatch planning is parked and the invoice is the dispatch.
+ * There is deliberately no field for it, so no production screen can show it
+ * by accident. The ERPNext API still returns the order's customer to a login
+ * that asks for it — this is what the screens show, not a permission.
+ */
 export interface ProductionOrderRow {
   id: string;
   /** The destination route, or the literal "No route set". Never a territory. */
   route: string;
-  /**
-   * Who the goods are for.
-   *
-   * Withheld from production until 19 Aug 2026, on the reasoning that the
-   * floor plans routes and vans rather than relationships. Dispatch changed
-   * that: somebody loading a vehicle has to know which customer each pallet
-   * belongs to, and a route alone does not say it when two customers sit on
-   * one round. Shown now, on the same screens that always showed the route.
-   */
-  customerName: string;
+  /** The Sales Person who sold it — who the floor rings about the order. */
   rep: string;
   unit?: string;
   placedOn: string;
@@ -512,12 +543,24 @@ export interface ProductionOrderRow {
   /** Times the rep has edited it since raising it. 0 on most orders. */
   editCount: number;
   combinedOrder?: string;
+  /**
+   * What SAP has said about the order, as the sync wrote it back. The queue
+   * lists an order only once `salesOrder` is set — see `productionQueue.ts`.
+   * The shape is `SapOrderState`'s, so its rules read it directly.
+   */
+  sap: {
+    salesOrder?: string;
+    salesOrderStatus?: string;
+    invoice?: string;
+    invoiceDate?: string;
+    syncedAt?: string;
+  };
 }
 
 /**
  * One order line still owed some quantity, offered up for a manager to add
- * to a `Manna Dispatch`. Carries the customer as well as the route — see
- * `ProductionOrderRow.customerName` for why that changed.
+ * to a `Manna Dispatch`. Carries the order, the route and the rep, not the
+ * customer — see `ProductionOrderRow`.
  */
 export interface DispatchableLine {
   salesOrder: string;
@@ -526,7 +569,6 @@ export interface DispatchableLine {
   itemCode: string;
   itemName: string;
   route: string;
-  customerName: string;
   /** Who sold it. The floor rings this person when a line has to be short-shipped. */
   rep: string;
   /** Still owed on this line: ordered, less whatever has already gone out. */
@@ -541,7 +583,6 @@ export interface DispatchLine {
   itemCode: string;
   itemName: string;
   route: string;
-  customerName: string;
   plannedRolls: number;
   plannedLooseBelts: number;
   /** Only meaningful once the header is `Dispatched`. */
@@ -587,16 +628,14 @@ export interface OrderDetail extends TeamOrder {
    * What SAP says about the order as a whole. The per-line detail is on
    * `OrderLine`; these are the order-level facts a line cannot carry.
    *
-   * `sapDeliveryOrder` matters beyond display: SAP delivers an ORDER, not a
-   * line, so a delivery means every line on it has gone — which is why
-   * `lineStatusFromSap` takes the order as well as the line.
+   * A line has no SAP number of its own, so `lineStatusFromSap` takes the
+   * order as well as the line: an uninvoiced line is Pushed to SAP only when
+   * its order is. `sapInvoice` is set only once every line has been invoiced.
    */
   sapSalesOrder?: string;
   sapSalesOrderStatus?: string;
-  sapProductionOrder?: string;
-  sapProductionStage?: string;
-  sapDeliveryOrder?: string;
-  sapDeliveryDate?: string;
+  sapInvoice?: string;
+  sapInvoiceDate?: string;
   sapSyncedAt?: string;
   sapSyncError?: string;
 }
@@ -624,6 +663,20 @@ export interface OrderDetail extends TeamOrder {
  */
 export interface MinStockLine {
   itemCode: string;
+  /**
+   * What a person recognises — "Tread Rubber Precured Black Pearl 156 AJAX
+   * 91". The code alone (`I-10280`) says nothing, and quality and pattern are
+   * parsed out of the name, never the code.
+   */
+  itemName?: string;
+  itemGroup?: string;
+  /**
+   * SAP's figure as it arrived, in kilos, available to promise. The only
+   * figure an item without weights has; see `stockView` for who is shown it.
+   */
+  kg?: number;
+  /** The item's stock UOM. `kg` is in this unit — five FG items are not Kg. */
+  uom?: string;
   /**
    * Available to promise. SAP has already taken off every quantity committed
    * to an open sales order, whoever raised it. Nothing subtracts further.
@@ -869,7 +922,7 @@ export interface Order {
   status: OrderStatus;
   items: OrderItem[];
 
-  /** Requested by the rep (1.7). Drives the edit-freeze deadline (3.3). */
+  /** Requested by the rep (1.7). */
   deliveryDate: string;
   /**
    * Immutable. Captured at creation and carried untouched through the whole

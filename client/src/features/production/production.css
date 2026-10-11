@@ -19,7 +19,6 @@
   flex-wrap: wrap;
   margin-top: 10px;
 }
-.prod__actions .note { flex: 1; min-width: 200px; }
 
 .prod__lines {
   display: grid;
@@ -45,41 +44,10 @@
   margin-bottom: 10px;
 }
 
-.prod__stagecap {
-  font-size: 12.5px;
-  color: var(--text-2);
-  margin-bottom: 6px;
-}
-
-/* An off-sequence stage is an error, not a stage. It must not look like one. */
-.prod__badstage {
-  font-size: 12.5px;
-  color: var(--hue-red);
-  font-weight: 600;
-  margin: 6px 0;
-}
-
-.prod__bar {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--surface-2);
-  overflow: hidden;
-}
-.prod__bar-fill {
-  height: 100%;
-  background: var(--accent);
-  transition: width 160ms ease;
-}
-.prod__bar-fill.done { background: var(--hue-green); }
-
-.week__label {
-  text-align: center;
-  min-width: 200px;
-  font-weight: 600;
-  font-size: 13.5px;
-}
-
-/* Combined-order groups on A4. */
+/*
+ * Combined-order groups on A4. CombinedOrdersPage uses these without
+ * importing this file (it arrives with the bundle), so they stay here.
+ */
 .comb {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -100,8 +68,3 @@
   border-top: 1px solid var(--border);
   padding: 4px 12px 10px;
 }
-
-.stock__alarms { display: flex; gap: 6px; flex-wrap: wrap; }
-.stock__movement { font-size: 11px; color: var(--text-3); margin-top: 6px; }
-.run__note .warn { color: var(--hue-amber); font-weight: 600; }
-.run__note .ok { color: var(--hue-green); font-weight: 600; }

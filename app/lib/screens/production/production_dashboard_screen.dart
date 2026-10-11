@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/production/production_order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -28,15 +29,29 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
   void _reload() =>
       setState(() => _future = Api.getApprovedPOsForProduction());
 
-  /// Searches the order number, the route and the customer. The customer
-  /// joined the list on 19 Aug 2026, when it stopped being withheld from
-  /// production — see Api.getApprovedPOsForProduction.
+  /// Searches the order number, the SAP order, the rep and the route — never
+  /// the customer, which production does not see (26 Sep 2026, see
+  /// Api.getApprovedPOsForProduction).
   bool _match(Map<String, dynamic> r) {
     if (_q.isEmpty) return true;
-    final hay = [r['name'], r['destination'], r['customer_name']]
-        .map((e) => (e ?? '').toString().toLowerCase())
-        .join(' ');
+    final hay = [
+      r['name'],
+      r['custom_sap_sales_order'],
+      r['custom_sales_person'],
+      r['destination'],
+    ].map((e) => (e ?? '').toString().toLowerCase()).join(' ');
     return hay.contains(_q.toLowerCase());
+  }
+
+  /// "SAP order 426" once SAP has it, else the ERPNext order number.
+  static String _title(Map<String, dynamic> r) {
+    final sap = '${r['custom_sap_sales_order'] ?? ''}'.trim();
+    return sap.isEmpty || sap == 'null' ? '${r['name']}' : 'SAP order $sap';
+  }
+
+  static String _soldBy(Map<String, dynamic> r) {
+    final rep = '${r['custom_sales_person'] ?? ''}'.trim();
+    return rep.isEmpty || rep == 'null' ? 'No rep on the order' : 'Sold by $rep';
   }
 
   @override
@@ -57,7 +72,7 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
           child: TextField(
             decoration: const InputDecoration(
               prefixIcon: Icon(Icons.search),
-              hintText: 'Search order no. / route…',
+              hintText: 'Search order / SAP no. / rep / route…',
               isDense: true,
               border: OutlineInputBorder(),
             ),
@@ -101,12 +116,12 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
                         color: changed
                             ? Colors.red
                             : const Color(0xFF7C3AED)),
-                    // The customer leads and the route qualifies it, below.
-                    // Production was shown the route alone until 19 Aug 2026
-                    // — see Api.getApprovedPOsForProduction for what changed.
+                    // The order leads, with the rep and the route below —
+                    // never the customer (26 Sep 2026, see
+                    // Api.getApprovedPOsForProduction).
                     title: Row(children: [
                       Expanded(
-                        child: Text('${r['customer_name'] ?? ''}',
+                        child: Text(_title(r),
                             style: const TextStyle(
                                 fontWeight: FontWeight.w600)),
                       ),
@@ -128,11 +143,21 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                              '${r['destination'] ?? 'No route set'}'
+                              '${_soldBy(r)}  ·  ${r['destination'] ?? 'No route set'}'
                               '\n${r['name']}  ·  raised ${r['transaction_date'] ?? ''}'
                               '\nDeliver by ${delivery.isEmpty || delivery == 'null' ? 'not set' : delivery}'),
                           const SizedBox(height: 4),
-                          OrderCompleteTick(order: r),
+                          // The tick reads SAP (orderProgress), which has no
+                          // word for cancelled — so a cancelled order is said
+                          // outright rather than read as still in SAP.
+                          if (cancelledInSap(SapOrderState.fromOrder(r)))
+                            Text('CANCELLED IN SAP',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.red.shade700))
+                          else
+                            OrderCompleteTick(order: r),
                         ]),
                     trailing: Text('₹${(r['grand_total'] ?? 0)}',
                         style: const TextStyle(fontWeight: FontWeight.bold)),

@@ -56,7 +56,7 @@ src/
   domain/          Pure business rules. No React, no Redux, no Axios.
     types.ts           Domain vocabulary
     productRules.ts    Per-category quantity/weight/money maths (1.2–1.5)
-    orderRules.ts      Rate lock (2.2), edit freeze (3.3), permissions
+    orderRules.ts      Rate lock (2.2), approval edit lock, permissions
     processStages.ts   Per-category production cycles (3.2)  ← provisional
     aging.ts           Dated batches and age bands (1.6)
     hrRules.ts         Headcount, attendance, leave clashes and balances
@@ -112,15 +112,11 @@ Everything else is workflow; these two are load-bearing.
 role-aware — nobody outranks it. `Api.orders.updateItems` re-applies stored rates on
 every item update even if the caller passes different ones.
 
-**Orders freeze at 1:00 PM on the delivery date (3.3).** `canEditItems()` is the
-only gate; every editable surface goes through it. A countdown chip sits on every
-order row so the deadline is visible before it bites.
-
-> **Judgement call, flagged:** when production moves the delivery date (3.2), the
-> freeze deadline follows the *revised* date, not the original. Preponing would
-> otherwise leave edits open past dispatch, and postponing would freeze an order
-> that still has a fortnight to run. Change `effectiveDeliveryDate()` in
-> `orderRules.ts` if you want it pinned to the originally requested date.
+**Approval ends editing** (`shared/fixtures/order_locked_after_approval.json`).
+The live order screens gate on `statusAllowsEdit()`; the legacy model's
+`canEditItems()` refuses anything past pending. Until 11 Oct 2026 orders also
+froze at 1:00 PM on the delivery date (3.3), with a countdown chip on every
+row; the cutoff and the chip are gone.
 
 ## Where the spec lives in the code
 

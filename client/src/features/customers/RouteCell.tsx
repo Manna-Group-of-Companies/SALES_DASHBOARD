@@ -43,16 +43,16 @@ export function RouteCell({
 
   if (!rep) {
     return (
-      <Badge tone="warn" title="Assign a representative before a route">
-        no rep
+      <Badge tone="warn" title="Assign a rep first">
+        No rep
       </Badge>
     );
   }
 
   if (mine.length === 0) {
     return (
-      <Badge tone="warn" title={`${rep} has no routes defined in ERPNext`}>
-        no routes for {rep}
+      <Badge tone="warn" title={`${rep} has no routes`}>
+        No routes
       </Badge>
     );
   }
@@ -79,7 +79,7 @@ export function RouteCell({
       aria-label={`Assign a route for ${id}`}
       title={`${rep}'s routes`}
     >
-      <option value="">{saving ? 'Saving…' : 'Assign route…'}</option>
+      <option value="">{saving ? 'Saving…' : 'Assign route'}</option>
       {mine.map((r) => (
         <option key={r.id} value={r.id}>
           {r.name}

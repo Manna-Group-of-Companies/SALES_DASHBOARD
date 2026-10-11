@@ -13,7 +13,14 @@
 
 import { describe, expect, it } from 'vitest';
 import fixture from '../../../../shared/fixtures/order_locked_after_approval.json';
-import { isApproved, PO_STATUS } from '../orderStatus';
+import {
+  EDIT_LOCK,
+  editOpenNote,
+  escalationLockReason,
+  isApproved,
+  PO_STATUS,
+  statusAllowsEdit,
+} from '../orderStatus';
 
 interface CanEditCase {
   why: string;
@@ -40,10 +47,10 @@ describe('the fixture and the code agree on what "approved" is', () => {
 
 describe('every fixture case that turns on the status alone', () => {
   /*
-   * Only the status half is asserted here. Ownership and the 1 pm cutoff are
-   * the phone's rules — the dashboard gates those on role and `pastCutoff`
-   * instead — so the fixture's `can_edit` cases are read for the one thing
-   * both sides must agree on: an approved order is shut.
+   * Only the status half is asserted here. Ownership is the phone's rule — the
+   * dashboard gates it on role instead — so the fixture's `can_edit` cases are
+   * read for the one thing both sides must agree on: an approved order is
+   * shut.
    */
   for (const c of fixture.can_edit as CanEditCase[]) {
     const status = String(c.order.custom_po_status ?? '');
@@ -89,4 +96,64 @@ describe('what the lock has to say for itself', () => {
       }
     });
   }
+});
+
+describe('who may change an order at each stage of approval (26 Sep 2026)', () => {
+  /*
+   * The fixture's by_role table, which the phone's suite reads too: the rep and
+   * the sales manager stop at the escalation, the GM at their own approval, and
+   * nobody changes an order the GM approved.
+   */
+  const roles = ['rep', 'sales_manager', 'general_manager'] as const;
+
+  it('the lock messages match the fixture word for word', () => {
+    expect(EDIT_LOCK.withGm).toBe(fixture.messages.with_gm);
+    expect(EDIT_LOCK.gmApproved).toBe(fixture.messages.gm_approved);
+  });
+
+  it('an unrecognised role is refused, as orderActions refuses it', () => {
+    expect(statusAllowsEdit('Pending Approval', 'production_manager')).toBe(false);
+    expect(statusAllowsEdit('Pending Approval', 'managing_director')).toBe(false);
+    expect(statusAllowsEdit('Pending Approval', undefined)).toBe(false);
+  });
+
+  for (const c of fixture.by_role) {
+    it(c.why, () => {
+      for (const role of roles) {
+        expect(statusAllowsEdit(c.po_status, role), role).toBe(c[role]);
+      }
+    });
+  }
+
+  it("the fixture's dated cases: a past delivery date locks nothing (11 Oct 2026)", () => {
+    // The dashboard's gate is the status for the role, and nothing on top. A
+    // dated case that expects an open order must be open to the people who
+    // may change it at that status, whatever its date.
+    const dated = (fixture.can_edit as CanEditCase[]).filter(
+      (c) => c.order.delivery_date != null,
+    );
+    expect(dated.length).toBeGreaterThan(0);
+    for (const c of dated) {
+      const status = String(c.order.custom_po_status ?? '');
+      for (const role of ['rep', 'sales_manager', 'general_manager']) {
+        expect(statusAllowsEdit(status, role), `${c.why} / ${role}`).toBe(c.expect);
+      }
+    }
+  });
+
+  it('tells someone who may still edit that a decision, not a date, ends it', () => {
+    for (const s of [PO_STATUS.pending, PO_STATUS.pendingGm, '']) {
+      expect(editOpenNote(s)).not.toMatch(/1 ?pm|1:00|13:00|delivery date/i);
+    }
+    expect(editOpenNote(PO_STATUS.pending)).toContain('approves');
+    expect(editOpenNote(PO_STATUS.pendingGm)).toContain('only you');
+  });
+
+  it('says why: with the GM for the others, approved by the GM for everyone', () => {
+    expect(escalationLockReason(PO_STATUS.pendingGm, 'sales_manager')).toBe(EDIT_LOCK.withGm);
+    expect(escalationLockReason(PO_STATUS.pendingGm, 'general_manager')).toBeNull();
+    expect(escalationLockReason(PO_STATUS.finalApproval, 'general_manager')).toBe(EDIT_LOCK.gmApproved);
+    expect(escalationLockReason(PO_STATUS.finalApproval, 'sales_manager')).toBe(EDIT_LOCK.gmApproved);
+    expect(escalationLockReason(PO_STATUS.pending, 'sales_manager')).toBeNull();
+  });
 });

@@ -38,6 +38,15 @@ export const OUTSTANDING_FIELD = {
   d30_60: 'custom_outstanding_30_60',
   d60_90: 'custom_outstanding_60_90',
   d90plus: 'custom_outstanding_90_plus',
+  /*
+   * Payment terms, added 11 Oct 2026. Written by the SAP credit sync, which
+   * decides what "overdue past the terms" means once, for both apps: the open
+   * amount on invoices whose SAP due date has passed, capped at the SAP
+   * balance, and 0 for a customer with no term set. See credit.json `fields`.
+   */
+  overduePastTerms: 'custom_overdue_past_terms',
+  paymentTerms: 'custom_payment_terms',
+  overdueDays: 'custom_overdue_days',
 } as const;
 
 /**
@@ -140,11 +149,89 @@ export function hasOverdue(customer: CustomerRow): boolean {
  * No limit set is not an unlimited limit, but it is not an escalation either.
  * Many of the 620 customers have none, and escalating all of them would bury
  * the general manager and teach everyone to wave the queue through.
+ *
+ * Since 11 Oct 2026 this is only the LIMIT half of the escalation. Whether an
+ * order goes to the GM is `creditEscalates`, which adds the payment-terms rule.
  */
 export function overCreditLimit(customer: CustomerRow, orderTotal: number): boolean {
   const a = agingOf(customer);
   if (!(a.creditLimit > 0)) return false;
   return a.total + orderTotal > a.creditLimit;
+}
+
+/** Below this, money left on an invoice is rounding, not an overdue customer. */
+export const OVERDUE_TOLERANCE = 1;
+
+/**
+ * What is overdue past the customer's payment terms, as the SAP sync wrote it.
+ * Zero when nothing is, when no term is set, or when the sync has not reached
+ * this customer yet — never an error.
+ */
+export function overduePastTerms(customer: CustomerRow): number {
+  return num(customer[OUTSTANDING_FIELD.overduePastTerms]);
+}
+
+/** The SAP payment term's name, or '' when none was synced. */
+export function paymentTermsOf(customer: CustomerRow): string {
+  const v = customer[OUTSTANDING_FIELD.paymentTerms];
+  const s = typeof v === 'string' ? v.trim() : '';
+  return s === 'null' ? '' : s;
+}
+
+/** How many days the oldest overdue invoice is past its due date. */
+export function overdueDaysOf(customer: CustomerRow): number {
+  return Math.max(0, Math.round(num(customer[OUTSTANDING_FIELD.overdueDays])));
+}
+
+/** Why an order needs the GM. Both may hold at once. */
+export interface CreditEscalation {
+  /** The order takes the customer past a credit limit that is set. */
+  overLimit: boolean;
+  /** Invoices are overdue past the customer's payment terms. */
+  pastTerms: boolean;
+}
+
+export function escalationOf(customer: CustomerRow, orderTotal: number): CreditEscalation {
+  return {
+    overLimit: overCreditLimit(customer, orderTotal),
+    pastTerms: overduePastTerms(customer) > OVERDUE_TOLERANCE,
+  };
+}
+
+/**
+ * Whether an order needs the general manager's credit approval.
+ *
+ * Over the credit limit (unchanged), **or** overdue past the payment terms —
+ * the second rule, asked for on 11 Oct 2026. The terms rule needs no limit:
+ * a customer with none who is overdue past their terms still escalates.
+ * Everything that used to ask `overCreditLimit` whether an order escalates —
+ * who may approve, the rep's commitment, the held proforma — asks this.
+ */
+export function creditEscalates(customer: CustomerRow, orderTotal: number): boolean {
+  const e = escalationOf(customer, orderTotal);
+  return e.overLimit || e.pastTerms;
+}
+
+/** One line for the GM and the sales manager: why this order is with the GM. */
+export function escalationReason(customer: CustomerRow, orderTotal: number): string {
+  const e = escalationOf(customer, orderTotal);
+  const limit = 'This order takes the customer past their credit limit';
+  const terms = `has ${pastTermsPhrase(customer)}`;
+  if (e.overLimit && e.pastTerms) return `${limit}, and the customer ${terms}.`;
+  if (e.overLimit) return `${limit}.`;
+  if (e.pastTerms) return `The customer ${terms}.`;
+  return '';
+}
+
+/** "₹25,000 overdue past Net-30 (oldest 12 days late)". */
+export function pastTermsPhrase(customer: CustomerRow): string {
+  const amount = overduePastTerms(customer);
+  const terms = paymentTermsOf(customer);
+  const days = overdueDaysOf(customer);
+  const rupees = `₹${Math.round(amount).toLocaleString('en-IN')}`;
+  return `${rupees} overdue past ${terms ? `their ${terms} terms` : 'their payment terms'}${
+    days > 0 ? ` (oldest ${days} day${days === 1 ? '' : 's'} late)` : ''
+  }`;
 }
 
 /** The four boxes, in the order they are shown, oldest last. */

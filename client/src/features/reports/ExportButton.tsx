@@ -20,7 +20,7 @@ export function ExportButton({
   sheet,
   rows,
   disabled = false,
-  label = 'Excel',
+  label = 'Export',
 }: {
   filename: string;
   sheet: string;
@@ -70,7 +70,7 @@ export function ExportButton({
       onClick={download}
       loading={busy}
       disabled={disabled || busy}
-      title={error ?? 'Download this view as an Excel file'}
+      title={error ?? 'Download as Excel'}
     >
       <span aria-hidden>⤓</span> {error ?? label}
     </Button>

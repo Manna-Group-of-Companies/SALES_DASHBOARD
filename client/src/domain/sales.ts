@@ -18,6 +18,7 @@ export type PoStatus =
   | 'Pending Rate Approval'
   | 'PO Uploaded - Pending Approval'
   | 'Pending GM Approval'
+  | 'Pending Final Approval'
   | 'PO Approved - Ready for SAP'
   | 'Rejected';
 
@@ -35,6 +36,9 @@ export function approvalLabel(status?: string): string {
       return 'Waiting for rate approval';
     case 'Pending GM Approval':
       return 'Escalated to GM';
+    // The GM approved the credit; the sales manager has still to push it.
+    case 'Pending Final Approval':
+      return 'Approved by GM — push to SAP';
     case 'Rejected':
       return 'Rejected';
     default:
@@ -54,6 +58,7 @@ export function approvalTone(status?: string): ApprovalTone {
     case 'PO Uploaded - Pending Approval':
     case 'Pending Rate Approval':
     case 'Pending GM Approval':
+    case 'Pending Final Approval':
       return 'warn';
     default:
       return 'neutral';
@@ -66,7 +71,9 @@ export function awaitingDecision(status?: string): boolean {
     status === 'Pending Approval' ||
     status === 'PO Uploaded - Pending Approval' ||
     status === 'Pending Rate Approval' ||
-    status === 'Pending GM Approval'
+    status === 'Pending GM Approval' ||
+    // Waiting on the sales manager's push, which is still a decision owed.
+    status === 'Pending Final Approval'
   );
 }
 
@@ -282,26 +289,25 @@ export function canOpen(managedTeam: string | undefined, screen: ManagerScreen):
 /**
  * What this user may open, from their **role** as well as their team.
  *
- * The General Manager is scoped by role and not by team. They are who every
- * other role escalates to, they hold the three exemptions in `orderStatus.ts`,
- * and `GmQueuePage` promises them "the same full review the sales manager
- * gets".
+ * **The General Manager opens none of the team screens**, whatever team they
+ * might carry. Asked for 24 September 2026: the GM's dashboard is the
+ * escalation queue and nothing else — no Customers, no Team Orders, no Stock.
+ * They review an escalated order on `/gm/orders/:orderId`, their own page,
+ * which carries the rep's commitment and the condition their approval makes.
  *
- * But the team token is a *sales manager's* token — it is read off
- * `Sales Person.custom_team_manager` — and a GM who runs no team of their own
- * has none. `screensFor` then returned an empty list, so `TeamRoute` bounced
- * them off every sales screen, including the order their own escalation queue
- * had just linked them to. Clicking "Open the order" redirected to `/` and
- * looked to the GM like a link that did nothing.
- *
- * Same shape as `StockRoute` in `routes.tsx`, for the same reason: a role
- * that legitimately manages no team cannot be gated on managing one.
+ * It was `FULL` from 7 September 2026, because the queue's "Open the order"
+ * linked to the sales manager's review at `/orders/:id` and a GM with no team
+ * was bounced off it. That review then offered the GM "Send to GM" on an
+ * order already escalated to them, so they could open it and not approve it.
+ * The link goes to the GM's page now, and the team screens are closed to the
+ * GM at the route as well as in the sidebar — hiding a nav item is tidiness,
+ * not access control.
  */
 export function screensForUser(
   role: string | undefined,
   managedTeam: string | undefined,
 ): ManagerScreen[] {
-  if (role === 'general_manager') return FULL;
+  if (role === 'general_manager') return [];
   return screensFor(managedTeam);
 }
 

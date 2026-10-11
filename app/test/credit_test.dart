@@ -39,7 +39,35 @@ void main() {
         kFieldOutstanding60_90,
         kFieldOutstanding90Plus,
       ], f['buckets']);
+      expect(kFieldOverduePastTerms, f['overdue_past_terms']);
+      expect(kFieldPaymentTerms, f['payment_terms']);
+      expect(kFieldOverdueDays, f['overdue_days']);
     });
+  });
+
+  group('shared fixture: overdue past payment terms', () {
+    for (final raw in fx['past_terms'] as List) {
+      final c = _asMap(raw);
+      test(c['why'] as String, () {
+        final customer = _asMap(c['customer']);
+        final e = _asMap(c['expect']);
+        final orderTotal = c['order_total'] == null ? 0.0 : _d(c['order_total']);
+        final why = escalationOf(customer, orderTotal);
+
+        if (e['escalates'] != null) {
+          expect(creditEscalates(customer, orderTotal), e['escalates']);
+        }
+        if (e['over_limit'] != null) expect(why.overLimit, e['over_limit']);
+        if (e['past_terms'] != null) expect(why.pastTerms, e['past_terms']);
+        if (e['overdue_past_terms'] != null) {
+          expect(overduePastTerms(customer),
+              closeTo(_d(e['overdue_past_terms']), 0.01));
+        }
+        // An escalated order always says why; one that does not never does.
+        expect(escalationReason(customer, orderTotal).isNotEmpty,
+            e['escalates'] == true);
+      });
+    }
   });
 
   group('shared fixture: what the total is', () {
@@ -70,7 +98,7 @@ void main() {
           expect(hasOverdue(customer), e['has_overdue']);
         }
         if (e['escalates'] != null) {
-          expect(overCreditLimit(customer, orderTotal), e['escalates']);
+          expect(creditEscalates(customer, orderTotal), e['escalates']);
         }
         if (e['blocks_order'] != null) {
           // The 90+ box is a warning, never a gate. Asserted separately from

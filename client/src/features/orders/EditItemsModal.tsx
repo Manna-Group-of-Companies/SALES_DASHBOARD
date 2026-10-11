@@ -133,7 +133,7 @@ export function EditItemsModal({
       dispatch(
         pushToast(
           postApproval
-            ? 'Saved. The Production Manager has been alerted and must acknowledge the change.'
+            ? 'Saved. Production Manager alerted to acknowledge.'
             : 'Order items updated.',
           postApproval ? 'warning' : 'success',
         ),
@@ -146,13 +146,13 @@ export function EditItemsModal({
 
   return (
     <Modal
-      title={`Edit items — ${order.orderNo}`}
+      title={`Edit Items · ${order.orderNo}`}
       width="xwide"
       onClose={onClose}
       footer={
         <>
           <span className="grow row gap-2">
-            <span className="muted small">New order value</span>
+            <span className="muted small">New total</span>
             <strong className="num">{money(total, 2)}</strong>
           </span>
           <Button onClick={onClose}>Cancel</Button>
@@ -169,10 +169,8 @@ export function EditItemsModal({
     >
       {postApproval && (
         <div style={{ marginBottom: 14 }}>
-          <Alert tone="warn" title="This order is already approved">
-            Production is working to it. Saving will send an alert the Production Manager has to
-            acknowledge before the change is treated as seen on the floor. Finalised rates cannot be
-            changed.
+          <Alert tone="warn" title="Already approved">
+            Saving alerts the Production Manager. Final rates cannot be changed.
           </Alert>
         </div>
       )}
@@ -191,9 +189,7 @@ export function EditItemsModal({
               <div key={item.id} className="prow">
                 <div className="small">
                   {item.itemName}
-                  <div className="tiny dim">
-                    This item is no longer in the catalogue — remove it or re-import products.
-                  </div>
+                  <div className="tiny dim">No longer in the catalogue</div>
                 </div>
                 <div />
                 <div />
@@ -232,9 +228,10 @@ export function EditItemsModal({
                   variant="ghost"
                   iconOnly
                   aria-label={`Remove ${item.itemName}`}
+                  title="Remove"
                   onClick={() => remove(index)}
                 >
-                  🗑
+                  ✕
                 </Button>
               </div>
             </div>
@@ -244,9 +241,9 @@ export function EditItemsModal({
 
       <div className="row gap-2" style={{ marginTop: 14 }}>
         <div style={{ minWidth: 280 }}>
-          <Field label="Add an item">
+          <Field label="Add item">
             <Select value={addCode} onChange={(e) => setAddCode(e.target.value)}>
-              <option value="">Select a product…</option>
+              <option value="">Select a product</option>
               {(['PCTR', 'CTR', 'BG', 'VS'] as const).map((cat) => (
                 <optgroup key={cat} label={CATEGORY_LABEL[cat]}>
                   {available
@@ -266,9 +263,9 @@ export function EditItemsModal({
         </Button>
         <div className="grow" />
         <div style={{ minWidth: 260, marginTop: 0 }}>
-          <Field label="Reason for the change (goes to production)">
+          <Field label="Reason for change">
             <Input
-              placeholder="e.g. customer increased quantity"
+              placeholder="Shared with production"
               value={note}
               onChange={(e) => setNote(e.target.value)}
             />

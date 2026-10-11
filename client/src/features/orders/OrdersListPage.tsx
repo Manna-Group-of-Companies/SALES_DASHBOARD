@@ -30,6 +30,7 @@ import {
 } from '@/domain/orderStatus';
 import {
   orderBucket,
+  orderProgress,
   ORDER_BUCKETS,
   ORDER_BUCKET_LABEL,
   type OrderBucket,
@@ -171,7 +172,13 @@ export function OrdersListPage() {
         date: o.placedOn,
         total: o.total,
         status: o.poStatus,
-        productionStatus: o.productionStatus,
+        // SAP's word once SAP has the order, the in-app status before: the
+        // tick, the production line and the export all read this. Same rule as
+        // the phone's lists — see `orderProgress`.
+        productionStatus: orderProgress(
+          { salesOrder: o.sapSalesOrder, invoice: o.sapInvoice },
+          o.productionStatus,
+        ),
         combinedOrder: o.combinedOrder,
         undecided: awaitingManager(o.poStatus),
         sapSalesOrder: o.sapSalesOrder,
@@ -246,12 +253,17 @@ export function OrdersListPage() {
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">Team orders</div>
-          <div className="page-head__sub">
-            {myTeam.length
-              ? `${myTeam.length} representatives in your team`
-              : 'Your orders'}
-          </div>
+          <div className="page-head__title">Team Orders</div>
+          {/* The one line that says whether there is work to do. */}
+          {!loading && !error && (
+            <div className="page-head__sub">
+              {rows.length} order{rows.length === 1 ? '' : 's'}
+              {' · '}
+              <span className={`orders__count ${waiting ? 'warn' : 'ok'}`}>
+                {waiting ? `${waiting} awaiting decision` : 'All decided'}
+              </span>
+            </div>
+          )}
         </div>
         <div className="cal__nav">
           <ExportButton
@@ -321,35 +333,23 @@ export function OrdersListPage() {
           ))}
         </Select>
         <Input
-          placeholder="Search order, party or rep…"
+          className="orders__search"
+          placeholder="Search order, customer or rep"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Search orders"
         />
       </div>
 
-      {/* The one line that says whether there is work to do. */}
-      <div className={`orders__count ${waiting ? 'warn' : 'ok'}`}>
-        {rows.length} order{rows.length === 1 ? '' : 's'} ·{' '}
-        {waiting ? `${waiting} waiting on you` : 'all decided'}
-      </div>
-
-      {loading && <Empty icon="◔" title="Reading orders…" />}
+      {loading && <Empty icon="◔" title="Loading orders…" />}
 
       {!loading && !error && rows.length === 0 && (
-        <Empty
-          icon="—"
-          title={
-            bucket
-              ? `Nothing to show under ${ORDER_BUCKET_LABEL[bucket].toLowerCase()}`
-              : 'No orders in this week'
-          }
-        >
+        <Empty icon="—" title="No orders">
           {/* Name the filter that is hiding things, or an empty list reads as
               "no orders exist" and a manager goes looking in the wrong place. */}
-          {bucket
-            ? `${scoped.length} order${scoped.length === 1 ? '' : 's'} in this week — choose All states to see them.`
-            : 'Pick another week above, or clear the search.'}
+          {bucket && scoped.length > 0
+            ? `${scoped.length} in other states`
+            : null}
         </Empty>
       )}
 
@@ -386,7 +386,7 @@ export function OrdersListPage() {
                     </Link>
                     {r.kind === 'lead' && (
                       <Badge tone="accent" title="Not yet a customer">
-                        LEAD
+                        Lead
                       </Badge>
                     )}
                   </span>
@@ -408,12 +408,11 @@ export function OrdersListPage() {
                   ) : (
                     <span className="mono">{r.id}</span>
                   )}{' '}
-                  · {r.rep || 'unassigned'} · {formatDate(r.date)}
+                  · {r.rep || 'Unassigned'} · {formatDate(r.date)}
                 </div>
 
                 <div className="ordrow__status">
                   <StatusPill status={r.status} sapStatus={r.sapSalesOrderStatus} />
-                  {r.undecided && <span className="tiny dim">Tap to review</span>}
                   {/* Never a tick on a lead order: it is not a Sales Order yet
                       and has no production status, so an empty box would read
                       as "not finished" rather than "not applicable". */}
@@ -426,15 +425,11 @@ export function OrdersListPage() {
                 {/* Only once approved: before that, production has never seen
                     the order and any sentence about it would be invented. */}
                 {prod && (
-                  <div className={`ordrow__prod ${prod.done ? 'done' : ''}`}>
-                    <span aria-hidden="true">{prod.done ? '☑' : '🏭'}</span> {prod.text}
-                  </div>
+                  <div className={`ordrow__prod ${prod.done ? 'done' : ''}`}>{prod.text}</div>
                 )}
 
                 {isSet(r.combinedOrder) && (
-                  <div className="ordrow__comb">
-                    <span aria-hidden="true">⑃</span> Week order: {r.combinedOrder}
-                  </div>
+                  <div className="ordrow__comb">Combined order {r.combinedOrder}</div>
                 )}
               </div>
             );

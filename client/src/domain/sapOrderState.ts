@@ -1,40 +1,51 @@
 /**
  * What SAP says about an order, and what the apps do with it.
  *
- * From 11 September 2026 the manufacturing floor lives in SAP. An approved
- * order becomes a SAP Sales Order; SAP links it to a production order and
- * moves it through stages; a SAP Delivery Order eventually carries several
- * orders out together. Neither app owns any of that any more — they report it.
+ * An approved order becomes a SAP Sales Order, and an A/R invoice raised
+ * against it is what says it has gone. The apps report those two facts and
+ * nothing in between:
  *
- * WHY THE STAGE IS FREE TEXT AND THE STATUS IS NOT
+ *     Not Started  ->  Pushed to SAP  ->  Dispatched
+ *     (no SAP no.)     (SAP has it)       (invoiced)
  *
- * The stage list belongs to the factory and has to change without an app
- * release, so `custom_sap_production_stage` is never an enum here. Screens
- * print it as SAP wrote it. This file is the only place a stage becomes
- * behaviour, mapping it onto the four values `custom_production_status` has
- * always carried — so every screen built against those keeps working.
+ * WHY THERE IS NO PRODUCTION STAGE
  *
- * THE ONE THAT ROUNDS IN THE SAFE DIRECTION
+ * Decided 24 September 2026 for the initial release. Under MRP one production
+ * order pools the demand of many sales orders, and SAP does not record which
+ * order a pooled production order is for — MRP-created orders carry no
+ * sales-order link at all, and the link table has no quantity column. Any
+ * per-order stage would be an allocation guess dressed up as a fact, so the
+ * release reports only what SAP records. `custom_sap_production_order` and
+ * `custom_sap_production_stage` still exist in ERPNext and may hold old
+ * values; nothing here reads them.
  *
- * A stage nobody has mapped means the floor has started and we do not know how
- * far. That is `In Production`, never `Ready`. Calling an unknown stage Ready
- * would tell a rep an order is made when it is halfway through a press.
+ * WHY A DELIVERY IS NOT DISPATCH
+ *
+ * The floor posts a delivery before it invoices. Dispatch is the invoice, so a
+ * delivered-but-uninvoiced order still reads Pushed to SAP. Also decided
+ * 24 September 2026.
+ *
+ * The function names are older than this rule — `productionStatusFromSap`
+ * predates the removal of stages — and are kept so their callers did not have
+ * to change.
  *
  * Pinned by `shared/fixtures/sap_order_state.json`; the Dart twin is
  * `app/lib/core/sap_order_state.dart`.
  */
 import { PO_STATUS, statusPill, type StatusTone } from './orderStatus';
 
-export type ProductionStatus = 'Not Started' | 'In Production' | 'Ready' | 'Dispatched';
+export type ProductionStatus = 'Not Started' | 'Pushed to SAP' | 'Dispatched';
 
 /** What SAP has told us about one order. All of it optional; none is ours. */
 export interface SapOrderState {
   salesOrder?: string | null;
   salesOrderStatus?: string | null;
-  productionOrder?: string | null;
-  productionStage?: string | null;
-  deliveryOrder?: string | null;
-  deliveryDate?: string | null;
+  /**
+   * The invoice that completed the order. The sync writes it only once every
+   * line has been invoiced, so a partly-invoiced order leaves it blank.
+   */
+  invoice?: string | null;
+  invoiceDate?: string | null;
   syncedAt?: string | null;
   syncError?: string | null;
 }
@@ -46,100 +57,85 @@ const clean = (v: string | null | undefined): string => {
   return s === 'null' ? '' : s;
 };
 
-/**
- * Stages that mean the floor has NOT begun.
- *
- * Deliberately short. Everything unrecognised counts as started, because the
- * error that costs money is claiming progress that has not happened — and the
- * opposite error, showing In Production for something merely queued, costs a
- * phone call.
- */
-const NOT_STARTED = new Set(['', 'planned', 'open', 'not started', 'pending']);
-
-/** Stages that mean the floor has finished with it. */
-const FINISHED = new Set(['finished', 'closed', 'completed', 'ready']);
-
-/**
- * The four-value status the screens act on.
- *
- * Order matters: delivery beats stage, because a delivery order is the later
- * fact. An order can sit at "Curing" in a stale production record and still
- * have shipped.
- */
-export function productionStatusFromSap(s: SapOrderState): ProductionStatus {
-  if (clean(s.deliveryOrder)) return 'Dispatched';
-
-  const stage = clean(s.productionStage).toLowerCase();
-  if (FINISHED.has(stage)) return 'Ready';
-  if (NOT_STARTED.has(stage)) return 'Not Started';
-  return 'In Production';
-}
-
 /** Whether SAP has taken the order at all. */
 export function reachedSap(s: SapOrderState): boolean {
   return clean(s.salesOrder).length > 0;
 }
 
+/**
+ * The order's status from its own fields.
+ *
+ * The invoice is checked first because it is the later fact: an order with an
+ * invoice has gone, whatever else is or is not filled in.
+ */
+export function productionStatusFromSap(s: SapOrderState): ProductionStatus {
+  if (clean(s.invoice)) return 'Dispatched';
+  if (reachedSap(s)) return 'Pushed to SAP';
+  return 'Not Started';
+}
+
+/**
+ * What an order LIST shows as the order's progress.
+ *
+ * SAP's status once SAP has the order (or an invoice exists); before that the
+ * stored in-app `custom_production_status`, which is what every order placed
+ * before the floor moved to SAP carries. Never a mix: an in-app Dispatched on
+ * an order SAP has not invoiced is not dispatch. An order is complete exactly
+ * when this reads 'Dispatched'.
+ *
+ * Fixture: `order_progress`. The Dart twin is `orderProgress`.
+ */
+export function orderProgress(s: SapOrderState, storedProductionStatus?: string | null): string {
+  if (reachedSap(s) || clean(s.invoice)) return productionStatusFromSap(s);
+  return clean(storedProductionStatus) || 'Not Started';
+}
+
 /** What SAP has told us about one LINE of an order. */
 export interface SapLineState {
-  productionOrder?: string | null;
-  productionStage?: string | null;
-  /** The delivery that carried THIS line. Blank means this line has not gone. */
-  deliveryOrder?: string | null;
-  deliveryDate?: string | null;
+  /** The invoice that carried THIS line. Blank means this line has not gone. */
+  invoice?: string | null;
+  invoiceDate?: string | null;
+}
+
+/** Whether SAP has said anything about this line of its own. */
+export function lineHasSap(line: SapLineState): boolean {
+  return clean(line.invoice).length > 0;
 }
 
 /**
  * One line's status.
  *
- * SAP raises a production order per item, so a four-item order has four
- * stages and an order-level stage hides which item is holding it up.
+ * THE INVOICE IS THE LINE'S OWN, NOT THE ORDER'S
  *
- * THE DELIVERY IS THE LINE'S OWN, NOT THE ORDER'S
- *
- * A delivery need not carry the whole order: dropping a row from it is how the
- * floor ships what is ready and leaves the rest open, which is exactly what
- * happened to SAP order 381 on 16 Sep 2026 — three lines shipped, one stayed
- * open. Reading the order's delivery here would mark that fourth line
- * Dispatched while it sat unmade in the factory, which is the same lie as
- * calling an unmapped stage Ready.
- *
- * Everything else defers to `productionStatusFromSap`, so a line and an order
- * can never drift apart on the rules they share.
+ * An order can be invoiced in parts, so a line is Dispatched only when THAT
+ * line was invoiced. A line has no SAP number of its own, though: it is Pushed
+ * to SAP when its `order` is, which is why the order is passed in.
  */
-export function lineStatusFromSap(line: SapLineState): ProductionStatus {
-  return productionStatusFromSap({
-    productionStage: line.productionStage,
-    deliveryOrder: line.deliveryOrder,
-  });
+export function lineStatusFromSap(line: SapLineState, order?: SapOrderState): ProductionStatus {
+  if (lineHasSap(line)) return 'Dispatched';
+  if (order && reachedSap(order)) return 'Pushed to SAP';
+  return 'Not Started';
 }
 
 const RANK: Record<ProductionStatus, number> = {
   'Not Started': 0,
-  'In Production': 1,
-  Ready: 2,
-  Dispatched: 3,
+  'Pushed to SAP': 1,
+  Dispatched: 2,
 };
 
 /**
  * The order's status, rolled up from its lines: the least advanced one wins.
  *
- * An order is Ready only when every line is. Rounding the other way would tell
- * a rep an order is made while one item is still in a press — the same error
- * `unknown_stage_is_in_production` exists to prevent.
+ * An order is Dispatched only when every line has been invoiced. A
+ * partly-invoiced order is still open, and calling it Dispatched would close
+ * it in a rep's mind while an item is outstanding.
  *
- * With no lines carrying SAP state at all, falls back to the order's own.
+ * With no lines at all, falls back to the order's own fields.
  */
 export function orderStatusFromLines(lines: SapLineState[], order: SapOrderState): ProductionStatus {
-  const known = lines.filter(
-    (l) => clean(l.productionOrder) || clean(l.productionStage) || clean(l.deliveryOrder),
-  );
-  if (known.length === 0) return productionStatusFromSap(order);
-  // Not short-circuited on the order's delivery: a partly-delivered order is
-  // still open, and saying Dispatched would close it in a rep's mind while a
-  // line is outstanding. It reaches Dispatched here only when every line has.
-  return known
-    .map(lineStatusFromSap)
+  if (lines.length === 0) return productionStatusFromSap(order);
+  return lines
+    .map((l) => lineStatusFromSap(l, order))
     .reduce((worst, s) => (RANK[s] < RANK[worst] ? s : worst));
 }
 
@@ -168,22 +164,18 @@ export function sapStale(s: SapOrderState, now: Date, hours = 24): boolean {
 }
 
 /**
- * One line a rep can read: where the order is and when it leaves.
+ * One line a rep can read: which invoice, when, and the SAP order number.
  *
  * Returns null when there is nothing worth saying, so a caller renders nothing
  * rather than an empty row.
  */
 export function sapSummary(s: SapOrderState): string | null {
   const bits: string[] = [];
-  const stage = clean(s.productionStage);
-  const delivery = clean(s.deliveryOrder);
-  const date = clean(s.deliveryDate);
-
-  if (delivery) {
-    bits.push(`Delivery ${delivery}`);
-    if (date) bits.push(`due ${date}`);
-  } else if (stage) {
-    bits.push(stage);
+  const invoice = clean(s.invoice);
+  const date = clean(s.invoiceDate);
+  if (invoice) {
+    bits.push(`Invoice ${invoice}`);
+    if (date) bits.push(date);
   }
   const so = clean(s.salesOrder);
   if (so) bits.push(`SAP ${so}`);
@@ -205,10 +197,9 @@ const SAP_CANCELLED = 'bost_cancelled';
  * and an app that goes on calling it Approved is telling a manager to expect
  * goods nobody is making.
  *
- * `bost_Cancelled` is a SAP enum, not a stage name, so it is stable in a way
- * the stage list deliberately is not. The sync folds SAP's separate
- * `Cancelled = tYES` flag into the same value — see `Resolve-SoStatus` — so
- * this one check covers both ways SAP says it.
+ * `bost_Cancelled` is a SAP enum, so it is stable. The sync folds SAP's
+ * separate `Cancelled = tYES` flag into the same value — see
+ * `Resolve-SoStatus` — so this one check covers both ways SAP says it.
  *
  * Found on 18 September 2026: SAP order 399 (DocEntry 2884) had been cancelled
  * and ERPNext had recorded it correctly for days. Nothing read it, so the
@@ -223,8 +214,7 @@ export function cancelledInSap(s: SapOrderState): boolean {
  *
  * One function rather than the same two-line check on four screens, which is
  * how the two apps drift. Cancellation outranks the approval status because it
- * is the later fact and the terminal one — the same reasoning that puts a
- * delivery above a stage in `productionStatusFromSap`.
+ * is the later fact and the terminal one.
  */
 export function orderPill(
   poStatus: string | undefined | null,

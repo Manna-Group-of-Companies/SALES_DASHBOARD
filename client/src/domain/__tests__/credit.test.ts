@@ -14,9 +14,13 @@ import {
   OUTSTANDING_FIELD,
   agingOf,
   bucketsOf,
+  creditEscalates,
+  escalationOf,
+  escalationReason,
   hasOverdue,
   overCreditLimit,
   overdueAmount,
+  overduePastTerms,
 } from '../credit';
 
 describe('shared fixture: the field names', () => {
@@ -31,7 +35,27 @@ describe('shared fixture: the field names', () => {
       OUTSTANDING_FIELD.d60_90,
       OUTSTANDING_FIELD.d90plus,
     ]).toEqual(cases.fields.buckets);
+    expect(OUTSTANDING_FIELD.overduePastTerms).toBe(cases.fields.overdue_past_terms);
+    expect(OUTSTANDING_FIELD.paymentTerms).toBe(cases.fields.payment_terms);
+    expect(OUTSTANDING_FIELD.overdueDays).toBe(cases.fields.overdue_days);
   });
+});
+
+describe('shared fixture: overdue past payment terms', () => {
+  for (const c of cases.past_terms) {
+    it(c.why, () => {
+      const e = c.expect as Record<string, number | boolean | undefined>;
+      const total = c.order_total ?? 0;
+      if (e.escalates != null) expect(creditEscalates(c.customer, total)).toBe(e.escalates);
+      if (e.over_limit != null) expect(escalationOf(c.customer, total).overLimit).toBe(e.over_limit);
+      if (e.past_terms != null) expect(escalationOf(c.customer, total).pastTerms).toBe(e.past_terms);
+      if (e.overdue_past_terms != null) {
+        expect(overduePastTerms(c.customer)).toBeCloseTo(e.overdue_past_terms as number, 2);
+      }
+      // An escalated order always says why; one that does not escalate never does.
+      expect(escalationReason(c.customer, total) !== '').toBe(Boolean(e.escalates));
+    });
+  }
 });
 
 describe('shared fixture: what the total is', () => {
@@ -53,7 +77,7 @@ describe('shared fixture: old debt', () => {
       if (e.overdue != null) expect(overdueAmount(c.customer)).toBeCloseTo(e.overdue as number, 2);
       if (e.has_overdue != null) expect(hasOverdue(c.customer)).toBe(e.has_overdue);
       if (e.escalates != null) {
-        expect(overCreditLimit(c.customer, c.order_total ?? 0)).toBe(e.escalates);
+        expect(creditEscalates(c.customer, c.order_total ?? 0)).toBe(e.escalates);
       }
       if (e.blocks_order != null) {
         // The 90+ box is a warning, never a gate. Asserted separately from

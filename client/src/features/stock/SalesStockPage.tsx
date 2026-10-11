@@ -20,13 +20,22 @@
  *     raised in SAP against a sales order now, and the sync brings the stage
  *     back onto the order's own lines, where the person waiting on it looks.
  *
- * It is read-only, as it always was.
+ * WHO SEES WHAT (24 September 2026)
+ *
+ * An item with both weight UDFs reads as rolls and belts to everyone. An item
+ * missing either reads in kilograms to a sales manager and is left off this
+ * page for every other role — see `domain/stockView.ts` for why. The manager
+ * is also the one who can get the UDFs filled in, so the page tells them how
+ * many items their reps cannot see.
+ *
+ * It is read-only apart from "Reload from SAP", which only asks the office
+ * server to fetch; it writes no stock itself.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import type { MinStockLine } from '@/domain/types';
-import { outOfStock, shelfAvailable } from '@/domain/minimumStock';
 import { parseItemName, distinctOf, worthOffering } from '@/domain/itemNaming';
+import { describeReading, hasStock, seesUnweighedStock, stockReading, type StockReading } from '@/domain/stockView';
 import { serverNow } from '@/domain/serverClock';
 import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
@@ -34,16 +43,25 @@ import { selectUser } from '@/store/selectors';
 import { Alert, Badge, Card, Empty, Input, Segmented, Select } from '@/components/ui';
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
+import { SapRefreshPanel, type SapRefreshTarget } from '@/components/common/SapRefreshPanel';
 import { ExportButton } from '@/features/reports/ExportButton';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import '@/features/orders/orders.css';
 import '@/features/production/production.css';
 
-type Filter = 'sellable' | 'none_left' | 'not_set_up' | 'all';
+type Filter = 'sellable' | 'none_left' | 'by_weight' | 'all';
+
+interface Row {
+  s: MinStockLine;
+  r: StockReading;
+  /** The item name when it has one; quality and pattern are parsed from it. */
+  label: string;
+}
 
 export function SalesStockPage() {
   const user = useAppSelector(selectUser);
+  const managerView = seesUnweighedStock(user?.role);
 
   const [pool, setPool] = useState<MinStockLine[]>([]);
   const [filter, setFilter] = useState<Filter>('sellable');
@@ -53,6 +71,24 @@ export function SalesStockPage() {
   const [tick, setTick] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  /*
+   * Memoised, and it has to be: the panel's polling loop depends on
+   * `onSynced`, and a new function every render would restart — and so stop —
+   * that loop once a second.
+   */
+  const stockSync = useMemo<SapRefreshTarget>(
+    () => ({
+      title: 'SAP Stock',
+      kind: 'stock',
+      getStatus: Api.sales.getStockSyncStatus,
+      request: Api.sales.requestStockSync,
+      noun: 'item',
+      busyNote: 'Syncing with SAP…',
+      onSynced: () => setTick((t) => t + 1),
+    }),
+    [],
+  );
 
   useEffect(() => {
     let live = true;
@@ -76,41 +112,46 @@ export function SalesStockPage() {
 
   const now = useMemo(() => serverNow(), [tick]);
 
-  const rowsWithTruth = useMemo(
-    () => pool.map((s) => ({ s, free: shelfAvailable(s) })),
-    [pool],
-  );
+  /** Every row this viewer may see. The rest never reach a filter or a count. */
+  const visible = useMemo<Row[]>(() => {
+    const out: Row[] = [];
+    for (const s of pool) {
+      const r = stockReading(s, user?.role);
+      if (r) out.push({ s, r, label: s.itemName || s.itemCode });
+    }
+    return out;
+  }, [pool, user?.role]);
 
   const counts = useMemo(
     () => ({
-      sellable: rowsWithTruth.filter((r) => r.free.rolls > 0 || r.free.belts > 0).length,
-      noneLeft: rowsWithTruth.filter((r) => r.s.weightsKnown && outOfStock(r.s)).length,
-      notSetUp: rowsWithTruth.filter((r) => !r.s.weightsKnown).length,
-      all: rowsWithTruth.length,
+      sellable: visible.filter((x) => hasStock(x.r)).length,
+      noneLeft: visible.filter((x) => !hasStock(x.r)).length,
+      byWeight: visible.filter((x) => x.r.kind === 'weight').length,
+      all: visible.length,
     }),
-    [rowsWithTruth],
+    [visible],
   );
 
   const qualities = useMemo(
-    () => distinctOf(pool.map((p) => p.itemCode), (n) => n.quality),
-    [pool],
+    () => distinctOf(visible.map((x) => x.label), (n) => n.quality),
+    [visible],
   );
   const patterns = useMemo(
-    () => distinctOf(pool.map((p) => p.itemCode), (n) => n.pattern),
-    [pool],
+    () => distinctOf(visible.map((x) => x.label), (n) => n.pattern),
+    [visible],
   );
 
   const rows = useMemo(() => {
-    let list = rowsWithTruth;
-    if (filter === 'sellable') list = list.filter((r) => r.free.rolls > 0 || r.free.belts > 0);
-    if (filter === 'none_left') list = list.filter((r) => r.s.weightsKnown && outOfStock(r.s));
-    if (filter === 'not_set_up') list = list.filter((r) => !r.s.weightsKnown);
+    let list = visible;
+    if (filter === 'sellable') list = list.filter((x) => hasStock(x.r));
+    if (filter === 'none_left') list = list.filter((x) => !hasStock(x.r));
+    if (filter === 'by_weight') list = list.filter((x) => x.r.kind === 'weight');
 
-    if (quality) list = list.filter((r) => parseItemName(r.s.itemCode).quality === quality);
-    if (pattern) list = list.filter((r) => parseItemName(r.s.itemCode).pattern === pattern);
+    if (quality) list = list.filter((x) => parseItemName(x.label).quality === quality);
+    if (pattern) list = list.filter((x) => parseItemName(x.label).pattern === pattern);
 
     const q = query.trim().toLowerCase();
-    if (q) list = list.filter((r) => r.s.itemCode.toLowerCase().includes(q));
+    if (q) list = list.filter((x) => `${x.label} ${x.s.itemCode}`.toLowerCase().includes(q));
 
     /*
      * By name, because the reader is looking something up. This sorted oldest
@@ -118,15 +159,18 @@ export function SalesStockPage() {
      * ordering the list by an age nobody is shown ranks it against a rule the
      * reader cannot see.
      */
-    return [...list].sort((a, b) => a.s.itemCode.localeCompare(b.s.itemCode));
-  }, [rowsWithTruth, filter, quality, pattern, query]);
+    return [...list].sort((a, b) => a.label.localeCompare(b.label));
+  }, [visible, filter, quality, pattern, query]);
 
-  const totals = useMemo(
-    () => ({
-      free: rowsWithTruth.reduce((n, r) => n + r.free.rolls, 0),
-    }),
-    [rowsWithTruth],
-  );
+  const totals = useMemo(() => {
+    let rolls = 0;
+    let kg = 0;
+    for (const x of visible) {
+      if (x.r.kind === 'rolls') rolls += x.r.rolls;
+      else if (x.r.uom === 'kg') kg += x.r.qty;
+    }
+    return { rolls, kg };
+  }, [visible]);
 
   if (!user) return null;
 
@@ -135,7 +179,6 @@ export function SalesStockPage() {
       <div className="page-head">
         <div className="grow">
           <div className="page-head__title">Stock</div>
-          <div className="page-head__sub">What SAP has, and what can be promised</div>
         </div>
         <div className="cal__nav">
           <ExportButton
@@ -143,11 +186,17 @@ export function SalesStockPage() {
             sheet="Stock"
             disabled={rows.length === 0}
             rows={() =>
-              rows.map((r) => ({
-                Item: r.s.itemCode,
-                'Available (rolls)': r.s.weightsKnown ? r.free.rolls : '',
-                'Available (loose belts)': r.s.weightsKnown ? r.free.belts : '',
-                'Weights set': r.s.weightsKnown ? 'Yes' : 'No',
+              rows.map((x) => ({
+                Item: x.label,
+                Code: x.s.itemCode,
+                'Available (rolls)': x.r.kind === 'rolls' ? x.r.rolls : '',
+                'Available (loose belts)': x.r.kind === 'rolls' ? x.r.belts : '',
+                ...(managerView
+                  ? {
+                      'Available (by weight)': x.r.kind === 'weight' ? x.r.qty : '',
+                      Unit: x.r.kind === 'weight' ? x.r.uom : '',
+                    }
+                  : {}),
               }))
             }
           />
@@ -155,25 +204,25 @@ export function SalesStockPage() {
         </div>
       </div>
 
+      <div style={{ marginBottom: 14 }}>
+        <SapRefreshPanel target={stockSync} />
+      </div>
+
       {error && (
-        <Alert tone="danger" title="Could not read stock">
+        <Alert tone="danger" title="Could not load stock">
           {error}
         </Alert>
       )}
 
       {/*
-        Not a defect and not hidden. SAP holds these items in kilograms and
-        nobody has said what a roll weighs, so there is no honest figure to
-        print — and the instruction is that they read as nothing available
-        until the weights are loaded. Saying how many there are is what stops
-        somebody reading the "Nothing left" count as the whole story.
+        Only the sales manager is told, because only the sales manager is shown
+        these rows — and saying who cannot see them is what stops the manager
+        assuming a rep has the same list in front of them.
       */}
-      {!loading && counts.notSetUp > 0 && (
+      {managerView && !loading && counts.byWeight > 0 && (
         <div style={{ marginBottom: 14 }}>
-          <Alert tone="warn" title={`${counts.notSetUp} items have no weights set`}>
-            SAP holds these in kilograms and their item master has no weight per roll or belts per
-            roll, so how many rolls that is cannot be worked out. They report nothing available
-            until the weights are loaded.
+          <Alert tone="warn" title={`${counts.byWeight} items shown in kg only`}>
+            Belts per roll and weight per roll are missing in SAP. Reps cannot see these items.
           </Alert>
         </div>
       )}
@@ -181,21 +230,22 @@ export function SalesStockPage() {
       <div className="tiles" style={{ marginBottom: 14 }}>
         <Tile
           label="Available to promise"
-          value={String(totals.free)}
+          value={`${totals.rolls.toLocaleString('en-IN')} rolls`}
           tone="ok"
-          foot="Rolls, across every item"
         />
         <Tile
-          label="Nothing left"
+          label="Out of stock"
           value={String(counts.noneLeft)}
           tone={counts.noneLeft ? 'warn' : undefined}
-          foot="In SAP, none available"
+          foot="Items"
         />
-        <Tile
-          label="Weights not set"
-          value={String(counts.notSetUp)}
-          foot="No figure can be given"
-        />
+        {managerView && (
+          <Tile
+            label="By weight only"
+            value={`${Math.round(totals.kg).toLocaleString('en-IN')} kg`}
+            foot={`${counts.byWeight} items`}
+          />
+        )}
       </div>
 
       <div className="cal__toolbar">
@@ -205,8 +255,10 @@ export function SalesStockPage() {
           onChange={setFilter}
           options={[
             { value: 'sellable', label: `Available (${counts.sellable})` },
-            { value: 'none_left', label: `Nothing left (${counts.noneLeft})` },
-            { value: 'not_set_up', label: `Weights not set (${counts.notSetUp})` },
+            { value: 'none_left', label: `Out of stock (${counts.noneLeft})` },
+            ...(managerView
+              ? [{ value: 'by_weight' as const, label: `By weight only (${counts.byWeight})` }]
+              : []),
             { value: 'all', label: `All (${counts.all})` },
           ]}
         />
@@ -231,21 +283,20 @@ export function SalesStockPage() {
           </Select>
         )}
         <Input
-          placeholder="Search item…"
+          placeholder="Search item"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Search stock"
         />
       </div>
 
-      {loading && <Empty icon="◔" title="Reading stock…" />}
+      {loading && <Empty icon="◔" title="Loading…" />}
 
       {!loading && !error && rows.length === 0 && (
-        <Empty icon="—" title="Nothing matches">
-          {filter === 'sellable'
-            ? 'SAP has nothing available to promise.'
-            : 'Try another filter, or clear the search.'}
-        </Empty>
+        <Empty
+          icon="—"
+          title={filter === 'sellable' && !query && !quality && !pattern ? 'No stock available' : 'No items'}
+        />
       )}
 
       {!loading && rows.length > 0 && (
@@ -259,30 +310,26 @@ export function SalesStockPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => {
-                  const p = parseItemName(r.s.itemCode);
+                {rows.map((x) => {
+                  const p = parseItemName(x.label);
                   return (
-                    <tr key={r.s.itemCode}>
+                    <tr key={x.s.itemCode}>
                       <td>
-                        <div>{r.s.itemCode}</div>
-                        {p.quality && (
-                          <div className="tiny dim">
-                            {p.quality}
-                            {p.width ? ` · ${p.width}` : ''}
-                            {p.pattern ? ` · ${p.pattern}` : ''}
-                          </div>
-                        )}
+                        <div>{x.label}</div>
+                        <div className="tiny dim">
+                          {x.s.itemCode}
+                          {p.quality ? ` · ${p.quality}` : ''}
+                          {p.width ? ` · ${p.width}` : ''}
+                          {p.pattern ? ` · ${p.pattern}` : ''}
+                        </div>
                       </td>
                       <td className="right num">
-                        {!r.s.weightsKnown ? (
-                          <Badge tone="neutral">weights not set</Badge>
-                        ) : r.free.rolls > 0 || r.free.belts > 0 ? (
-                          <b className="ok">
-                            {r.free.rolls}
-                            {r.free.belts ? ` + ${r.free.belts} belts` : ''}
-                          </b>
+                        {!hasStock(x.r) ? (
+                          <Badge tone="warn">None</Badge>
+                        ) : x.r.kind === 'weight' ? (
+                          <b title="No roll weight in SAP">{describeReading(x.r)}</b>
                         ) : (
-                          <Badge tone="warn">none</Badge>
+                          <b className="ok">{describeReading(x.r)}</b>
                         )}
                       </td>
                     </tr>
@@ -292,14 +339,6 @@ export function SalesStockPage() {
             </table>
           </div>
         </Card>
-      )}
-
-      {!loading && rows.length > 0 && (
-        <p className="note" style={{ marginTop: 12 }}>
-          These figures come from SAP and are <b>already net of every open sales order</b>, whoever
-          raised it. They refresh on the five-minute stock sync, so two people can briefly be shown
-          the same rolls — SAP decides who gets them.
-        </p>
       )}
     </div>
   );

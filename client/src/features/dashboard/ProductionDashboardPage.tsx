@@ -30,7 +30,6 @@ import {
 import { useAppSelector } from '@/store/hooks';
 import { selectProductionQueue, selectUser, selectVisibleOrders } from '@/store/selectors';
 import { Alert, Badge, Button, Card, Empty } from '@/components/ui';
-import { greeting } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
 import { plural } from './dashboardRules';
 import '@/components/layout/layout.css';
@@ -87,9 +86,7 @@ export function ProductionDashboardPage() {
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">
-            {greeting()}, {user.name.split(' ')[0]}
-          </div>
+          <div className="page-head__title">Production</div>
           <div className="page-head__sub">
             {formatDate(today)} · {queue.length} {plural(queue.length, 'order')} on the floor
           </div>
@@ -104,19 +101,13 @@ export function ProductionDashboardPage() {
             title={`${unacked.length} ${plural(unacked.length, 'order')} changed after approval`}
             actions={
               <Button size="sm" onClick={() => navigate('/production')}>
-                Review on the board
+                Review
               </Button>
             }
-          >
-            Quantities moved after the order was released to the floor. Acknowledge each one on the
-            production board — work may already have started against the old figures.
-          </Alert>
+          />
         )}
         {overdue.length > 0 && (
-          <Alert tone="warn" title={`${overdue.length} past the delivery date`}>
-            Still open after their due date. If a batch will not be ready, move the date on the
-            order so the sales side sees it — production owns that date.
-          </Alert>
+          <Alert tone="warn" title={`${overdue.length} past the delivery date`} />
         )}
       </div>
 
@@ -125,14 +116,12 @@ export function ProductionDashboardPage() {
         <Tile
           label="In production"
           value={String(inProduction.length)}
-          foot="Work under way"
           onClick={() => navigate('/production')}
         />
         <Tile
           label="Not started"
           value={String(notStarted.length)}
           tone={notStarted.length ? 'warn' : undefined}
-          foot="Approved, nothing moved yet"
           onClick={() => navigate('/production')}
         />
         <Tile
@@ -145,7 +134,6 @@ export function ProductionDashboardPage() {
           label="Changes to acknowledge"
           value={String(unacked.length)}
           tone={unacked.length ? 'alert' : undefined}
-          foot={unacked.length ? 'Must be acknowledged' : 'Nothing outstanding'}
           onClick={() => navigate('/production')}
         />
       </div>
@@ -156,15 +144,13 @@ export function ProductionDashboardPage() {
           title="Due this week"
           actions={
             <Button size="sm" variant="ghost" onClick={() => navigate('/production')}>
-              Production board →
+              All orders →
             </Button>
           }
           flush
         >
           {dueThisWeek.length === 0 ? (
-            <Empty icon="✓" title="Nothing due this week">
-              Orders appear here once the Sales Manager releases them to the floor.
-            </Empty>
+            <Empty icon="✓" title="Nothing due this week" />
           ) : (
             <table className="table">
               <thead>
@@ -194,7 +180,7 @@ export function ProductionDashboardPage() {
         {/* --- waiting to start ------------------------------------------ */}
         <Card title="Waiting to start">
           {notStarted.length === 0 ? (
-            <Empty icon="✓" title="Everything released has been started" />
+            <Empty icon="✓" title="All started" />
           ) : (
             <div className="stack gap-2">
               {notStarted.slice(0, 6).map((o) => (

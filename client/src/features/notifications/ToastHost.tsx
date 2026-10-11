@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { dismissToast } from '@/store/slices/notificationsSlice';
+import { Icon } from '@/components/ui';
 
-const ICON = { success: '✓', info: 'ℹ', warning: '⚠', critical: '⚠' } as const;
+const ICON = { success: 'checkCircle', info: 'info', warning: 'alert', critical: 'alert' } as const;
 const TTL_MS = 4500;
 
 /** Transient confirmations. The persistent record lives in the panel. */
@@ -55,14 +56,16 @@ export function ToastHost() {
     <div className="toast-host" role="status" aria-live="polite">
       {toasts.map((t) => (
         <div key={t.id} className={`toast toast--${t.severity}`}>
-          <span aria-hidden>{ICON[t.severity]}</span>
+          <span className="toast__icon" aria-hidden>
+            <Icon name={ICON[t.severity]} />
+          </span>
           <span className="grow">{t.message}</span>
           <button
             className="btn btn--ghost btn--sm btn--icon"
             onClick={() => dispatch(dismissToast(t.id))}
             aria-label="Dismiss"
           >
-            ✕
+            <Icon name="x" size={14} />
           </button>
         </div>
       ))}

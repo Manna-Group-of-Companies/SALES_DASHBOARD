@@ -21,7 +21,7 @@ Anything you do not re-implement is simply not enforced for your users:
 | Rule | Enforced only in | Consequence if you skip it |
 | --- | --- | --- |
 | Minimum-stock headroom | client | two users oversell the same rolls |
-| 1 pm edit cutoff | client | orders change after the factory has acted |
+| Edit lock at approval / escalation (the 1 pm cutoff was dropped 11 Oct 2026) | client | orders change after the factory has acted |
 | Rate lock after approval | client | signed-off prices get edited |
 | Customer hidden from production | client (API layer) | production sees who bought what |
 | Order timestamp immutability | client | who-ordered-first becomes unprovable |
@@ -51,7 +51,8 @@ validation errors with a useful body. If your HTTP client throws on 4xx you
 will lose the message.
 
 **Take the clock off the `Date` response header, not the browser.** Several
-rules turn on time of day (the 1 pm cutoff, attendance windows). A user
+rules turn on time of day (attendance windows, and the 1 pm cutoff until it
+was dropped on 11 Oct 2026). A user
 controls their own clock. `lib/core/server_clock.dart` keeps a skew from every
 response and every rule reads through it. This matters less in a browser than
 on a phone, but the rules must agree across clients or the same order is
@@ -279,18 +280,16 @@ rep the word "PO".
 Read *status*, never the order-level flag, to decide "is this approved". A rep
 who edits an approved order must look like work to do again.
 
-### The 1 pm rule
+### The edit rule
 
-An order stays fully editable until **1 pm on its required delivery date** —
-not midnight, and not measured from when it was raised. That is the last moment
-the factory can act on a change.
+An order stays fully editable until the sales manager **approves it or sends
+it to the GM**. With the GM only the GM may change it; once the GM has approved
+it, or it is approved and sent to SAP, nobody does. The delivery date has no
+say. Until 11 Oct 2026 orders also froze at 1 pm on the delivery date; that
+cutoff is gone. See `shared/fixtures/order_locked_after_approval.json`.
 
 Editable by the rep who raised it **or their manager** (a customer who rings
 the office should not wait for their rep to come back into signal).
-
-A missing delivery date reads as *open*, not frozen — an order without a date is
-a data problem and freezing it would prevent fixing the very field that is
-missing.
 
 ### Sales Order Item custom fields
 

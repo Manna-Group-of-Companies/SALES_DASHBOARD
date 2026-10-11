@@ -104,7 +104,7 @@ read and tested on its own:
 | `production.ts` | stage sequences and the order roll-up |
 | `orderStatus.ts` | approval vocabulary, escalation, GM exemptions |
 | `geo.ts` | trip distances and what they can honestly prove |
-| `weeks.ts` | Monday–Sunday weeks and the 1 pm edit freeze |
+| `weeks.ts` | Monday–Sunday weeks |
 
 `client/src/domain/__tests__/` covers all of it, including a `live-parity` suite
 that asserts this dashboard writes order lines byte-identically to the mobile

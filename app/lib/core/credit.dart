@@ -35,8 +35,17 @@ const String kFieldOutstanding30_60 = 'custom_outstanding_30_60';
 const String kFieldOutstanding60_90 = 'custom_outstanding_60_90';
 const String kFieldOutstanding90Plus = 'custom_outstanding_90_plus';
 
-/// Every field the aging display needs, for the `fields` list of a customer
-/// query. One list, so a screen cannot quietly fetch three of the four.
+// Payment terms, added 11 Oct 2026. Written by the SAP credit sync, which
+// decides what "overdue past the terms" means once, for both apps: the open
+// amount on invoices whose SAP due date has passed, capped at the SAP balance,
+// and 0 for a customer with no term set. See credit.json `fields`.
+const String kFieldOverduePastTerms = 'custom_overdue_past_terms';
+const String kFieldPaymentTerms = 'custom_payment_terms';
+const String kFieldOverdueDays = 'custom_overdue_days';
+
+/// Every field the aging display and the escalation need, for the `fields`
+/// list of a customer query. One list, so a screen cannot quietly fetch three
+/// of the four.
 const List<String> kOutstandingFields = [
   kFieldOutstandingTotal,
   kFieldCreditLimit,
@@ -44,6 +53,9 @@ const List<String> kOutstandingFields = [
   kFieldOutstanding30_60,
   kFieldOutstanding60_90,
   kFieldOutstanding90Plus,
+  kFieldOverduePastTerms,
+  kFieldPaymentTerms,
+  kFieldOverdueDays,
 ];
 
 /// How far the stored total may sit from the sum of the buckets before it is
@@ -173,10 +185,84 @@ bool hasOverdue(Map<String, dynamic> customer) => overdueAmount(customer) > 0;
 /// No limit set is not an unlimited limit, but it is not an escalation either.
 /// Many of the 620 customers have none, and escalating all of them would bury
 /// the general manager and teach everyone to wave the queue through.
+///
+/// Since 11 Oct 2026 this is only the LIMIT half of the escalation. Whether an
+/// order goes to the GM is [creditEscalates], which adds the payment-terms rule.
 bool overCreditLimit(Map<String, dynamic> customer, double orderTotal) {
   final a = agingOf(customer);
   if (!(a.creditLimit > 0)) return false;
   return a.total + orderTotal > a.creditLimit;
+}
+
+/// Below this, money left on an invoice is rounding, not an overdue customer.
+const double kOverdueTolerance = 1;
+
+/// What is overdue past the customer's payment terms, as the SAP sync wrote
+/// it. Zero when nothing is, when no term is set, or when the sync has not
+/// reached this customer yet — never an error.
+double overduePastTerms(Map<String, dynamic> customer) =>
+    _num(customer[kFieldOverduePastTerms]);
+
+/// The SAP payment term's name, or '' when none was synced.
+String paymentTermsOf(Map<String, dynamic> customer) {
+  final s = '${customer[kFieldPaymentTerms] ?? ''}'.trim();
+  return s == 'null' ? '' : s;
+}
+
+/// How many days the oldest overdue invoice is past its due date.
+int overdueDaysOf(Map<String, dynamic> customer) {
+  final d = _num(customer[kFieldOverdueDays]).round();
+  return d < 0 ? 0 : d;
+}
+
+/// Why an order needs the GM. Both may hold at once.
+class CreditEscalation {
+  /// The order takes the customer past a credit limit that is set.
+  final bool overLimit;
+
+  /// Invoices are overdue past the customer's payment terms.
+  final bool pastTerms;
+
+  const CreditEscalation({required this.overLimit, required this.pastTerms});
+}
+
+CreditEscalation escalationOf(Map<String, dynamic> customer, double orderTotal) =>
+    CreditEscalation(
+      overLimit: overCreditLimit(customer, orderTotal),
+      pastTerms: overduePastTerms(customer) > kOverdueTolerance,
+    );
+
+/// Whether an order needs the general manager's credit approval.
+///
+/// Over the credit limit (unchanged), or overdue past the payment terms — the
+/// second rule, asked for on 11 Oct 2026. The terms rule needs no limit: a
+/// customer with none who is overdue past their terms still escalates.
+/// Everything that used to ask [overCreditLimit] whether an order escalates —
+/// who may approve, the rep's commitment, the held proforma — asks this.
+bool creditEscalates(Map<String, dynamic> customer, double orderTotal) {
+  final e = escalationOf(customer, orderTotal);
+  return e.overLimit || e.pastTerms;
+}
+
+/// "Rs 25,000 overdue past their Net-30 terms (oldest 12 days late)".
+String pastTermsPhrase(Map<String, dynamic> customer) {
+  final amount = overduePastTerms(customer).round();
+  final terms = paymentTermsOf(customer);
+  final days = overdueDaysOf(customer);
+  final against = terms.isEmpty ? 'their payment terms' : 'their $terms terms';
+  final late = days > 0 ? ' (oldest $days day${days == 1 ? '' : 's'} late)' : '';
+  return 'Rs $amount overdue past $against$late';
+}
+
+/// One sentence: why this order is with the GM. Empty when it is not.
+String escalationReason(Map<String, dynamic> customer, double orderTotal) {
+  final e = escalationOf(customer, orderTotal);
+  const limit = 'This order takes the customer past their credit limit';
+  final terms = 'has ${pastTermsPhrase(customer)}';
+  if (e.overLimit && e.pastTerms) return '$limit, and the customer $terms.';
+  if (e.overLimit) return '$limit.';
+  if (e.pastTerms) return 'The customer $terms.';
+  return '';
 }
 
 /// What a bucket reads when SAP has sent no breakdown at all.

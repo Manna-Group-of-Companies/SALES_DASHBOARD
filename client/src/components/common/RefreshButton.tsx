@@ -7,7 +7,7 @@
  * whole page and losing their place.
  */
 
-import { Button } from '@/components/ui';
+import { Button, Icon } from '@/components/ui';
 
 export function RefreshButton({
   onClick,
@@ -19,15 +19,9 @@ export function RefreshButton({
   label?: string;
 }) {
   return (
-    <Button
-      size="sm"
-      variant="ghost"
-      onClick={onClick}
-      loading={loading}
-      title="Reload from ERPNext"
-      aria-label="Reload from ERPNext"
-    >
-      <span aria-hidden>↻</span> {label}
+    <Button size="sm" variant="ghost" onClick={onClick} loading={loading}>
+      {!loading && <Icon name="refresh" size={14} />}
+      {label}
     </Button>
   );
 }

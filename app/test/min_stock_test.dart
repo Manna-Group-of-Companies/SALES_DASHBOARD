@@ -17,9 +17,46 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
+import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 void main() {
+  group('Which items the stock list shows', () {
+    // Decided 24 September 2026: a rep reads stock as rolls and belts only.
+    // An item SAP can only count in kilograms is left off the phone; the sales
+    // manager's dashboard shows it by weight instead.
+    MinStockDetail item(String code, {required bool weightsKnown, num qty = 0}) =>
+        MinStockDetail(
+          stock: MinStock.fromJson({
+            'item_code': code,
+            'available_qty': qty,
+            'weights_known': weightsKnown,
+          }),
+          product: Product({
+            'name': code,
+            'item_name': 'Tread Rubber Precured Black Pearl 156 AJAX 91',
+            'item_group': 'Precured',
+            'stock_uom': 'Kg',
+          }),
+        );
+
+    test('an item with no roll weight is not listed at all', () {
+      final shown = shownAsRollsAndBelts([
+        item('I-11672', weightsKnown: true, qty: 3),
+        item('I-10280', weightsKnown: false),
+      ]);
+      expect(shown.map((d) => d.stock.itemCode), ['I-11672']);
+    });
+
+    test('an item with weights and nothing left is still listed, as none left',
+        () {
+      // Out of stock is something a rep needs to know; "not set up" was not.
+      final shown =
+          shownAsRollsAndBelts([item('I-11674', weightsKnown: true, qty: 0)]);
+      expect(shown, hasLength(1));
+    });
+  });
+
   group('Availability', () {
     test('what SAP sent is what is available, with nothing taken off it', () {
       // The figure has already had every open SAP order deducted from it.

@@ -9,7 +9,7 @@
  */
 
 import { useNavigate } from 'react-router-dom';
-import type { AppNotification, NotificationKind } from '@/domain/types';
+import type { AppNotification } from '@/domain/types';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import {
   acknowledgeNotification,
@@ -18,25 +18,8 @@ import {
   togglePanel,
 } from '@/store/slices/notificationsSlice';
 import { selectNotificationFeed, selectUser } from '@/store/selectors';
-import { Button, Empty } from '@/components/ui';
+import { Button, Empty, Icon } from '@/components/ui';
 import { relativeTime } from '@/components/common/format';
-
-const ICON: Record<NotificationKind, string> = {
-  order_submitted: '📥',
-  order_approved: '✅',
-  order_rejected: '⛔',
-  order_edited_post_approval: '⚠️',
-  delivery_date_changed: '📅',
-  stage_advanced: '⚙️',
-  order_dispatched: '🚚',
-  orders_grouped: '🗂️',
-  min_stock_low: '📉',
-  min_stock_replenished: '📦',
-  edit_freeze_imminent: '⏳',
-  leave_applied: '🗓️',
-  leave_decided: '🧑',
-  attendance_unmarked: '🕘',
-};
 
 export function NotificationPanel() {
   const dispatch = useAppDispatch();
@@ -71,16 +54,12 @@ export function NotificationPanel() {
           </Button>
         )}
         <Button size="sm" variant="ghost" iconOnly onClick={close} aria-label="Close">
-          ✕
+          <Icon name="x" />
         </Button>
       </header>
 
       <div className="notif-panel__list">
-        {ordered.length === 0 && (
-          <Empty icon="🔔" title="Nothing new">
-            Order updates for you will appear here.
-          </Empty>
-        )}
+        {ordered.length === 0 && <Empty title="No notifications" />}
 
         {ordered.map((n) => {
           const needsAck = Boolean(n.requiresAck && !n.ackedAt);
@@ -95,9 +74,7 @@ export function NotificationPanel() {
                 if (e.key === 'Enter' || e.key === ' ') open(n);
               }}
             >
-              <span className="notif__icon" aria-hidden>
-                {ICON[n.kind]}
-              </span>
+              <span className={`notif__icon notif__icon--${n.severity}`} aria-hidden />
               <div className="grow">
                 <div className="notif__title">{n.title}</div>
                 <div className="notif__body">{n.body}</div>

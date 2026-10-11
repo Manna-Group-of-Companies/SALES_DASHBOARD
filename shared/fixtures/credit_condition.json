@@ -6,8 +6,8 @@
   "doctype": "Manna Credit Condition",
 
   "rules": {
-    "who_sets_it": "The GM alone, at the moment of approving. Never the rep, never the sales manager. A condition recorded later is one somebody has to remember to record.",
-    "optional": "An approval may carry no condition at all. Plenty do not, and forcing one produces a field full of 'n/a'.",
+    "who_sets_it": "The GM alone, at the moment of approving. Never the sales manager. A condition recorded later is one somebody has to remember to record. Since 24 Sep 2026 the WORDS usually come from the rep: they write the customer's commitment when raising an over-limit order, and it is what the GM's condition starts as - but it only becomes a condition when the GM approves. See credit_commitment.json.",
+    "optional": "An approval may carry no condition at all - unless the order carries the rep's commitment, in which case approving always makes one (credit_commitment.json). Without a commitment, plenty do not, and forcing one produces a field full of 'n/a'.",
     "who_answers": "The rep who raised the order. Answering moves it Open -> Awaiting Review. It never closes it.",
     "who_closes": "The GM alone. The person under an obligation declaring it satisfied is not accountability. Enforced in code on both sides, because this site has no Server Script behind the screen.",
     "send_back": "The GM may return it: Awaiting Review -> Open, and the rep's response stays on the record rather than being cleared.",

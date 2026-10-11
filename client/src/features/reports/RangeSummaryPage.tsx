@@ -176,10 +176,7 @@ export function RangeSummaryPage() {
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">Summary by date range</div>
-          <div className="page-head__sub">
-            Shop visits, distance and claims by sales officer
-          </div>
+          <div className="page-head__title">Range Summary</div>
         </div>
         <div className="cal__nav">
           <ExportButton
@@ -231,27 +228,23 @@ export function RangeSummaryPage() {
         </div>
       </div>
 
-      {invalid && (
-        <Alert tone="warn" title="The end date is before the start date">
-          Nothing can fall in that range — move one of the dates.
-        </Alert>
-      )}
+      {invalid && <Alert tone="warn" title="End date is before start date" />}
 
       {error && (
-        <Alert tone="danger" title="Could not read trips">
+        <Alert tone="danger" title="Could not load trips">
           {error}
         </Alert>
       )}
-      {loading && !error && <Empty icon="◔" title="Reading trips…" />}
+      {loading && !error && <Empty icon="◔" title="Loading…" />}
 
       {!loading && !error && (
         <>
           <div className="tiles" style={{ marginBottom: 14 }}>
-            <Tile label="Total shop visits" value={String(grand.visits)} foot="Across the team" />
-            <Tile label="Days of visit" value={String(grand.days)} foot="Distinct days with a trip" />
-            <Tile label="Total distance" value={`${grand.km} km`} foot="Every trip once" />
-            <Tile label="Total claimed" value={money(grand.claimed, 0)} tone="ok" foot="Shared trips counted once" />
-            <Tile label="Officers active" value={String(rows.length)} foot="With a trip in range" />
+            <Tile label="Shop visits" value={String(grand.visits)} />
+            <Tile label="Visit days" value={String(grand.days)} />
+            <Tile label="Distance" value={`${grand.km} km`} />
+            <Tile label="Total claimed" value={money(grand.claimed, 0)} tone="ok" />
+            <Tile label="Active officers" value={String(rows.length)} />
           </div>
 
           <Card flush>
@@ -268,7 +261,7 @@ export function RangeSummaryPage() {
                       <th rowSpan={2} className="right">Distance</th>
                       <th rowSpan={2} className="right">Shops</th>
                       <th rowSpan={2} className="right">Claimed</th>
-                      <th colSpan={2} className="exp__grouphead">Shop visit with manager</th>
+                      <th colSpan={2} className="exp__grouphead">With manager</th>
                     </tr>
                     <tr>
                       <th className="right">Days</th>
@@ -297,7 +290,7 @@ export function RangeSummaryPage() {
                       </tr>
                     ))}
                     <tr className="exp__total">
-                      <td colSpan={2}>Total — each trip counted once</td>
+                      <td colSpan={2}>Team total (each trip once)</td>
                       <td className="right num">{grand.days}</td>
                       <td className="right num">{grand.km} km</td>
                       <td className="right num">{grand.visits}</td>
@@ -309,12 +302,6 @@ export function RangeSummaryPage() {
               </div>
             )}
           </Card>
-
-          <p className="note" style={{ marginTop: 12 }}>
-            Per-officer rows count only the trips that officer owns and claims. The team total
-            counts each trip once, so a shared journey is not billed twice — which is why the
-            column does not add up to the total.
-          </p>
         </>
       )}
     </div>

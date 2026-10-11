@@ -3,17 +3,23 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/credit.dart';
+import 'package:manna_field_sales/core/credit_commitment.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/sync_scope.dart';
+import 'package:manna_field_sales/core/week.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
+import 'package:manna_field_sales/models/sap_rates.dart';
 import 'package:manna_field_sales/screens/orders/min_stock_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
 import 'package:manna_field_sales/screens/orders/product_row.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
+import 'package:manna_field_sales/widgets/sync_all_button.dart';
 
 class OrderScreen extends StatefulWidget {
   /// Who the order is for. A lead orders on exactly the same terms as a
@@ -50,10 +56,15 @@ class _OrderScreenState extends State<OrderScreen> {
   /// zero available.
   Map<String, MinStock> _stock = {};
 
+  /// Manna Treads' SAP rates for this customer or lead (25 Sep 2026). An item
+  /// with one is sold at it, in a locked box. Empty when there are none.
+  SapRates _sapRates = SapRates.none;
+
   String _company = '';
   String _q = '';
   DateTime? _deliveryDate;
   bool _submitting = false;
+  bool _reloading = false;
   Timer? _poll;
 
   @override
@@ -69,12 +80,74 @@ class _OrderScreenState extends State<OrderScreen> {
       if (d != null) _deliveryDate = DateTime.tryParse('$d');
     }
     _init = _load();
+    // The Sync button over every screen does not reload what is showing; this
+    // screen re-reads its stock when that button's sync settles.
+    SapSyncAll.epoch.addListener(_onSynced);
   }
 
   @override
   void dispose() {
+    SapSyncAll.epoch.removeListener(_onSynced);
     _poll?.cancel();
     super.dispose();
+  }
+
+  void _onSynced() {
+    if (!_usesMinimumStock || _reloading) return;
+    unawaited(_rereadStock().catchError((Object _) {}));
+  }
+
+  /// Whether this login may ask SAP for stock — the same rule as the Sync
+  /// button (core/sync_scope.dart).
+  bool get _mayReloadStock =>
+      _usesMinimumStock && syncsForSession(Session.I).contains(SyncKind.stock);
+
+  /// Brings the stock on this screen up to date with SAP, then shows it
+  /// (11 Oct 2026, the user's request: the order screen is where reps read
+  /// stock, and until now it re-read only ERPNext's copy, which moves only
+  /// when somebody presses Sync).
+  ///
+  /// The same press writes any packing figure typed on this screen into
+  /// SAP's two UDFs where SAP had none (`Api.syncStockAndWait`).
+  Future<void> _reloadStock() async {
+    if (_reloading) return;
+    setState(() => _reloading = true);
+    _snack('Asking SAP for the latest stock…');
+    try {
+      await Api.syncStockAndWait();
+      await _rereadStock();
+      if (mounted) _snack('Stock is up to date with SAP.');
+    } catch (e) {
+      if (mounted) _snack(humanError(e));
+    } finally {
+      if (mounted) setState(() => _reloading = false);
+    }
+  }
+
+  /// Re-reads stock and each product's packing from ERPNext without
+  /// rebuilding the lines, so nothing the rep has typed is lost. Packing is
+  /// re-read because stock in rolls is worked out from it, and the sync may
+  /// have brought a figure SAP has and ERPNext did not.
+  Future<void> _rereadStock() async {
+    final results = await Future.wait([Api.getItems(), Api.getMinimumStock()]);
+    if (!mounted) return;
+    final byCode = {
+      for (final d in results[0] as List<Map<String, dynamic>>) '${d['name']}': d
+    };
+    setState(() {
+      for (final line in _lines) {
+        final fresh = byCode[line.product.code];
+        if (fresh == null) continue;
+        for (final f in const [
+          'custom_weight_per_roll',
+          'custom_belts_per_roll',
+          'custom_pack_litres',
+        ]) {
+          if (fresh[f] != null) line.product.doc[f] = fresh[f];
+        }
+      }
+      _stock = results[1] as Map<String, MinStock>;
+    });
   }
 
   /// Minimum stock is a Treads process. For the other units the pool is never
@@ -131,6 +204,17 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _load() async {
+    // Manna Treads' SAP rates for this customer or lead (the user, 25-26 Sep
+    // 2026): the price an item with one is sold at — a customer's special
+    // price or the list price, a lead's list price. Started with the rest but
+    // kept out of the Future.wait below, so a failure here — no signal, not a
+    // Treads party, no copy of SAP yet — cannot fail the whole screen; it just
+    // means no rates are shown, and the rep types the rate as before.
+    final Future<SapRates>? sapRates =
+        (Session.I.isTreadsUnit && widget.party.name.isNotEmpty)
+            ? Api.getSapRates(widget.party.name, lead: widget.party.isLead)
+                .catchError((Object _) => SapRates.none)
+            : null;
     final results = await Future.wait([
       Api.getItems(),
       Api.getCompany(),
@@ -146,7 +230,37 @@ class _OrderScreenState extends State<OrderScreen> {
       _startPolling();
     }
     if (_isEdit) _applyExistingOrder();
+    if (sapRates != null) _sapRates = await sapRates;
+    _applySapRates();
   }
+
+  /// The SAP rate for a line. SAP prices these items per kg, so only rows whose
+  /// rate box is per kg are given one (vulcanizing solution is per can).
+  SapRate? _sapRateFor(OrderLine line) =>
+      line.product.category.rateUnit == 'kg' ? _sapRates[line.product.code] : null;
+
+  /// An item with a Manna Treads SAP rate is sold at that rate and nothing
+  /// else (the user, 26 Sep 2026: the rep must not edit "the rates that are
+  /// there in the list or are there from special rate of the business
+  /// partner"). A lead gets the list price, a customer their special price or
+  /// the list price, as the server decided. So every such item carries it —
+  /// on an edit too, which moves an old line to today's SAP rate — and its box
+  /// is locked. A line the manager already approved keeps what was approved.
+  /// Lines with no quantity count for nothing, so filling every row is
+  /// harmless.
+  void _applySapRates() {
+    for (final line in _lines) {
+      final sap = _sapRateFor(line);
+      if (sap == null || _approvedLines.contains(line.product.code)) continue;
+      line.rate = sap.rate;
+    }
+  }
+
+  /// Whether an item with a Manna Treads SAP rate is on the order. The banner
+  /// above the list speaks only then: while only the test items are priced,
+  /// every Treads customer has rates, and a banner on every order screen
+  /// would describe rows that are not there.
+  bool get _sapRateOnOrder => _picked.any((l) => _sapRateFor(l) != null);
 
   /// Minimum stock is shared with every other rep in the field, so what this
   /// screen showed when it opened goes stale the moment someone else commits.
@@ -276,13 +390,153 @@ class _OrderScreenState extends State<OrderScreen> {
     return null;
   }
 
+  /// Whether this order needs the customer's commitment before it may go.
+  ///
+  /// Exactly when it will escalate to the GM — the same test the manager's
+  /// review uses (credit_commitment.json). An edit to an order that already
+  /// carries one keeps it. A manager editing from their review is not the
+  /// person who heard the customer's promise, so they are not asked to invent
+  /// one; the GM sees "no commitment" and asks the rep.
+  bool get _needsCommitment {
+    if (widget.party.isLead) return false;
+    if (!commitmentRequired(widget.party.doc, _total)) return false;
+    if (_isEdit) {
+      if (hasCommitment(widget.existingOrder!['custom_credit_commitment'])) {
+        return false;
+      }
+      if (Session.I.isManager || Session.I.isGM) return false;
+    }
+    return true;
+  }
+
+  /// Asks the rep what the customer has committed to.
+  ///
+  /// Asked at the moment of sending, with the credit figures in front of
+  /// them, because that is when the customer is still at the counter and the
+  /// promise is still fresh. The date is optional: plenty of promises are
+  /// "with the next order", and the GM sets one on approval anyway.
+  Future<({String text, String? due})?> _askCommitment() async {
+    final ctrl = TextEditingController();
+    DateTime? due;
+    String? problem;
+    final a = agingOf(widget.party.doc);
+    final why = escalationOf(widget.party.doc, _total);
+    String rs(double v) => 'Rs ${v.toStringAsFixed(0)}';
+
+    return showDialog<({String text, String? due})?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          // Over the limit, overdue past the payment terms (11 Oct 2026), or
+          // both — the rep is told which, with the figures behind it.
+          title: Text(why.overLimit && why.pastTerms
+              ? 'Over the limit and overdue'
+              : why.overLimit
+                  ? 'Over the credit limit'
+                  : 'Overdue past payment terms'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (why.overLimit)
+                  Text(
+                    'Owes ${rs(a.total)} · this order ${rs(_total)} · '
+                    'limit ${rs(a.creditLimit)}.',
+                    style: const TextStyle(
+                        fontSize: 12.5, fontWeight: FontWeight.w600),
+                  ),
+                if (why.pastTerms)
+                  Text(
+                    '${pastTermsPhrase(widget.party.doc)}.',
+                    style: const TextStyle(
+                        fontSize: 12.5, fontWeight: FontWeight.w600),
+                  ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Your manager cannot approve this order on their own. They '
+                  'send it to the general manager, who decides it on what you '
+                  'write here — and once approved, it becomes your condition.',
+                  style: TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ctrl,
+                  autofocus: true,
+                  maxLines: 4,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: InputDecoration(
+                    labelText: 'What has the customer committed to?',
+                    hintText:
+                        'Cheque for 50,000 on Friday, balance with the next order',
+                    border: const OutlineInputBorder(),
+                    errorText: problem,
+                    errorMaxLines: 3,
+                  ),
+                  onChanged: (_) {
+                    if (problem != null) setLocal(() => problem = null);
+                  },
+                ),
+                const SizedBox(height: 8),
+                Row(children: [
+                  const Text('By when', style: TextStyle(fontSize: 13)),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () async {
+                      final now = DateTime.now();
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: due ?? now.add(const Duration(days: 7)),
+                        firstDate: now,
+                        lastDate: now.add(const Duration(days: 365)),
+                      );
+                      if (picked != null) setLocal(() => due = picked);
+                    },
+                    child: Text(due == null ? 'Optional' : isoDate(due!)),
+                  ),
+                  if (due != null)
+                    IconButton(
+                      tooltip: 'No date',
+                      icon: const Icon(Icons.close, size: 18),
+                      onPressed: () => setLocal(() => due = null),
+                    ),
+                ]),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, null),
+                child: const Text('Back to the order')),
+            FilledButton(
+              onPressed: () {
+                final p = commitmentProblem(ctrl.text);
+                if (p != null) {
+                  setLocal(() => problem = p);
+                  return;
+                }
+                Navigator.pop(ctx, (
+                  text: ctrl.text.trim(),
+                  due: due == null ? null : isoDate(due!),
+                ));
+              },
+              child: const Text('Send for approval'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Offers to hold an order that could not be sent for want of signal.
   ///
   /// The wording is careful on purpose. No order number exists and no stock is
   /// held — stock is committed in SAP, which this order has not reached — so
   /// the rep must not walk away believing the customer is covered. Another rep
   /// in signal can take the same rolls before this draft is ever sent.
-  Future<void> _offerDraft(String deliveryDate) async {
+  Future<void> _offerDraft(String deliveryDate,
+      {({String text, String? due})? commitment}) async {
     if (!mounted) return;
     setState(() => _submitting = false);
 
@@ -314,6 +568,8 @@ class _OrderScreenState extends State<OrderScreen> {
       deliveryDate: deliveryDate,
       items: [for (final l in _picked) l.toSalesOrderItem()],
       isLead: widget.party.isLead,
+      commitment: commitment?.text,
+      commitmentDue: commitment?.due,
     );
     if (!mounted) return;
     _snack('Saved on your phone — not sent yet. Send it from Unsent Orders.');
@@ -324,6 +580,14 @@ class _OrderScreenState extends State<OrderScreen> {
   Future<void> _submit() async {
     final problem = _validate();
     if (problem != null) return _snack(problem);
+
+    // Before anything is sent, so backing out of the dialog leaves the order
+    // on screen exactly as the rep built it.
+    ({String text, String? due})? commitment;
+    if (_needsCommitment) {
+      commitment = await _askCommitment();
+      if (commitment == null || !mounted) return;
+    }
 
     setState(() => _submitting = true);
 
@@ -350,6 +614,8 @@ class _OrderScreenState extends State<OrderScreen> {
           // manager, because what they approved is no longer what will ship.
           returnForApproval: _wasApproved,
           isLead: widget.party.isLead,
+          commitment: commitment?.text,
+          commitmentDue: commitment?.due,
         );
         _snack(_wasApproved
             ? 'Order updated ✓ — sent back to your manager'
@@ -379,8 +645,12 @@ class _OrderScreenState extends State<OrderScreen> {
           company: _company,
           items: [for (final l in _picked) l.toSalesOrderItem()],
           deliveryDate: dd,
+          commitment: commitment?.text,
+          commitmentDue: commitment?.due,
         );
-        _snack('Order sent for approval ✓  $name');
+        _snack(commitment != null
+            ? 'Order sent with your commitment ✓  $name'
+            : 'Order sent for approval ✓  $name');
       }
 
       await Future.delayed(const Duration(milliseconds: 400));
@@ -396,7 +666,7 @@ class _OrderScreenState extends State<OrderScreen> {
       // Every other failure means the server considered this order and said no,
       // so a draft would only defer the same answer.
       if (isOffline(e) && !_isEdit) {
-        await _offerDraft(dd);
+        await _offerDraft(dd, commitment: commitment);
         return;
       }
       // The most likely failure is someone else getting there first, so the
@@ -488,6 +758,17 @@ class _OrderScreenState extends State<OrderScreen> {
                 ? 'Lead order — $name'
                 : 'Order — $name'),
         actions: [
+          if (_mayReloadStock)
+            IconButton(
+              tooltip: 'Reload stock from SAP',
+              onPressed: _reloading || _submitting ? null : _reloadStock,
+              icon: _reloading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.sync),
+            ),
           if (_usesMinimumStock)
             IconButton(
               tooltip: 'Slow movers',
@@ -561,6 +842,24 @@ class _OrderScreenState extends State<OrderScreen> {
               final onOrder = _onOrder;
               return ListView(
                 children: [
+                  if (_sapRateOnOrder)
+                    Container(
+                      width: double.infinity,
+                      color: const Color(0xFFE3F2FD),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      child: Text(
+                          [
+                            _sapRates.listOnly
+                                ? "Lead orders are taken at Manna Treads' list price: items that have one are priced and locked."
+                                : "Items with a Manna Treads SAP rate for this customer are priced from SAP and locked.",
+                            if (_sapRates.syncedAt.isNotEmpty)
+                              'Prices as read from SAP ${_sapRates.syncedAt}.',
+                            if (_sapRates.note.isNotEmpty) _sapRates.note,
+                          ].join(' '),
+                          style: TextStyle(
+                              fontSize: 12, color: Colors.blue.shade900)),
+                    ),
                   if (onOrder.isNotEmpty) ...[
                     Container(
                       width: double.infinity,
@@ -581,6 +880,8 @@ class _OrderScreenState extends State<OrderScreen> {
                         stock: _stock[line.product.code],
                         showMinimumStock: _usesMinimumStock,
                         rateLocked: _approvedLines.contains(line.product.code),
+                        sapRate: _sapRateFor(line),
+                        leadOrder: _sapRates.listOnly,
                         onChanged: () => setState(() {}),
                       ),
                   ],
@@ -597,6 +898,8 @@ class _OrderScreenState extends State<OrderScreen> {
                         // Only the lines the manager actually signed off are
                         // frozen. A product added since still needs pricing.
                         rateLocked: _approvedLines.contains(line.product.code),
+                        sapRate: _sapRateFor(line),
+                        leadOrder: _sapRates.listOnly,
                         onChanged: () => setState(() {}),
                       ),
                   ],

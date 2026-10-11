@@ -167,21 +167,8 @@ export function MonthlyExpensePage() {
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">Monthly expense sheet</div>
-          <div className="page-head__sub">
-            Travel and out-of-pocket claims, one row per trip
-          </div>
+          <div className="page-head__title">Monthly Expenses</div>
         </div>
-      </div>
-
-      <div className="cal__toolbar">
-        <Select value={personId} onChange={(e) => setPersonId(e.target.value)} aria-label="Sales person">
-          {staff.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}{p.teamManager ? ` — ${p.teamManager}` : ''}
-            </option>
-          ))}
-        </Select>
         <div className="cal__nav">
           <ExportButton
             filename={`expenses-${person?.name ?? 'all'}-${MONTHS[cursor.m]}-${cursor.y}.xlsx`}
@@ -216,31 +203,40 @@ export function MonthlyExpensePage() {
             }
           />
           <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
+        </div>
+      </div>
+
+      <div className="cal__toolbar">
+        <Select value={personId} onChange={(e) => setPersonId(e.target.value)} aria-label="Sales person">
+          {staff.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}{p.teamManager ? ` — ${p.teamManager}` : ''}
+            </option>
+          ))}
+        </Select>
+        <div className="cal__nav">
           <Button size="sm" variant="ghost" onClick={() => shift(-1)} aria-label="Previous month">‹</Button>
           <div className="cal__title">{MONTHS[cursor.m]} {cursor.y}</div>
           <Button size="sm" variant="ghost" onClick={() => shift(1)} aria-label="Next month">›</Button>
         </div>
       </div>
 
-      {error && <Alert tone="danger" title="Could not read trips">{error}</Alert>}
-      {loading && !error && <Empty icon="◔" title="Reading trips…" />}
+      {error && <Alert tone="danger" title="Could not load trips">{error}</Alert>}
+      {loading && !error && <Empty icon="◔" title="Loading…" />}
 
       {!loading && !error && person && rates && (
         <>
           <div className="tiles" style={{ marginBottom: 14 }}>
-            <Tile label="Distance" value={`${totals.km} km`} foot="Own trips only" />
-            <Tile label="Travel claim" value={money(totals.travel, 0)} foot="Distance × rate" />
-            <Tile label="Out of pocket" value={money(totals.pocket, 0)} foot="D.A, lodging, tickets" />
-            <Tile label="Total claimed" value={money(totals.claimed, 0)} tone="ok" foot="What payroll pays" />
-            <Tile label="Shop visits" value={String(totals.visits)} foot="On own trips" />
+            <Tile label="Distance" value={`${totals.km} km`} />
+            <Tile label="Travel claim" value={money(totals.travel, 0)} />
+            <Tile label="Out of pocket" value={money(totals.pocket, 0)} />
+            <Tile label="Total claimed" value={money(totals.claimed, 0)} tone="ok" />
           </div>
 
           {totals.joined > 0 && (
             <div style={{ marginBottom: 14 }}>
               <Alert tone="info" title={`${totals.joined} shared trip${totals.joined === 1 ? '' : 's'} joined`}>
-                {person.name} travelled on {totals.joined} trip{totals.joined === 1 ? '' : 's'} paid
-                for by someone else. Those rows show ₹0 here on purpose — the claim sits on the
-                owner's sheet, and counting it twice would pay it twice.
+                Shown at ₹0; claimed on the owner's sheet.
               </Alert>
             </div>
           )}
@@ -285,7 +281,7 @@ export function MonthlyExpensePage() {
                       />
                     ))}
                     <tr className="exp__total">
-                      <td colSpan={8}>Total — own trips only</td>
+                      <td colSpan={8}>Total (own trips)</td>
                       <td className="right num">{totals.km} km</td>
                       <td />
                       <td />
@@ -301,7 +297,7 @@ export function MonthlyExpensePage() {
           </Card>
 
           {monthLeave.length > 0 && (
-            <Card title="Approved leave this month" flush className="mt-16">
+            <Card title="Approved Leave" flush className="mt-16">
               <div className="scroll-x">
                 <table className="table">
                   <thead>

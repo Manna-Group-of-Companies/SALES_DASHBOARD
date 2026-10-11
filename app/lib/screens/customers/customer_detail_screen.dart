@@ -323,9 +323,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             over ? const Color(0xFFFFEBEE) : null),
       ]),
 
-      // Directly under the two figures it describes. A limit raised this
-      // morning does not reach here until the nightly job runs, and a rep
-      // being refused by a stale number has no other way to tell.
+      // Directly under the two figures it describes. A limit raised in SAP
+      // does not reach here until somebody syncs, and a rep being refused by
+      // a stale number has no other way to tell.
       const SapSyncBar(),
 
       // How old the debt is. Shown, never enforced: the credit rule is still
@@ -349,6 +349,35 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               style: TextStyle(fontSize: 11, color: Colors.orange.shade900)),
         ),
 
+      // Payment terms (11 Oct 2026). Unlike the four boxes, being overdue past
+      // the terms DOES send this customer's orders to the GM, so it is said in
+      // words, with the term it is measured against.
+      if (overduePastTerms(c) > kOverdueTolerance)
+        Container(
+          margin: const EdgeInsets.only(top: 4),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+              color: const Color(0xFFFFEBEE),
+              borderRadius: BorderRadius.circular(8)),
+          child: Row(children: [
+            const Icon(Icons.schedule, color: Colors.red, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+                child: Text(
+                    '${pastTermsPhrase(c)}. '
+                    'New orders go to the GM for credit approval.',
+                    style: const TextStyle(color: Colors.red))),
+          ]),
+        )
+      else if (paymentTermsOf(c).isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          child: Text(
+              'Payment terms: ${paymentTermsOf(c)}. '
+              'Nothing overdue past them.',
+              style: const TextStyle(fontSize: 11, color: Colors.black45)),
+        ),
+
       if (over)
         Container(
           margin: const EdgeInsets.only(top: 4),
@@ -361,7 +390,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             SizedBox(width: 8),
             Expanded(
                 child: Text(
-                    'Over credit limit — proforma will need manager release.',
+                    'Over credit limit — orders go to the general manager, and '
+                    'the proforma unlocks once they approve.',
                     style: TextStyle(color: Colors.red))),
           ]),
         ),

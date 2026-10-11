@@ -92,9 +92,7 @@ export const ProductRow = memo(function ProductRow({
               <span>
                 <b>{product.beltsPerRoll}</b> belts/roll
               </span>
-              <span className="dim">
-                1 belt = {round(beltWeight(product))} kg
-              </span>
+              <span className="dim">{round(beltWeight(product))} kg/belt</span>
             </>
           )}
           {product.category === 'CTR' && (
@@ -104,7 +102,7 @@ export const ProductRow = memo(function ProductRow({
           )}
           {product.category === 'BG' && (
             <span>
-              1 box = {BG_KG_PER_BOX} kg ({BG_KG_PER_ROLL} kg × 4 rolls)
+              Box <b>{BG_KG_PER_BOX} kg</b> ({BG_KG_PER_ROLL} kg × 4 rolls)
             </span>
           )}
           {product.category === 'VS' && (
@@ -113,7 +111,7 @@ export const ProductRow = memo(function ProductRow({
             </span>
           )}
         </div>
-        <div style={{ marginTop: 6 }}>
+        <div className="prow__stock">
           <StockChip
             item={minStock}
             available={available ?? undefined}
@@ -252,7 +250,7 @@ export const ProductRow = memo(function ProductRow({
             </div>
             <div className="prow__breakdown">{computed.breakdown}</div>
             {oversold && (
-              <div className="small" style={{ color: 'var(--danger)', fontWeight: 600, marginTop: 3 }}>
+              <div className="prow__oversold">
                 Only {round(available!)} {computed.uom} free
               </div>
             )}

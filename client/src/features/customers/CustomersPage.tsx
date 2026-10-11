@@ -45,6 +45,9 @@ function rowOf(c: SalesCustomer) {
     custom_outstanding_30_60: c.outstanding30_60,
     custom_outstanding_60_90: c.outstanding60_90,
     custom_outstanding_90_plus: c.outstanding90Plus,
+    custom_overdue_past_terms: c.overduePastTerms,
+    custom_payment_terms: c.paymentTerms ?? '',
+    custom_overdue_days: c.overdueDays,
   };
 }
 import '@/components/layout/layout.css';
@@ -170,15 +173,17 @@ export function CustomersPage() {
         <div className="grow">
           <div className="page-head__title">Customers</div>
           <div className="page-head__sub">
-            {customers.length} in your team
-            {myTeam.length ? ` · ${myTeam.length} representatives` : ''}
+            {stats.total === customers.length
+              ? `${customers.length} customers`
+              : `${stats.total} of ${customers.length} customers`}
+            {myTeam.length ? ` · ${myTeam.length} reps` : ''}
           </div>
         </div>
         <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
       </div>
 
       {error && (
-        <Alert tone="danger" title="Could not read customers">
+        <Alert tone="danger" title="Could not load customers">
           {error}
         </Alert>
       )}
@@ -190,26 +195,22 @@ export function CustomersPage() {
       </div>
 
       <div className="tiles" style={{ marginBottom: 14 }}>
-        <Tile label="Shown" value={String(stats.total)} foot={rep || 'Your team'} />
         <Tile
           label="No route"
           value={String(stats.noRoute)}
           tone={stats.noRoute ? 'warn' : undefined}
-          foot="Cannot be ordered from"
         />
         <Tile
           label="Unassigned"
           value={String(stats.noRep)}
           tone={stats.noRep ? 'warn' : undefined}
-          foot="No rep on the record"
         />
         <Tile
           label="Over credit limit"
           value={String(stats.overLimit)}
           tone={stats.overLimit ? 'alert' : undefined}
-          foot="Owes more than allowed"
         />
-        <Tile label="Outstanding" value={money(stats.owed, 0)} foot="Across those shown" />
+        <Tile label="Outstanding" value={money(stats.owed, 0)} />
       </div>
 
       <div className="cal__toolbar">
@@ -223,7 +224,7 @@ export function CustomersPage() {
           ))}
         </Select>
         <Input
-          placeholder="Search name, route, GSTIN…"
+          placeholder="Search name, route or GSTIN"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Search customers"
@@ -240,12 +241,12 @@ export function CustomersPage() {
         />
       </div>
 
-      {loading && <Empty icon="◔" title="Reading customers…" />}
+      {loading && <Empty icon="◔" title="Loading…" />}
 
       {!loading && !error && (
         <Card flush>
           {rows.length === 0 ? (
-            <Empty icon="—" title="No customers match" />
+            <Empty icon="—" title="No customers" />
           ) : (
             <div className="scroll-x">
               <table className="table">
@@ -332,7 +333,7 @@ export function CustomersPage() {
                         </td>
                         <td>
                           {c.locationStatus === 'Verified' ? (
-                            <Badge tone="ok">verified</Badge>
+                            <Badge tone="ok">Verified</Badge>
                           ) : (
                             <span className="dim small">{c.locationStatus || '—'}</span>
                           )}
@@ -345,14 +346,6 @@ export function CustomersPage() {
             </div>
           )}
         </Card>
-      )}
-
-      {!loading && stats.noRoute > 0 && (
-        <p className="note" style={{ marginTop: 12 }}>
-          {stats.noRoute} of the customers shown have no sales route. An order cannot be started
-          for them — production is given the route and nothing else, so an order without one
-          reaches the floor with nowhere to send it.
-        </p>
       )}
     </div>
   );

@@ -2,7 +2,7 @@
 //
 // WHY THIS EXISTS
 //
-// Every rule the app enforces — the 1 pm edit cutoff, the booking headroom
+// Every rule the app enforces — the approval edit lock, the booking headroom
 // check, the rate lock — lives in the app, because the plan no longer runs
 // Server Scripts. That is survivable while everyone is on the same build. It
 // stops being survivable the moment they are not: a rep still carrying an APK

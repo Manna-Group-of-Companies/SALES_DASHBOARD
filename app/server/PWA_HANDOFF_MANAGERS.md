@@ -43,7 +43,7 @@ Ten commits. Each is expanded later; this is the index.
 | 6 | Minimum-stock lines skip the making stages | Production |
 | 7 | **Combined Order** — weekly grouping per customer | Both |
 | 8 | Route is mandatory before an order can be taken | Both |
-| 9 | Fulfilment mode locks at 1 pm; grouping shown to managers | Both |
+| 9 | Fulfilment mode locks at approval (the 1 pm lock was dropped 11 Oct 2026); grouping shown to managers | Both |
 | 10 | A closed week shows as one row that opens into its orders | Both |
 
 ---
@@ -92,7 +92,7 @@ and that split is deliberate.
 | Approval | Screen | Why |
 |---|---|---|
 | Order / rate approval | **Team Orders only** | Deciding an order needs the lines, the stock position and the credit picture. An inbox row cannot carry that. |
-| Proforma release | Approvals inbox | |
+| Proforma release | **none — retired 26 Sep 2026** | The GM's approval of an over-limit order unlocks its proforma (`shared/fixtures/proforma_release.json`). |
 | Customer location verification | Approvals inbox | |
 | Customer **site** verification | Approvals inbox | |
 | Lead location verification | Approvals inbox | |
@@ -171,13 +171,15 @@ The manager can escalate instead of deciding:
 GM queue is anything sitting at that value. There is no automatic threshold —
 escalation is a manual choice by the sales manager.
 
-### 3.5 Proforma release
+### 3.5 Proforma release — retired 26 Sep 2026
 
-- Queue: `custom_proforma_status = "Pending Release Approval"`, team-filtered.
-- Release → `custom_proforma_status: "Released"`
-- Refuse → `custom_proforma_status: "Blocked - Credit"`
+There is no release queue any more. A proforma is held only while an
+over-limit order waits for the GM, and the GM's approval unlocks it
+(`shared/fixtures/proforma_release.json`). No live order ever sat at
+`Pending Release Approval`. `Released` written by an old build still counts;
+`Blocked - Credit` no longer decides anything.
 
-Other values seen: `Ready`, `Sent`.
+Values seen: `Ready`, `Sent`.
 
 ### 3.6 Credit limit
 
@@ -602,27 +604,24 @@ Leads:    3001 total | with route: 2994 | WITHOUT:   7
 
 ---
 
-## 10. The 1 pm rule, and what it now covers
+## 10. When an order stops being editable
 
-An order freezes at **13:00 on its required delivery date**
-(`kOrderEditCutoffHour = 13`, `lib/core/order_rules.dart`).
+**Dropped 11 Oct 2026: the 1 pm rule.** Orders used to freeze at 13:00 on their
+delivery date (`kOrderEditCutoffHour`). That is gone from both apps. The
+approval status alone decides (`statusAllowsEdit`, `lib/core/order_rules.dart`;
+`shared/fixtures/order_locked_after_approval.json`):
 
-- No delivery date → treated as permanently **open**, not shut. An order without
-  a date is a data problem, and refusing to let anyone fix it makes it worse.
-- Judged against the **server clock**, read from the HTTP `Date` response header.
-  A rep controls the phone's clock; this deadline decides whether a change is
-  allowed, so it cannot be trusted to the device.
+- Open until the sales manager approves the order or sends it to the GM.
+- With the GM: only the GM may change it. Approved by the GM, or approved and
+  sent to SAP: nobody. Rejected: open again, for the rep to fix and resend.
 
-Who may edit before the deadline: the rep who raised it, **or** their manager. A
+Who may edit while it is open: the rep who raised it, **or** their manager. A
 manager needs it because a customer who rings the office should not have to wait
 for their rep to come back into signal.
 
-**NEW: the fulfilment mode now locks at 1 pm too.** Switching a line between
-`From Minimum Stock` and `New Production` is a change to the order like any
-other. After the deadline the goods are already being picked or made against
-whatever was decided, so moving it would overwrite a decision the floor has acted
-on. The API refuses it as well, judged against the order **as stored**, not as
-the screen last saw it.
+The fulfilment mode locks at approval, like everything else on the order. The
+API refuses a locked change as well, judged against the order **as stored**,
+not as the screen last saw it.
 
 ---
 
@@ -744,7 +743,7 @@ the 3-stage and 8-stage displays side by side.
 | Concern | File |
 |---|---|
 | Every backend call | `lib/services/api.dart` (~3,400 lines) |
-| Approval labels, 1 pm rule, lead completeness | `lib/core/order_rules.dart` |
+| Approval labels, the edit lock, lead completeness | `lib/core/order_rules.dart` |
 | Stage sequences and the roll-up | `lib/core/production_stages.dart` |
 | Week boundaries | `lib/core/week.dart` |
 | Duplicate-place arithmetic | `lib/core/proximity.dart` |

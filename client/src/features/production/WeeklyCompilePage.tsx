@@ -17,7 +17,7 @@ import {
 } from '@/store/selectors';
 import { compileWeeklyGroup } from '@/store/slices/ordersSlice';
 import { pushToast } from '@/store/slices/notificationsSlice';
-import { Alert, Badge, Button, Card, Empty } from '@/components/ui';
+import { Badge, Button, Card, Empty } from '@/components/ui';
 import { money } from '@/components/common/format';
 
 export function WeeklyCompilePage() {
@@ -48,27 +48,13 @@ export function WeeklyCompilePage() {
   return (
     <div>
       <div className="page-head">
-        <div className="grow">
-          <div className="page-head__title">Weekly compile</div>
-          <div className="page-head__sub">
-            Group a customer's dispatched orders for the week into one compiled order
-          </div>
-        </div>
-      </div>
-
-      <div style={{ marginBottom: 14 }}>
-        <Alert tone="info">
-          Only dispatched orders appear here. Once compiled, the rep sees the week as a single row
-          they can expand to see every order inside.
-        </Alert>
+        <div className="page-head__title grow">Weekly Compile</div>
       </div>
 
       <div className="stack gap-4">
         <Card title={`Ready to compile (${buckets.length})`} flush>
           {buckets.length === 0 ? (
-            <Empty icon="🗂" title="Nothing to compile">
-              Dispatch some orders first — they will bucket by customer and week here.
-            </Empty>
+            <Empty title="Nothing to compile" />
           ) : (
             <div className="table-wrap">
               <table className="table">
@@ -126,7 +112,7 @@ export function WeeklyCompilePage() {
                                 {o.orderNo}
                               </td>
                               <td className="small dim">
-                                dispatched {o.dispatchedAt ? formatDate(o.dispatchedAt.slice(0, 10)) : '—'}
+                                Dispatched {o.dispatchedAt ? formatDate(o.dispatchedAt.slice(0, 10)) : '—'}
                               </td>
                               <td />
                               <td className="right num">{o.items.length}</td>
@@ -145,7 +131,7 @@ export function WeeklyCompilePage() {
 
         <Card title={`Compiled groups (${groups.length})`} flush>
           {groups.length === 0 ? (
-            <Empty icon="📚" title="No groups yet" />
+            <Empty title="No compiled groups" />
           ) : (
             <div className="table-wrap">
               <table className="table">

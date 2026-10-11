@@ -1,8 +1,11 @@
 // When an order can still be changed, and by whom.
 //
-// The cutoff is 1 pm on the required delivery date — not midnight, and not
-// measured from when the order was raised. Both of those are easy mistakes to
-// make later, so they are pinned here.
+// The approval status decides, and nothing else. The 1 pm delivery-day cutoff
+// that used to sit on top was dropped on 11 October 2026; it is pinned here as
+// gone, because a date-based lock is an easy thing to put back by accident.
+
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -40,33 +43,31 @@ void main() {
     Session.I.isGM = false;
   });
 
-  group('The cutoff', () {
-    test('is 1 pm on the delivery date, not midnight', () {
-      final d = orderEditDeadline('2026-08-20');
-      expect(d, DateTime(2026, 8, 20, 13));
+  group('The delivery date has no say (11 Oct 2026)', () {
+    final past = _iso(today.subtract(const Duration(days: 2)));
+
+    test('an undecided order past its delivery date is still open to its rep',
+        () {
+      expect(canEditOrder(_order(deliveryDate: past, owner: 'Test Rep')),
+          isTrue);
+      expect(orderLockReason(_order(deliveryDate: past, owner: 'Test Rep')),
+          isEmpty);
     });
 
-    test('a delivery date well in the future is open', () {
-      final future = _iso(today.add(const Duration(days: 30)));
-      expect(orderEditWindowOpen(future), isTrue);
+    test('and to their manager', () {
+      Session.I.managedTeam = 'Pareeth';
+      Session.I.teamReps = ['Amjad Pr'];
+      expect(canEditOrder(_order(deliveryDate: past, owner: 'Amjad Pr')),
+          isTrue);
     });
 
-    test('a delivery date in the past is closed', () {
-      final past = _iso(today.subtract(const Duration(days: 2)));
-      expect(orderEditWindowOpen(past), isFalse);
+    test('today, after 1 pm, is no different from any other day', () {
+      expect(canEditOrder(_order(deliveryDate: _iso(today), owner: 'Test Rep')),
+          isTrue);
     });
 
-    test('an order with no delivery date stays open, not permanently shut', () {
-      // A missing date is a data problem. Freezing the order would make it
-      // impossible to fix the very field that is missing.
-      expect(orderEditWindowOpen(null), isTrue);
-      expect(orderEditWindowOpen(''), isTrue);
-      expect(orderEditDeadline(null), isNull);
-    });
-
-    test('a datetime string is accepted as well as a plain date', () {
-      expect(orderEditDeadline('2026-08-20 00:00:00'),
-          DateTime(2026, 8, 20, 13));
+    test('an order with no delivery date is open too', () {
+      expect(canEditOrder(_order(owner: 'Test Rep')), isTrue);
     });
   });
 
@@ -97,16 +98,7 @@ void main() {
           isFalse);
     });
 
-    test('nobody can edit after the cutoff, not even the owner', () {
-      final past = _iso(today.subtract(const Duration(days: 1)));
-      expect(
-          canEditOrder(_order(deliveryDate: past, owner: 'Test Rep')), isFalse);
-    });
-
     test('the lock reason says which rule stopped them', () {
-      final past = _iso(today.subtract(const Duration(days: 1)));
-      expect(orderLockReason(_order(deliveryDate: past)), contains('1 pm'));
-
       Session.I.salesPerson = 'Test Rep';
       expect(orderLockReason(_order(deliveryDate: future, owner: 'Amjad Pr')),
           contains('Amjad Pr'));
@@ -268,15 +260,14 @@ void main() {
       expect(canEditOrder(approved()), isFalse);
     });
 
-    test('and neither can the GM, who is exempt from everything else', () {
-      // The exemption is about approving, not about editing an order the
-      // factory is already working to. No seniority makes an app edit reach
-      // SAP.
+    test('and neither can the GM', () {
+      // The GM may trim an order while it is with them, which is about
+      // deciding, not about editing an order the factory is already working
+      // to. No seniority makes an app edit reach SAP.
       Session.I.isGM = true;
       expect(canEditOrder(approved()), isFalse);
-      // Still exempt from the cutoff on an order that is NOT approved.
-      final past = _iso(today.subtract(const Duration(days: 2)));
-      expect(canEditOrder(_order(deliveryDate: past, owner: 'Amjad Pr')),
+      // Any rep's undecided order is still the GM's to change.
+      expect(canEditOrder(_order(deliveryDate: future, owner: 'Amjad Pr')),
           isTrue);
       Session.I.isGM = false;
     });
@@ -296,13 +287,169 @@ void main() {
       expect(r, isNot(contains('SAP order ')));
     });
 
-    test('an unapproved order in the window is not locked at all', () {
+    test('an unapproved order is not locked at all', () {
       expect(orderLockReason(_order(deliveryDate: future, owner: 'Test Rep')),
           isEmpty);
     });
 
     test('deleting stays refused, as it already was', () {
       expect(canDeleteOrder(approved()), isFalse);
+    });
+  });
+
+  /*
+   * Escalation and the GM's approval, decided 26 September 2026. Read from
+   * shared/fixtures/order_locked_after_approval.json (by_role), which the
+   * dashboard's suite reads too: the rep and the sales manager stop at the
+   * escalation, the GM at their own approval.
+   */
+  group('Who may change an order at each stage of approval', () {
+    final fixture = json.decode(
+            File('../shared/fixtures/order_locked_after_approval.json')
+                .readAsStringSync())
+        as Map<String, dynamic>;
+    final future = _iso(today.add(const Duration(days: 7)));
+
+    test('the lock messages match the fixture word for word', () {
+      final m = fixture['messages'] as Map<String, dynamic>;
+      expect(kEditLockWithGm, m['with_gm']);
+      expect(kEditLockGmApproved, m['gm_approved']);
+    });
+
+    test('the fixture\'s dated cases: a past delivery date locks nothing', () {
+      // The fixture's orders name no rep, so each is read as the owner's.
+      var dated = 0;
+      for (final c
+          in (fixture['can_edit'] as List).cast<Map<String, dynamic>>()) {
+        final order = (c['order'] as Map).cast<String, dynamic>();
+        if (order['delivery_date'] == null) continue;
+        dated++;
+        expect(canEditOrder({...order, 'custom_sales_person': 'Test Rep'}),
+            c['expect'],
+            reason: c['why'] as String);
+      }
+      for (final c
+          in (fixture['lock_reason'] as List).cast<Map<String, dynamic>>()) {
+        if (c['expect_empty_for_owner'] != true) continue;
+        final order = (c['order'] as Map).cast<String, dynamic>();
+        expect(orderLockReason({...order, 'custom_sales_person': 'Test Rep'}),
+            isEmpty,
+            reason: c['why'] as String);
+      }
+      expect(dated, greaterThan(0), reason: 'or this proves nothing');
+    });
+
+    test('an unrecognised role is refused, as orderActions refuses it', () {
+      expect(statusAllowsEdit('Pending Approval', 'production_manager'), isFalse);
+      expect(statusAllowsEdit('Pending Approval', ''), isFalse);
+    });
+
+    for (final c in (fixture['by_role'] as List).cast<Map<String, dynamic>>()) {
+      final po = c['po_status'];
+      test(c['why'], () {
+        for (final role in ['rep', 'sales_manager', 'general_manager']) {
+          expect(statusAllowsEdit(po, role), c[role], reason: role);
+        }
+
+        // And the same through canEditOrder, as each login would see it.
+        final order = {
+          ..._order(deliveryDate: future, owner: 'Test Rep'),
+          'custom_po_status': po,
+        };
+        expect(canEditOrder(order), c['rep'], reason: 'owning rep');
+
+        Session.I.salesPerson = 'Pareeth Kb';
+        Session.I.managedTeam = 'Pareeth';
+        Session.I.teamReps = ['Test Rep'];
+        expect(canEditOrder(order), c['sales_manager'], reason: 'sales manager');
+
+        Session.I.managedTeam = null;
+        Session.I.teamReps = [];
+        Session.I.salesPerson = null;
+        Session.I.isGM = true;
+        expect(canEditOrder(order), c['general_manager'], reason: 'GM');
+      });
+    }
+
+    test('the rep is told why when the GM has it', () {
+      final order = {
+        ..._order(deliveryDate: future, owner: 'Test Rep'),
+        'custom_po_status': 'Pending GM Approval',
+      };
+      expect(orderLockReason(order), kEditLockWithGm);
+    });
+
+    test('and everyone is told why once the GM has approved it', () {
+      final order = {
+        ..._order(deliveryDate: future, owner: 'Test Rep'),
+        'custom_po_status': 'Pending Final Approval',
+      };
+      expect(orderLockReason(order), kEditLockGmApproved);
+      Session.I.isGM = true;
+      expect(orderLockReason(order), kEditLockGmApproved);
+    });
+
+    test('the GM editing an order with them is not told it is locked', () {
+      Session.I.isGM = true;
+      final order = {
+        ..._order(deliveryDate: future, owner: 'Test Rep'),
+        'custom_po_status': 'Pending GM Approval',
+      };
+      expect(orderLockReason(order), isNot(kEditLockWithGm));
+    });
+  });
+
+  /*
+   * Found in review, 26 Sep 2026: a Lead Order keeps its approval in
+   * `status`, so it read as undecided for ever; and deleting ignored
+   * escalation.
+   */
+  group('Lead orders and deleting follow the same stages', () {
+    final future = _iso(today.add(const Duration(days: 7)));
+    Map<String, dynamic> lead(String status) => {
+          'doctype': 'Lead Order',
+          'name': 'LO-0001',
+          'lead': 'CRM-LEAD-2026-04130',
+          'sales_person': 'Test Rep',
+          'delivery_date': future,
+          'status': status,
+        };
+
+    test('an approved lead order is shut, with its own reason', () {
+      for (final s in ['Approved', 'PO Uploaded', 'PO Approved - Ready for SAP', 'Converted']) {
+        expect(canEditOrder(lead(s)), isFalse, reason: s);
+        expect(orderLockReason(lead(s)), kEditLockLeadApproved, reason: s);
+      }
+    });
+
+    test('a pending or rejected lead order stays open to its rep', () {
+      expect(canEditOrder(lead('Pending Approval')), isTrue);
+      expect(canEditOrder(lead('Rejected')), isTrue);
+    });
+
+    test('a lead order with the GM is for the GM alone', () {
+      expect(canEditOrder(lead('Pending GM Approval')), isFalse);
+      Session.I.isGM = true;
+      expect(canEditOrder(lead('Pending GM Approval')), isTrue);
+    });
+
+    test('the rep cannot delete an order once it is with the GM, or approved by the GM', () {
+      Map<String, dynamic> so(String po) => {
+            ..._order(deliveryDate: future, owner: 'Test Rep'),
+            'docstatus': 0,
+            'custom_po_status': po,
+          };
+      expect(canDeleteOrder(so('Pending Approval')), isTrue);
+      expect(canDeleteOrder(so('Pending GM Approval')), isFalse);
+      expect(canDeleteOrder(so('Pending Final Approval')), isFalse);
+      Session.I.isGM = true;
+      expect(canDeleteOrder(so('Pending GM Approval')), isTrue);
+      expect(canDeleteOrder(so('Pending Final Approval')), isFalse);
+    });
+
+    test('a Sales Order is never mistaken for a lead order', () {
+      expect(isLeadOrderDoc(_order(deliveryDate: future)), isFalse);
+      expect(editStatusOf({'custom_po_status': ' Pending GM Approval '}), 'Pending GM Approval');
     });
   });
 }

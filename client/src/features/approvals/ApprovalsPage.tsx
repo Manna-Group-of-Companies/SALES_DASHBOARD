@@ -25,17 +25,14 @@ export function ApprovalsPage() {
         <div className="grow">
           <div className="page-head__title">Approvals</div>
           <div className="page-head__sub">
-            {pending.length} order{pending.length === 1 ? '' : 's'} waiting. Rates are locked
-            permanently at approval.
+            {pending.length} order{pending.length === 1 ? '' : 's'} waiting
           </div>
         </div>
       </div>
 
       {pending.length === 0 ? (
         <Card>
-          <Empty icon="✅" title="Queue is clear">
-            Nothing is waiting for your approval.
-          </Empty>
+          <Empty icon="✓" title="No orders waiting" />
         </Card>
       ) : (
         <Card flush>

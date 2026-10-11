@@ -1,7 +1,7 @@
 // The dead end a build too old to be trusted arrives at.
 //
 // Deliberately offers no way past it. Everything this app enforces — the stock
-// headroom check, the 1 pm edit cutoff, the rate lock — runs on the phone, so a
+// headroom check, the approval edit lock, the rate lock — runs on the phone, so a
 // build that predates a rule does not know to apply it and the backend will not
 // catch what it lets through. Letting a rep "continue anyway" would put exactly
 // that build back in front of live stock.

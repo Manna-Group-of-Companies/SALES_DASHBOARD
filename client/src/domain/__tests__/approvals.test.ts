@@ -1,13 +1,12 @@
 /**
- * Approvals, escalation, GM exemptions, weeks, the 1 pm freeze and the money
- * identities on an order line.
+ * Approvals, escalation, GM exemptions, weeks and the money identities on an
+ * order line.
  *
  * These are the rules that must not differ between the two applications.
  */
 
 import { describe, expect, it } from 'vitest';
 import {
-  boundByCutoff,
   boundByOwnership,
   creditPicture,
   escalates,
@@ -26,7 +25,6 @@ import {
   isClosed,
   lastClosedWeek,
   mondayOf,
-  pastCutoff,
   recentWeeks,
   shiftWeek,
   weekOf,
@@ -51,6 +49,10 @@ describe('the status pill never leaks the stored string', () => {
     expect(statusPill(PO_STATUS.poUploaded).text).toBe('WAITING FOR MANAGER APPROVAL');
     expect(statusPill(PO_STATUS.pendingRate).text).toBe('WAITING FOR RATE APPROVAL');
     expect(statusPill(PO_STATUS.pendingGm).text).toBe('ESCALATED TO GM');
+    // Approved by the GM is not approved: it is not in SAP until the sales
+    // manager pushes it, so it must not read as done.
+    expect(statusPill(PO_STATUS.finalApproval)).toEqual({ text: 'APPROVED BY GM', tone: 'warn' });
+    expect(isApproved(PO_STATUS.finalApproval)).toBe(false);
     expect(statusPill(PO_STATUS.rejected)).toEqual({ text: 'REJECTED', tone: 'danger' });
   });
 
@@ -92,13 +94,8 @@ describe('escalation is on the customer’s credit limit', () => {
   });
 });
 
-describe('the three GM exemptions, and nobody else gets them', () => {
+describe('the two GM exemptions, and nobody else gets them', () => {
   const others = ['sales_manager', 'production_manager', 'stock_manager', 'hr', undefined];
-
-  it('exempts the GM from the 1 pm freeze', () => {
-    expect(boundByCutoff('general_manager')).toBe(false);
-    for (const r of others) expect(boundByCutoff(r)).toBe(true);
-  });
 
   it('exempts the GM from the rep/manager ownership rule', () => {
     expect(boundByOwnership('general_manager')).toBe(false);
@@ -167,19 +164,6 @@ describe('weeks are Monday to Sunday, on the date only', () => {
   });
 });
 
-describe('the 1 pm freeze', () => {
-  it('closes at exactly 13:00 on the delivery date', () => {
-    expect(pastCutoff('2026-08-13', new Date(2026, 7, 13, 12, 59))).toBe(false);
-    expect(pastCutoff('2026-08-13', new Date(2026, 7, 13, 13, 0))).toBe(true);
-  });
-
-  it('leaves an order with NO delivery date permanently OPEN', () => {
-    // A missing date is a data problem; refusing edits would make it permanent.
-    expect(pastCutoff(undefined, new Date(2099, 0, 1))).toBe(false);
-    expect(pastCutoff('', new Date(2099, 0, 1))).toBe(false);
-  });
-});
-
 describe('the completion tick is derived, and names the state', () => {
   it('maps the four production statuses', () => {
     expect(tickState('Dispatched')).toBe('complete');
@@ -190,6 +174,10 @@ describe('the completion tick is derived, and names the state', () => {
 
   it('rounds an unrecognised status down', () => {
     expect(tickState('Curing')).toBe('not_started');
+  });
+
+  it('names an order SAP has taken, rather than calling it not started', () => {
+    expect(tickState('Pushed to SAP')).toBe('in_sap');
   });
 });
 

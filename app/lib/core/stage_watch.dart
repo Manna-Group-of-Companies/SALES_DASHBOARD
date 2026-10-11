@@ -148,7 +148,12 @@ String describeChange(StageChange c) =>
 /// after seven days — a baseline that expires would replay every stage as news
 /// on any order a rep has not opened in a week.
 class StageSeen {
-  static const _prefix = 'stageSeen:';
+  // v2 from 24 Sep 2026, when the made portion started being fed the line's
+  // SAP status. A baseline taken under the old values would report every line
+  // of every order opened before as "moved" on its first look after the
+  // update; a new key makes that first look set the baseline instead, which
+  // is what a never-opened order already does. Same key as the dashboard's.
+  static const _prefix = 'stageSeen2:';
 
   static Future<StageSnapshot?> load(String orderName) async {
     try {

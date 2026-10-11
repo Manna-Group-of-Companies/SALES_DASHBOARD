@@ -25,7 +25,6 @@ import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import { Alert, Badge, Button, Card, Empty, Input, Segmented, Select } from '@/components/ui';
-import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
@@ -107,7 +106,6 @@ export function LocationVerificationPage() {
     () => ({
       customers: queue.filter((q) => q.kind === 'customer').length,
       leads: queue.filter((q) => q.kind === 'lead').length,
-      noPhoto: queue.filter((q) => !q.bannerPhoto).length,
     }),
     [queue],
   );
@@ -137,11 +135,7 @@ export function LocationVerificationPage() {
       // discover the one row that changed.
       setQueue((cur) => cur.filter((q) => !(q.id === item.id && q.kind === item.kind)));
       setZoomed(null);
-      setDone(
-        approve
-          ? `${item.name} verified — its coordinates are now the ones punch-in is measured against.`
-          : `${item.name} sent back. The rep is asked to capture it again.`,
-      );
+      setDone(approve ? `${item.name} verified.` : `${item.name} sent back to the rep.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save the decision.');
     } finally {
@@ -155,16 +149,13 @@ export function LocationVerificationPage() {
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">Location verification</div>
-          <div className="page-head__sub">
-            Check the photo against the name, then verify or send it back
-          </div>
+          <div className="page-head__title">Location Checks</div>
         </div>
         <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
       </div>
 
       {error && (
-        <Alert tone="danger" title="Could not read or save">
+        <Alert tone="danger" title="Could not load or save">
           {error}
         </Alert>
       )}
@@ -173,23 +164,6 @@ export function LocationVerificationPage() {
           <Alert tone="ok" title={done} />
         </div>
       )}
-
-      <div className="tiles" style={{ marginBottom: 14 }}>
-        <Tile
-          label="Waiting on you"
-          value={String(queue.length)}
-          tone={queue.length ? 'warn' : 'ok'}
-          foot={queue.length ? 'Captures to check' : 'Queue clear'}
-        />
-        <Tile label="Customers" value={String(counts.customers)} foot="Already on the books" />
-        <Tile label="Leads" value={String(counts.leads)} foot="Not yet converted" />
-        <Tile
-          label="No photo"
-          value={String(counts.noPhoto)}
-          tone={counts.noPhoto ? 'warn' : undefined}
-          foot="Nothing to recognise"
-        />
-      </div>
 
       <div className="cal__toolbar">
         <Select value={rep} onChange={(e) => setRep(e.target.value)} aria-label="Representative">
@@ -211,21 +185,20 @@ export function LocationVerificationPage() {
           ]}
         />
         <Input
-          placeholder="Search by name…"
+          placeholder="Search by name"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Search the queue"
         />
       </div>
 
-      {loading && <Empty icon="◔" title="Reading the queue…" />}
+      {loading && <Empty icon="◔" title="Loading…" />}
 
       {!loading && !error && rows.length === 0 && (
-        <Empty icon="✓" title="Nothing waiting on a location decision">
-          {queue.length > 0
-            ? 'Nothing matches this filter — clear the rep or the search.'
-            : 'A capture appears here the first time a rep visits a shop.'}
-        </Empty>
+        <Empty
+          icon={queue.length > 0 ? '—' : '✓'}
+          title={queue.length > 0 ? 'No matches' : 'No locations waiting'}
+        />
       )}
 
       <div className="loc__grid">
@@ -239,7 +212,7 @@ export function LocationVerificationPage() {
                 <span className="odo__title">
                   <span>{item.name}</span>
                   <Badge tone={item.kind === 'lead' ? 'accent' : item.kind === 'site' ? 'warn' : 'neutral'}>
-                    {item.kind}
+                    {item.kind === 'lead' ? 'Lead' : item.kind === 'site' ? 'Site' : 'Customer'}
                   </Badge>
                 </span>
               }
@@ -251,17 +224,13 @@ export function LocationVerificationPage() {
                     type="button"
                     className="loc__zoom"
                     onClick={() => setZoomed(item)}
-                    title="Click to see it full size"
+                    title="Enlarge"
                   >
                     <img src={item.bannerPhoto} alt={`${item.name} shopfront`} loading="lazy" />
-                    <span className="loc__zoom-hint">Click to enlarge</span>
+                    <span className="loc__zoom-hint">Enlarge</span>
                   </button>
                 ) : (
-                  <div className="loc__photo--empty">
-                    No shop photo was captured.
-                    <br />
-                    There is nothing to recognise this place by.
-                  </div>
+                  <div className="loc__photo--empty">No photo</div>
                 )}
               </div>
 
@@ -301,7 +270,7 @@ export function LocationVerificationPage() {
                       {item.mobile ? (
                         <a href={`tel:${item.mobile}`}>{item.mobile}</a>
                       ) : (
-                        <span className="dim">not recorded</span>
+                        <span className="dim">—</span>
                       )}
                     </td>
                   </tr>
@@ -317,7 +286,7 @@ export function LocationVerificationPage() {
                   </tr>
                   <tr>
                     <td className="dim">Route</td>
-                    <td>{item.route || <span className="dim">none set</span>}</td>
+                    <td>{item.route || <span className="dim">—</span>}</td>
                   </tr>
                   <tr>
                     <td className="dim">Coordinates</td>
@@ -331,7 +300,7 @@ export function LocationVerificationPage() {
                           {item.latitude.toFixed(5)}, {item.longitude.toFixed(5)}
                         </a>
                       ) : (
-                        <span className="dim">not captured</span>
+                        <span className="dim">Not captured</span>
                       )}
                     </td>
                   </tr>
@@ -348,11 +317,7 @@ export function LocationVerificationPage() {
                   onClick={() => decide(item, true)}
                   loading={busy === key}
                   disabled={busy !== null || !hasFix}
-                  title={
-                    hasFix
-                      ? 'Copy these coordinates into the verified fields'
-                      : 'Nothing was captured, so there is nothing to verify'
-                  }
+                  title={hasFix ? undefined : 'No coordinates captured'}
                 >
                   Verify
                 </Button>
@@ -361,7 +326,6 @@ export function LocationVerificationPage() {
                   variant="ghost"
                   onClick={() => decide(item, false)}
                   disabled={busy !== null}
-                  title="Send it back for the rep to capture again"
                 >
                   Send back
                 </Button>
@@ -392,7 +356,7 @@ export function LocationVerificationPage() {
                 <b>{zoomed.name}</b>
                 <span className="dim small">
                   {' '}
-                  · captured by {zoomed.capturedBy || zoomed.rep || 'unknown'}
+                  · {zoomed.capturedBy || zoomed.rep || '—'}
                 </span>
               </span>
               <Button
@@ -417,15 +381,6 @@ export function LocationVerificationPage() {
             </div>
           </div>
         </div>
-      )}
-
-      {!loading && rows.length > 0 && (
-        <p className="note" style={{ marginTop: 12 }}>
-          Verifying copies the captured coordinates into the verified fields — those are what the
-          2 km punch-in check measures against. Sending one back returns it to “Not Captured”, so
-          the rep is asked to capture it again rather than leaving a rejected reading that still
-          looks like a location.
-        </p>
       )}
     </div>
   );

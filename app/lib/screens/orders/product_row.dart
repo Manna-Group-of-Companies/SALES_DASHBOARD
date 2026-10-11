@@ -14,6 +14,7 @@ import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/pool_allocation.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
+import 'package:manna_field_sales/models/sap_rates.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class ProductRow extends StatefulWidget {
@@ -34,6 +35,16 @@ class ProductRow extends StatefulWidget {
   /// much — but the price is no longer the rep's to move.
   final bool rateLocked;
 
+  /// Manna Treads' SAP rate for this item and this customer or lead, or null
+  /// when SAP has none. When there is one it IS the price (the user, 26 Sep
+  /// 2026): the screen has already put it in the box, and the box is locked.
+  /// An item with no [sapRate] is priced by hand as before.
+  final SapRate? sapRate;
+
+  /// True on a lead order, where [sapRate] is always the list price. Changes
+  /// only what the line under the box says.
+  final bool leadOrder;
+
   final VoidCallback onChanged;
 
   const ProductRow({
@@ -43,6 +54,8 @@ class ProductRow extends StatefulWidget {
     required this.onChanged,
     this.showMinimumStock = true,
     this.rateLocked = false,
+    this.sapRate,
+    this.leadOrder = false,
   });
 
   @override
@@ -67,6 +80,10 @@ class _ProductRowState extends State<ProductRow> {
   /// offered for editing here at all — it decides what customers are charged,
   /// and a number that can be revised after orders have been priced against it
   /// is one nobody can reconcile later. Corrections go through Desk.
+  ///
+  /// What is typed here is final (11 Oct 2026): the next stock sync writes the
+  /// roll weight and belts per roll into SAP's two UDFs, where SAP had none.
+  /// Litres per tin has no UDF in SAP and stays in ERPNext.
   Future<void> _collectPacking() async {
     final rollCtrl = TextEditingController();
     final beltsCtrl = TextEditingController();
@@ -131,10 +148,12 @@ class _ProductRowState extends State<ProductRow> {
               ),
               const SizedBox(height: 12),
             ],
-            const Text(
+            Text(
               'This is what the product is priced by, and it cannot be changed '
-              'from the app once saved. Check it before you save.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
+              'from the app once saved.'
+              '${needsRoll || needsBelts ? ' It is also written into SAP the next time stock is synced.' : ''}'
+              ' Check it before you save.',
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
             ),
           ]),
         ),
@@ -182,7 +201,9 @@ class _ProductRowState extends State<ProductRow> {
           (needsLitres && written['custom_pack_litres'] != litres);
       _snack(kept
           ? 'Someone else filled this in first — their figures are being used.'
-          : 'Saved. This cannot be changed from the app.');
+          : (needsRoll || needsBelts)
+              ? 'Saved. It goes into SAP with the next stock sync.'
+              : 'Saved. This cannot be changed from the app.');
     } catch (e) {
       _snack(humanError(e));
     } finally {
@@ -554,41 +575,56 @@ class _ProductRowState extends State<ProductRow> {
     );
   }
 
-  /// Rate is never prefilled from `standard_rate`. Field pricing is negotiated
-  /// per customer, and a prefilled number is one a tired rep will accept.
+  /// An item Manna Treads' SAP prices is sold at that price, and nothing else:
+  /// the screen has already put it in the box, and the box is locked (the
+  /// user, 26 Sep 2026 — no typing over it, and no "Use" button, which is what
+  /// it had on 25 Sep). A different price for a dealer is a special price in
+  /// SAP, and for a lead it goes through Higher Management once they are a
+  /// customer; neither is the rep's to type.
+  ///
+  /// An item SAP does not price is typed by hand, and is never prefilled:
+  /// field pricing is negotiated per customer, and a prefilled number is one a
+  /// tired rep will accept.
   ///
   /// Once the manager has approved it the field goes read-only rather than
   /// disappearing — the rep still needs to see what was agreed while they are
   /// talking to the customer.
   Widget _rateField() {
+    final sap = widget.sapRate;
+    final unit = p.category.rateUnit;
+    final fromSap = !widget.rateLocked && sap != null;
+    final locked = widget.rateLocked || fromSap;
     return TextField(
       controller: _rate,
-      readOnly: widget.rateLocked,
+      readOnly: locked,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       inputFormatters: [
         FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))
       ],
       decoration: InputDecoration(
-        labelText: 'Rate per ${p.category.rateUnit}',
+        labelText: 'Rate per $unit',
         prefixText: 'Rs ',
         border: const OutlineInputBorder(),
         isDense: true,
-        filled: widget.rateLocked,
+        filled: locked,
         fillColor: const Color(0xFFF0F0F0),
-        suffixIcon: widget.rateLocked
+        suffixIcon: locked
             ? const Icon(Icons.lock_outline, size: 16, color: Colors.black45)
             : null,
         errorText: line.needsRate ? 'Enter a rate' : null,
         helperText: widget.rateLocked
             ? 'Approved by your manager — ask them to reopen it'
-            : ((p.doc['standard_rate'] is num &&
-                    (p.doc['standard_rate'] as num) > 0)
-                ? 'List rate Rs ${trimQty((p.doc['standard_rate'] as num).toDouble())}'
-                : null),
+            : (sap != null
+                ? (widget.leadOrder ? sap.leadHint(unit) : sap.fixedHint(unit))
+                : ((p.doc['standard_rate'] is num &&
+                        (p.doc['standard_rate'] as num) > 0)
+                    ? 'List rate Rs ${trimQty((p.doc['standard_rate'] as num).toDouble())}'
+                    : null)),
+        helperMaxLines: 2,
         helperStyle: const TextStyle(fontSize: 11),
       ),
       onChanged: (v) {
-        if (widget.rateLocked) return;
+        if (locked) return;
         line.rate = double.tryParse(v) ?? 0;
         widget.onChanged();
       },

@@ -15,13 +15,20 @@ import type { OrderLine } from './types';
 
 // ------------------------------------------------------- approval status ---
 
-/** The seven values `Sales Order.custom_po_status` accepts. */
+/** The eight values `Sales Order.custom_po_status` accepts. */
 export const PO_STATUS = {
   none: 'No PO Yet',
   pending: 'Pending Approval',
   pendingRate: 'Pending Rate Approval',
   poUploaded: 'PO Uploaded - Pending Approval',
   pendingGm: 'Pending GM Approval',
+  /**
+   * The GM has approved the credit and the order is back with the sales
+   * manager, who pushes it to SAP. The Select carried this option unused until
+   * 24 Sep 2026, when the GM stopped pushing to SAP themselves — see
+   * `shared/fixtures/credit_commitment.json`. Shown as "Approved by GM".
+   */
+  finalApproval: 'Pending Final Approval',
   approved: 'PO Approved - Ready for SAP',
   rejected: 'Rejected',
 } as const;
@@ -43,6 +50,10 @@ export function statusPill(status: string | undefined | null): {
       return { text: 'WAITING FOR RATE APPROVAL', tone: 'warn' };
     case PO_STATUS.pendingGm:
       return { text: 'ESCALATED TO GM', tone: 'warn' };
+    // Amber, not green: the GM has decided the credit, but the order is not
+    // in SAP until the sales manager pushes it, and a green pill reads as done.
+    case PO_STATUS.finalApproval:
+      return { text: 'APPROVED BY GM', tone: 'warn' };
     case PO_STATUS.rejected:
       return { text: 'REJECTED', tone: 'danger' };
     // `No PO Yet`, empty and null all mean the same thing to a manager: it has
@@ -55,6 +66,73 @@ export function statusPill(status: string | undefined | null): {
 
 export function isApproved(status: string | undefined | null): boolean {
   return (status ?? '').trim() === PO_STATUS.approved;
+}
+
+/** What the lines editor says when escalation, not the clock, shuts it. */
+export const EDIT_LOCK = {
+  withGm: 'This order is with the general manager. Only they can change it now.',
+  gmApproved:
+    'The general manager approved this order as it stands, so it can no longer be changed. ' +
+    'The sales manager pushes it to SAP, or the general manager rejects it.',
+} as const;
+
+/**
+ * Whether an order at `status` may be changed by `role` — `rep`,
+ * `sales_manager` or `general_manager` — as far as its approval goes.
+ *
+ * Decided 26 Sep 2026 (`order_locked_after_approval.json`, `by_role`), and
+ * paired with `statusAllowsEdit` in `app/lib/core/order_rules.dart`. Rates
+ * come from SAP, so what is left to change is quantities, items and the
+ * delivery date, and those stop at the decision that settles the order:
+ *  - undecided (and Rejected, which the rep is meant to fix): all three;
+ *  - escalated to the GM: the GM only — they may trim it before deciding;
+ *  - approved by the GM, or approved and pushed to SAP: nobody.
+ * Any other role is refused, as `orderActions` refuses it. Nothing else sits on
+ * top: the 1 pm delivery-day cutoff was dropped on 11 Oct 2026, so the status
+ * alone decides.
+ */
+export function statusAllowsEdit(
+  status: string | undefined | null,
+  role: string | undefined | null,
+): boolean {
+  if (role !== 'rep' && role !== 'sales_manager' && role !== 'general_manager') return false;
+  switch ((status ?? '').trim()) {
+    case PO_STATUS.approved:
+    case PO_STATUS.finalApproval:
+      return false;
+    case PO_STATUS.pendingGm:
+      return role === 'general_manager';
+    default:
+      return true;
+  }
+}
+
+/**
+ * Why `role` may not change an order at `status` because of where it is in
+ * escalation, or null when escalation is not what stops them. Approval to SAP
+ * has its own, longer sentence, which names the SAP order.
+ */
+export function escalationLockReason(
+  status: string | undefined | null,
+  role: string | undefined | null,
+): string | null {
+  const s = (status ?? '').trim();
+  if (s === PO_STATUS.finalApproval) return EDIT_LOCK.gmApproved;
+  if (s === PO_STATUS.pendingGm && !statusAllowsEdit(s, role)) return EDIT_LOCK.withGm;
+  return null;
+}
+
+/**
+ * What someone who may still change the order is told about when that stops.
+ * It is a decision, not a date: the 1 pm delivery-day cutoff was dropped on
+ * 11 Oct 2026. Only shown where `statusAllowsEdit` said yes, so an order with
+ * the GM is being read by the GM.
+ */
+export function editOpenNote(status: string | undefined | null): string {
+  if ((status ?? '').trim() === PO_STATUS.pendingGm) {
+    return 'With you · only you can change it until you approve or reject it';
+  }
+  return 'Editable until the sales manager approves it or sends it to the GM';
 }
 
 /**
@@ -135,7 +213,7 @@ export function isDispatched(status: string | undefined | null): boolean {
 
 // ------------------------------------------------------ completion tick ---
 
-export type TickState = 'complete' | 'ready' | 'in_production' | 'not_started';
+export type TickState = 'complete' | 'in_sap' | 'ready' | 'in_production' | 'not_started';
 
 /**
  * The completion tick, **derived and never stored**.
@@ -152,6 +230,11 @@ export function tickState(productionStatus: string | undefined | null): TickStat
   switch ((productionStatus ?? '').trim()) {
     case PRODUCTION_STATUS.dispatched:
       return 'complete';
+    // What `orderProgress` reads once SAP has the order and it is not yet
+    // invoiced. Named, not rounded down: an order SAP has taken is not "Not
+    // Started" to the manager chasing it.
+    case 'Pushed to SAP':
+      return 'in_sap';
     case PRODUCTION_STATUS.ready:
       return 'ready';
     case PRODUCTION_STATUS.inProduction:
@@ -163,6 +246,7 @@ export function tickState(productionStatus: string | undefined | null): TickStat
 
 export const TICK_LABEL: Record<TickState, string> = {
   complete: 'Complete',
+  in_sap: 'Pushed to SAP',
   ready: 'Ready',
   in_production: 'In Production',
   not_started: 'Not Started',
@@ -268,9 +352,11 @@ export function creditPicture(input: {
 // ------------------------------------------------------- GM exemptions ---
 
 /**
- * The GM is exempt from three rules everyone else is bound by.
+ * The GM is exempt from two rules everyone else is bound by: ownership and
+ * the rate lock. (The third, the 1 pm delivery-day cutoff, was dropped for
+ * everyone on 11 Oct 2026.)
  *
- * All three exist because the GM is who those rules escalate *to*. An
+ * Both exist because the GM is who those rules escalate *to*. An
  * escalation arriving with no power to change anything is a rubber stamp.
  *
  * A sales manager must **not** inherit any of them — they are the one whose
@@ -278,11 +364,6 @@ export function creditPicture(input: {
  */
 export function isGeneralManager(role: string | undefined): boolean {
   return role === 'general_manager';
-}
-
-/** The 13:00 deadline binds everyone except the GM. */
-export function boundByCutoff(role: string | undefined): boolean {
-  return !isGeneralManager(role);
 }
 
 /** Only the rep or their manager may edit — the GM may edit anyone's. */

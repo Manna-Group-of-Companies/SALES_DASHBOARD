@@ -34,7 +34,7 @@
   /* --- text ------------------------------------------------------------ */
   --text: #16212e;
   --text-2: #55647a;
-  --text-3: #8494a8;
+  --text-3: #76869b;
   --text-inverse: #ffffff;
 
   /* --- brand ----------------------------------------------------------- */
@@ -84,7 +84,7 @@
   --r-lg: 11px;
   --r-full: 999px;
 
-  --shadow-1: 0 1px 2px rgb(16 24 40 / 0.06), 0 1px 3px rgb(16 24 40 / 0.08);
+  --shadow-1: 0 1px 2px rgb(16 24 40 / 0.05);
   --shadow-2: 0 4px 8px -2px rgb(16 24 40 / 0.08), 0 2px 4px -2px rgb(16 24 40 / 0.05);
   --shadow-3: 0 12px 24px -6px rgb(16 24 40 / 0.14), 0 4px 8px -4px rgb(16 24 40 / 0.08);
 
@@ -171,17 +171,22 @@ body {
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 h1, h2, h3, h4 {
   margin: 0;
   font-weight: 600;
   letter-spacing: -0.011em;
+  line-height: 1.3;
 }
 
-h1 { font-size: 20px; }
+h1 { font-size: 20px; letter-spacing: -0.015em; }
 h2 { font-size: 16px; }
 h3 { font-size: 14px; }
+
+::selection { background: var(--accent-soft); }
 
 p { margin: 0; }
 
@@ -269,4 +274,16 @@ button, input, select, textarea {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/*
+ * `.note` — the short secondary line under a control or a figure. Used across
+ * the app with no rule of its own until 26 Sep 2026, so every note rendered as
+ * full-size body text and pages read wordier than they were. :where() keeps it
+ * at zero specificity: any page's own note styling still wins.
+ */
+:where(.note) {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-2);
 }

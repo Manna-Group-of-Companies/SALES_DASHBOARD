@@ -8,11 +8,13 @@
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/production_stages.dart';
+import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class OrderCompleteTick extends StatelessWidget {
-  /// The order as read from the backend. Only the rolled-up production status
-  /// is used, so this works on a list row without fetching the lines.
+  /// The order as read from the backend. Only order-level fields are used —
+  /// the rolled-up production status and `custom_sap_sales_order` /
+  /// `custom_sap_invoice` — so this works on a list row without the lines.
   final Map<String, dynamic> order;
 
   /// Compact drops the word and leaves the tick, for dense list rows.
@@ -24,7 +26,11 @@ class OrderCompleteTick extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final done = Api.isOrderComplete(order);
-    final status = '${order['custom_production_status'] ?? ''}'.trim();
+    // SAP's word once SAP has the order (Pushed to SAP / Dispatched), the
+    // in-app status before — the rule isOrderComplete applies, so the word
+    // and the tick cannot disagree. Needs the order's SAP fields fetched.
+    final status = orderProgress(
+        SapOrderState.fromOrder(order), order['custom_production_status']);
 
     final colour = done
         ? const Color(0xFF1B7F3B)

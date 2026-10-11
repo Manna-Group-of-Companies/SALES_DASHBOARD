@@ -35,20 +35,19 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
   /// manager confirms the coordinates belong to it. A manager's own capture
   /// never appears, because it would be asking them to approve themselves —
   /// see `Api.locationPhotoRequired`.
+  ///
+  /// The "Proforma credit release" that used to sit here went on 26 Sep 2026:
+  /// a proforma held on credit now unlocks when the GM approves the order
+  /// (shared/fixtures/proforma_release.json), so there is nothing for a sales
+  /// manager to release.
   Future<List<Approval>> _load() async {
     final res = await Future.wait([
-      Api.getPendingProformaReleases(),
       Api.getPendingSiteVerifications(),
       Api.getPendingLocationVerifications(),
       Api.getPendingLeadLocationVerifications(),
     ]);
     final out = <Approval>[];
-    for (final r in res[0]) {
-      out.add(Approval('Proforma credit release', r['name'],
-          r['custom_sales_person'], r['customer'], (r['grand_total'] ?? 0),
-          'proforma'));
-    }
-    for (final r in res[2]) {
+    for (final r in res[1]) {
       out.add(Approval(
           'Location verification',
           r['name'],
@@ -60,7 +59,7 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
           lng: r['custom_longitude'],
           image: r['custom_banner_photo']?.toString()));
     }
-    for (final r in res[3]) {
+    for (final r in res[2]) {
       out.add(Approval(
           'Lead location verification',
           r['name'],
@@ -72,7 +71,7 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
           lng: r['custom_longitude'],
           image: r['custom_banner_photo']?.toString()));
     }
-    for (final r in res[1]) {
+    for (final r in res[0]) {
       // A site hangs off a customer or a lead, never both. Heading the card
       // with a blank customer told the manager nothing about what they were
       // being asked to approve.
@@ -153,9 +152,6 @@ class _ManagerApprovalsScreenState extends State<ManagerApprovalsScreen> {
           } else {
             await Api.approveLeadOrderPO(a.name, approve);
           }
-          break;
-        case 'proforma':
-          await Api.releaseProforma(a.name, approve);
           break;
         case 'location':
           await Api.approveLocation(a.name, approve, a.lat, a.lng);

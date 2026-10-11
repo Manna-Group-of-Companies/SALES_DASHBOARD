@@ -142,13 +142,15 @@ raised ──> Pending Approval ──> manager approves ──> PO Approved - R
 ```
 
 **Editing window:** everything about an order — products added, removed,
-requantified — stays open until **1 pm on the required delivery date**, for the
-rep who raised it and for their manager. After that it is frozen. The rule is
-in [lib/core/order_rules.dart](../lib/core/order_rules.dart) and is judged
-against the server's clock.
+requantified — stays open until the sales manager **approves it or sends it to
+the GM**, for the rep who raised it and for their manager. With the GM only the
+GM may change it; after the GM's approval nobody does. The rule is in
+[lib/core/order_rules.dart](../lib/core/order_rules.dart) and
+`shared/fixtures/order_locked_after_approval.json`. (Until 11 Oct 2026 orders
+also froze at 1 pm on the delivery date; that cutoff is gone.)
 
-Note this is enforced in the app only. Without server scripts nothing re-checks
-the deadline on write, so it stops an honest mistake, not a determined one.
+Note this is enforced in the apps only. No Server Script re-checks it on
+write, so it stops an honest mistake, not a determined one.
 
 Two consequences worth knowing:
 

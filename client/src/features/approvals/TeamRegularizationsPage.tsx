@@ -28,7 +28,6 @@ import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import { Alert, Badge, Button, Card, Empty, Input, Segmented, Select } from '@/components/ui';
-import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
@@ -172,16 +171,13 @@ export function TeamRegularizationsPage() {
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">Attendance corrections</div>
-          <div className="page-head__sub">
-            Your team's regularizations · {myTeam.length} representatives
-          </div>
+          <div className="page-head__title">Attendance Corrections</div>
         </div>
         <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
       </div>
 
       {error && (
-        <Alert tone="danger" title="Could not read or save">
+        <Alert tone="danger" title="Could not load or save">
           {error}
         </Alert>
       )}
@@ -194,32 +190,10 @@ export function TeamRegularizationsPage() {
       {stranded.length > 0 && (
         <div style={{ marginBottom: 14 }}>
           <Alert tone="warn" title={`${stranded.length} approved but not applied`}>
-            These were approved before the dashboard applied the log write automatically. Until the
-            log is rewritten those days still count as nothing on the calendar and in payroll.
+            These days are not yet counted on the calendar or in payroll.
           </Alert>
         </div>
       )}
-
-      <div className="tiles" style={{ marginBottom: 14 }}>
-        <Tile
-          label="Waiting on you"
-          value={String(queue.length)}
-          tone={queue.length ? 'warn' : 'ok'}
-          foot={queue.length ? 'Your team’s corrections' : 'Queue clear'}
-        />
-        <Tile label="Your team" value={String(myTeam.length)} foot="Representatives" />
-        <Tile
-          label="Approved"
-          value={String(mine.filter((r) => r.status === 'Approved').length)}
-          foot="All time"
-        />
-        <Tile
-          label="Not applied"
-          value={String(stranded.length)}
-          tone={stranded.length ? 'warn' : undefined}
-          foot="Approved, log unchanged"
-        />
-      </div>
 
       <div className="cal__toolbar">
         <Select value={rep} onChange={(e) => setRep(e.target.value)} aria-label="Representative">
@@ -242,13 +216,10 @@ export function TeamRegularizationsPage() {
         />
       </div>
 
-      {loading && <Empty icon="◔" title="Reading corrections…" />}
+      {loading && <Empty icon="◔" title="Loading…" />}
 
       {!loading && !error && rows.length === 0 && (
-        <Empty icon="✓" title="Nothing waiting on you">
-          A correction appears here when one of your reps says their punch times were wrong.
-          Managers' own corrections go to HR instead.
-        </Empty>
+        <Empty icon="✓" title={tab === 'pending' ? 'No corrections waiting' : 'No corrections'} />
       )}
 
       <div className="loc__grid">
@@ -280,14 +251,14 @@ export function TeamRegularizationsPage() {
                     </td>
                   </tr>
                   <tr>
-                    <td className="dim">Should have been</td>
+                    <td className="dim">Requested</td>
                     <td className="num">
                       {clockOf(ar.requestedPunchIn)} → {clockOf(ar.requestedPunchOut)}
                     </td>
                   </tr>
                   <tr>
                     <td className="dim">Reason</td>
-                    <td>{ar.reason || <span className="dim">none given</span>}</td>
+                    <td>{ar.reason || <span className="dim">—</span>}</td>
                   </tr>
                   {ar.decidedBy && (
                     <tr>
@@ -297,14 +268,12 @@ export function TeamRegularizationsPage() {
                   )}
                   {ar.status === 'Approved' && (
                     <tr>
-                      <td className="dim">Log rewritten</td>
+                      <td className="dim">Attendance log</td>
                       <td>
                         {ar.completionStatus === 'Completed' ? (
-                          <Badge tone="ok">applied</Badge>
+                          <Badge tone="ok">Applied</Badge>
                         ) : (
-                          <Badge tone="warn" title="The day still counts as nothing until this is applied">
-                            not applied
-                          </Badge>
+                          <Badge tone="warn">Not applied</Badge>
                         )}
                       </td>
                     </tr>
@@ -320,7 +289,7 @@ export function TeamRegularizationsPage() {
                 <>
                   <Input
                     compact
-                    placeholder="Remark (optional) — the rep sees this"
+                    placeholder="Remark for the rep (optional)"
                     value={remark[ar.id] ?? ''}
                     onChange={(e) => setRemark((c) => ({ ...c, [ar.id]: e.target.value }))}
                     aria-label={`Remark for ${ar.person}`}
@@ -339,16 +308,14 @@ export function TeamRegularizationsPage() {
               {!canDecide && canUndo && (
                 <div className="loc__actions">
                   <Button size="sm" variant="ghost" onClick={() => revoke(ar)} disabled={!!busy}>
-                    Undo this decision
+                    Undo decision
                   </Button>
                 </div>
               )}
 
-              {!canDecide && !canUndo && (
-                <p className="note" style={{ marginTop: 10 }}>
-                  {ar.requesterIsManager
-                    ? 'A manager’s own correction is HR’s to decide, not yours.'
-                    : 'Nothing to decide on this one.'}
+              {!canDecide && !canUndo && ar.requesterIsManager && (
+                <p className="small dim" style={{ marginTop: 10, marginBottom: 0 }}>
+                  Handled by HR
                 </p>
               )}
             </Card>

@@ -2,8 +2,8 @@
 //
 // Two exemptions, and both exist for the same reason: the GM is the person the
 // other rules escalate *to*. An escalation that arrives with no power to change
-// anything is a rubber stamp, so the deadline, the ownership check and the rate
-// lock all stop at them.
+// anything is a rubber stamp, so the escalation lock, the ownership check and
+// the rate lock all stop at them.
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -25,21 +25,21 @@ void main() {
 
   Map<String, dynamic> order({
     String rep = 'Jaimon D',
-    String delivery = '2020-01-01', // long past, so the 1 pm rule has closed
+    String po = 'Pending GM Approval', // escalated, so the rep is shut out
     int rateApproved = 1,
   }) =>
       {
         'custom_sales_person': rep,
-        'delivery_date': delivery,
+        'custom_po_status': po,
         'custom_rate_approved': rateApproved,
       };
 
   group('editing', () {
-    test('a closed order is shut to the rep who raised it', () {
+    test('an order with the GM is shut to the rep who raised it', () {
       expect(canEditOrder(order()), isFalse);
     });
 
-    test('the GM can edit it anyway', () {
+    test('the GM can trim it before deciding', () {
       Session.I.isGM = true;
       expect(canEditOrder(order()), isTrue);
     });
@@ -49,11 +49,11 @@ void main() {
       // on anybody's team by design.
       Session.I.isGM = true;
       Session.I.salesPerson = null;
-      expect(canEditOrder(order(rep: 'Someone Else', delivery: '2099-01-01')),
+      expect(canEditOrder(order(rep: 'Someone Else', po: 'Pending Approval')),
           isTrue);
     });
 
-    test('an ordinary manager is still bound by the deadline', () {
+    test('an ordinary manager is shut out of it like the rep', () {
       Session.I.managedTeam = 'Sales Team';
       Session.I.teamReps = ['Jaimon D'];
       Session.I.salesPerson = 'Pareeth Kb';

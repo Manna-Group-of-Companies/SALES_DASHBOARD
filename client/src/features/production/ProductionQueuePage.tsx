@@ -1,34 +1,67 @@
 /**
  * B1 — Production dashboard, the queue.
  *
- * Production used to be sent the route and never the customer: the API
- * resolved customer → route and deleted the identity before the payload
- * reached this screen.
+ * WHAT IS ON IT (24 September 2026)
  *
- * That was reversed on 19 Aug 2026, because dispatch needs it — somebody
- * loading a vehicle has to know whose pallet is whose, and a route does not
- * say that when two customers sit on one round. The customer now leads each
- * row, with the route beneath it, and the search matches order number, route
- * and customer.
+ * Every order SAP has, and nothing SAP does not. An order arrives here the
+ * moment the sync writes its SAP sales-order number back, and an order SAP
+ * cancels stays on the list marked Cancelled in SAP rather than vanishing —
+ * see `domain/productionQueue.ts`. Until that day the queue listed every order
+ * approved in ERPNext whether or not SAP had it, and the floor's screen was
+ * mostly sync-test orders.
+ *
+ * The week is chosen, as on the sales manager's Team Orders, and means the
+ * same thing there and here: the Monday-to-Sunday week the order was RAISED
+ * in, on the server's clock. Two managers saying "this week's orders" should
+ * be looking at the same orders.
+ *
+ * Dispatch planning is parked, on instruction, so this screen no longer links
+ * to it.
+ *
+ * The SAP order leads each row, with the rep who sold it and the route
+ * beneath — never the customer (26 Sep 2026, the user: production sees "only
+ * the orders and the sales user who put the orders, just like in SAP"). It
+ * was shown from 19 Aug 2026 for dispatch planning, which is parked.
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import type { ProductionOrderRow } from '@/domain/types';
 import { formatDate } from '@/domain/orderRules';
+import {
+  inProductionQueue,
+  queueState,
+  QUEUE_STATES,
+  QUEUE_STATE_LABEL,
+  type QueueState,
+} from '@/domain/productionQueue';
+import { addDays, isoDate, recentWeeks, type Week } from '@/domain/weeks';
+import { serverNow } from '@/domain/serverClock';
 import { Api } from '@/api/client';
 import { UNITS } from '@/api/endpoints';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
-import { Alert, Badge, Empty, Input, Select } from '@/components/ui';
+import { Alert, Badge, Empty, Input, Segmented, Select, type BadgeTone } from '@/components/ui';
 import { money } from '@/components/common/format';
-import { Tile } from '@/components/common/Tile';
-import { CompletionTick } from '@/components/common/StatusPill';
-import { RefreshButton } from '@/components/common/RefreshButton';
+import { ORDER_SYNC, SapSyncButton } from '@/components/common/SapSyncButton';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import '@/components/common/status.css';
 import '@/features/orders/orders.css';
+
+/** Weeks offered, newest first — the same span as Team Orders. */
+const WEEKS = 13;
+
+const STATE_TONE: Record<QueueState, BadgeTone> = {
+  in_sap: 'info',
+  dispatched: 'ok',
+  cancelled: 'danger',
+};
+
+interface Row {
+  r: ProductionOrderRow;
+  state: QueueState;
+}
 
 export function ProductionQueuePage() {
   const user = useAppSelector(selectUser);
@@ -38,11 +71,13 @@ export function ProductionQueuePage() {
   /*
    * Scoped to this manager's own unit by default, from
    * `User.custom_production_company` — Ajith is "Manna Treads", Saju is "Manna
-   * Tyre Retreads", Renjith is "Manna Tyres UAE". B1 filters the queue on
-   * `custom_company`, and defaulting to every unit would put three factories'
-   * work on one floor's screen.
+   * Tyre Retreads", Renjith is "Manna Tyres UAE". Defaulting to every unit
+   * would put three factories' work on one floor's screen.
    */
   const [unit, setUnit] = useState<string>(user?.productionUnit ?? '');
+  const [weeks, setWeeks] = useState<Week[]>([]);
+  const [weekStart, setWeekStart] = useState('');
+  const [state, setState] = useState<'' | QueueState>('');
   const [query, setQuery] = useState('');
   const [tick, setTick] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -52,10 +87,18 @@ export function ProductionQueuePage() {
     let live = true;
     setLoading(true);
     setError(null);
+    // A coarse bound on the read, from the browser's clock: the week offered
+    // for choosing is built on the server's clock below, once a response has
+    // set it, so a browser a day out cannot put a manager in the wrong week.
+    const since = isoDate(addDays(new Date(), -7 * (WEEKS + 1)));
     Api.production
-      .listQueue(unit || undefined)
+      .listQueue(unit || undefined, since)
       .then((r) => {
-        if (live) setRows(r);
+        if (!live) return;
+        setRows(r);
+        const list = recentWeeks(serverNow(), WEEKS);
+        setWeeks(list);
+        setWeekStart((current) => (list.some((w) => w.start === current) ? current : list[0].start));
       })
       .catch((e: unknown) => {
         if (live) setError(e instanceof Error ? e.message : 'Could not read the queue.');
@@ -68,76 +111,100 @@ export function ProductionQueuePage() {
     };
   }, [tick, unit]);
 
-  const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    // Order number and route only. There is nothing else on the object.
-    return rows.filter(
-      (r) =>
-        r.id.toLowerCase().includes(q) ||
-        r.route.toLowerCase().includes(q) ||
-        r.customerName.toLowerCase().includes(q),
-    );
-  }, [rows, query]);
-
-  const stats = useMemo(
-    () => ({
-      changed: rows.filter((r) => r.changedAfterApproval).length,
-      dispatched: rows.filter((r) => r.productionStatus === 'Dispatched').length,
-      noRoute: rows.filter((r) => r.route === 'No route set').length,
-    }),
-    [rows],
+  const week = useMemo(
+    () => weeks.find((w) => w.start === weekStart) ?? weeks[0],
+    [weeks, weekStart],
   );
+
+  /** The week's orders SAP has. Every count and filter works from this. */
+  const inWeek = useMemo<Row[]>(() => {
+    if (!week) return [];
+    return rows
+      .filter((r) => inProductionQueue(r.sap))
+      .filter((r) => r.placedOn >= week.start && r.placedOn <= week.end)
+      .map((r) => ({ r, state: queueState(r.sap) }));
+  }, [rows, week]);
+
+  const counts = useMemo(() => {
+    const c: Record<QueueState, number> = { in_sap: 0, dispatched: 0, cancelled: 0 };
+    for (const x of inWeek) c[x.state] += 1;
+    return c;
+  }, [inWeek]);
+
+  // A cancelled order is not work, so a change to one is not worth a warning.
+  const changed = useMemo(
+    () => inWeek.filter((x) => x.state !== 'cancelled' && x.r.changedAfterApproval).length,
+    [inWeek],
+  );
+
+  const shown = useMemo(() => {
+    let list = inWeek;
+    if (state) list = list.filter((x) => x.state === state);
+    const q = query.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (x) =>
+          x.r.id.toLowerCase().includes(q) ||
+          x.r.route.toLowerCase().includes(q) ||
+          x.r.rep.toLowerCase().includes(q) ||
+          (x.r.sap.salesOrder ?? '').toLowerCase().includes(q),
+      );
+    }
+    return list;
+  }, [inWeek, state, query]);
 
   if (!user) return null;
 
   return (
     <div>
       <div className="page-head">
-        <div className="grow">
-          <div className="page-head__title">Production</div>
-          <div className="page-head__sub">
-            Approved orders, by destination route · {rows.length} in the queue
-            {unit ? ` · ${unit}` : ' · all units'}
-          </div>
-        </div>
+        <div className="page-head__title grow">Production</div>
         <div className="cal__nav">
-          {/*
-            Was "Close the week", which grouped a finished week's orders into
-            one combined order per customer. Combining is what a dispatch does
-            now, so this points at the screen that actually does it.
-          */}
-          <Link to="/production/dispatch" className="btn btn--ghost btn--sm">
-            Dispatch planning
-          </Link>
-          <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
+          <SapSyncButton target={ORDER_SYNC} onSynced={() => setTick((t) => t + 1)} />
         </div>
       </div>
 
       {error && (
-        <Alert tone="danger" title="Could not read the queue">
+        <Alert tone="danger" title="Could not load orders">
           {error}
         </Alert>
       )}
 
-      <div className="tiles" style={{ marginBottom: 14 }}>
-        <Tile label="In the queue" value={String(rows.length)} foot="Approved and released" />
-        <Tile
-          label="Changed after approval"
-          value={String(stats.changed)}
-          tone={stats.changed ? 'warn' : undefined}
-          foot={stats.changed ? 'The floor may be building the wrong thing' : 'None'}
-        />
-        <Tile label="Dispatched" value={String(stats.dispatched)} tone="ok" foot="Complete" />
-        <Tile
-          label="No route set"
-          value={String(stats.noRoute)}
-          tone={stats.noRoute ? 'warn' : undefined}
-          foot="Nowhere to deliver"
-        />
-      </div>
+      {/* State counts are on the filter below; only a change needs a banner. */}
+      {changed > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <Alert
+            tone="warn"
+            title={`${changed} ${changed === 1 ? 'order' : 'orders'} changed after approval`}
+          />
+        </div>
+      )}
 
       <div className="cal__toolbar">
+        <Select
+          value={weekStart}
+          onChange={(e) => setWeekStart(e.target.value)}
+          aria-label="Week"
+          disabled={!weeks.length}
+        >
+          {weeks.map((w, i) => (
+            <option key={w.start} value={w.start}>
+              {i === 0 ? `This week · ${w.label}` : w.label}
+            </option>
+          ))}
+        </Select>
+        <Segmented
+          ariaLabel="State"
+          value={state}
+          onChange={setState}
+          options={[
+            { value: '' as const, label: `All (${inWeek.length})` },
+            ...QUEUE_STATES.map((s) => ({
+              value: s,
+              label: `${QUEUE_STATE_LABEL[s]} (${counts[s]})`,
+            })),
+          ]}
+        />
         <Select value={unit} onChange={(e) => setUnit(e.target.value)} aria-label="Unit">
           <option value="">All units</option>
           {UNITS.map((u) => (
@@ -147,29 +214,30 @@ export function ProductionQueuePage() {
           ))}
         </Select>
         <Input
-          placeholder="Search order number or route…"
+          placeholder="Search order, SAP no., rep, route"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          aria-label="Search the queue"
+          aria-label="Search orders"
         />
       </div>
 
-      {loading && <Empty icon="◔" title="Reading the queue…" />}
+      {loading && <Empty icon="◔" title="Loading…" />}
 
       {!loading && !error && shown.length === 0 && (
-        <Empty icon="—" title="Nothing in the queue">
-          Orders appear here once a sales manager approves them.
-        </Empty>
+        <Empty icon="—" title={inWeek.length ? 'No matching orders' : 'No orders this week'} />
       )}
 
       {!loading && shown.length > 0 && (
         <div className="orders__list">
-          {shown.map((r) => (
+          {shown.map(({ r, state: s }) => (
             <div
               key={r.id}
               className="ordrow"
               role="button"
               tabIndex={0}
+              // A cancelled order stays readable but steps back, so the live
+              // work is what the eye lands on.
+              style={s === 'cancelled' ? { opacity: 0.72 } : undefined}
               onClick={() => navigate(`/production/${r.id}`)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
@@ -180,20 +248,26 @@ export function ProductionQueuePage() {
             >
               <div className="ordrow__top">
                 <span className="ordrow__party">
-                  <span aria-hidden="true">{r.changedAfterApproval ? '⚠' : '🧾'}</span>
-                  {/* The customer leads, the route qualifies it. Production was
-                      shown the route alone until 19 Aug 2026; dispatch needs to
-                      know whose goods these are. Never the territory — see the
-                      API for why "No route set" stands rather than falling back. */}
-                  <span>{r.customerName}</span>
-                  {r.changedAfterApproval && <Badge tone="danger">CHANGED</Badge>}
+                  <span style={s === 'cancelled' ? { textDecoration: 'line-through' } : undefined}>
+                    SAP order <span className="mono">{r.sap.salesOrder}</span>
+                  </span>
+                  {s !== 'cancelled' && r.changedAfterApproval && (
+                    <Badge tone="danger">CHANGED</Badge>
+                  )}
                 </span>
                 <b className="num">{money(r.total, 0)}</b>
               </div>
 
               <div className="ordrow__meta">
-                <span className={r.route === 'No route set' ? 'dim' : ''}>{r.route}</span> ·{' '}
-                <span className="mono">{r.id}</span> · raised {formatDate(r.placedOn)}
+                {r.rep ? (
+                  <>
+                    Sold by <b>{r.rep}</b>
+                  </>
+                ) : (
+                  <span className="dim">No rep</span>
+                )}{' '}
+                · <span className={r.route === 'No route set' ? 'dim' : ''}>{r.route}</span> ·{' '}
+                <span className="mono">{r.id}</span> · Raised {formatDate(r.placedOn)}
               </div>
               <div className="ordrow__meta">
                 Deliver by {r.deliveryDate ? formatDate(r.deliveryDate) : 'not set'}
@@ -209,7 +283,13 @@ export function ProductionQueuePage() {
               </div>
 
               <div className="ordrow__status">
-                <CompletionTick productionStatus={r.productionStatus} />
+                <Badge tone={STATE_TONE[s]}>{QUEUE_STATE_LABEL[s].toUpperCase()}</Badge>
+                {s === 'dispatched' && r.sap.invoice && (
+                  <span className="small">
+                    Invoice <b className="mono">{r.sap.invoice}</b>
+                    {r.sap.invoiceDate ? ` · ${formatDate(r.sap.invoiceDate)}` : ''}
+                  </span>
+                )}
               </div>
             </div>
           ))}

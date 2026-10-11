@@ -1,9 +1,9 @@
 // When a line's source stops being changeable.
 //
-// Three separate things close it, and the delivery deadline is the weakest of
-// them. An order is routinely dispatched days before its delivery date, so a
-// rule that waited for 1 pm would leave the toggle live on goods that have
-// already left the building — and switching one of those back to new production
+// Approval and dispatch close it; the delivery date never did on its own. An
+// order is routinely dispatched days before its delivery date, so a rule that
+// waited for the date would leave the toggle live on goods that have already
+// left the building — and switching one of those back to new production
 // releases a reservation against stock that is on a van.
 
 import 'package:flutter_test/flutter_test.dart';
@@ -53,8 +53,8 @@ void main() {
   group('the case that was being missed', () {
     test('dispatched with a future delivery date is still complete', () {
       // SAL-ORD-2026-00100: dispatched, delivery 2026-08-08, checked on
-      // 2026-08-07. The 1 pm deadline had not passed, so the toggle stayed
-      // live on an order that had already gone out.
+      // 2026-08-07. The delivery-day deadline of the time had not passed, so
+      // the toggle stayed live on an order that had already gone out.
       final order = {
         'custom_production_status': 'Dispatched',
         'delivery_date': '2026-08-08',
@@ -80,6 +80,9 @@ void main() {
         'Pending Rate Approval',
         'PO Uploaded - Pending Approval',
         'Pending GM Approval',
+        // Approved by the GM is not approved: the sales manager has still to
+        // push it to SAP.
+        'Pending Final Approval',
         'No PO Yet',
         '',
       ]) {
@@ -100,10 +103,9 @@ void main() {
     });
 
     test('approval alone locks it, with no delivery date at all', () {
-      // orderEditWindowOpen treats a missing delivery date as permanently
-      // open. Approval must not depend on it.
+      // No date is involved in the lock any more (11 Oct 2026). Approval must
+      // not depend on one.
       const order = {'custom_po_status': 'PO Approved - Ready for SAP'};
-      expect(orderEditWindowOpen(order['delivery_date']), isTrue);
       expect(orderApproved(order), isTrue);
     });
   });

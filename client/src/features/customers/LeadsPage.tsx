@@ -143,34 +143,29 @@ export function LeadsPage() {
       <div className="page-head">
         <div className="grow">
           <div className="page-head__title">Leads</div>
-          <div className="page-head__sub">
-            {stats.total} in your team · not yet customers
-          </div>
+          <div className="page-head__sub">{stats.total} leads</div>
         </div>
         <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
       </div>
 
       {error && (
-        <Alert tone="danger" title="Could not read leads">
+        <Alert tone="danger" title="Could not load leads">
           {error}
         </Alert>
       )}
 
       <div className="tiles" style={{ marginBottom: 14 }}>
-        <Tile label="Leads" value={String(stats.total)} foot="Across your team" />
         <Tile
           label="No route"
           value={String(stats.noRoute)}
           tone={stats.noRoute ? 'warn' : undefined}
-          foot="Cannot be ordered from"
         />
         <Tile
           label="Location to verify"
           value={String(stats.pending)}
           tone={stats.pending ? 'warn' : undefined}
-          foot="Waiting on you"
         />
-        <Tile label="Converted" value={String(stats.converted)} foot="Now customers" />
+        <Tile label="Converted" value={String(stats.converted)} />
       </div>
 
       <div className="cal__toolbar">
@@ -183,7 +178,7 @@ export function LeadsPage() {
           ))}
         </Select>
         <Input
-          placeholder="Search name, city or mobile…"
+          placeholder="Search name, city or mobile"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Search leads"
@@ -200,12 +195,12 @@ export function LeadsPage() {
         />
       </div>
 
-      {loading && <Empty icon="◔" title="Reading leads…" />}
+      {loading && <Empty icon="◔" title="Loading…" />}
 
       {!loading && !error && (
         <Card flush>
           {rows.length === 0 ? (
-            <Empty icon="—" title="No leads match" />
+            <Empty icon="—" title="No leads" />
           ) : (
             <div className="scroll-x">
               <table className="table">
@@ -256,11 +251,11 @@ export function LeadsPage() {
                       <td className="dim small">{l.shopType || '—'}</td>
                       <td>
                         {l.locationStatus === 'Verified' ? (
-                          <Badge tone="ok">verified</Badge>
+                          <Badge tone="ok">Verified</Badge>
                         ) : l.locationStatus === 'Pending Verification' ? (
-                          <Badge tone="warn">to verify</Badge>
+                          <Badge tone="warn">To verify</Badge>
                         ) : (
-                          <span className="dim small">not captured</span>
+                          <span className="dim small">Not captured</span>
                         )}
                       </td>
                       <td className="mono small">
@@ -276,9 +271,8 @@ export function LeadsPage() {
       )}
 
       {!loading && rows.length === 500 && (
-        <p className="note" style={{ marginTop: 12 }}>
-          Showing the first 500 of {leads.length}. Narrow with the rep filter or search — the list
-          is capped rather than truncated silently.
+        <p className="small dim" style={{ marginTop: 12 }}>
+          Showing 500 of {leads.length}. Narrow with the filters.
         </p>
       )}
     </div>

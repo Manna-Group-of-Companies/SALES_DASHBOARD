@@ -12,7 +12,7 @@ import {
   pendingLeave,
   summariseAttendance,
 } from '@/domain/hrRules';
-import { freezeUrgency, roleCanSee, toIsoDate } from '@/domain/orderRules';
+import { roleCanSee, toIsoDate } from '@/domain/orderRules';
 import { bucketForGrouping } from '@/api/client';
 import type { RootState } from './index';
 
@@ -72,16 +72,6 @@ export const selectWeeklyBuckets = createSelector(selectOrders, (orders) =>
 );
 
 export const selectWeeklyGroups = (s: RootState) => s.orders.weeklyGroups;
-
-/** Orders about to freeze — drives the rep's "edit now or never" banner (3.3). */
-export const selectFreezingSoon = createSelector(selectVisibleOrders, (orders) =>
-  orders.filter(
-    (o) =>
-      freezeUrgency(o) === 'imminent' &&
-      o.status !== 'grouped' &&
-      o.status !== 'rejected',
-  ),
-);
 
 export const selectUnreadCount = createSelector(
   selectNotificationFeed,

@@ -25,23 +25,29 @@
   "order_sync": {
     "po_status_gate":          "PO Approved - Ready for SAP",
 
-    "fixed_card_code":         "20416",
+    "fixed_card_code":         "10118",
     "send_line_unit_price":    false,
     "line_warehouse":          "07",
 
     "status_source":           "document_status",
-    "stage_source":            "routing_stages",
     "stamp_erpnext_name_in":   "NumAtCard",
-    "delivery_ship_date_from": "DocDueDate",
-    "production_scan_statuses": ["boposPlanned", "boposReleased", "boposClosed"],
     "delivery_scan_days":       120,
+    "invoice_scan_days":        120
+  },
 
-    "production_status_labels": {
-      "boposPlanned":   "Planned",
-      "boposReleased":  "In Production",
-      "boposClosed":    "Closed",
-      "boposCancelled": "Cancelled"
-    }
+  "manna_treads": {
+    "_note":                  "Optional - PASS C, stage two. Every value here is also the default in code, so the block may be left out. A key set to null is left off the SAP order. item_allowlist: the only items PASS C may put on a Manna Treads order (an empty list allows none). approvers: the only ERPNext users whose request (custom_mt_so_requested_by) PASS C acts on - a System Manager who approves on the dashboard must be added (an empty list accepts nobody). GST is not configurable: 18%, rate GST-inclusive. username/password may be added to log in to MANNA_TREADS_LIVE as someone else; otherwise the sap login is used.",
+    "enabled":                true,
+    "company_db":             "MANNA_TREADS_LIVE",
+    "series":                 189,
+    "bpl_id":                 1,
+    "warehouse":              "01",
+    "tax_code":               "CG+SG@18",
+    "location_code":          2,
+    "allowed_bill_to_states": ["KL"],
+    "item_allowlist":         ["I-14636", "I-14637", "I-14638", "I-14639", "I-14640",
+                               "I-14641", "I-14642", "I-14643", "I-14644", "I-14645"],
+    "approvers":              ["jineesh@mannarubber.com"]
   },
 
   "log_dir":       "./logs",

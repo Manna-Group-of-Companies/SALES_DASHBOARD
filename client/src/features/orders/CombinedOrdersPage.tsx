@@ -21,11 +21,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { CombinedOrder, TeamOrder } from '@/domain/types';
 import { isSet } from '@/domain/orderStatus';
+import { orderProgress } from '@/domain/sapOrderState';
 import { formatDate } from '@/domain/orderRules';
 import { Api } from '@/api/client';
 import { Alert, Card, Empty, Input } from '@/components/ui';
 import { money } from '@/components/common/format';
-import { Tile } from '@/components/common/Tile';
 import { CompletionTick } from '@/components/common/StatusPill';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import '@/components/layout/layout.css';
@@ -107,10 +107,22 @@ export function CombinedOrdersPage() {
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">Combined orders</div>
-          <div className="page-head__sub">
-            One per customer per week · created by production when a week is closed
-          </div>
+          <div className="page-head__title">Combined Orders</div>
+          {/* The summary, taken from the headers and never from the members
+              loaded here. */}
+          {!loading && !error && (
+            <div className="page-head__sub">
+              {groups.length} combined order{groups.length === 1 ? '' : 's'} · {totals.orders}{' '}
+              order{totals.orders === 1 ? '' : 's'} grouped ·{' '}
+              <b className="num">{money(totals.value, 0)}</b>
+              {orphans.length > 0 && (
+                <>
+                  {' · '}
+                  <span className="orders__count warn">{orphans.length} ungrouped</span>
+                </>
+              )}
+            </div>
+          )}
         </div>
         <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
       </div>
@@ -121,36 +133,19 @@ export function CombinedOrdersPage() {
         </Alert>
       )}
 
-      <div className="tiles" style={{ marginBottom: 14 }}>
-        <Tile label="Combined orders" value={String(groups.length)} foot="Across all weeks" />
-        <Tile label="Orders grouped" value={String(totals.orders)} foot="From the headers" />
-        <Tile label="Value" value={money(totals.value, 0)} foot="From the headers" />
-        {orphans.length > 0 && (
-          <Tile
-            label="Ungrouped"
-            value={String(orphans.length)}
-            tone="warn"
-            foot="Header unreadable"
-          />
-        )}
-      </div>
-
       <div className="cal__toolbar">
         <Input
-          placeholder="Search customer or group…"
+          className="orders__search"
+          placeholder="Search customer or order"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Search combined orders"
         />
       </div>
 
-      {loading && <Empty icon="◔" title="Reading combined orders…" />}
+      {loading && <Empty icon="◔" title="Loading combined orders…" />}
 
-      {!loading && !error && rows.length === 0 && (
-        <Empty icon="—" title="No combined orders yet">
-          A week is grouped by the production manager once its orders are dispatched.
-        </Empty>
-      )}
+      {!loading && !error && rows.length === 0 && <Empty icon="—" title="No combined orders" />}
 
       {!loading && rows.length > 0 && (
         <div className="orders__list">
@@ -177,9 +172,9 @@ export function CombinedOrdersPage() {
                   <span className="grow">
                     <div className="ordrow__party">{g.customerName}</div>
                     <div className="ordrow__meta">
-                      <span className="mono">{g.id}</span> · {formatDate(g.weekStart)} to{' '}
+                      <span className="mono">{g.id}</span> · {formatDate(g.weekStart)} –{' '}
                       {formatDate(g.weekEnd)} · {g.orderCount} order
-                      {g.orderCount === 1 ? '' : 's'} combined
+                      {g.orderCount === 1 ? '' : 's'}
                     </div>
                   </span>
                   {/* The header's own total — not the sum of what is loaded. */}
@@ -190,13 +185,21 @@ export function CombinedOrdersPage() {
                     items are never both on screen adding up to twice the money. */}
                 {isOpen && (
                   <div className="comb__body">
+                    {/* The header may count orders this login cannot see — they
+                        may belong to another team. */}
                     {inside.length === 0 ? (
-                      <p className="note">
-                        The header says {g.orderCount} order{g.orderCount === 1 ? '' : 's'}, but
-                        none are visible to you — they may belong to another team.
-                      </p>
+                      <p className="comb__none">Not visible to your team</p>
                     ) : (
                       <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Order</th>
+                            <th>Date</th>
+                            <th>Rep</th>
+                            <th>Status</th>
+                            <th className="right">Amount</th>
+                          </tr>
+                        </thead>
                         <tbody>
                           {inside.map((o) => (
                             <tr key={o.id}>
@@ -206,7 +209,12 @@ export function CombinedOrdersPage() {
                               <td className="num">{formatDate(o.placedOn)}</td>
                               <td className="dim">{o.rep}</td>
                               <td>
-                                <CompletionTick productionStatus={o.productionStatus} />
+                                <CompletionTick
+                                  productionStatus={orderProgress(
+                                    { salesOrder: o.sapSalesOrder, invoice: o.sapInvoice },
+                                    o.productionStatus,
+                                  )}
+                                />
                               </td>
                               <td className="right num">{money(o.total, 0)}</td>
                             </tr>
@@ -223,9 +231,18 @@ export function CombinedOrdersPage() {
       )}
 
       {!loading && orphans.length > 0 && (
-        <Card title="Grouped, but the group could not be read" className="mt-16" flush>
+        <Card title="Ungrouped Orders" className="mt-16" flush>
           <div className="scroll-x">
             <table className="table">
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Customer</th>
+                  <th>Date</th>
+                  <th>Combined order</th>
+                  <th className="right">Amount</th>
+                </tr>
+              </thead>
               <tbody>
                 {orphans.map((o) => (
                   <tr key={o.id}>
@@ -234,7 +251,9 @@ export function CombinedOrdersPage() {
                     </td>
                     <td>{o.customerName}</td>
                     <td className="num">{formatDate(o.placedOn)}</td>
-                    <td className="dim small">points at {o.combinedOrder}</td>
+                    <td className="dim small">
+                      <span className="mono">{o.combinedOrder}</span> · unavailable
+                    </td>
                     <td className="right num">{money(o.total, 0)}</td>
                   </tr>
                 ))}

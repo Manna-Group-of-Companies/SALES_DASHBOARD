@@ -200,7 +200,10 @@ class _ManagerOrdersScreenState extends State<ManagerOrdersScreen> {
     final approved = orderApproved(r);
     final status = '${r['custom_po_status'] ?? ''}';
     final rejected = status == 'Rejected';
-    final production = '${r['custom_production_status'] ?? ''}';
+    // SAP's word once SAP has the order, the in-app status before — the same
+    // rule as the rep's My Orders and the dashboard's list.
+    final production =
+        orderProgress(SapOrderState.fromOrder(r), r['custom_production_status']);
     final finish = '${r['custom_production_finish_date'] ?? ''}';
     final combinedRaw = '${r['custom_combined_order'] ?? ''}'.trim();
     final combined =

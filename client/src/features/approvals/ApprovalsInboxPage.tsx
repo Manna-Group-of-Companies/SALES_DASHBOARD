@@ -21,7 +21,6 @@ import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import { Alert, Badge, Button, Card, Empty, Segmented } from '@/components/ui';
 import { money } from '@/components/common/format';
-import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
@@ -29,8 +28,10 @@ import './approvals.css';
 
 type Filter = 'all' | InboxKind;
 
+// The "Proforma credit release" queue went on 26 Sep 2026: a proforma held on
+// credit now unlocks when the GM approves the order
+// (shared/fixtures/proforma_release.json). Sites are what is left.
 const KIND_LABEL: Record<InboxKind, string> = {
-  proforma: 'Proforma credit release',
   site: 'Customer site',
 };
 
@@ -73,7 +74,7 @@ export function ApprovalsInboxPage() {
   }, [tick, user]);
 
   const counts = useMemo(() => {
-    const c: Record<InboxKind, number> = { proforma: 0, site: 0 };
+    const c: Record<InboxKind, number> = { site: 0 };
     for (const i of items) c[i.kind] += 1;
     return c;
   }, [items]);
@@ -111,30 +112,15 @@ export function ApprovalsInboxPage() {
       <div className="page-head">
         <div className="grow">
           <div className="page-head__title">Approvals</div>
-          <div className="page-head__sub">
-            Proforma releases and new sites. Orders are decided in Team Orders; locations verify
-            themselves.
-          </div>
         </div>
         <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
       </div>
 
       {error && (
-        <Alert tone="danger" title="Could not read or save">
+        <Alert tone="danger" title="Could not load or save">
           {error}
         </Alert>
       )}
-
-      <div className="tiles" style={{ marginBottom: 14 }}>
-        <Tile
-          label="Waiting on you"
-          value={String(items.length)}
-          tone={items.length ? 'warn' : 'ok'}
-          foot={items.length ? 'Decisions owed' : 'Inbox clear'}
-        />
-        <Tile label="Proforma" value={String(counts.proforma)} foot="Credit release" />
-        <Tile label="Sites" value={String(counts.site)} foot="New premises to verify" />
-      </div>
 
       <div className="cal__toolbar">
         <Segmented
@@ -143,25 +129,22 @@ export function ApprovalsInboxPage() {
           onChange={setFilter}
           options={[
             { value: 'all', label: `All (${items.length})` },
-            { value: 'proforma', label: `Proforma (${counts.proforma})` },
             { value: 'site', label: `Sites (${counts.site})` },
           ]}
         />
       </div>
 
-      {loading && <Empty icon="◔" title="Reading the inbox…" />}
+      {loading && <Empty icon="◔" title="Loading…" />}
 
       {!loading && !error && rows.length === 0 && (
-        <Empty icon="✓" title="Nothing waiting on a decision">
-          Orders are not shown here — they are decided in Team Orders, where the lines and the
-          credit picture are.
-        </Empty>
+        <Empty icon="✓" title="No approvals waiting" />
       )}
 
       <div className="loc__grid">
         {rows.map((item) => {
           const key = `${item.kind}-${item.id}`;
-          const isLocation = item.kind !== 'proforma';
+          // Every kind left is a place to verify.
+          const isLocation = true;
           const hasCoords = Boolean(item.latitude && item.longitude);
           return (
             <Card
@@ -169,9 +152,7 @@ export function ApprovalsInboxPage() {
               title={
                 <span className="odo__title">
                   <span>{item.title}</span>
-                  <Badge tone={item.kind === 'proforma' ? 'accent' : 'neutral'}>
-                    {KIND_LABEL[item.kind]}
-                  </Badge>
+                  <Badge tone="neutral">{KIND_LABEL[item.kind]}</Badge>
                 </span>
               }
             >
@@ -182,7 +163,7 @@ export function ApprovalsInboxPage() {
                       <img src={item.photo} alt={`${item.party ?? item.id}`} loading="lazy" />
                     </a>
                   ) : (
-                    <div className="loc__photo--empty">No photo captured</div>
+                    <div className="loc__photo--empty">No photo</div>
                   )}
                 </div>
               )}
@@ -226,7 +207,7 @@ export function ApprovalsInboxPage() {
                             {item.latitude!.toFixed(5)}, {item.longitude!.toFixed(5)}
                           </a>
                         ) : (
-                          <span className="dim">not captured</span>
+                          <span className="dim">Not captured</span>
                         )}
                       </td>
                     </tr>
@@ -240,13 +221,9 @@ export function ApprovalsInboxPage() {
                   onClick={() => decide(item, true)}
                   loading={busy === key}
                   disabled={busy !== null || (isLocation && !hasCoords)}
-                  title={
-                    isLocation && !hasCoords
-                      ? 'Nothing was captured, so there is nothing to verify'
-                      : undefined
-                  }
+                  title={isLocation && !hasCoords ? 'No coordinates captured' : undefined}
                 >
-                  {item.kind === 'proforma' ? 'Release' : 'Verify'}
+                  Verify
                 </Button>
                 <Button
                   size="sm"
@@ -254,22 +231,13 @@ export function ApprovalsInboxPage() {
                   onClick={() => decide(item, false)}
                   disabled={busy !== null}
                 >
-                  {item.kind === 'proforma' ? 'Block on credit' : 'Send back'}
+                  Send back
                 </Button>
               </div>
             </Card>
           );
         })}
       </div>
-
-      {!loading && rows.length > 0 && (
-        <p className="note" style={{ marginTop: 12 }}>
-          Verifying a location copies the captured coordinates into the verified fields — those are
-          what the 2 km punch-in check measures against. Sending one back returns it to “Not
-          Captured” so the rep captures again, rather than leaving a rejected reading that still
-          looks like a location.
-        </p>
-      )}
     </div>
   );
 }

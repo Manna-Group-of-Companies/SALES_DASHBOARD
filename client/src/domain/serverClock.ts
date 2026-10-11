@@ -1,10 +1,11 @@
 /**
  * The clock every deadline is judged against.
  *
- * Two things in this app turn on the time: whether an order can still be
- * edited (13:00 on the delivery date), and which week an order belongs to.
- * Both decide whether a user is allowed to do something, so neither may be
- * judged against a clock that user controls. A browser clock is a setting.
+ * Which week an order belongs to turns on the time, and so did whether an
+ * order could still be edited (13:00 on the delivery date) until that cutoff
+ * was dropped on 11 Oct 2026. Anything that decides whether a user is allowed
+ * to do something must not be judged against a clock that user controls. A
+ * browser clock is a setting.
  *
  * Frappe returns a `Date` header on every response, so the offset between the
  * server and this machine is measured from ordinary traffic — no clock

@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { LeadOrder } from '@/domain/types';
-import { canEscalateLeadOrder, leadOrderApproved } from '@/domain/orderStatus';
+import { leadOrderApproved } from '@/domain/orderStatus';
 import { formatDate } from '@/domain/orderRules';
 import { Api, type LeadGaps } from '@/api/client';
 import { Alert, Badge, Button, Card, Empty } from '@/components/ui';
@@ -90,13 +90,10 @@ export function LeadOrderPage() {
       // The gaps are re-checked live inside this call, against the lead as
       // stored — not against what this page loaded, which may be minutes old.
       const r = await Api.sales.approveLeadOrder({ leadOrderId: order.id });
-      setDone(
-        `Converted to customer ${r.customer} and raised ${r.salesOrder}, already approved.${
-          r.linkageStored
-            ? ''
-            : ' The link was recorded in the manager remarks — this site has no sales_order field on Lead Order.'
-        }`,
-      );
+      // When the site cannot store the link (`r.linkageStored` false) it is
+      // written into the manager remarks instead, which the approved banner
+      // below shows — so nothing extra needs saying here.
+      setDone(`Converted to customer ${r.customer} · Sales Order ${r.salesOrder} approved`);
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not approve this lead order.');
@@ -111,7 +108,7 @@ export function LeadOrderPage() {
     setError(null);
     try {
       await Api.sales.rejectLeadOrder(order.id);
-      setDone('Rejected. Nothing was converted.');
+      setDone('Lead order rejected');
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not reject this lead order.');
@@ -126,12 +123,12 @@ export function LeadOrderPage() {
         <div className="grow">
           <div className="page-head__title">
             {order ? order.leadName : 'Loading…'}{' '}
-            {order && <Badge tone="accent">LEAD</Badge>}
+            {order && <Badge tone="accent">Lead</Badge>}
           </div>
           <div className="page-head__sub">
             {order ? (
               <>
-                Raised by {order.rep || 'unassigned'} on {formatDate(order.orderDate)} ·{' '}
+                {order.rep || 'Unassigned'} · {formatDate(order.orderDate)} ·{' '}
                 <span className="mono">{order.id}</span>
               </>
             ) : (
@@ -142,7 +139,7 @@ export function LeadOrderPage() {
         <div className="cal__nav">
           <RefreshButton onClick={reload} loading={loading} />
           <Link to="/orders" className="btn btn--ghost btn--sm">
-            ← Team orders
+            ← Team Orders
           </Link>
         </div>
       </div>
@@ -157,42 +154,28 @@ export function LeadOrderPage() {
           <Alert tone="ok" title={done} />
         </div>
       )}
-      {loading && !error && <Empty icon="◔" title="Reading lead order…" />}
+      {loading && !error && <Empty icon="◔" title="Loading lead order…" />}
 
       {!loading && order && (
         <>
           {/* Block 2 — above the money and the lines, deliberately. */}
           {blocked && gaps && (
             <div style={{ marginBottom: 14 }}>
-              <Alert tone="danger" title="Cannot approve yet">
-                <p style={{ margin: '0 0 6px' }}>
-                  This lead becomes a customer on approval and is invoiced from there, so it needs:
-                </p>
+              <Alert tone="danger" title="Cannot approve yet · missing on the lead">
                 <ul className="lead__gaps">
                   {gaps.gstin && <li>GST number</li>}
                   {gaps.address && <li>Address</li>}
                   {gaps.route && <li>Sales route</li>}
                 </ul>
-                <p className="note" style={{ margin: '6px 0 0' }}>
-                  Ask the rep to add them on the lead, or edit the lead yourself.
-                </p>
               </Alert>
             </div>
           )}
 
-          {/* Block 3 — the total alone. No credit verdict on a lead. */}
-          <div className="lead__total">
-            <span className="dim">Order total</span>
-            <b className="num">{money(order.total, 0)}</b>
-            <span className="note">
-              A lead has no trading history and no credit limit, so there is nothing to check this
-              against.
-            </span>
-          </div>
-
+          {/* No credit verdict on a lead, ever: it has no trading history and
+              no limit, so there is nothing to be within. */}
           <Card title="Lines" flush>
             {order.lines.length === 0 ? (
-              <Empty icon="—" title="This lead order has no lines" />
+              <Empty icon="—" title="No lines" />
             ) : (
               <div className="scroll-x">
                 <table className="table">
@@ -201,7 +184,6 @@ export function LeadOrderPage() {
                       <th>Item</th>
                       <th className="right">Qty</th>
                       <th className="right">Rate</th>
-                      <th className="right">Disc %</th>
                       <th className="right">Amount</th>
                     </tr>
                   </thead>
@@ -235,58 +217,52 @@ export function LeadOrderPage() {
             on 17 September 2026 with the feature: the rep types the rate after
             discount, so the rate column is the whole price story.
           */}
-          <div className="order__total mt-16">
+          <div className="order__total">
             <span>Order total</span>
             <b>{money(orderTotal, 0)}</b>
           </div>
 
-          <p className="note" style={{ marginTop: 10 }}>
-            A lead order carries no roll or belt breakdown and no stock bookings, so the Sales Order
-            this raises always reads as new production.
-          </p>
-
           {decided ? (
             <div className="mt-16">
-              <Alert tone="ok" title={`✓ ${order.status}`}>
-                {order.approvalRemarks || 'Nothing further to decide.'}
+              <Alert tone="ok" title={order.status}>
+                {order.approvalRemarks || undefined}
               </Alert>
             </div>
           ) : (
             <Card title="Decision" className="mt-16">
-              <p className="note" style={{ marginBottom: 10 }}>
-                Approving converts the lead to a customer, raises a Sales Order against it already
-                approved, and fixes every rate permanently.
-              </p>
-              <div className="lv__actions" style={{ justifyContent: 'flex-start', gap: 8 }}>
+              <div className="decide__bar">
                 <Button
+                  variant="primary"
                   onClick={approve}
                   loading={busy === 'approve'}
                   disabled={!!busy || blocked}
                   title={
                     blocked
-                      ? 'The lead is missing details it needs as a customer'
-                      : 'Convert and raise the Sales Order'
+                      ? 'Missing details needed to become a customer'
+                      : 'Convert to a customer and raise an approved Sales Order'
                   }
                 >
                   Approve &amp; convert
                 </Button>
-                <Button variant="ghost" onClick={reject} disabled={!!busy}>
+                <Button
+                  variant="ghost"
+                  onClick={reject}
+                  loading={busy === 'reject'}
+                  disabled={!!busy}
+                >
                   Reject
                 </Button>
+                {!blocked && (
+                  <span className="decide__hint">Creates the customer · rates become final</span>
+                )}
               </div>
               {/*
                * No "Send to GM": `Lead Order.status` is a Select whose options
                * are Pending Approval / Approved / Rejected / PO Uploaded /
                * PO Approved - Ready for SAP / Converted. There is no
-               * `Pending GM Approval`, and writing one is refused by Frappe.
+               * `Pending GM Approval`, and writing one is refused by Frappe
+               * (see `canEscalateLeadOrder`).
                */}
-              {!canEscalateLeadOrder() && (
-                <p className="note" style={{ marginTop: 10 }}>
-                  A lead order cannot be escalated to the GM: its status field has no such option on
-                  this site. Escalation would have to be added to the `Lead Order.status` Select
-                  first.
-                </p>
-              )}
             </Card>
           )}
         </>

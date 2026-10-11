@@ -1,0 +1,228 @@
+{
+  "about": "Stage two: re-creating a finished Hi-Tech order as a Sales Order in SAP company MANNA_TREADS_LIVE, to the real end customer, so Manna Treads can invoice that customer. Hi-Tech (HITECH_PRETREADS_LIVE) makes and delivers the goods and bills Manna Treads (inter-company CardCode 10118); Manna Treads then bills the end customer. The accountant (Jineesh) sees each order Hi-Tech has finished, grouped by customer, and approves it; the office order sync then creates the Manna Treads order through the Service Layer. Decided by the user on 26 September 2026. Read by client/src/domain/__tests__/mannaTreadsReorder.test.ts and sap-order-sync/Test-MannaTreadsReorder.ps1.",
+
+  "why": "Hi-Tech does not always ship what was ordered. What it delivered is what the customer received, so it - not the approved order - is the exact invoice Manna Treads has to raise. A view built on the ERPNext order alone overbills every short delivery, because the Hi-Tech line reconcile leaves a closed-and-delivered line at the ORDERED kilos.",
+
+  "gst_percent": 18,
+
+  "rules": {
+    "finished_means_closed": "An order is ready only once Hi-Tech has CLOSED its SAP Sales Order (custom_sap_sales_order_status = bost_Close). While it is open it may still be delivered further, so a partial delivery on an open order is shown as in progress at Hi-Tech, never as ready.",
+    "delivery_wins": "If ANY line of the order has a delivered quantity, the order is billed on what was DELIVERED, line by line, and invoiced quantities are ignored - Hi-Tech's invoice for a delivered order is drawn from the delivery, and counting both would bill the same kilos twice. Only an order with no delivery at all (invoiced straight from the sales order) is billed on what was invoiced.",
+    "cancelled_deliveries_do_not_count": "A cancelled Hi-Tech delivery and its reversal document are not deliveries. The sync counts only delivery notes whose CancelStatus is csNo, so delivered_kg already excludes them.",
+    "lines_with_nothing_are_left_out": "A line with 0 billable kilos is not on the Manna Treads order. An order where every line is 0 is 'nothing_delivered' and is never offered for creation.",
+    "the_price_is_the_approved_one": "The price is what the manager approved in ERPNext, per kilo: amount / ordered_kg, rounded to 2 decimals (rate_per_kg only when ordered_kg is 0). Never Hi-Tech's price - that is the inter-company transfer price - and never whatever Manna Treads' price list says on the day. Using amount/ordered_kg rather than rate_per_kg keeps a legacy line that still carries a discount at its net price.",
+    "the_price_includes_gst": "The approved rate is GST-inclusive (reps quote whole rupees per kilo including tax). Manna Treads keys prices the same way: 220 gross is UnitPrice 186.44 under CG+SG@18. So the SAP line carries unit_price_net = rate / (1 + gst_percent/100), rounded to 6 decimals, with the tax code, and SAP adds the tax back. Sending the gross rate as UnitPrice would bill the customer 18% high.",
+    "amounts": "amount = billable_kg x rate, rounded to 2 decimals; total = the sum of the line amounts.",
+    "customer_code": "The Manna Treads customer is ERPNext Customer.custom_bp_code, which is the MANNA_TREADS_LIVE CardCode (238 of 239 checked on 26 Sep 2026). With no code the order is 'blocked' - never guessed from the name.",
+    "states_and_precedence": "In this order: not_in_sap (no Hi-Tech order), created (a Manna Treads order exists - a fact in SAP, whatever else is true), cancelled (Hi-Tech cancelled it), at_hitech (Hi-Tech has not closed it), nothing_delivered, failed (asked for, and the sync reported an error), queued (asked for, waiting for the office sync), blocked (no Manna Treads customer code), ready."
+  },
+
+  "cases": [
+    {
+      "why": "delivered in full: bill the delivered kilos at the approved rate, net of GST on the SAP line",
+      "order": {
+        "sap_sales_order": "425", "sap_status": "bost_Close", "customer_mt_code": "ZZ-TEST-A",
+        "mt_sales_order": "", "mt_requested": false, "mt_error": "",
+        "lines": [
+          { "item": "I-14636", "ordered_kg": 60, "amount": 11940, "rate_per_kg": 199, "delivered_kg": 60, "invoiced_kg": 0 },
+          { "item": "I-14640", "ordered_kg": 36, "amount": 6120, "rate_per_kg": 170, "delivered_kg": 36, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": {
+        "state": "ready", "basis": "delivered",
+        "lines": [
+          { "item": "I-14636", "kg": 60, "rate": 199, "amount": 11940, "unit_price_net": 168.644068 },
+          { "item": "I-14640", "kg": 36, "rate": 170, "amount": 6120, "unit_price_net": 144.067797 }
+        ],
+        "total": 18060
+      }
+    },
+    {
+      "why": "a short delivery bills what went, not what was ordered - the overbilling this whole rule exists to stop",
+      "order": {
+        "sap_sales_order": "430", "sap_status": "bost_Close", "customer_mt_code": "ZZ-TEST-A",
+        "mt_sales_order": "", "mt_requested": false, "mt_error": "",
+        "lines": [
+          { "item": "I-14636", "ordered_kg": 60, "amount": 11940, "rate_per_kg": 199, "delivered_kg": 55.5, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": {
+        "state": "ready", "basis": "delivered",
+        "lines": [ { "item": "I-14636", "kg": 55.5, "rate": 199, "amount": 11044.5, "unit_price_net": 168.644068 } ],
+        "total": 11044.5
+      }
+    },
+    {
+      "why": "a line Hi-Tech never delivered is left off the Manna Treads order; the delivered one is still billed",
+      "order": {
+        "sap_sales_order": "431", "sap_status": "bost_Close", "customer_mt_code": "ZZ-TEST-B",
+        "mt_sales_order": "", "mt_requested": false, "mt_error": "",
+        "lines": [
+          { "item": "I-14636", "ordered_kg": 60, "amount": 11940, "rate_per_kg": 199, "delivered_kg": 60, "invoiced_kg": 0 },
+          { "item": "I-14638", "ordered_kg": 100.8, "amount": 20160, "rate_per_kg": 200, "delivered_kg": 0, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": {
+        "state": "ready", "basis": "delivered",
+        "lines": [ { "item": "I-14636", "kg": 60, "rate": 199, "amount": 11940, "unit_price_net": 168.644068 } ],
+        "total": 11940
+      }
+    },
+    {
+      "why": "delivered AND invoiced: the invoice was drawn from the delivery, so only the delivered kilos count - never both",
+      "order": {
+        "sap_sales_order": "432", "sap_status": "bost_Close", "customer_mt_code": "ZZ-TEST-A",
+        "mt_sales_order": "", "mt_requested": false, "mt_error": "",
+        "lines": [
+          { "item": "I-14636", "ordered_kg": 60, "amount": 11940, "rate_per_kg": 199, "delivered_kg": 60, "invoiced_kg": 60 },
+          { "item": "I-14640", "ordered_kg": 36, "amount": 6120, "rate_per_kg": 170, "delivered_kg": 0, "invoiced_kg": 36 }
+        ]
+      },
+      "expect": {
+        "state": "ready", "basis": "delivered",
+        "lines": [ { "item": "I-14636", "kg": 60, "rate": 199, "amount": 11940, "unit_price_net": 168.644068 } ],
+        "total": 11940
+      }
+    },
+    {
+      "why": "invoiced straight from the sales order with no delivery at all: bill what was invoiced",
+      "order": {
+        "sap_sales_order": "433", "sap_status": "bost_Close", "customer_mt_code": "ZZ-TEST-A",
+        "mt_sales_order": "", "mt_requested": false, "mt_error": "",
+        "lines": [
+          { "item": "I-14640", "ordered_kg": 36, "amount": 6120, "rate_per_kg": 170, "delivered_kg": 0, "invoiced_kg": 34.2 }
+        ]
+      },
+      "expect": {
+        "state": "ready", "basis": "invoiced",
+        "lines": [ { "item": "I-14640", "kg": 34.2, "rate": 170, "amount": 5814, "unit_price_net": 144.067797 } ],
+        "total": 5814
+      }
+    },
+    {
+      "why": "a legacy discounted line is priced from its net amount, not from the list rate on the line",
+      "order": {
+        "sap_sales_order": "379", "sap_status": "bost_Close", "customer_mt_code": "C-1615",
+        "mt_sales_order": "", "mt_requested": false, "mt_error": "",
+        "lines": [
+          { "item": "I-11688", "ordered_kg": 105, "amount": 2362.5, "rate_per_kg": 25, "delivered_kg": 105, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": {
+        "state": "ready", "basis": "delivered",
+        "lines": [ { "item": "I-11688", "kg": 105, "rate": 22.5, "amount": 2362.5, "unit_price_net": 19.067797 } ],
+        "total": 2362.5
+      }
+    },
+    {
+      "why": "still open at Hi-Tech: a partial delivery is progress, not a finished order to invoice",
+      "order": {
+        "sap_sales_order": "434", "sap_status": "bost_Open", "customer_mt_code": "ZZ-TEST-A",
+        "mt_sales_order": "", "mt_requested": false, "mt_error": "",
+        "lines": [
+          { "item": "I-14636", "ordered_kg": 60, "amount": 11940, "rate_per_kg": 199, "delivered_kg": 20, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": { "state": "at_hitech" }
+    },
+    {
+      "why": "closed with nothing delivered or invoiced: the factory dropped it, so there is nothing to bill",
+      "order": {
+        "sap_sales_order": "435", "sap_status": "bost_Close", "customer_mt_code": "ZZ-TEST-A",
+        "mt_sales_order": "", "mt_requested": false, "mt_error": "",
+        "lines": [
+          { "item": "I-14636", "ordered_kg": 60, "amount": 11940, "rate_per_kg": 199, "delivered_kg": 0, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": { "state": "nothing_delivered" }
+    },
+    {
+      "why": "cancelled at Hi-Tech is never billed, whatever the lines say",
+      "order": {
+        "sap_sales_order": "412", "sap_status": "bost_Cancelled", "customer_mt_code": "ZZ-TEST-A",
+        "mt_sales_order": "", "mt_requested": false, "mt_error": "",
+        "lines": [
+          { "item": "I-14636", "ordered_kg": 60, "amount": 11940, "rate_per_kg": 199, "delivered_kg": 60, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": { "state": "cancelled" }
+    },
+    {
+      "why": "no Manna Treads customer code: blocked, never guessed from the customer's name",
+      "order": {
+        "sap_sales_order": "436", "sap_status": "bost_Close", "customer_mt_code": "",
+        "mt_sales_order": "", "mt_requested": false, "mt_error": "",
+        "lines": [
+          { "item": "I-14636", "ordered_kg": 60, "amount": 11940, "rate_per_kg": 199, "delivered_kg": 60, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": { "state": "blocked" }
+    },
+    {
+      "why": "asked for and waiting for the office sync",
+      "order": {
+        "sap_sales_order": "437", "sap_status": "bost_Close", "customer_mt_code": "ZZ-TEST-A",
+        "mt_sales_order": "", "mt_requested": true, "mt_error": "",
+        "lines": [
+          { "item": "I-14636", "ordered_kg": 60, "amount": 11940, "rate_per_kg": 199, "delivered_kg": 60, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": { "state": "queued" }
+    },
+    {
+      "why": "asked for, and the sync could not create it: failed, with its reason, and can be asked for again",
+      "order": {
+        "sap_sales_order": "438", "sap_status": "bost_Close", "customer_mt_code": "ZZ-TEST-A",
+        "mt_sales_order": "", "mt_requested": true, "mt_error": "Item I-11688 is not in Manna Treads SAP",
+        "lines": [
+          { "item": "I-11688", "ordered_kg": 60, "amount": 11940, "rate_per_kg": 199, "delivered_kg": 60, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": { "state": "failed" }
+    },
+    {
+      "why": "a Manna Treads order exists: created, and nothing else is offered for it",
+      "order": {
+        "sap_sales_order": "425", "sap_status": "bost_Close", "customer_mt_code": "ZZ-TEST-A",
+        "mt_sales_order": "440", "mt_requested": true, "mt_error": "",
+        "lines": [
+          { "item": "I-14636", "ordered_kg": 60, "amount": 11940, "rate_per_kg": 199, "delivered_kg": 60, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": { "state": "created" }
+    },
+    {
+      "why": "not in SAP at all: not Hi-Tech's yet, so not the accountant's",
+      "order": {
+        "sap_sales_order": "", "sap_status": "", "customer_mt_code": "ZZ-TEST-A",
+        "mt_sales_order": "", "mt_requested": false, "mt_error": "",
+        "lines": [
+          { "item": "I-14636", "ordered_kg": 60, "amount": 11940, "rate_per_kg": 199, "delivered_kg": 0, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": { "state": "not_in_sap" }
+    },
+    {
+      "why": "half-paisa midpoints round UP on the decimal value, on both sides - 6029.7 / 60 is 100.495 and bills 100.50, 20.115 kg x 185 is 3721.275 and bills 3721.28, 60.25 kg x 170.50 is 10272.625 and bills 10272.63. A double holds 100.495 as 100.49499999999999, so rounding the raw double gives 100.49 and SAP would be keyed a paisa below the rate the accountant approved (found in review, 26 Sep 2026)",
+      "order": {
+        "sap_sales_order": "433", "sap_status": "bost_Close", "customer_mt_code": "ZZ-TEST-A",
+        "mt_sales_order": "", "mt_requested": false, "mt_error": "",
+        "lines": [
+          { "item": "I-14636", "ordered_kg": 60, "amount": 6029.7, "rate_per_kg": 100.5, "delivered_kg": 60, "invoiced_kg": 0 },
+          { "item": "I-14637", "ordered_kg": 30, "amount": 5550, "rate_per_kg": 185, "delivered_kg": 20.115, "invoiced_kg": 0 },
+          { "item": "I-14638", "ordered_kg": 60.25, "amount": 10272.63, "rate_per_kg": 170.5, "delivered_kg": 60.25, "invoiced_kg": 0 }
+        ]
+      },
+      "expect": {
+        "state": "ready",
+        "basis": "delivered",
+        "lines": [
+          { "item": "I-14636", "kg": 60, "rate": 100.5, "amount": 6030, "unit_price_net": 85.169492 },
+          { "item": "I-14637", "kg": 20.115, "rate": 185, "amount": 3721.28, "unit_price_net": 156.779661 },
+          { "item": "I-14638", "kg": 60.25, "rate": 170.5, "amount": 10272.63, "unit_price_net": 144.491525 }
+        ],
+        "total": 20023.91
+      }
+    }
+  ]
+}

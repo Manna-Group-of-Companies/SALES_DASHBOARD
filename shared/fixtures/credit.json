@@ -11,7 +11,11 @@
       "custom_outstanding_60_90",
       "custom_outstanding_90_plus"
     ],
-    "note": "Created on the live site 13 Aug 2026. The credit limit stays a SINGLE figure because SAP sends one; only the outstanding is split."
+    "note": "Created on the live site 13 Aug 2026. The credit limit stays a SINGLE figure because SAP sends one; only the outstanding is split.",
+    "overdue_past_terms": "custom_overdue_past_terms",
+    "payment_terms": "custom_payment_terms",
+    "overdue_days": "custom_overdue_days",
+    "terms_note": "Added 11 Oct 2026. Written by the SAP credit sync, which decides what 'overdue past payment terms' means in ONE place so the two apps never have to: the open amount on invoices whose SAP due date (set from the customer's payment terms) has passed, capped at the customer's SAP balance so a payment on account counts, and 0 for a customer with no payment term set (SAP's '- Cash Basic -'). custom_payment_terms is the SAP term's name, custom_overdue_days how many days the oldest of those invoices is past its due date. Both apps only read them."
   },
 
   "total": [
@@ -87,7 +91,7 @@
       "expect": { "overdue": 40000, "has_overdue": true, "blocks_order": false }
     },
     {
-      "why": "old debt alone is not a reason to escalate - the credit rule is still total against limit, and adding a second rule silently would start stopping orders the day it shipped",
+      "why": "the 90+ AGE bucket alone is still not a reason to escalate - it ages by invoice date, not by the customer's payment terms. Since 11 Oct 2026 the second rule is 'overdue past payment terms' (see past_terms), which reads the sync's own figure, not the buckets",
       "customer": {
         "custom_outstanding_balance": 10000,
         "custom_outstanding_90_plus": 10000,
@@ -112,6 +116,93 @@
       "why": "nothing older than 90 days is not a warning",
       "customer": { "custom_outstanding_90_plus": 0 },
       "expect": { "overdue": 0, "has_overdue": false }
+    }
+  ],
+
+  "past_terms": [
+    {
+      "why": "the rule asked for on 11 Oct 2026: within the credit limit, but invoices are overdue past the payment terms SAP holds for this customer - the order goes to the GM like an over-limit one",
+      "customer": {
+        "custom_outstanding_balance": 40000,
+        "custom_credit_limit": 100000,
+        "custom_overdue_past_terms": 25000,
+        "custom_payment_terms": "Net-30",
+        "custom_overdue_days": 12
+      },
+      "order_total": 5000,
+      "expect": { "escalates": true, "over_limit": false, "past_terms": true, "overdue_past_terms": 25000 }
+    },
+    {
+      "why": "no credit limit set does not escalate on the limit (see overdue), but being overdue past the payment terms still does - the terms rule does not need a limit",
+      "customer": {
+        "custom_outstanding_balance": 40000,
+        "custom_credit_limit": 0,
+        "custom_overdue_past_terms": 25000,
+        "custom_payment_terms": "Net-15"
+      },
+      "order_total": 5000,
+      "expect": { "escalates": true, "over_limit": false, "past_terms": true }
+    },
+    {
+      "why": "both at once - over the limit AND overdue past terms. One escalation, both reasons shown to the GM",
+      "customer": {
+        "custom_outstanding_balance": 169900,
+        "custom_credit_limit": 70000,
+        "custom_overdue_past_terms": 90000,
+        "custom_payment_terms": "Net-30"
+      },
+      "order_total": 5000,
+      "expect": { "escalates": true, "over_limit": true, "past_terms": true }
+    },
+    {
+      "why": "over the limit with nothing overdue - the limit rule is unchanged",
+      "customer": {
+        "custom_outstanding_balance": 169900,
+        "custom_credit_limit": 70000,
+        "custom_overdue_past_terms": 0,
+        "custom_payment_terms": "Net-30"
+      },
+      "order_total": 5000,
+      "expect": { "escalates": true, "over_limit": true, "past_terms": false }
+    },
+    {
+      "why": "within the limit and nothing past its due date - nothing escalates",
+      "customer": {
+        "custom_outstanding_balance": 40000,
+        "custom_credit_limit": 100000,
+        "custom_overdue_past_terms": 0,
+        "custom_payment_terms": "Net-30"
+      },
+      "order_total": 5000,
+      "expect": { "escalates": false, "over_limit": false, "past_terms": false }
+    },
+    {
+      "why": "a rupee of rounding left on an invoice is not an overdue customer",
+      "customer": {
+        "custom_outstanding_balance": 40000,
+        "custom_credit_limit": 100000,
+        "custom_overdue_past_terms": 0.6
+      },
+      "order_total": 5000,
+      "expect": { "escalates": false, "past_terms": false }
+    },
+    {
+      "why": "old debt in the 90+ bucket but nothing past its due date (a customer with no payment term, whose figure the sync writes as 0) - the buckets alone still do not escalate",
+      "customer": {
+        "custom_outstanding_balance": 40000,
+        "custom_outstanding_90_plus": 40000,
+        "custom_credit_limit": 100000,
+        "custom_overdue_past_terms": 0,
+        "custom_payment_terms": "- Cash Basic -"
+      },
+      "order_total": 5000,
+      "expect": { "escalates": false, "past_terms": false }
+    },
+    {
+      "why": "a customer the sync has not reached with the new fields yet reads as nothing overdue, never as an error - the limit rule still applies to them",
+      "customer": { "custom_outstanding_balance": 40000, "custom_credit_limit": 100000 },
+      "order_total": 5000,
+      "expect": { "escalates": false, "past_terms": false, "overdue_past_terms": 0 }
     }
   ]
 }

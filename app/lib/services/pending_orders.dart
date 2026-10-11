@@ -37,6 +37,12 @@ class PendingOrder {
   /// Why the last send attempt failed, in the words the rep was shown.
   final String? lastError;
 
+  /// What the customer committed to, when the order takes them past their
+  /// credit limit — asked at the counter, and carried with the draft so it is
+  /// not lost between the shop and the signal. See credit_commitment.json.
+  final String? commitment;
+  final String? commitmentDue;
+
   const PendingOrder({
     required this.id,
     required this.customer,
@@ -47,6 +53,8 @@ class PendingOrder {
     required this.savedAt,
     this.isLead = false,
     this.lastError,
+    this.commitment,
+    this.commitmentDue,
   });
 
   double get total => items.fold(
@@ -67,6 +75,8 @@ class PendingOrder {
         'saved_at': savedAt.toIso8601String(),
         if (isLead) 'is_lead': true,
         if (lastError != null) 'last_error': lastError,
+        if (commitment != null) 'commitment': commitment,
+        if (commitmentDue != null) 'commitment_due': commitmentDue,
       };
 
   static PendingOrder? fromJson(dynamic json) {
@@ -83,6 +93,8 @@ class PendingOrder {
       savedAt: DateTime.tryParse('${json['saved_at'] ?? ''}') ?? serverNow(),
       isLead: json['is_lead'] == true,
       lastError: json['last_error'] as String?,
+      commitment: json['commitment'] as String?,
+      commitmentDue: json['commitment_due'] as String?,
     );
   }
 
@@ -96,6 +108,8 @@ class PendingOrder {
         savedAt: savedAt,
         isLead: isLead,
         lastError: error,
+        commitment: commitment,
+        commitmentDue: commitmentDue,
       );
 
   static List<Map<String, dynamic>> _rows(dynamic v) => (v as List? ?? [])
@@ -152,6 +166,8 @@ class PendingOrders {
     required String deliveryDate,
     required List<Map<String, dynamic>> items,
     bool isLead = false,
+    String? commitment,
+    String? commitmentDue,
   }) async {
     final now = serverNow();
     final existing = await _raw();
@@ -174,6 +190,8 @@ class PendingOrders {
       salesPerson: Session.I.salesPerson ?? '',
       savedAt: now,
       isLead: isLead,
+      commitment: commitment,
+      commitmentDue: commitmentDue,
     );
     await _replaceAll([...existing, draft]);
     return draft;

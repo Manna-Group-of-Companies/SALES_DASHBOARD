@@ -1,0 +1,151 @@
+/* ------------------------------------------ Orders at Hi-Tech (8 Oct 2026) --- */
+
+.acct__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.acct__tiles { margin-bottom: 16px; }
+
+.acct__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.acct__toolbar .segmented {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+.acct__filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.acct__filters .input { width: 240px; max-width: 100%; }
+
+.acct__busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.acct__list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* One card per order: who it is really for, then what Hi-Tech sent. */
+.acct-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.acct-card--delivered { border-left-color: var(--ok); }
+.acct-card--part_delivered { border-left-color: var(--info); }
+.acct-card--invoiced { border-left-color: var(--warn); }
+.acct-card--cancelled { border-left-color: var(--danger-border); opacity: 0.85; }
+
+.acct-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 8px;
+}
+.acct-card__who { min-width: 0; }
+.acct-card__customer {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.acct-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.acct-card__amount {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+  text-align: right;
+}
+.acct-card__total { font-size: 16px; font-weight: 650; color: var(--text); }
+.acct-card__kg { font-size: 12px; color: var(--text-3); }
+
+.acct-card__refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  margin: 0;
+  padding: 0 16px 12px;
+}
+.acct-card__refs > div { min-width: 0; }
+.acct-card__refs dt {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.acct-card__refs dd { margin: 1px 0 0; font-size: 13px; color: var(--text); }
+
+/* The document the lines come from: the delivery once there is one. */
+.acct-doc {
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.acct-doc--delivery { background: var(--ok-soft); }
+.acct-doc__label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  width: 100%;
+  padding: 9px 16px;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.acct-doc__label b { color: var(--text); }
+.acct-doc--delivery .acct-doc__label b { color: var(--ok); }
+.acct-doc__caret { width: 10px; color: var(--text-3); }
+.acct-doc__empty { padding: 0 16px 12px; }
+
+.acct-doc .table-wrap { padding: 0 8px 8px; }
+.acct-lines {
+  font-size: 12.5px;
+  background: var(--surface);
+  border-radius: var(--r);
+}
+.acct-lines tfoot td { border-top: 1px solid var(--border); }
+
+@media (max-width: 640px) {
+  .acct-card__head { flex-direction: column; }
+  .acct-card__amount { flex-direction: row; align-items: center; gap: 10px; }
+  .acct__filters { width: 100%; }
+  .acct__filters .input { flex: 1; width: auto; }
+}
+.acct__filters .select { width: auto; }
+.acct-lines td.num { white-space: nowrap; }

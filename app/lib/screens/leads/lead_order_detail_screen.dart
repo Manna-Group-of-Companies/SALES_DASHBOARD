@@ -93,6 +93,11 @@ class _LeadOrderDetailScreenState extends State<LeadOrderDetailScreen> {
           final approved = status == 'Approved' ||
               status == 'PO Uploaded' ||
               status == 'PO Approved - Ready for SAP';
+          // The proforma no longer waits for the manager (26 Sep 2026): rates
+          // come from SAP, and a lead has no credit limit to escalate on, so
+          // proforma_release.json never holds one. Only a rejected order has
+          // nothing to hand over.
+          final proformaOpen = status != 'Rejected';
           return ListView(padding: const EdgeInsets.all(16), children: [
             Text(widget.lead['lead_name'] ?? _order['lead_name'] ?? '',
                 style:
@@ -118,15 +123,14 @@ class _LeadOrderDetailScreenState extends State<LeadOrderDetailScreen> {
               const InfoBox(
                   icon: Icons.hourglass_top,
                   color: Colors.orange,
-                  text:
-                  'Awaiting manager order approval. Once approved, you can send the proforma.'),
+                  text: 'Awaiting manager order approval.'),
             if (status == 'Rejected')
               const InfoBox(
                   icon: Icons.cancel,
                   color: Colors.red,
                   text: 'This lead order was rejected by the manager.'),
-            // Editable on exactly the same terms as a customer order: until
-            // 1 pm on the delivery date, by the rep who raised it or their
+            // Editable on exactly the same terms as a customer order: until it
+            // is approved or sent to the GM, by the rep who raised it or their
             // manager. Approved rates stay locked through the edit.
             if (canEditOrder(_order))
               SizedBox(
@@ -143,15 +147,18 @@ class _LeadOrderDetailScreenState extends State<LeadOrderDetailScreen> {
                   icon: Icons.lock_clock,
                   color: Colors.black54,
                   text: orderLockReason(_order)),
-            if (approved) ...[
+            if (proformaOpen) ...[
               const SizedBox(height: 16),
               const Text('Proforma',
                   style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 4),
-              const Text(
-                  'For the customer’s own records. Nothing has to come back — '
-                  'the order is already with the factory.',
-                  style: TextStyle(fontSize: 12, color: Colors.black54)),
+              Text(
+                  approved
+                      ? 'For the customer’s own records. Nothing has to come '
+                          'back — the order is already with the factory.'
+                      : 'For the customer’s own records. The order is with '
+                          'your manager for approval.',
+                  style: const TextStyle(fontSize: 12, color: Colors.black54)),
               const SizedBox(height: 8),
               FilledButton.icon(
                 onPressed: _busy ? null : () => _proforma(asPO: false),

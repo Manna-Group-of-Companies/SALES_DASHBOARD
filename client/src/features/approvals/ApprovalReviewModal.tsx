@@ -218,8 +218,8 @@ export function ApprovalReviewModal({ order, onClose }: { order: Order; onClose:
 
         <Alert tone="warn" title="Rates lock permanently">
           Approving {order.orderNo} fixes every rate on it. Nobody — you, the rep, or production —
-          can change a rate afterwards. Items and quantities stay editable until 1:00 PM on{' '}
-          {formatDate(effectiveDeliveryDate(order))}.
+          can change a rate afterwards. Items and quantities lock too: an approved order is with
+          the factory.
         </Alert>
 
         <div className="stack gap-2" style={{ marginTop: 14 }}>

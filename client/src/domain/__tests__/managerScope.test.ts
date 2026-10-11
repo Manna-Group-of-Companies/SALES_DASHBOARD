@@ -57,29 +57,27 @@ describe('the token is matched exactly', () => {
 });
 
 /**
- * The GM is scoped by role, not by team.
+ * The GM sees the escalation queue and nothing else.
  *
- * Their escalation queue links straight to `/orders/:id`, and that route is
- * behind `TeamRoute`. A GM runs no sales team of their own, so a team-only
- * test gave them nothing and the link redirected to `/` — which on screen is
- * a button that does nothing at all.
+ * Asked for 24 September 2026. Until then the GM opened every team screen,
+ * because the queue linked to the sales manager's review at `/orders/:id` —
+ * and that review offered the GM "Send to GM" on an order already escalated
+ * to them. The GM reviews on `/gm/orders/:id` now, behind a role route, so no
+ * team screen is theirs.
  */
 describe('the General Manager', () => {
-  it('opens every screen without managing a team', () => {
+  it('opens none of the team screens', () => {
     for (const s of [...PARTY, ...ORDER_SIDE]) {
-      expect(canOpenAs('general_manager', undefined, s)).toBe(true);
+      expect(canOpenAs('general_manager', undefined, s)).toBe(false);
     }
+    expect(screensForUser('general_manager', undefined)).toEqual([]);
   });
 
-  it('reaches the order they were escalated, which is the whole point', () => {
-    expect(canOpenAs('general_manager', undefined, 'orders')).toBe(true);
-  });
-
-  it('is not narrowed by a team that would narrow a sales manager', () => {
-    // Saneesh's token gives a sales manager party records only. It must not
-    // take the order pipeline away from a GM who happens to carry one.
-    expect(canOpenAs('general_manager', 'Saneesh', 'orders')).toBe(true);
-    expect(canOpen('Saneesh', 'orders')).toBe(false);
+  it('is not handed the pipeline by a team token they happen to carry', () => {
+    // Pareeth's token gives a sales manager everything. A GM carrying one is
+    // still a GM, and the GM's dashboard is the queue.
+    expect(canOpenAs('general_manager', 'Pareeth', 'orders')).toBe(false);
+    expect(canOpen('Pareeth', 'orders')).toBe(true);
   });
 
   it('changes nothing for anybody else', () => {

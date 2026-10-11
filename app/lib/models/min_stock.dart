@@ -144,3 +144,18 @@ class MinStockDetail {
       ? '${trimQty(stock.availableQty)} ${category.stockUnit}'
       : 'not set up';
 }
+
+/// The rows the phone's stock list shows: items SAP's kilograms can be
+/// counted in rolls and belts for.
+///
+/// An item missing belts-per-roll or weight-per-roll is left off, on
+/// instruction (24 September 2026). A rep reads stock as rolls and belts, and
+/// a row that could only say "not set up" was most of the list — 265 of the
+/// 443 stocked items that day. The sales manager's dashboard shows those items
+/// by weight; the phone never does. See `shared/DIVERGENCES.md`.
+///
+/// This is the list only. The order screen still offers every item and still
+/// says "Stock not set up" on one of these, because an item can be ordered —
+/// and made — whether or not its stock can be counted.
+List<MinStockDetail> shownAsRollsAndBelts(Iterable<MinStockDetail> all) =>
+    all.where((d) => d.stock.weightsKnown).toList();

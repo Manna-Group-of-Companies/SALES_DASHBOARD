@@ -360,8 +360,10 @@ Records still at `Pending Verification` are legacy. Treat them as captured.
 **Sites are unchanged** — still a photo, still a manager approval. A site is
 somebody asserting new premises exist, not a pin on a shop already on the books.
 
-**The approvals inbox now holds two queues only:** proforma credit release, and
-sites.
+**The approvals inbox now holds one queue only: sites.** The proforma credit
+release went on 26 Sep 2026. A proforma held on credit unlocks when the GM
+approves the order (`shared/fixtures/proforma_release.json`), so there is
+nothing left for a sales manager to release.
 
 ---
 
@@ -375,7 +377,7 @@ This is the part that must not differ between the two applications.
 |---|---|---|
 | Order approval (Sales Order) | **Team Orders only** | not the inbox |
 | Lead order approval | **Team Orders only** | not the inbox |
-| Proforma credit release | Approvals inbox | |
+| Proforma held on credit | **released by the GM's approval of the order** (`proforma_release.json`) | no separate release, since 26 Sep 2026 |
 | Site verification | Approvals inbox | |
 | Over-credit-limit orders | **GM queue** | |
 | Customer / lead location | **nowhere — self-verifying** | |
@@ -414,16 +416,38 @@ projected = custom_outstanding_balance + orderTotal
 escalates = custom_credit_limit > 0 && projected > custom_credit_limit
 ```
 
-When it escalates, the sales manager's **Approve** becomes **Send to GM**, with:
-
-> This order takes the customer past their credit limit. Approving sends it to
-> the General Manager rather than finalising it.
+When it escalates, the sales manager's **Approve** becomes **Send to GM**. The
+sales manager may **not** approve an over-limit order to SAP — refused in both
+apps' API calls, not only hidden — and once it is `Pending GM Approval` they no
+longer decide it at all.
 
 Sending to GM writes `{ "custom_po_status": "Pending GM Approval" }`
 (Lead Order: `{ "status": "Pending GM Approval" }`).
 
 **A lead never escalates.** No limit, no trading history — a GM would be deciding
 on nothing.
+
+**The rep's commitment — from 24 Sep 2026.** When an order will escalate, the
+phone asks the rep what the customer has committed to before it may be sent, and
+writes it to `Sales Order.custom_credit_commitment` (optional date:
+`custom_credit_commitment_due`). The sales manager and the GM see it on the
+order and may comment on it (`Manna Credit Comment`, one document per comment).
+When the GM approves, the commitment becomes the rep's `Manna Credit Condition`
+— the GM may reword it, not drop it — and it shows on the rep's My Conditions
+with the comments beside it. **The whole rule, with cases, is
+`shared/fixtures/credit_commitment.json`**; both apps' test suites read it.
+
+**The GM does not push to SAP.** The GM's approval writes
+`{ "custom_po_status": "Pending Final Approval", "custom_gm_approved_by": "…",
+"custom_gm_approved_on": "…" }` — shown as **Approved by GM** — and locks
+nothing. The order is back in the sales manager's queue, whose **Push to SAP**
+is the approval in §7.2 (status, `custom_rate_approved`, every line), at the
+rates the GM approved. The sales manager cannot reject a GM-approved order; the
+GM can withdraw the approval by rejecting until it is pushed. **Nobody may
+change a GM-approved order** (26 Sep 2026, `shared/fixtures/order_locked_after_approval.json`
+`by_role`): the sales manager pushes it as approved, or the GM withdraws by
+rejecting. While an order is at `Pending GM Approval` only the GM may change it;
+the rep and the sales manager are locked out from the escalation onwards.
 
 ### 7.4 The GM queue
 
@@ -438,7 +462,27 @@ Credit limit    ₹1,50,000
 Over by ₹15,000
 ```
 
-Plus **"Open the order"** — the same full review the sales manager gets.
+…and the rep's commitment under it. **"Review & decide"** opens the GM's own
+review (`/gm/orders/:id` on the dashboard), not the sales manager's: the credit
+picture, the commitment and its comments, the lines (editable), and a decision
+that approves the credit on the condition — back to the sales manager, not to
+SAP. Orders the GM has approved and the sales manager has not yet pushed are
+listed under the queue. Until 24 Sep 2026 it opened the sales
+manager's review, which offered the GM "Send to GM" on an order already
+escalated to them.
+
+The GM's dashboard is this queue and **Follow-up** — no Customers, Team Orders
+or Stock (asked for 24 Sep 2026).
+
+**Follow-up (25 Sep 2026)** is where an order goes once the GM has approved it:
+every order with `custom_gm_approved_by` set, plus any a condition points at,
+sorted rep-has-answered → overdue → waiting for the push → open → closed. Each
+shows SAP's order number once pushed, SAP's status, the invoice, the lines, the
+condition (close / send back), and one thread: the commitment, the managers'
+comments, the approval, the condition, and every answer the rep has given —
+the phone writes each answer to `Manna Credit Comment` with `author_role:
+"Sales Rep"` as well as to the condition. The sidebar badge counts conditions
+at Awaiting Review.
 
 ### 7.5 What the GM may do that nobody else may
 
@@ -447,12 +491,13 @@ escalation arriving with no power to change anything is a rubber stamp.
 
 | Rule | Everyone else | GM |
 |---|---|---|
-| 1 pm edit deadline | binding | exempt |
+| ~~1 pm edit deadline~~ — dropped for everyone 11 Oct 2026; approval alone ends editing | — | — |
 | Only the rep or their manager may edit | binding | exempt |
 | Rate locked once approved | binding | **exempt** |
 
 So the GM can change lines, quantities, the delivery date, **and the rate** on an
-order the sales manager already signed off.
+order that is still undecided or with them. Never once it is approved — by the
+sales manager to SAP, or by the GM themselves (26 Sep 2026, `by_role`).
 
 A sales manager must **not** inherit either exemption — they are the one whose
 approval set the lock.

@@ -281,7 +281,7 @@ export function TakeOrderPage() {
               <Field
                 label="Requested delivery date"
                 error={showProblems && !deliveryDate ? 'Required' : undefined}
-                hint={deliveryDate ? 'Edits close 1:00 PM that day' : undefined}
+                hint={deliveryDate ? 'Changes close when the sales manager approves the order' : undefined}
               >
                 <Input
                   type="date"

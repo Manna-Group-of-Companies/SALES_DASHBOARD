@@ -1,7 +1,6 @@
-import type { AttendanceStatus, LeaveStatus, Order, OrderStatus } from '@/domain/types';
+import type { AttendanceStatus, LeaveStatus, OrderStatus } from '@/domain/types';
 import { ATTENDANCE_LABEL, LEAVE_STATUS_LABEL, ORDER_STATUS_LABEL } from '@/domain/types';
-import { formatFreezeCountdown, freezeUrgency } from '@/domain/orderRules';
-import { Badge, type BadgeTone, Tooltip } from '@/components/ui';
+import { Badge, type BadgeTone } from '@/components/ui';
 
 const TONE: Record<OrderStatus, BadgeTone> = {
   draft: 'neutral',
@@ -21,31 +20,12 @@ export function StatusBadge({ status }: { status: OrderStatus }) {
   );
 }
 
-/**
- * The edit-freeze countdown (3.3). Sits on every order row so a rep can see at a
- * glance which orders they can still change — the deadline is easy to forget
- * and impossible to undo.
+/*
+ * `FreezeChip` stood here until 11 October 2026: a countdown to 1:00 PM on the
+ * delivery date, when orders used to stop taking changes. That cutoff is gone
+ * — approval alone ends editing (order_locked_after_approval.json) — so there
+ * is nothing left to count down to.
  */
-export function FreezeChip({ order }: { order: Order }) {
-  if (order.status === 'grouped' || order.status === 'rejected') return null;
-
-  const urgency = freezeUrgency(order);
-  const tone: BadgeTone =
-    urgency === 'frozen' ? 'danger' : urgency === 'imminent' ? 'warn' : 'neutral';
-  const label = formatFreezeCountdown(order);
-
-  return (
-    <Tooltip
-      text={
-        urgency === 'frozen'
-          ? 'Edits closed at 1:00 PM on the delivery date.'
-          : 'Edits close at 1:00 PM on the delivery date.'
-      }
-    >
-      <Badge tone={tone}>{urgency === 'frozen' ? '🔒 Frozen' : `⏳ ${label}`}</Badge>
-    </Tooltip>
-  );
-}
 
 const ATTENDANCE_TONE: Record<AttendanceStatus, BadgeTone> = {
   present: 'ok',

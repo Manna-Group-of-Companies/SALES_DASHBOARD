@@ -1,50 +1,63 @@
 /**
  * B2 — Production order detail.
  *
- * The customer was absent by construction until 19 Aug 2026 — the API resolved
- * them to a route and dropped the identity. Dispatch changed that: somebody
- * loading a van has to know whose pallet is whose, and a route does not say it
- * when two customers sit on one round. `getOrderForProduction` now resolves
- * and keeps the name.
+ * No customer (26 Sep 2026): the order is headed by its SAP order number, with
+ * the rep who sold it and the route — "only the orders and the sales user who
+ * put the orders, just like in SAP", the user. `getOrderForProduction` reads
+ * the customer for the route and drops it. (It was shown from 19 Aug 2026 for
+ * dispatch planning, now parked.)
  *
- * The two writes here are the ones most likely to go wrong, and both are
- * shaped by ERPNext's field types rather than by preference:
+ * THE STATUS IS SAP'S (25 September 2026)
  *
- *   - **Setting a stage writes two fields of different types.** The line's
- *     `custom_production_stage` is free text and takes the fine stage name;
- *     the order's `custom_production_status` is a Select of four values and
- *     rejects anything else — taking the whole update down with it.
- *   - **Moving the delivery date captures the original once, and never again.**
- *     Without that capture the new date is just a number and nobody can see
- *     that it moved, or from what.
+ * Each line carried a stage picker here — the floor moved a line through its
+ * product's cycle and the order rolled up from the lines. Removed on
+ * instruction: the status comes from SAP's own sales order → invoice loop, so
+ * nothing on this screen sets it. The order reads Pushed to SAP until SAP
+ * invoices it, Dispatched once it has, and Cancelled in SAP if SAP cancels it;
+ * each line reads Dispatched once the invoice that carried it exists. The
+ * rules are `productionQueue.ts` and `sapOrderState.ts` (fixture-pinned).
+ *
+ * `custom_production_stage` / `custom_production_status` may still hold values
+ * written before that day. Nothing here reads them.
+ *
+ * The one write left is shaped by ERPNext rather than by preference: **moving
+ * the delivery date captures the original once, and never again.** Without
+ * that capture the new date is just a number and nobody can see that it
+ * moved, or from what.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { OrderLine, ProductionOrderRow } from '@/domain/types';
-import {
-  DISPATCHED,
-  tracksFor,
-  rollUp,
-  workComplete,
-  workPosition,
-  workProgress,
-  workTotal,
-  type StagedLine,
-} from '@/domain/production';
 import { modeLabel, modeTone, servedFrom } from '@/domain/minimumStock';
+import { lineStatusFromSap } from '@/domain/sapOrderState';
+import { queueState, QUEUE_STATE_LABEL, type QueueState } from '@/domain/productionQueue';
 import { formatDate } from '@/domain/orderRules';
 import { Api } from '@/api/client';
-import { Alert, Badge, Button, Card, Empty, Input, Select } from '@/components/ui';
+import { Alert, Badge, Button, Card, Empty, Input, type BadgeTone } from '@/components/ui';
 import { money } from '@/components/common/format';
-import { CompletionTick } from '@/components/common/StatusPill';
-import { RefreshButton } from '@/components/common/RefreshButton';
+import { ORDER_SYNC, SapSyncButton } from '@/components/common/SapSyncButton';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import '@/components/common/status.css';
 import './production.css';
 
 type Order = ProductionOrderRow & { lines: OrderLine[] };
+
+const STATE_TONE: Record<QueueState, BadgeTone> = {
+  in_sap: 'info',
+  dispatched: 'ok',
+  cancelled: 'danger',
+};
+
+/** One line's reading. A cancelled order's lines are cancelled with it. */
+function lineReading(line: OrderLine, order: Order): { text: string; tone: BadgeTone } {
+  if (queueState(order.sap) === 'cancelled') return { text: 'Cancelled in SAP', tone: 'danger' };
+  const s = lineStatusFromSap({ invoice: line.sapInvoice }, order.sap);
+  if (s === 'Dispatched') return { text: 'Dispatched', tone: 'ok' };
+  if (s === 'Pushed to SAP') return { text: 'Pushed to SAP', tone: 'info' };
+  return { text: 'Not in SAP yet', tone: 'neutral' };
+}
 
 export function ProductionOrderPage() {
   const { orderId = '' } = useParams();
@@ -89,33 +102,6 @@ export function ProductionOrderPage() {
     };
   }, [orderId, tick]);
 
-  /** What the order status will become once a stage is set — shown live. */
-  const impliedStatus = useMemo(() => (order ? rollUp(order.lines) : null), [order]);
-
-  const setStage = async (
-    line: OrderLine,
-    stage: string,
-    field: 'stockStage' | 'productionStage',
-  ) => {
-    if (!order) return;
-    setBusy(line.id + field);
-    setError(null);
-    try {
-      const saved = await Api.production.setStage({
-        orderId: order.id,
-        lineId: line.id,
-        stage,
-        field,
-      });
-      setOrder(saved);
-      setDone(`${line.itemName} → ${stage}. Order is now ${saved.productionStatus}.`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not save the stage.');
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const moveDate = async () => {
     if (!order || !newDate) return;
     setBusy('date');
@@ -124,7 +110,7 @@ export function ProductionOrderPage() {
       const saved = await Api.production.moveDeliveryDate({ orderId: order.id, date: newDate });
       setOrder(saved);
       setMoving(false);
-      setDone('Delivery date moved. The rep sees the new date on their order.');
+      setDone('Delivery date moved');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not move the date.');
     } finally {
@@ -155,21 +141,25 @@ export function ProductionOrderPage() {
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">{order ? order.customerName : 'Loading…'}</div>
+          <div className="page-head__title">
+            {order ? (order.sap.salesOrder ? `SAP order ${order.sap.salesOrder}` : order.id) : 'Loading…'}
+          </div>
           <div className="page-head__sub">
-            {order ? `${order.route} · destination route` : 'Destination route'}
+            {order
+              ? [order.rep ? `Sold by ${order.rep}` : 'No rep', order.route].join(' · ')
+              : ''}
           </div>
         </div>
         <div className="cal__nav">
-          <RefreshButton onClick={reload} loading={loading} />
+          <SapSyncButton target={ORDER_SYNC} onSynced={reload} />
           <Link to="/production" className="btn btn--ghost btn--sm">
-            ← Queue
+            ← Production
           </Link>
         </div>
       </div>
 
       {error && (
-        <Alert tone="danger" title="Could not read or save">
+        <Alert tone="danger" title="Could not load or save">
           {error}
         </Alert>
       )}
@@ -178,20 +168,22 @@ export function ProductionOrderPage() {
           <Alert tone="ok" title={done} />
         </div>
       )}
-      {loading && !error && <Empty icon="◔" title="Reading order…" />}
+      {loading && !error && <Empty icon="◔" title="Loading…" />}
 
       {!loading && order && (
         <>
           {order.changedAfterApproval && (
             <div style={{ marginBottom: 14 }}>
-              <Alert tone="danger" title="This order was edited after it was approved">
-                <p style={{ margin: '0 0 10px' }}>
-                  The floor may be building the wrong quantities. Check the lines below against
-                  what is already in progress.
-                </p>
-                <Button size="sm" onClick={acknowledge} loading={busy === 'ack'}>
-                  Acknowledged
-                </Button>
+              <Alert
+                tone="danger"
+                title="Edited after approval"
+                actions={
+                  <Button size="sm" onClick={acknowledge} loading={busy === 'ack'}>
+                    Acknowledge
+                  </Button>
+                }
+              >
+                Check the lines against work in progress.
               </Alert>
             </div>
           )}
@@ -202,6 +194,10 @@ export function ProductionOrderPage() {
                 <tr>
                   <td className="dim">Order</td>
                   <td className="mono">{order.id}</td>
+                </tr>
+                <tr>
+                  <td className="dim">Sold by</td>
+                  <td>{order.rep || '—'}</td>
                 </tr>
                 <tr>
                   <td className="dim">Raised</td>
@@ -216,21 +212,37 @@ export function ProductionOrderPage() {
                   <td>{order.unit || '—'}</td>
                 </tr>
                 <tr>
+                  <td className="dim">SAP order</td>
+                  <td className="mono">{order.sap.salesOrder || 'Not in SAP yet'}</td>
+                </tr>
+                <tr>
                   <td className="dim">Status</td>
                   <td>
-                    <CompletionTick productionStatus={order.productionStatus} />
+                    {order.sap.salesOrder ? (
+                      <Badge tone={STATE_TONE[queueState(order.sap)]}>
+                        {QUEUE_STATE_LABEL[queueState(order.sap)].toUpperCase()}
+                      </Badge>
+                    ) : (
+                      <Badge tone="neutral">NOT IN SAP YET</Badge>
+                    )}
+                    {order.sap.invoice && (
+                      <span className="small" style={{ marginLeft: 8 }}>
+                        Invoice <b className="mono">{order.sap.invoice}</b>
+                        {order.sap.invoiceDate ? ` · ${formatDate(order.sap.invoiceDate)}` : ''}
+                      </span>
+                    )}
                   </td>
                 </tr>
               </tbody>
             </table>
 
             <div className="prod__delivery">
-              Delivery: {order.deliveryDate ? formatDate(order.deliveryDate) : 'not set'}
+              Deliver by {order.deliveryDate ? formatDate(order.deliveryDate) : 'not set'}
             </div>
 
             {moved && (
               <Alert tone="warn" title={postponed ? 'Postponed' : 'Brought forward'}>
-                Customer asked for {formatDate(order.originalDeliveryDate!)}, now{' '}
+                Originally due {formatDate(order.originalDeliveryDate!)}, now{' '}
                 {formatDate(order.deliveryDate!)}.
               </Alert>
             )}
@@ -243,11 +255,7 @@ export function ProductionOrderPage() {
                   this card that changes what the rep is promised, and nobody
                   could tell it was clickable.
                 */}
-                <Button onClick={() => setMoving(true)}>📅 Move delivery date</Button>
-                <span className="note">
-                  Postpone or bring forward to a date the floor can actually meet. The rep sees the
-                  new date on their order.
-                </span>
+                <Button onClick={() => setMoving(true)}>Move delivery date</Button>
               </div>
             ) : (
               <div className="prod__actions">
@@ -264,10 +272,9 @@ export function ProductionOrderPage() {
                   Cancel
                 </Button>
                 {!order.originalDeliveryDate && (
-                  <span className="note">
-                    The current date ({order.deliveryDate ? formatDate(order.deliveryDate) : '—'})
-                    is recorded as what the customer asked for. That is captured once and never
-                    overwritten.
+                  <span className="small dim">
+                    {order.deliveryDate ? formatDate(order.deliveryDate) : '—'} is kept as the
+                    original date.
                   </span>
                 )}
               </div>
@@ -276,13 +283,8 @@ export function ProductionOrderPage() {
 
           <div className="prod__lines">
             {order.lines.map((l) => {
-              const staged: StagedLine = {
-                category: l.category,
-                fulfilmentMode: l.fulfilmentMode,
-                productionStage: l.productionStage,
-              };
-              const tracks = tracksFor(staged);
               const mode = servedFrom(l);
+              const reading = lineReading(l, order);
               return (
                 <Card key={l.id} title={l.itemName}>
                   <div className="prod__linetop">
@@ -308,88 +310,22 @@ export function ProductionOrderPage() {
                   */}
 
                   {/*
-                    One track. There were two when a line was split between the
-                    shelf and the plant — the shelf half only picked and packed,
-                    the made half running the family cycle — and the list shape
-                    survives that.
+                    The line's status, from SAP. A stage track with a picker
+                    stood here until 25 September 2026 — see the header.
                   */}
-                  {tracks.map((t) => {
-                    /*
-                      Counted against the stages the FLOOR works, not the
-                      stored sequence: Dispatch Planning owns `Dispatched`
-                      now, so measuring against it left a packed line — which
-                      is finished, as far as this screen's reader is
-                      concerned — showing "Stage 2 of 3" behind a half-empty
-                      bar. See `workPosition` in domain/production.ts.
-                    */
-                    const pos = workPosition(t.sequence, t.stage);
-                    const unknown = pos < 0;
-                    const total = workTotal(t.sequence);
-                    const done = workComplete(t.sequence, t.stage);
-                    const pct = Math.round(workProgress(t.sequence, t.stage) * 100);
-                    const key = l.id + t.field;
-                    return (
-                      <div key={t.key} className={`track track--${t.key}`}>
-                        <div className="track__title">{t.title}</div>
-                        {unknown ? (
-                          <p className="prod__badstage">
-                            Stage &ldquo;{t.stage}&rdquo; is not in this product&rsquo;s cycle
-                          </p>
-                        ) : (
-                          <>
-                            <div className="prod__stagecap">
-                              Stage {pos} of {total} · {t.stage}
-                            </div>
-                            <div className="prod__bar">
-                              <div
-                                className={`prod__bar-fill ${done ? 'done' : ''}`}
-                                style={{ width: `${pct}%` }}
-                              />
-                            </div>
-                          </>
-                        )}
-                        <div className="prod__actions">
-                          {/*
-                            Dispatched is never hand-picked here — Dispatch
-                            Planning is the only thing that writes it now, and
-                            only once a line's full ordered quantity has
-                            actually gone out. Once a track reaches it, the
-                            picker is retired: moving it "back" from Dispatched
-                            would corrupt the cumulative-quantity invariant
-                            Dispatch Planning depends on.
-                          */}
-                          <Select
-                            value={unknown ? '' : t.stage}
-                            disabled={busy === key || t.stage === DISPATCHED}
-                            onChange={(e) => e.target.value && setStage(l, e.target.value, t.field)}
-                            aria-label={`${t.title} stage for ${l.itemName}`}
-                          >
-                            {unknown && <option value="">Set a stage from this cycle…</option>}
-                            {t.sequence
-                              .filter((s) => s !== DISPATCHED)
-                              .map((s) => (
-                                <option key={s} value={s}>
-                                  {s}
-                                </option>
-                              ))}
-                          </Select>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  <div className="prod__actions">
+                    <Badge tone={reading.tone}>{reading.text.toUpperCase()}</Badge>
+                    {l.sapInvoice && (
+                      <span className="small">
+                        Invoice <b className="mono">{l.sapInvoice}</b>
+                        {l.sapInvoiceDate ? ` · ${formatDate(l.sapInvoiceDate)}` : ''}
+                      </span>
+                    )}
+                  </div>
                 </Card>
               );
             })}
           </div>
-
-          {impliedStatus && (
-            <p className="note" style={{ marginTop: 12 }}>
-              The order reads <b>{impliedStatus}</b>, rolled up from its lines: Ready and
-              Dispatched are decided by the slowest line, In Production by the fastest, and a stage
-              that is not in a line's cycle counts as not started — errors always round down, so an
-              unrecognised stage can never make an order look shippable.
-            </p>
-          )}
         </>
       )}
 
