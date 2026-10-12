@@ -188,13 +188,6 @@ class _CommitmentThreadState extends State<CommitmentThread> {
           ),
         ),
       ],
-      if (committed) ...[
-        const SizedBox(height: 6),
-        const Text(
-            "When the general manager approves, this becomes the rep's "
-            'condition, with these comments beside it.',
-            style: TextStyle(fontSize: 11.5, color: Colors.black54)),
-      ],
     ]);
   }
 }

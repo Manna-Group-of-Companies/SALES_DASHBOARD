@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { signIn } from '@/store/slices/authSlice';
 import { Alert, Button, Card, Field, Input } from '@/components/ui';
+import logoInk from '@/assets/manna-logo.png';
+import logoWhite from '@/assets/manna-logo-white.png';
 import './login.css';
 
 export function LoginPage() {
@@ -14,16 +16,15 @@ export function LoginPage() {
 
   return (
     <div className="login">
+      <aside className="login__hero">
+        <img className="login__hero-logo" src={logoWhite} alt="Manna Group" />
+        <div className="login__hero-line">Sales &amp; Production</div>
+      </aside>
+
       <div className="login__panel">
-        <div className="login__brand">
-          <div className="sidebar__logo" style={{ width: 38, height: 38, fontSize: 15 }}>
-            MT
-          </div>
-          <div>
-            <h1>Manna Treads</h1>
-            <p className="muted small">Sales &amp; Production module</p>
-          </div>
-        </div>
+        <img className="login__logo login__logo--ink" src={logoInk} alt="Manna Group" />
+        <img className="login__logo login__logo--white" src={logoWhite} alt="" />
+        <h1 className="login__title">Sign in</h1>
 
         <Card>
           <form
@@ -74,10 +75,6 @@ export function LoginPage() {
             </Button>
           </form>
         </Card>
-
-        <p className="tiny dim center">
-          Your role decides what you see. Contact the Sales Manager if you need access.
-        </p>
       </div>
     </div>
   );

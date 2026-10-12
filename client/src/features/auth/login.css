@@ -1,24 +1,56 @@
+/* Charcoal brand panel on the left, the form on the right; one column on a phone. */
 .login {
   min-height: 100%;
   display: grid;
-  place-items: center;
-  padding: 24px;
-  background:
-    radial-gradient(1000px 500px at 15% -10%, var(--accent-soft), transparent 60%),
-    var(--bg);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  background: var(--bg);
+}
+
+.login__hero {
+  position: relative;
+  overflow: hidden;
+  background: var(--chrome);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 48px;
+}
+/* One orange band along the foot — the logo's other colour. */
+.login__hero::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 6px;
+  background: var(--accent);
+}
+.login__hero-logo { width: min(340px, 70%); height: auto; }
+.login__hero-line {
+  color: var(--chrome-text-2);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
 }
 
 .login__panel {
   width: 100%;
   max-width: 380px;
+  margin: auto;
+  padding: 32px 24px;
   display: flex;
   flex-direction: column;
   gap: 18px;
 }
+.login__logo { display: none; width: 170px; height: auto; margin: 0 auto 4px; }
+:root[data-theme='dark'] .login__logo--ink,
+:root:not([data-theme='dark']) .login__logo--white { display: none !important; }
+.login__title { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
 
-.login__brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+@media (max-width: 860px) {
+  .login { grid-template-columns: 1fr; }
+  .login__hero { display: none; }
+  .login__logo { display: block; }
+  .login__title { text-align: center; }
 }
-.login__brand h1 { font-size: 21px; letter-spacing: -0.02em; }

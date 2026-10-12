@@ -9,9 +9,13 @@
 
 import { describe, expect, it } from 'vitest';
 import { canOpen, canOpenAs, screensFor, screensForUser, type ManagerScreen } from '../sales';
+import fixture from '../../../../shared/fixtures/manager_scope.json';
 
 const PARTY: ManagerScreen[] = ['customers', 'leads', 'locations', 'regularizations'];
-const ORDER_SIDE: ManagerScreen[] = ['orders', 'approvals', 'combined', 'stock'];
+// 'approvals' and 'combined' were dropped on 11 October 2026 — see the note
+// on `ManagerScreen`. Sites are verified in Location Checks, which is a party
+// screen, so no team gained anything the reduced set did not already allow.
+const ORDER_SIDE: ManagerScreen[] = ['orders', 'stock'];
 
 describe('Pareeth runs the order pipeline', () => {
   it('opens everything', () => {
@@ -87,4 +91,17 @@ describe('the General Manager', () => {
     expect(canOpenAs('stock_manager', undefined, 'orders')).toBe(false);
     expect(canOpenAs(undefined, undefined, 'orders')).toBe(false);
   });
+});
+
+/**
+ * The same rule, as the phone reads it. The manager workspace on the phone
+ * (`app/lib/core/manager_scope.dart`) is tested against this file too, so a
+ * manager cannot reach on one device what the other refuses.
+ */
+describe('shared/fixtures/manager_scope.json', () => {
+  for (const c of fixture.cases) {
+    it(c.why, () => {
+      expect([...screensForUser(c.role, c.team)].sort()).toEqual([...c.screens].sort());
+    });
+  }
 });

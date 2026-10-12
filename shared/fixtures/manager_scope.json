@@ -1,0 +1,61 @@
+{
+  "about": "Which screens a sales manager may open, by the team they manage. Both apps read this file in their tests: the dashboard's sidebar and routes (client/src/domain/sales.ts) and the phone's manager workspace (app/lib/core/manager_scope.dart). Pareeth's team raises the orders, so that manager gets the order pipeline; the others work party records and their own people. An unrecognised team gets the reduced set, never the full one.",
+  "party_screens": ["customers", "leads", "locations", "regularizations"],
+  "order_screens": ["orders", "stock"],
+  "cases": [
+    {
+      "why": "Pareeth's team raises the orders, so the whole pipeline is theirs.",
+      "role": "sales_manager",
+      "team": "Pareeth",
+      "screens": ["customers", "leads", "locations", "regularizations", "orders", "stock"]
+    },
+    {
+      "why": "Saneesh works party records and their own people, nothing else.",
+      "role": "sales_manager",
+      "team": "Saneesh",
+      "screens": ["customers", "leads", "locations", "regularizations"]
+    },
+    {
+      "why": "Renjith likewise, despite also being the production manager.",
+      "role": "sales_manager",
+      "team": "Renjith",
+      "screens": ["customers", "leads", "locations", "regularizations"]
+    },
+    {
+      "why": "A team nobody configured must not silently inherit the order pipeline. The failure that costs least is the one where somebody asks for access.",
+      "role": "sales_manager",
+      "team": "SomeNewManager",
+      "screens": ["customers", "leads", "locations", "regularizations"]
+    },
+    {
+      "why": "The token is a stored value, not free text: a different casing is not Pareeth.",
+      "role": "sales_manager",
+      "team": "pareeth",
+      "screens": ["customers", "leads", "locations", "regularizations"]
+    },
+    {
+      "why": "Surrounding spaces are trimmed before matching.",
+      "role": "sales_manager",
+      "team": "  Pareeth  ",
+      "screens": ["customers", "leads", "locations", "regularizations", "orders", "stock"]
+    },
+    {
+      "why": "Somebody who manages no team gets nothing at all.",
+      "role": "sales_manager",
+      "team": "",
+      "screens": []
+    },
+    {
+      "why": "Blank is the same as no team.",
+      "role": "sales_manager",
+      "team": "   ",
+      "screens": []
+    },
+    {
+      "why": "The GM's work is the escalation queue; no team screen is theirs, whatever token they carry.",
+      "role": "general_manager",
+      "team": "Pareeth",
+      "screens": []
+    }
+  ]
+}

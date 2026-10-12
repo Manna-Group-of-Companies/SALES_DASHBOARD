@@ -688,6 +688,108 @@ class Api {
     return rows;
   }
 
+  /// Every order waiting on this manager, of either kind and from any week.
+  ///
+  /// The manager workspace's home summarises this. Team Orders shows a week
+  /// at a time, so an order left from three weeks ago would otherwise only be
+  /// found by somebody scrolling back for it. Shaped like [getTeamOrders].
+  static Future<List<Map<String, dynamic>>> getTeamWaitingOrders() async {
+    final team = Session.I.teamReps;
+    if (team.isEmpty) return [];
+    const waiting =
+        '["Pending Approval","Pending Rate Approval","PO Uploaded - Pending Approval","Pending Final Approval"]';
+    final results = await Future.wait([
+      _list('Sales Order',
+          fields: '["name","customer","custom_sales_person","grand_total",'
+              '"transaction_date","custom_po_status","custom_sap_sales_order",'
+              '"custom_sap_sales_order_status","creation"]',
+          filters: '[["custom_po_status","in",$waiting],'
+              '["custom_sales_person","in",${_inList(team)}],'
+              '["docstatus","<",2]]',
+          orderBy: 'creation asc'),
+      _list('Lead Order',
+          fields: '["name","lead","lead_name","sales_person","total_amount",'
+              '"order_date","status","creation"]',
+          filters: '[["status","=","Pending Approval"],'
+              '["sales_person","in",${_inList(team)}]]',
+          orderBy: 'creation asc').catchError((_) => <Map<String, dynamic>>[]),
+    ]);
+    final rows = <Map<String, dynamic>>[
+      // Cancelled in SAP is nobody's decision any more, whatever the status.
+      for (final r in results[0])
+        if (!cancelledInSap(SapOrderState.fromOrder(r))) r,
+      for (final l in results[1])
+        {
+          ...l,
+          'is_lead': true,
+          'customer': l['lead_name'] ?? l['lead'],
+          'custom_sales_person': l['sales_person'],
+          'grand_total': l['total_amount'],
+          'transaction_date': l['order_date'],
+          'custom_po_status': l['status'],
+        },
+    ];
+    rows.sort((a, b) =>
+        '${a['creation'] ?? ''}'.compareTo('${b['creation'] ?? ''}'));
+    return rows;
+  }
+
+  /// Takes back a rejection, returning the order to `Pending Approval`.
+  ///
+  /// Checked as stored, as the dashboard's `undoOrderRejection` does: an Undo
+  /// left on screen after the order moved on — resubmitted, or sent to the
+  /// GM — must not pull it back.
+  static Future<void> undoOrderRejection(String name) async {
+    final stored = await getOrder(name);
+    if ('${stored['custom_po_status'] ?? ''}' != 'Rejected') {
+      throw Exception('This order is no longer rejected. Refresh to see '
+          'where it is now.');
+    }
+    await _put('Sales Order', name,
+        {'custom_po_status': 'Pending Approval', 'custom_rate_approved': 0});
+  }
+
+  /// The team's customers, for the manager's Customers tab.
+  static Future<List<Map<String, dynamic>>> getTeamCustomers() {
+    final team = Session.I.teamReps;
+    if (team.isEmpty) return Future.value([]);
+    return _list('Customer',
+        fields: jsonEncode([
+          'name',
+          'customer_name',
+          kFieldCustomerOwner,
+          'custom_sales_route',
+          'custom_gstin',
+          'custom_phone',
+          'custom_location_status',
+          ...kOutstandingFields,
+        ]),
+        filters: '[["$kFieldCustomerOwner","in",${_inList(team)}],'
+            '["disabled","=",0]]',
+        orderBy: 'customer_name asc');
+  }
+
+  /// The team's leads, for the manager's Customers tab.
+  static Future<List<Map<String, dynamic>>> getTeamLeads() {
+    final team = Session.I.teamReps;
+    if (team.isEmpty) return Future.value([]);
+    return _list('Lead',
+        fields: '["name","lead_name","company_name","$kFieldLeadOwner",'
+            '"custom_sales_route","city","mobile_no","custom_location_status",'
+            '"customer"]',
+        filters: '[["$kFieldLeadOwner","in",${_inList(team)}]]',
+        orderBy: 'modified desc',
+        limit: 500);
+  }
+
+  /// Puts a customer or a lead on a sales route — the dashboard's
+  /// `assignRoute`.
+  static Future<void> assignRoute(
+      {required bool lead, required String name, required String route}) async {
+    await _put(lead ? 'Lead' : 'Customer', name, {'custom_sales_route': route});
+    await OfflineCache.clear();
+  }
+
   // `getPendingProformaReleases` went on 26 Sep 2026 with the sales manager's
   // proforma release: a proforma held on credit now unlocks when the GM
   // approves the order (shared/fixtures/proforma_release.json).
@@ -813,6 +915,12 @@ class Api {
     }
 
     final doc = await getLeadOrder(name);
+    // Asked of the stored order: a second approval raises a second Sales
+    // Order, and the screen that offered it may be stale or on another device.
+    if (orderSignedOff(doc, isLead: true)) {
+      throw Exception('This lead order is already approved. Refresh to see '
+          'where it is now.');
+    }
     final leadName = '${doc['lead'] ?? ''}';
 
     String? customer;
@@ -4048,6 +4156,39 @@ class Api {
     if (r.statusCode != 200 && r.statusCode != 201) {
       throw Exception(_frappeError(r));
     }
+    // `fieldname` only records which field the file is for; Frappe attaches
+    // it and leaves the field itself empty. Every site photo captured before
+    // 11 Oct 2026 sat attached to its site with `banner_photo` blank, and the
+    // manager verified sites without ever seeing one. Best effort: the file
+    // is attached either way, and [attachedPhotos] finds it from there.
+    final d = r.data;
+    final url = d is Map && d['message'] is Map ? d['message']['file_url'] : null;
+    if (url is String && url.isNotEmpty) {
+      try {
+        await _put(doctype, docname, {fieldname: url});
+      } catch (_) {}
+    }
+  }
+
+  /// Photos attached to [names] of [doctype] for [field], by document name.
+  /// For records whose photo field was never filled in — see [uploadPhoto].
+  /// The newest attachment wins when a place was captured more than once.
+  static Future<Map<String, String>> attachedPhotos(
+      String doctype, String field, List<String> names) async {
+    if (names.isEmpty) return {};
+    final rows = await _list('File',
+        fields: '["attached_to_name","file_url"]',
+        filters: jsonEncode([
+          ['attached_to_doctype', '=', doctype],
+          ['attached_to_field', '=', field],
+          ['attached_to_name', 'in', names],
+        ]),
+        orderBy: 'creation asc');
+    return {
+      for (final f in rows)
+        if ('${f['file_url'] ?? ''}'.isNotEmpty)
+          '${f['attached_to_name']}': '${f['file_url']}'
+    };
   }
 
   // -------- Attendance --------
@@ -4189,23 +4330,26 @@ class Api {
         {'status': 'Approved', 'decided_by': Session.I.email});
   }
 
-  // Missed punch-out (punched in, never out) -> alert next morning. Deliberately
-  // scoped to *yesterday*: a rep who is still out at 10 PM has not missed
-  // anything yet, so nothing nags them the same night.
-  static Future<Map<String, dynamic>?> getMissedPunchYesterday() async {
-    final me = Session.I.salesPerson;
-    if (me == null) return null;
-    final y = ServerClock.I.now().subtract(const Duration(days: 1));
-    final ds =
-        '${y.year}-${y.month.toString().padLeft(2, '0')}-${y.day.toString().padLeft(2, '0')}';
-    final list = await _list('Attendance Log',
-        fields: '["name","attendance_date","punch_in_time","punch_out_time"]',
-        filters: '[["sales_person","=","$me"],["attendance_date","=","$ds"]]',
-        limit: 1);
-    if (list.isEmpty) return null;
-    final r = list.first;
-    if (r['punch_in_time'] != null && r['punch_out_time'] == null) return r;
-    return null;
+  /// What was actually punched on the days these corrections are for, keyed
+  /// `rep|date`. A day with no log is simply absent from the map.
+  ///
+  /// The approver was shown only what the rep asked for, and could not tell a
+  /// forgotten punch-out from a day nobody punched at all.
+  static Future<Map<String, Map<String, dynamic>>> attendanceLogsFor(
+      List<Map<String, dynamic>> regs) async {
+    final reps = {for (final r in regs) '${r['sales_person'] ?? ''}'}
+      ..remove('');
+    final dates = {for (final r in regs) '${r['attendance_date'] ?? ''}'}
+      ..remove('');
+    if (reps.isEmpty || dates.isEmpty) return {};
+    final rows = await _list('Attendance Log',
+        fields:
+            '["sales_person","attendance_date","punch_in_time","punch_out_time"]',
+        filters: '[["sales_person","in",${_inList(reps.toList())}],'
+            '["attendance_date","in",${_inList(dates.toList())}]]');
+    return {
+      for (final l in rows) '${l['sales_person']}|${l['attendance_date']}': l
+    };
   }
 
   /// `yyyy-MM-dd HH:mm:ss`, the shape Frappe wants for a Datetime field.

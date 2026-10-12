@@ -18,7 +18,6 @@ import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import {
   selectActiveEmployees,
   selectPendingAcks,
-  selectPendingApproval,
   selectPendingLeave,
   selectUnreadCount,
   selectUser,
@@ -39,6 +38,8 @@ import { ToastHost } from '@/features/notifications/ToastHost';
 import { SyncAllButton } from './SyncAllButton';
 import { Api } from '@/api/client';
 import { COND_AWAITING } from '@/domain/creditCondition';
+import logoInk from '@/assets/manna-logo.png';
+import logoWhite from '@/assets/manna-logo-white.png';
 import './layout.css';
 
 interface NavItem {
@@ -69,7 +70,6 @@ export function AppShell() {
   const panelOpen = useAppSelector((s) => s.notifications.panelOpen);
 
   const myOrders = useAppSelector(selectVisibleOrders);
-  const awaitingApproval = useAppSelector(selectPendingApproval);
   const headcount = useAppSelector(selectActiveEmployees).length;
   const pendingLeave = useAppSelector(selectPendingLeave);
 
@@ -166,12 +166,15 @@ export function AppShell() {
     // The accountant's one screen: every order at Hi-Tech with its real customer (8 Oct 2026).
     { to: '/manna-treads', label: 'Orders at Hi-Tech', icon: 'file', roles: ['accountant'], group: 'Accounts' },
     { to: '/customers', label: 'Customers', icon: 'users', roles: ['sales_manager'], screen: 'customers', group: 'Sales' },
+    // Team Analysis is hidden until SAP's sales history is wired in — see the
+    // note on its route in routes.tsx.
     { to: '/leads', label: 'Leads', icon: 'userPlus', roles: ['sales_manager'], screen: 'leads', group: 'Sales' },
     { to: '/orders', label: 'Team Orders', icon: 'clipboard', roles: ['sales_manager'], screen: 'orders', count: myOrders.length, group: 'Sales' },
     { to: '/locations', label: 'Location Checks', icon: 'pin', roles: ['sales_manager'], screen: 'locations', group: 'Sales' },
     { to: '/team/regularizations', label: 'Attendance Corrections', icon: 'clock', roles: ['sales_manager'], screen: 'regularizations', group: 'Sales' },
-    { to: '/approvals', label: 'Approvals', icon: 'checkCircle', roles: ['sales_manager'], screen: 'approvals', count: awaitingApproval.length, urgent: awaitingApproval.length > 0, group: 'Sales' },
-    { to: '/combined', label: 'Combined Orders', icon: 'layers', roles: ['sales_manager'], screen: 'combined', group: 'Sales' },
+    // Approvals and Combined Orders were here until 11 October 2026 — see the
+    // note on `ManagerScreen`. Sites are verified in Location Checks; the
+    // week rollup is gone.
 
     { to: '/production', label: 'Production Queue', icon: 'factory', roles: ['production_manager'], group: 'Production' },
     // Dispatch Planning was here. Parked on 24 September 2026 on instruction —
@@ -205,7 +208,9 @@ export function AppShell() {
     { to: '/reports/expenses', label: 'Monthly Expenses', icon: 'receipt', roles: ['hr'], group: 'Reports' },
     { to: '/reports/summary', label: 'Range Summary', icon: 'chart', roles: ['hr'], group: 'Reports' },
 
-    { to: '/import', label: 'Data Import', icon: 'upload', roles: ['sales_manager', 'stock_manager'], group: 'Admin' },
+    // Stock manager only since 11 October 2026 — nothing is imported from the
+    // sales manager's side, so the entry was an invitation to break things.
+    { to: '/import', label: 'Data Import', icon: 'upload', roles: ['stock_manager'], group: 'Admin' },
   ];
 
   /*
@@ -238,11 +243,8 @@ export function AppShell() {
     <div className="shell">
       <nav className={`sidebar ${navOpen ? 'is-open' : ''}`}>
         <div className="sidebar__brand">
-          <div className="sidebar__logo">MT</div>
-          <div>
-            <div className="sidebar__name">Manna Treads</div>
-            <div className="sidebar__sub">Sales</div>
-          </div>
+          <img className="sidebar__logo-img" src={logoWhite} alt="Manna Group" />
+          <div className="sidebar__sub">Sales Dashboard</div>
         </div>
 
         <div className="sidebar__nav">
@@ -307,6 +309,9 @@ export function AppShell() {
             <Icon name="menu" size={18} />
           </Button>
           <div className="header__lead grow">
+            {/* The sidebar carries the logo; these stand in when it collapses. */}
+            <img className="header__logo header__logo--ink" src={logoInk} alt="Manna Group" />
+            <img className="header__logo header__logo--white" src={logoWhite} alt="" />
             <div className="header__title">{title}</div>
             {/* An "N orders freeze within 24 hours" line stood here until
                 11 Oct 2026. The 1 pm cutoff it counted down to is gone:

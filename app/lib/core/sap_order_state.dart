@@ -219,3 +219,22 @@ bool cancelledInSap(SapOrderState s) =>
 /// later fact and the terminal one.
 String orderApprovalLabel(dynamic rawPoStatus, SapOrderState sap) =>
     cancelledInSap(sap) ? 'Cancelled in SAP' : approvalLabel(rawPoStatus);
+
+/// Which filter of the manager's Team Orders an order falls under.
+enum OrderBucket { toApprove, approved, rejected, cancelled }
+
+/// The twin of `orderBucket` in `client/src/domain/sapOrderState.ts`.
+///
+/// Cancelled in SAP first, because it is the later fact and the terminal one;
+/// then a rejection; then approval. Both doctypes spell rejection 'Rejected'.
+/// [approved] is asked by the caller because a lead order and a Sales Order
+/// answer it from different fields (`orderSignedOff`).
+OrderBucket orderBucket(
+    {required bool approved,
+    dynamic poStatus,
+    required SapOrderState sap}) {
+  if (cancelledInSap(sap)) return OrderBucket.cancelled;
+  if (_clean('${poStatus ?? ''}') == 'Rejected') return OrderBucket.rejected;
+  if (approved) return OrderBucket.approved;
+  return OrderBucket.toApprove;
+}

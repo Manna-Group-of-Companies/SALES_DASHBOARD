@@ -68,18 +68,38 @@ class SapSyncAll {
 
   /// Given to `MaterialApp.navigatorObservers`.
   static final NavigatorObserver observer = _RouteTick();
+
+  /// The name of the route on top, where it has one.
+  static String? _topRoute;
+
+  /// Routes that carry Sync in their own header, so the floating button
+  /// would only be a second copy of it.
+  static const Set<String> hostsOwnSync = {kManagerWorkspaceRoute};
 }
 
+/// Was the tabbed manager workspace's route name; that workspace was removed
+/// on 11 Oct 2026 and nothing carries this name now.
+const String kManagerWorkspaceRoute = 'manager-workspace';
+
 class _RouteTick extends NavigatorObserver {
-  void _bump() => SapSyncAll._routes.value++;
+  // Only pages count as "on top". A dialog or a sheet over the workspace must
+  // not bring the floating button back underneath it.
+  void _top(Route<dynamic>? r) {
+    if (r is PageRoute) SapSyncAll._topRoute = r.settings.name;
+    SapSyncAll._routes.value++;
+  }
+
   @override
-  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) => _bump();
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) => _top(route);
   @override
-  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) => _bump();
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) => _top(previousRoute);
   @override
-  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) => _bump();
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) => _top(newRoute);
   @override
-  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) => _bump();
+  // Removal is how pushAndRemoveUntil clears what lay underneath, so the
+  // route on top has not changed.
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      SapSyncAll._routes.value++;
 }
 
 /// Put in `MaterialApp.builder` around the app's child.
@@ -95,7 +115,8 @@ class SyncAllOverlay extends StatelessWidget {
         child,
         ValueListenableBuilder<int>(
           valueListenable: SapSyncAll._routes,
-          builder: (context, _, __) => Session.I.hasToken
+          builder: (context, _, __) => Session.I.hasToken &&
+                  !SapSyncAll.hostsOwnSync.contains(SapSyncAll._topRoute)
               ? Positioned(left: 12, bottom: 84 + bottom, child: const SyncAllButton())
               : const SizedBox.shrink(),
         ),
@@ -127,21 +148,19 @@ String _list(Iterable<_Kind> kinds) {
   return '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
 }
 
-class SyncAllButton extends StatefulWidget {
-  const SyncAllButton({super.key});
-  @override
-  State<SyncAllButton> createState() => _SyncAllButtonState();
-}
+/// The sync itself, shared by every button that starts one.
+///
+/// There are two: the floating one above the Navigator, and the one in the
+/// manager workspace's header (11 Oct 2026). Holding the run here means a
+/// press on either shows as running on both, and a second press while one is
+/// in flight does nothing rather than raising the flags twice.
+class SapSyncEngine extends ChangeNotifier {
+  SapSyncEngine._();
+  static final SapSyncEngine I = SapSyncEngine._();
 
-class _SyncAllButtonState extends State<SyncAllButton> {
   bool _working = false;
+  bool get working => _working;
   Timer? _timer;
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
 
   Future<Map<String, dynamic>> _ask(_Kind k) {
     if (k == _Kind.orders) return Api.requestOrderSync();
@@ -169,9 +188,14 @@ class _SyncAllButtonState extends State<SyncAllButton> {
       ..showSnackBar(SnackBar(content: Text(text)));
   }
 
-  Future<void> _press() async {
+  void _set(bool v) {
+    _working = v;
+    notifyListeners();
+  }
+
+  Future<void> press() async {
     if (_working) return;
-    setState(() => _working = true);
+    _set(true);
     final scope = syncsForSession(Session.I);
     final kinds = [
       _Kind.orders,
@@ -193,11 +217,12 @@ class _SyncAllButtonState extends State<SyncAllButton> {
       _finish(failed);
       return;
     }
-    _say('Asked SAP for the latest ${_list(asked)}…');
+    _say('Syncing ${_list(asked)} with SAP…');
     _watch(asked, DateTime.now(), failed);
   }
 
   void _watch(List<_Kind> pending, DateTime since, List<_Kind> failed) {
+    _timer?.cancel();
     _timer = Timer(_pollEvery, () async {
       final still = <_Kind>[];
       final nowFailed = [...failed];
@@ -214,15 +239,14 @@ class _SyncAllButtonState extends State<SyncAllButton> {
           nowFailed.add(k);
         }
       }
-      if (!mounted) return;
       if (still.isEmpty) {
         _finish(nowFailed);
         return;
       }
       if (DateTime.now().difference(since) > _giveUpAfter) {
-        setState(() => _working = false);
+        _set(false);
         _say('Still waiting on the office server for ${_list(still)}. '
-            'Your request is saved and will run when it picks it up.');
+            'It will run when the server picks it up.');
         return;
       }
       _watch(still, since, nowFailed);
@@ -230,36 +254,96 @@ class _SyncAllButtonState extends State<SyncAllButton> {
   }
 
   void _finish(List<_Kind> failed) {
-    if (!mounted) return;
-    setState(() => _working = false);
+    _set(false);
     SapSyncAll.epoch.value++;
     _say(failed.isEmpty
-        ? 'Synced with SAP. Reopen a screen to see the latest.'
+        ? 'Synced with SAP.'
         : 'Synced, but ${_list(failed)} did not go through. Try again in a minute.');
   }
+}
+
+/// When the order sync last finished, as "Synced today 18:52". Blank when it
+/// cannot be read — a freshness line that guesses is worse than none.
+Future<String> lastSyncLabel() async {
+  try {
+    final s = await Api.orderSyncStatus();
+    final raw = '${s['last_sync_at'] ?? ''}';
+    final at = DateTime.tryParse(raw.replaceFirst(' ', 'T'));
+    if (at == null) return '';
+    final now = DateTime.now();
+    final hm =
+        '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(at.year, at.month, at.day);
+    final diff = today.difference(day).inDays;
+    if (diff == 0) return 'Synced today $hm';
+    if (diff == 1) return 'Synced yesterday $hm';
+    const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return 'Synced ${at.day} ${m[at.month - 1]} $hm';
+  } catch (_) {
+    return '';
+  }
+}
+
+class SyncAllButton extends StatelessWidget {
+  const SyncAllButton({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: const Color(0xFF3F3F3F),
-      shape: const CircleBorder(),
-      elevation: 3,
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: _working ? null : _press,
-        child: SizedBox(
-          width: 44,
-          height: 44,
-          child: Center(
-            child: _working
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.sync, color: Colors.white, semanticLabel: 'Sync with SAP'),
+    return ListenableBuilder(
+      listenable: SapSyncEngine.I,
+      builder: (context, _) {
+        final working = SapSyncEngine.I.working;
+        return Material(
+          color: const Color(0xFF3F3F3F),
+          shape: const CircleBorder(),
+          elevation: 3,
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: working ? null : SapSyncEngine.I.press,
+            child: SizedBox(
+              width: 44,
+              height: 44,
+              child: Center(
+                child: working
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.sync, color: Colors.white, semanticLabel: 'Sync with SAP'),
+              ),
+            ),
           ),
-        ),
-      ),
+        );
+      },
+    );
+  }
+}
+
+/// The Sync control for an AppBar: an icon and a word, spinning while a run
+/// is in flight.
+class SyncAppBarButton extends StatelessWidget {
+  const SyncAppBarButton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: SapSyncEngine.I,
+      builder: (context, _) {
+        final working = SapSyncEngine.I.working;
+        return TextButton.icon(
+          style: TextButton.styleFrom(foregroundColor: Colors.white),
+          onPressed: working ? null : SapSyncEngine.I.press,
+          icon: working
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Icon(Icons.sync, size: 20),
+          label: Text(working ? 'Syncing' : 'Sync',
+              style: const TextStyle(color: Colors.white)),
+        );
+      },
     );
   }
 }

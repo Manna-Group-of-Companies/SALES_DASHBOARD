@@ -74,7 +74,7 @@
   color: var(--text-2);
 }
 .month__cell.is-today .month__num {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 700;
 }
 
@@ -99,7 +99,7 @@
 .month__cell.s-worked .month__hours { color: var(--ok); }
 .month__cell.s-open { background: var(--danger-soft); }
 .month__cell.s-leave { background: var(--accent-soft); }
-.month__cell.s-leave .month__tag { color: var(--accent); }
+.month__cell.s-leave .month__tag { color: var(--accent-text); }
 .month__cell.s-half { background: var(--warn-soft); }
 .month__cell.s-half .month__tag { color: var(--warn); }
 .month__cell.s-none { background: var(--surface); }
@@ -164,7 +164,7 @@
 .odo__triplink {
   font-size: 11.5px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: none;
   padding: 1px 7px;
   border: 1px solid var(--accent-border);

@@ -1064,3 +1064,36 @@ check.
 only. `app/lib/core/sync_scope.dart`, its Dart twin, has no such branch
 because the phone app has no accountant role; if an accountant login ever
 reaches the phone, add the branch there in the same commit.
+
+---
+
+## The manager workspace on the phone — **decided 11 Oct 2026**
+
+Managers approve from their phones, so the phone was given the dashboard's
+manager screens: a summary, Team Orders with the same filters, the order
+review (now with Undo rejection and a note for the GM), Location Checks,
+Attendance Corrections, Customers and Leads with route setting, and Sync.
+
+**Who sees what is now one rule.** Until today the phone offered every
+manager the order pipeline while the dashboard offered it to Pareeth's team
+only. Both read `fixtures/manager_scope.json` now (`core/manager_scope.dart`,
+`domain/sales.ts`).
+
+**Where the phone deliberately has more:**
+
+- **Leave approvals.** Reps apply for leave on the phone with their sales
+  manager as the approver (`approver_type = Sales Manager`). The dashboard has
+  no sales-manager leave screen, so the phone is the only place those requests
+  are decided. Removing it would strand them.
+- **Targets and outstanding limits.** Phone-only since before the dashboard
+  existed; nothing on the web replaced them.
+
+**Where the dashboard has more:** Export to a spreadsheet, the decided /
+revoke view of attendance corrections, and assigning an owner in the pooled
+UAE unit. None of those decides money or approval.
+
+**Found while doing it:** the phone read a lead order as decided only when its
+status was `Approved`. The dashboard writes `Converted`, so a lead order
+approved on the web was offered for approval again on the phone, which would
+have raised a second Sales Order. `orderSignedOff` now accepts `Converted`,
+and `Api.approveLeadOrder` refuses an order already signed off.

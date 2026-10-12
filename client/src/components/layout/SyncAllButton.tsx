@@ -259,7 +259,10 @@ export function SyncAllButton({
         title="Sync with SAP"
       >
         <Icon name="refresh" className={busy ? 'is-spinning' : ''} />
-        <span className="sync-all__label">Sync</span>
+        {/* Named for what it reaches, not for what it does. A bare "Sync"
+            was being read as a page refresh — this is the only control in
+            the dashboard that talks to SAP. */}
+        <span className="sync-all__label">Sync with SAP</span>
       </Button>
     </div>
   );

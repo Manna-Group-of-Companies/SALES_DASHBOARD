@@ -233,14 +233,27 @@ export function customerBelongsTo(assignedRep: string | undefined, reps: string[
  * see the order queue" is a business decision that will change, and it should
  * change in one place rather than in six `roles:` arrays.
  */
+/*
+ * `approvals` and `combined` were removed on 11 October 2026.
+ *
+ * The Approvals inbox had been reduced to a single queue — customer sites —
+ * and Location Checks already carried sites alongside customers and leads,
+ * writing the same fields to the same doctype. Two screens asking one
+ * question, which is the arrangement `listLocationQueue` already argues
+ * against in its own comment: the smaller queue is the one nobody opens.
+ *
+ * Combined Orders was the "close the week" rollup, superseded by dispatch
+ * grouping on 20 August 2026. The dashboard no longer makes or shows them.
+ * The `Combined Order` doctype, `domain/combinedOrders.ts` and
+ * `shared/fixtures/combined_order.json` all stay — the phone still READS
+ * these and shows them to reps, so none of that is dead.
+ */
 export type ManagerScreen =
   | 'customers'
   | 'leads'
   | 'locations'
   | 'regularizations'
   | 'orders'
-  | 'approvals'
-  | 'combined'
   | 'stock';
 
 /** Everything. */
@@ -250,8 +263,6 @@ const FULL: ManagerScreen[] = [
   'locations',
   'regularizations',
   'orders',
-  'approvals',
-  'combined',
   'stock',
 ];
 

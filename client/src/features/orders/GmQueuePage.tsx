@@ -159,9 +159,6 @@ export function GmQueuePage() {
       <div className="page-head">
         <div className="grow">
           <div className="page-head__title">Escalated to You</div>
-          <div className="page-head__sub">
-            Orders a sales manager could not approve, because each takes its customer past the credit limit.
-          </div>
         </div>
         <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
       </div>

@@ -42,16 +42,44 @@ class TripTracker {
 
   bool isRecording(String tripName) => activeTrip.value == tripName;
 
-  Future<String?> start(String tripName) async {
+  /// True while [start] is between its first check and setting [activeTrip].
+  /// Without it a second caller saw "not recording" and started a second run.
+  bool _starting = false;
+
+  /// When [resumeIfNeeded] last tried, so a resume that cannot succeed is not
+  /// retried on every rebuild of the home screen.
+  DateTime? _autoResumeTriedAt;
+  static const Duration _autoResumeCooldown = Duration(minutes: 2);
+
+  /// Starts recording [tripName].
+  ///
+  /// [interactive] is whether a person just asked for this by tapping a
+  /// button. Only then may it show a permission dialog. An automatic start
+  /// (see [resumeIfNeeded]) never prompts. A permission request pauses and
+  /// resumes the app, and the home screen calls [resumeIfNeeded] on every
+  /// resume. On 11 Oct 2026 a phone where location had been refused for good
+  /// ran that loop 412 times in four minutes: Punch Out blinked, and Android's
+  /// permission screen crashed under the load.
+  Future<String?> start(String tripName, {bool interactive = true}) async {
     if (activeTrip.value == tripName) return null;
     if (activeTrip.value != null) {
       return 'Another trip (${activeTrip.value}) is already recording. Stop it first.';
     }
+    if (_starting) return null;
+    _starting = true;
+    try {
+      return await _start(tripName, interactive);
+    } finally {
+      _starting = false;
+    }
+  }
+
+  Future<String?> _start(String tripName, bool interactive) async {
     if (!await Geolocator.isLocationServiceEnabled()) {
       return 'Turn on GPS/location first.';
     }
     var perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
+    if (perm == LocationPermission.denied && interactive) {
       perm = await Geolocator.requestPermission();
     }
     if (perm == LocationPermission.denied ||
@@ -72,7 +100,7 @@ class TripTracker {
     // if they refuse — a partial route beats none — and the caller is told so
     // it can explain.
     needsAlwaysPermission = perm == LocationPermission.whileInUse;
-    if (needsAlwaysPermission) {
+    if (needsAlwaysPermission && interactive) {
       try {
         final again = await Geolocator.requestPermission();
         needsAlwaysPermission = again != LocationPermission.always;
@@ -163,15 +191,22 @@ class TripTracker {
   /// helps a rep who opens the app and notices it — and a rep driving all
   /// afternoon has no reason to.
   ///
-  /// Safe to call as often as you like: it does nothing when already running.
+  /// Safe to call as often as you like. It does nothing when already running,
+  /// tries at most once per [_autoResumeCooldown], and never asks for
+  /// permission. If location is not granted, the banner's Resume button is
+  /// how the rep fixes it.
   Future<void> resumeIfNeeded() async {
-    if (activeTrip.value != null) return;
+    if (activeTrip.value != null || _starting) return;
     if (Session.I.salesPerson == null) return;
+    final now = DateTime.now();
+    final last = _autoResumeTriedAt;
+    if (last != null && now.difference(last) < _autoResumeCooldown) return;
+    _autoResumeTriedAt = now;
     try {
       final trip = await Api.getActiveTrip();
       final name = '${trip?['name'] ?? ''}';
       if (name.isEmpty || name == 'null') return;
-      await start(name);
+      await start(name, interactive: false);
     } catch (_) {}
   }
 
@@ -206,6 +241,7 @@ class TripTracker {
     _ticker = null;
     _lastSaved = null;
     activeTrip.value = null;
+    _autoResumeTriedAt = null;
     // A trip that has just ended is the moment its route matters most, so the
     // queue is pushed once more rather than waiting for the next fix.
     unawaited(TripPoints.flush());

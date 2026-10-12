@@ -1,22 +1,24 @@
 // Every order the manager's team has raised, a week at a time.
 //
-// The approvals queue only ever shows work outstanding, which means an order
-// disappears the moment it is approved — and then there is nowhere to answer
-// "what happened to that one?". This screen is the other half: decided and
-// undecided together, with whatever the production manager has since put on it.
+// Decided and undecided together, so "what happened to that one?" has an
+// answer after the order leaves the queue. A week is the unit because that is
+// how the factory plans.
 //
-// A week is the unit because that is how the factory plans. Picking a month
-// would bury the order somebody is asking about; picking a day would mean
-// hunting through seven screens to find it.
+// Filtered the way the dashboard's Team Orders is (OrdersListPage.tsx): by
+// week, by approval state with a count on each, by rep, and by a search over
+// order, party and rep. The state filter opens on "To approve", because that
+// is what the manager came for.
 
 import 'package:flutter/material.dart';
 
-import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
+import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/manager/manager_order_review_screen.dart';
+import 'package:manna_field_sales/screens/manager/manager_ui.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/sync_all_button.dart';
 
 /// A Monday-to-Sunday window, with a label a human recognises.
 class _Week {
@@ -32,310 +34,341 @@ class _Week {
       '${d.year}-${d.month.toString().padLeft(2, '0')}-'
       '${d.day.toString().padLeft(2, '0')}';
 
-  static const _months = [
-    '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-  ];
-
   String get label {
-    final a = '${start.day} ${_months[start.month]}';
-    final b = '${end.day} ${_months[end.month]}';
+    final range = '${shortDate(from)} – ${shortDate(to)}';
     switch (offset) {
       case 0:
-        return 'This week  ($a – $b)';
+        return 'This week · $range';
       case -1:
-        return 'Last week  ($a – $b)';
+        return 'Last week · $range';
       default:
-        return '$a – $b';
+        return range;
     }
   }
 }
 
-class ManagerOrdersScreen extends StatefulWidget {
-  const ManagerOrdersScreen({super.key});
-  @override
-  State<ManagerOrdersScreen> createState() => _ManagerOrdersScreenState();
+const Map<OrderBucket, String> _bucketLabel = {
+  OrderBucket.toApprove: 'To approve',
+  OrderBucket.approved: 'Approved',
+  OrderBucket.rejected: 'Rejected',
+  OrderBucket.cancelled: 'Cancelled in SAP',
+};
+
+/// Which filter an order belongs under, asking each kind the right field.
+OrderBucket bucketOf(Map<String, dynamic> r) {
+  // A Sales Order is asked its status, never its rate flag: a rep's edit
+  // after approval sends it back to "To approve" with its rates still stamped.
+  final isLead = r['is_lead'] == true;
+  return orderBucket(
+      approved: isLead ? orderSignedOff(r, isLead: true) : orderApproved(r),
+      poStatus: r['custom_po_status'],
+      sap: SapOrderState.fromOrder(r));
 }
 
-class _ManagerOrdersScreenState extends State<ManagerOrdersScreen> {
-  late List<_Week> _weeks;
-  late _Week _selected;
-  late Future<List<Map<String, dynamic>>> _future;
+/// The pill on an order card: its words and how worried to look.
+(String, Tone) orderPill(Map<String, dynamic> r) {
+  final b = bucketOf(r);
+  final label = orderApprovalLabel(r['custom_po_status'],
+      SapOrderState.fromOrder(r));
+  return switch (b) {
+    OrderBucket.cancelled => ('Cancelled in SAP', Tone.bad),
+    OrderBucket.rejected => ('Rejected', Tone.bad),
+    OrderBucket.approved => ('Approved', Tone.good),
+    OrderBucket.toApprove => (label, Tone.warn),
+  };
+}
+
+/// Opens an order for review; true when a decision was made.
+Future<bool> openOrderReview(BuildContext context, Map<String, dynamic> r) async {
+  final decided = await Navigator.push<bool>(
+    context,
+    MaterialPageRoute(
+        builder: (_) => ManagerOrderReviewScreen(
+              orderName: '${r['name']}',
+              isLead: r['is_lead'] == true,
+            )),
+  );
+  return decided == true;
+}
+
+/// One order in a list: party, amount, status, and where it has got to.
+class OrderCard extends StatelessWidget {
+  final Map<String, dynamic> order;
+  final VoidCallback onTap;
+  final Widget? trailingNote;
+  const OrderCard(
+      {super.key, required this.order, required this.onTap, this.trailingNote});
+
+  @override
+  Widget build(BuildContext context) {
+    final r = order;
+    final (pill, tone) = orderPill(r);
+    final approved = bucketOf(r) == OrderBucket.approved;
+    final sapNo = textOf(r['custom_sap_sales_order']);
+    final production = orderProgress(
+        SapOrderState.fromOrder(r), r['custom_production_status']);
+    final finish = textOf(r['custom_production_finish_date']);
+    return Panel(
+      onTap: onTap,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            child: Text(textOf(r['customer']).isEmpty
+                    ? '${r['name']}'
+                    : textOf(r['customer']),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w600)),
+          ),
+          const SizedBox(width: 8),
+          Text(money(numOf(r['grand_total'])),
+              style: const TextStyle(
+                  fontSize: 15, fontWeight: FontWeight.w700)),
+        ]),
+        const SizedBox(height: 4),
+        Text(
+            [
+              if (sapNo.isNotEmpty) 'SAP $sapNo' else '${r['name']}',
+              textOf(r['custom_sales_person']),
+              shortDate(r['transaction_date']),
+            ].where((s) => s.isNotEmpty).join(' · '),
+            style: const TextStyle(fontSize: 12, color: kMuted)),
+        const SizedBox(height: 8),
+        Row(children: [
+          StatusPill(pill, tone: tone),
+          if (r['is_lead'] == true) ...[
+            const SizedBox(width: 6),
+            const StatusPill('Lead', tone: Tone.info),
+          ],
+          const Spacer(),
+          if (trailingNote != null) trailingNote!,
+        ]),
+        if (approved && r['is_lead'] != true) ...[
+          const SizedBox(height: 8),
+          Row(children: [
+            Icon(
+                Api.isOrderComplete(r)
+                    ? Icons.check_circle
+                    : Icons.precision_manufacturing_outlined,
+                size: 15,
+                color: Api.isOrderComplete(r) ? toneColor(Tone.good) : kMuted),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                  Api.isOrderComplete(r)
+                      ? 'Dispatched'
+                      : [
+                          textOf(production).isEmpty
+                              ? 'Not started'
+                              : production,
+                          if (finish.isNotEmpty) 'finish ${shortDate(finish)}',
+                        ].join(' · '),
+                  style: const TextStyle(fontSize: 12, color: kMuted)),
+            ),
+          ]),
+        ],
+      ]),
+    );
+  }
+}
+
+class TeamOrdersView extends StatefulWidget {
+  const TeamOrdersView({super.key});
+  @override
+  State<TeamOrdersView> createState() => _TeamOrdersViewState();
+}
+
+class _TeamOrdersViewState extends State<TeamOrdersView> {
+  late final List<_Week> _weeks = _buildWeeks();
+  late _Week _week = _weeks.first;
+  OrderBucket _bucket = OrderBucket.toApprove;
+  String? _rep;
+  String _query = '';
+  late Future<List<Map<String, dynamic>>> _future = _load();
 
   @override
   void initState() {
     super.initState();
-    _weeks = _buildWeeks();
-    _selected = _weeks.first;
-    _future = _load();
+    SapSyncAll.epoch.addListener(_reload);
   }
 
-  /// This week and the twelve before it. Judged against the server's clock so
-  /// a phone with a wrong date does not offer the wrong weeks.
+  @override
+  void dispose() {
+    SapSyncAll.epoch.removeListener(_reload);
+    super.dispose();
+  }
+
+  /// This week and the twelve before it, on the server's clock so a phone
+  /// with a wrong date does not offer the wrong weeks.
   List<_Week> _buildWeeks() {
     final now = ServerClock.I.now();
     final today = DateTime(now.year, now.month, now.day);
-    final thisMonday = today.subtract(Duration(days: today.weekday - 1));
+    final monday = today.subtract(Duration(days: today.weekday - 1));
     return [
       for (var i = 0; i <= 12; i++)
-        _Week(
-          thisMonday.subtract(Duration(days: 7 * i)),
-          thisMonday.subtract(Duration(days: 7 * i - 6)),
-          -i,
-        )
+        _Week(monday.subtract(Duration(days: 7 * i)),
+            monday.subtract(Duration(days: 7 * i - 6)), -i)
     ];
   }
 
   Future<List<Map<String, dynamic>>> _load() =>
-      Api.getTeamOrders(from: _selected.from, to: _selected.to);
+      Api.getTeamOrders(from: _week.from, to: _week.to);
 
-  void _reload() => setState(() => _future = _load());
+  void _reload() {
+    if (mounted) setState(() => _future = _load());
+  }
 
   Future<void> _open(Map<String, dynamic> r) async {
-    final decided = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-          builder: (_) => ManagerOrderReviewScreen(
-                orderName: '${r['name']}',
-                isLead: r['is_lead'] == true,
-              )),
-    );
-    if (decided == true) _reload();
+    if (await openOrderReview(context, r)) _reload();
+  }
+
+  bool _matches(Map<String, dynamic> r) {
+    if (_rep != null && textOf(r['custom_sales_person']) != _rep) return false;
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    return [r['name'], r['customer'], r['custom_sales_person'],
+            r['custom_sap_sales_order']]
+        .any((v) => textOf(v).toLowerCase().contains(q));
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Team Orders'), actions: [
-        IconButton(icon: const Icon(Icons.refresh), onPressed: _reload),
-      ]),
-      body: Column(children: [
-        Container(
-          color: Colors.white,
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-          child: InputDecorator(
-            decoration: const InputDecoration(
-                labelText: 'Week',
-                border: OutlineInputBorder(),
-                isDense: true,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 10, vertical: 6)),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<_Week>(
-                value: _selected,
-                isExpanded: true,
-                items: [
-                  for (final w in _weeks)
-                    DropdownMenuItem(value: w, child: Text(w.label))
-                ],
-                onChanged: (w) {
-                  if (w == null) return;
-                  setState(() {
-                    _selected = w;
-                    _future = _load();
-                  });
-                },
-              ),
-            ),
-          ),
-        ),
-        Expanded(
-          child: FutureBuilder<List<Map<String, dynamic>>>(
-            future: _future,
-            builder: (context, snap) {
-              if (snap.connectionState != ConnectionState.done) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (snap.hasError) {
-                return Center(
-                    child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Text(humanError(snap.error))));
-              }
-              final rows = snap.data ?? [];
-              if (rows.isEmpty) {
-                return Center(
-                    child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text('No orders in ${_selected.label}.',
-                            textAlign: TextAlign.center)));
-              }
-              final waiting =
-                  rows.where((r) => !orderApproved(r)).length;
-              return RefreshIndicator(
-                onRefresh: () async {
-                  _reload();
-                  await _future;
-                },
-                child: ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                  itemCount: rows.length + 1,
-                  itemBuilder: (_, i) {
-                    if (i == 0) {
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Text(
-                            '${rows.length} order${rows.length == 1 ? '' : 's'}'
-                            '${waiting > 0 ? '  ·  $waiting waiting on you' : '  ·  all decided'}',
-                            style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: waiting > 0
-                                    ? Colors.orange.shade800
-                                    : Colors.green)),
-                      );
-                    }
-                    return _orderCard(rows[i - 1]);
-                  },
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _future,
+      builder: (context, snap) {
+        final loading = snap.connectionState != ConnectionState.done;
+        final all = snap.data ?? const <Map<String, dynamic>>[];
+        final scoped = all.where(_matches).toList();
+        final counts = {
+          for (final b in OrderBucket.values)
+            b: scoped.where((r) => bucketOf(r) == b).length
+        };
+        final rows = scoped.where((r) => bucketOf(r) == _bucket).toList();
+
+        return RefreshIndicator(
+          onRefresh: () async {
+            _reload();
+            await _future;
+          },
+          child: CustomScrollView(slivers: [
+            SliverToBoxAdapter(child: _filters(counts)),
+            if (loading)
+              const SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(child: CircularProgressIndicator()))
+            else if (snap.hasError)
+              SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: ErrorState(error: snap.error, onRetry: _reload))
+            else if (rows.isEmpty)
+              SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: EmptyState(
+                      icon: _bucket == OrderBucket.toApprove
+                          ? Icons.task_alt
+                          : Icons.receipt_long_outlined,
+                      text: _bucket == OrderBucket.toApprove
+                          ? 'Nothing to approve this week.'
+                          : 'No ${_bucketLabel[_bucket]!.toLowerCase()} orders this week.'))
+            else
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+                sliver: SliverList.builder(
+                  itemCount: rows.length,
+                  itemBuilder: (_, i) =>
+                      OrderCard(order: rows[i], onTap: () => _open(rows[i])),
                 ),
-              );
-            },
-          ),
-        ),
-      ]),
+              ),
+          ]),
+        );
+      },
     );
   }
 
-  Widget _orderCard(Map<String, dynamic> r) {
-    final approved = orderApproved(r);
-    final status = '${r['custom_po_status'] ?? ''}';
-    final rejected = status == 'Rejected';
-    // SAP's word once SAP has the order, the in-app status before — the same
-    // rule as the rep's My Orders and the dashboard's list.
-    final production =
-        orderProgress(SapOrderState.fromOrder(r), r['custom_production_status']);
-    final finish = '${r['custom_production_finish_date'] ?? ''}';
-    final combinedRaw = '${r['custom_combined_order'] ?? ''}'.trim();
-    final combined =
-        (combinedRaw.isEmpty || combinedRaw == 'null') ? '' : combinedRaw;
-
-    final colour = rejected
-        ? Colors.red
-        : (approved ? Colors.green : Colors.orange.shade800);
-
-    return Card(
+  Widget _filters(Map<OrderBucket, int> counts) {
+    final reps = [...Session.I.teamReps]..sort();
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
       margin: const EdgeInsets.only(bottom: 8),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: () => _open(r),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(
-                  child: Text('${r['customer'] ?? r['name']}',
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600))),
-              // Approving a lead order also converts the lead, so the manager
-              // should know which kind they are opening before they open it.
-              if (r['is_lead'] == true)
-                Container(
-                  margin: const EdgeInsets.only(right: 8),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                      color: const Color(0xFFE0E7FF),
-                      borderRadius: BorderRadius.circular(4)),
-                  child: const Text('LEAD',
-                      style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF3949AB))),
-                ),
-              Text('Rs ${_num(r['grand_total']).toStringAsFixed(0)}',
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-            ]),
-            const SizedBox(height: 2),
-            Text(
-                '${r['name']}  ·  ${r['custom_sales_person'] ?? '—'}'
-                '  ·  ${r['transaction_date'] ?? ''}',
-                style: const TextStyle(fontSize: 11, color: Colors.black54)),
-            const SizedBox(height: 6),
-            Row(children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                    color: colour.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(4)),
-                child: Text(
-                    orderApprovalLabel(status, SapOrderState.fromOrder(r))
-                        .toUpperCase(),
-                    style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: colour)),
-              ),
-              const Spacer(),
-              if (!approved && !rejected)
-                const Text('Tap to review',
-                    style: TextStyle(fontSize: 11, color: Colors.black45)),
-            ]),
-            // What the factory has done with it since. Only meaningful once
-            // approved — before that, production has never seen the order.
-            if (approved) ...[
-              const SizedBox(height: 6),
-              // A finished order is said plainly rather than left as one more
-              // stage name the manager has to know the order of. Everything
-              // short of finished still reads as its stage, because "not
-              // complete" is not enough to chase anything with.
-              if (Api.isOrderComplete(r))
-                Row(children: const [
-                  Icon(Icons.check_box, size: 15, color: Color(0xFF1B7F3B)),
-                  SizedBox(width: 4),
-                  Text('Order complete — dispatched',
-                      style: TextStyle(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF1B7F3B))),
-                ])
-              else
-                Row(children: [
-                  const Icon(Icons.precision_manufacturing_outlined,
-                      size: 14, color: Colors.black54),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                        'Production: '
-                        '${production.isEmpty || production == 'null' ? 'Not started' : production}'
-                        '${(finish.isNotEmpty && finish != 'null') ? '  ·  est. finish $finish' : ''}',
-                        style: const TextStyle(
-                            fontSize: 11, color: Colors.black54)),
-                  ),
-                ]),
-            ],
-            // The weekly combined order this one was rolled into, once the
-            // production manager has closed that week. Shown to the manager
-            // for the same reason the rep sees it: a customer ringing about
-            // "last week's order" and the office looking at one combined
-            // document need to be talking about the same thing.
-            if (combined.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Row(children: [
-                const Icon(Icons.merge_type, size: 14, color: Color(0xFF6D4C41)),
-                const SizedBox(width: 4),
-                Text('Week order: $combined',
-                    style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF6D4C41))),
-              ]),
-            ],
-            if ('${r['delivery_date'] ?? ''}'.isNotEmpty &&
-                '${r['delivery_date']}' != 'null')
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: _dropdown<_Week>(
+              value: _week,
+              items: {for (final w in _weeks) w: w.label},
+              onChanged: (w) {
+                _week = w;
+                _reload();
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _dropdown<String?>(
+              value: _rep,
+              items: {null: 'All reps', for (final r in reps) r: r},
+              onChanged: (r) => setState(() => _rep = r),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        TextField(
+          onChanged: (v) => setState(() => _query = v),
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: 'Search order, party or rep',
+            prefixIcon: const Icon(Icons.search, size: 20),
+            filled: true,
+            fillColor: const Color(0xFFF3F4F6),
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none),
+          ),
+        ),
+        const SizedBox(height: 8),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(children: [
+            for (final b in OrderBucket.values)
               Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Text('Required by ${r['delivery_date']}',
-                    style: const TextStyle(
-                        fontSize: 11, color: Colors.black54)),
+                padding: const EdgeInsets.only(right: 6),
+                child: ChoiceChip(
+                  label: Text('${_bucketLabel[b]}  ${counts[b] ?? 0}'),
+                  selected: _bucket == b,
+                  showCheckmark: false,
+                  onSelected: (_) => setState(() => _bucket = b),
+                ),
               ),
           ]),
         ),
-      ),
+      ]),
     );
   }
 
-  static double _num(dynamic v) =>
-      v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
+  Widget _dropdown<T>(
+          {required T value,
+          required Map<T, String> items,
+          required ValueChanged<T> onChanged}) =>
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+            border: Border.all(color: kLine),
+            borderRadius: BorderRadius.circular(12)),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<T>(
+            value: value,
+            isExpanded: true,
+            style: const TextStyle(fontSize: 13, color: Colors.black87),
+            items: [
+              for (final e in items.entries)
+                DropdownMenuItem<T>(
+                    value: e.key,
+                    child: Text(e.value, overflow: TextOverflow.ellipsis))
+            ],
+            onChanged: (v) => onChanged(v as T),
+          ),
+        ),
+      );
 }

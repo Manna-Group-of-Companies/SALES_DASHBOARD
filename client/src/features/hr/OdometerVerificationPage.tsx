@@ -171,7 +171,7 @@ export function OdometerVerificationPage() {
         <div className="grow">
           <div className="page-head__title">Odometer verification</div>
           <div className="page-head__sub">
-            Check the photo against what the rep typed — last {WINDOW_DAYS} days
+            Last {WINDOW_DAYS} days
           </div>
         </div>
         <div className="odo__toolbar">

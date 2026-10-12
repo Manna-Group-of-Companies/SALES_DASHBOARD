@@ -80,13 +80,22 @@ export function SalesDashboardPage() {
       </div>
 
       {/* --- what cannot wait --------------------------------------------- */}
+      {/*
+        Everything here opens Team Orders, not an approvals inbox.
+
+        These tiles count ORDERS awaiting a decision, and they used to link to
+        /approvals — a queue that deliberately never held orders at all. A
+        manager clicking "3 awaiting approval" landed on a screen of customer
+        sites. Orders are approved in Team Orders and nowhere else; the
+        approvals inbox itself went on 11 October 2026.
+      */}
       <div className="stack gap-3" style={{ marginBottom: 16 }}>
         {oldest && oldestDays >= 3 && (
           <Alert
             tone="danger"
             title={`${oldest.orderNo} has been waiting ${oldestDays} days`}
             actions={
-              <Button size="sm" onClick={() => navigate('/approvals')}>
+              <Button size="sm" onClick={() => navigate('/orders')}>
                 Open queue
               </Button>
             }
@@ -104,12 +113,12 @@ export function SalesDashboardPage() {
           tone={waiting.length ? 'warn' : undefined}
           // Deliberately all-time, not this week — see the note at the top.
           foot={oldest ? `Oldest ${oldestDays}d` : undefined}
-          onClick={() => navigate('/approvals')}
+          onClick={() => navigate('/orders')}
         />
         <Tile
           label="Value awaiting"
           value={moneyShort(waitingValue)}
-          onClick={() => navigate('/approvals')}
+          onClick={() => navigate('/orders')}
         />
         <Tile
           label="Live orders"
@@ -123,7 +132,7 @@ export function SalesDashboardPage() {
         <Card
           title="Longest Waiting"
           actions={
-            <Button size="sm" variant="ghost" onClick={() => navigate('/approvals')}>
+            <Button size="sm" variant="ghost" onClick={() => navigate('/orders')}>
               View all
             </Button>
           }

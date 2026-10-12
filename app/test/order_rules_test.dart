@@ -422,6 +422,18 @@ void main() {
       }
     });
 
+    // Found 11 Oct 2026: the dashboard writes `Converted`, the phone read only
+    // `Approved`, so the manager's review offered a second approval — which
+    // raises a second Sales Order.
+    test('a lead order converted on the dashboard reads as signed off here', () {
+      for (final s in ['Approved', 'PO Approved - Ready for SAP', 'Converted']) {
+        expect(orderSignedOff(lead(s), isLead: true), isTrue, reason: s);
+      }
+      for (final s in ['Pending Approval', 'Rejected']) {
+        expect(orderSignedOff(lead(s), isLead: true), isFalse, reason: s);
+      }
+    });
+
     test('a pending or rejected lead order stays open to its rep', () {
       expect(canEditOrder(lead('Pending Approval')), isTrue);
       expect(canEditOrder(lead('Rejected')), isTrue);

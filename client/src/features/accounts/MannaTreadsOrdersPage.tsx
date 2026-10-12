@@ -160,10 +160,6 @@ export function MannaTreadsOrdersPage() {
       <div className="page-head">
         <div className="grow">
           <div className="page-head__title">Orders at Hi-Tech</div>
-          <div className="page-head__sub">
-            The real customer behind every order sent to Hi-Tech Pretreads. Once Hi-Tech delivers, the
-            delivery is shown in place of the order.
-          </div>
         </div>
         <div className="acct__actions">
           <ExportButton

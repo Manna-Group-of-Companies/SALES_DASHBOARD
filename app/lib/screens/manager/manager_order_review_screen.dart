@@ -18,7 +18,6 @@
 
 import 'package:flutter/material.dart';
 
-import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/credit_commitment.dart';
 import 'package:manna_field_sales/core/errors.dart';
@@ -32,6 +31,7 @@ import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/sync_all_button.dart';
 
 class ManagerOrderReviewScreen extends StatefulWidget {
   final String orderName;
@@ -65,6 +65,19 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   void initState() {
     super.initState();
     _init = _load();
+    SapSyncAll.epoch.addListener(_reload);
+  }
+
+  @override
+  void dispose() {
+    SapSyncAll.epoch.removeListener(_reload);
+    super.dispose();
+  }
+
+  /// Fresh figures after a sync, so the credit picture the decision rests on
+  /// is SAP's latest rather than what the screen opened with.
+  void _reload() {
+    if (mounted && !_busy) setState(() => _init = _load());
   }
 
   /// What a lead order is still missing before it can be approved. Empty for a
@@ -133,7 +146,16 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   /// A decision is outstanding unless the order is actually approved. Read off
   /// the status rather than the rate flag: a rep who edits an approved order
   /// sends it back here, and it has to look like work to do again.
-  bool get _approved => orderApproved(_order);
+  ///
+  /// A lead order keeps its decision in `status`, so it is asked through
+  /// [orderSignedOff]; read as a Sales Order it looked undecided for ever and
+  /// offered Approve again, which raises a second Sales Order.
+  bool get _approved =>
+      _isLead ? orderSignedOff(_order, isLead: true) : orderApproved(_order);
+
+  bool get _rejected =>
+      '${_isLead ? _order['status'] : _order['custom_po_status']}'.trim() ==
+      'Rejected';
 
   /// True when the sales manager cannot finish this alone.
   ///
@@ -167,6 +189,17 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
       poStatus: _order['custom_po_status'],
       overLimit: _escalates);
 
+  bool get _cancelled =>
+      !_isLead && cancelledInSap(SapOrderState.fromOrder(_order));
+
+  /// Cancelled outranks approved: an order SAP cancelled after approval was
+  /// shown in approval green until 11 Oct 2026, and read as good news.
+  Color get _statusColour => _cancelled || _rejected
+      ? Colors.red.shade700
+      : _approved
+          ? Colors.green.shade700
+          : Colors.orange.shade800;
+
   static double _num(dynamic v) =>
       v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
 
@@ -177,19 +210,6 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   }
   static int _int(dynamic v) =>
       v is num ? v.toInt() : (int.tryParse('${v ?? ''}') ?? 0);
-
-  /// The mode a line is on.
-  ///
-  /// It used to be inferred from the rep's own booking where nothing was
-  /// recorded — a line the rep had booked was being served from stock until
-  /// the manager said otherwise. There are no bookings to read now, so an
-  /// unrecorded line is treated as made to order, which is the answer that
-  /// cannot promise stock nobody has checked.
-  String _modeOf(Map<String, dynamic> it) {
-    final stored = '${it['custom_fulfilment_mode'] ?? ''}';
-    if (stored.isNotEmpty && stored != 'null') return stored;
-    return kFulfilNewProduction;
-  }
 
   // ------------------------------------------------------------ actions ---
 
@@ -292,37 +312,35 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
     // the only thing left is the push.
     final escalating = approve && _escalates && !_gmApproved;
 
+    // Asked before anything is written. Kept to a line each: the screen
+    // above already shows what the decision rests on.
+    String gmNote = '';
     if (approve && _gmApproved) {
       final by = _s(_order['custom_gm_approved_by']);
-      final who = by.isEmpty ? '' : ' ($by)';
-      final ok = await _confirm(
-        'Push this order to SAP?',
-        'The general manager$who approved the credit. Pushing sends it to SAP '
-            'at the rates shown and fixes every one of them.',
-      );
+      final ok = await _confirm('Push to SAP?',
+          '${by.isEmpty ? 'The GM' : by} approved the credit. Rates become final.');
       if (ok != true) return;
     } else if (escalating) {
-      final ok = await _confirm(
-        'Send this order to the GM?',
-        '${escalationReason(_customer, _orderTotal)} So the general manager '
-            "decides it — with the rep's commitment and anything you have "
-            'added to it above.',
-      );
-      if (ok != true) return;
+      final note = await _askGmNote();
+      if (note == null) return;
+      gmNote = note;
     } else if (approve) {
       final ok = await _confirm(
-        _isLead ? 'Approve and convert this lead?' : 'Approve this order?',
+        _isLead ? 'Approve and convert?' : 'Approve this order?',
         [
-          if (_isLead)
-            'This turns the lead into a customer and raises the real order for '
-                'production. The stock it is already holding moves across with '
-                'it.',
-          if (_overLimit)
-            'This takes the customer past their credit limit.',
-          'Approving fixes every rate on this order permanently. '
-              'Nobody, including you, can change them afterwards.',
-        ].join('\n\n'),
+          if (_isLead) 'The lead becomes a customer.',
+          if (_overLimit) 'This takes the customer past their credit limit.',
+          'Rates become final.',
+        ].join(' '),
       );
+      if (ok != true) return;
+    } else {
+      final withdrawing = Session.I.isGM && _gmApproved;
+      final ok = await _confirm(
+          withdrawing ? 'Withdraw your approval?' : 'Reject this order?',
+          'It goes back to the rep.',
+          action: withdrawing ? 'Withdraw' : 'Reject',
+          destructive: true);
       if (ok != true) return;
     }
 
@@ -339,16 +357,19 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
         return;
       }
       if (escalating) {
+        // The note first, as the dashboard does: the GM reads the thread when
+        // the order lands, so it has to be there before it does.
+        if (gmNote.isNotEmpty) {
+          await Api.addCreditComment(
+              salesOrder: widget.orderName, comment: gmNote);
+        }
         await Api.escalateSalesOrderPOToGM(widget.orderName);
-        _snack('Sent to the GM — this takes the customer past their credit '
-            'limit.');
+        _snack('Sent to the GM.');
       } else {
         await Api.approveSalesOrderPO(widget.orderName, approve);
         _snack(approve
-            ? (_gmApproved
-                ? 'Pushed to SAP on the GM’s approval — rates are now final.'
-                : 'Approved — rates are now final.')
-            : 'Rejected ${widget.orderName}');
+            ? (_gmApproved ? 'Pushed to SAP.' : 'Approved.')
+            : 'Rejected.');
       }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -357,28 +378,84 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
     }
   }
 
-  Future<bool?> _confirm(String title, String body) => showDialog<bool>(
+  Future<bool?> _confirm(String title, String body,
+          {String action = 'Continue', bool destructive = false}) =>
+      showDialog<bool>(
         context: context,
-        builder: (_) => AlertDialog(
+        builder: (ctx) => AlertDialog(
           title: Text(title),
           content: Text(body),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(context, false),
+                onPressed: () => Navigator.pop(ctx, false),
                 child: const Text('Cancel')),
             FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Continue')),
+                style: destructive
+                    ? FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFFB3261E))
+                    : null,
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(action)),
           ],
         ),
       );
+
+  /// Send to GM, with an optional note for them. Null when cancelled; blank
+  /// when sent without one.
+  Future<String?> _askGmNote() {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Send to GM?'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(escalationReason(_customer, _orderTotal)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl,
+            maxLines: 3,
+            minLines: 2,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+                hintText: 'Note for the GM (optional)',
+                border: OutlineInputBorder()),
+          ),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('Send to GM')),
+        ],
+      ),
+    );
+  }
+
+  /// Takes back a rejection — the dashboard's Undo rejection. The order goes
+  /// back to waiting on the manager.
+  Future<void> _undoReject() async {
+    setState(() => _busy = true);
+    try {
+      await Api.undoOrderRejection(widget.orderName);
+      _snack('Rejection undone.');
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      _snack(humanError(e));
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   // -------------------------------------------------------------- build ---
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Review ${widget.orderName}')),
+      appBar: AppBar(
+        title: Text(widget.orderName),
+        actions: const [SyncAppBarButton(), SizedBox(width: 4)],
+      ),
       body: FutureBuilder<void>(
         future: _init,
         builder: (context, snap) {
@@ -407,9 +484,15 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                     backgroundColor: Color(0xFFE0E7FF),
                     visualDensity: VisualDensity.compact),
             ]),
+            const SizedBox(height: 2),
             Text(
-                'Raised by ${_order['custom_sales_person'] ?? _order['sales_person'] ?? '—'}'
-                '  ·  delivery ${_order['delivery_date'] ?? '—'}',
+                [
+                  if (_s(_order['custom_sap_sales_order']).isNotEmpty)
+                    'SAP ${_s(_order['custom_sap_sales_order'])}',
+                  '${_order['custom_sales_person'] ?? _order['sales_person'] ?? '—'}',
+                  if (_s(_order['delivery_date']).isNotEmpty)
+                    'Delivery ${_s(_order['delivery_date'])}',
+                ].join('  ·  '),
                 style: const TextStyle(fontSize: 12, color: Colors.black54)),
             Text(
                 _isLead
@@ -419,7 +502,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                 style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: _approved ? Colors.green : Colors.orange.shade800)),
+                    color: _statusColour)),
             // How much this order has been churned before it reached approval.
             // An order rewritten five times is worth a second look at, and the
             // manager had no way to tell one from an order raised once.
@@ -444,16 +527,14 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
             ],
             const SizedBox(height: 16),
             const Text('Lines', style: TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 2),
-            const Text(
-                'Choose per line whether it comes out of minimum stock or waits '
-                'for a production run. Changes take effect immediately.',
-                style: TextStyle(fontSize: 12, color: Colors.black54)),
             const SizedBox(height: 4),
             for (final it in _items) _lineCard(it),
             const SizedBox(height: 8),
             _totalsBlock(),
             const SizedBox(height: 8),
+            // Why a locked order is locked was spelled out here. The status
+            // line at the top already says it — approved, with the GM,
+            // cancelled — and the paragraph was clutter on a phone.
             if (canEditOrder(_order))
               OutlinedButton.icon(
                 onPressed: _busy ? null : _edit,
@@ -461,10 +542,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                 label: const Padding(
                     padding: EdgeInsets.all(8),
                     child: Text('Add / Remove / Requantify')),
-              )
-            else
-              Text(orderLockReason(_order),
-                  style: const TextStyle(fontSize: 12, color: Colors.black54)),
+              ),
             const Divider(height: 28),
             _decisionSection(),
             if (_busy)
@@ -498,16 +576,8 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                   style: TextStyle(fontWeight: FontWeight.bold)),
             ]),
             const SizedBox(height: 8),
-            Text(
-              'This lead becomes a customer on approval and is invoiced from '
-              'there, so it needs: ${_missing.join(', ')}.',
-              style: const TextStyle(fontSize: 13, height: 1.4),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Ask the rep to add them on the lead, or edit the lead yourself.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
-            ),
+            Text('Missing on the lead: ${_missing.join(', ')}.',
+                style: const TextStyle(fontSize: 13, height: 1.4)),
           ]),
         ),
       );
@@ -665,7 +735,6 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
     final s = _stock[code];
     final p = _products[code];
     final unit = p?.category.stockUnit ?? 'units';
-    final mode = _modeOf(it);
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -688,30 +757,13 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
               '${it['custom_packing_note'] ?? ''}'
               '${_num(it['custom_rate_per_kg']) > 0 ? '  ·  Rs ${trimQty(_num(it['custom_rate_per_kg']))}/kg' : ''}',
               style: const TextStyle(fontSize: 11, color: Colors.black54)),
-          if (_int(it['custom_rate_approved']) == 1)
-            const Padding(
-              padding: EdgeInsets.only(top: 4),
-              child: Row(children: [
-                Icon(Icons.lock_outline, size: 13, color: Colors.black45),
-                SizedBox(width: 4),
-                Text('Rate final — cannot be changed by anyone',
-                    style: TextStyle(fontSize: 11, color: Colors.black45)),
-              ]),
-            ),
-          if (s == null)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text('Not on the minimum stock list — made to order',
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.black45,
-                      fontStyle: FontStyle.italic)),
-            )
-          else ...[
+          // "Rate final", "made to order" and where the line is served from
+          // were each a line here until 11 Oct 2026. SAP commits stock when
+          // the order reaches it, so none of them was a decision for the
+          // manager, and on a phone they buried the figures that are.
+          if (s != null) ...[
             const Divider(height: 14),
             _stockBreakdown(s, unit, it),
-            const SizedBox(height: 8),
-            _modeToggle(it, mode),
           ],
         ]),
       ),
@@ -793,49 +845,29 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
             ]),
       );
 
-  /// Where this line is being served from — reported, never chosen.
-  ///
-  /// This was a pair of chips the manager picked between, and it was the wrong
-  /// question to put to them. Two orders wanting more of a product than the
-  /// pool holds cannot both be served from it however anybody chooses; the
-  /// stock belongs to whoever booked first, because that booking is already
-  /// holding it. Offering a choice the booking had in effect already made only
-  /// invited a manager to "switch" a line and quietly take stock off a rep who
-  /// had it — and then wonder why the pool no longer added up.
-  ///
-  /// So the line reports what happened. First booking takes the shelf, a claim
-  /// takes the run, everything else is made to order.
-  Widget _modeToggle(Map<String, dynamic> it, String mode) {
-    final (label, colour, icon) = switch (mode) {
-      kFulfilMinimumStock => (
-          'Served from minimum stock',
-          Colors.blue.shade700,
-          Icons.inventory_2_outlined
-        ),
-      kFulfilProductionRun => (
-          'Claimed from a production run — not made yet',
-          const Color(0xFF1A56A8),
-          Icons.precision_manufacturing_outlined
-        ),
-      _ => (
-          'Made to order',
-          Colors.deepPurple,
-          Icons.precision_manufacturing_outlined
-        ),
-    };
-
-    return Row(children: [
-      Icon(icon, size: 14, color: colour),
-      const SizedBox(width: 6),
-      Expanded(
-        child: Text(label,
-            style: TextStyle(
-                fontSize: 11.5, fontWeight: FontWeight.w600, color: colour)),
-      ),
-    ]);
-  }
-
   Widget _decisionSection() {
+    // Cancelled in SAP is the last word on an order; nothing here moves it.
+    if (!_isLead && cancelledInSap(SapOrderState.fromOrder(_order))) {
+      return _note(const Color(0xFFFFEBEE), Icons.block, Colors.red,
+          'Cancelled in SAP.');
+    }
+    // A rejection is undone rather than re-decided, as on the dashboard: the
+    // order goes back to waiting, and the rep may change it first.
+    if (_rejected) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _note(const Color(0xFFFFEBEE), Icons.cancel, Colors.red,
+            'Rejected and returned to the rep.'),
+        if (!_isLead && !Session.I.isGM) ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: _busy ? null : _undoReject,
+            icon: const Icon(Icons.undo),
+            label: const Padding(
+                padding: EdgeInsets.all(8), child: Text('Undo rejection')),
+          ),
+        ],
+      ]);
+    }
     if (_approved) {
       return Container(
         padding: const EdgeInsets.all(12),
@@ -846,7 +878,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
           Icon(Icons.check_circle, color: Colors.green),
           SizedBox(width: 8),
           Expanded(
-              child: Text('Approved. Rates on this order are final.',
+              child: Text('Approved. Rates are final.',
                   style: TextStyle(color: Colors.green))),
         ]),
       );
@@ -879,9 +911,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
             borderRadius: BorderRadius.circular(8)),
         child: Text(
             withGm
-                ? 'With the General Manager. This order takes the customer past '
-                    'their credit limit, so the GM decides it. Anything you add '
-                    'to the commitment above, the GM reads first.'
+                ? 'With the General Manager for credit approval.'
                 : 'Nothing on this order is yours to decide.',
             style: const TextStyle(fontSize: 12.5)),
       );
@@ -895,11 +925,8 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
           decoration: BoxDecoration(
               color: const Color(0xFFFFF3E0),
               borderRadius: BorderRadius.circular(6)),
-          child: const Text(
-              'This order takes the customer past their credit limit. You '
-              'cannot approve it to SAP — send it to the General Manager with '
-              "the rep's commitment, or reject it.",
-              style: TextStyle(fontSize: 12, color: Colors.deepOrange)),
+          child: const Text('Needs GM approval for credit.',
+              style: TextStyle(fontSize: 12.5, color: Colors.deepOrange)),
         ),
       // Back from the GM, approved: said plainly, because the push is now the
       // sales manager's and the GM's name is what they are acting on.
@@ -913,26 +940,11 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
               borderRadius: BorderRadius.circular(6)),
           child: Text(
               isGm
-                  ? 'You approved the credit. It is back with the sales '
-                      'manager to push to SAP. You can still withdraw the '
-                      'approval until they do.'
-                  : '$approvedLine. Read their comments above, then push it '
-                      'to SAP.',
+                  ? 'You approved the credit. The sales manager pushes it to SAP.'
+                  : '$approvedLine.',
               style: const TextStyle(fontSize: 12.5)),
         ),
-      Text(
-          isGm
-              ? (_gmApproved
-                  ? 'Withdrawing rejects the order and closes its condition.'
-                  : 'Approving does not send it to SAP. It goes back to the '
-                      "sales manager to push, and makes the rep's commitment "
-                      'their condition.')
-              : _gmApproved
-                  ? 'Pushing sends it to SAP at the rates the GM approved and '
-                      'fixes every one of them.'
-                  : 'Approving fixes every rate on this order permanently.',
-          style: const TextStyle(fontSize: 12, color: Colors.black54)),
-      const SizedBox(height: 8),
+      const SizedBox(height: 4),
       Row(children: [
         if (forward)
           Expanded(
@@ -965,6 +977,17 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
       ]),
     ]);
   }
+
+  Widget _note(Color bg, IconData icon, Color fg, String text) => Container(
+        padding: const EdgeInsets.all(12),
+        decoration:
+            BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8)),
+        child: Row(children: [
+          Icon(icon, color: fg),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text, style: TextStyle(color: fg))),
+        ]),
+      );
 
   Widget _kv(String k, String v) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 1),

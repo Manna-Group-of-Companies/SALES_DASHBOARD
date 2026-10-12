@@ -7,88 +7,101 @@
 }
 
 /* ------------------------------------------------------------ sidebar --- */
+/* Charcoal, like the reps' app bar, with the logo in its white-ink variant. */
 .sidebar {
-  background: var(--surface);
-  border-right: 1px solid var(--border);
+  background: var(--chrome);
+  color: var(--chrome-text);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
+/* Logo and wordmark centred in the rail — asked for 11 October 2026. */
 .sidebar__brand {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
-  height: var(--header-h);
-  padding: 0 18px;
-  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  padding: 22px 22px 18px;
+  border-bottom: 1px solid var(--chrome-border);
   flex-shrink: 0;
 }
-.sidebar__logo {
-  width: 28px; height: 28px;
-  border-radius: var(--r);
-  background: var(--accent);
-  color: var(--text-inverse);
-  display: grid;
-  place-items: center;
-  font-weight: 700;
-  font-size: 11.5px;
-  letter-spacing: 0.01em;
-  flex-shrink: 0;
-}
-.sidebar__name { font-size: 13.5px; font-weight: 650; line-height: 1.2; letter-spacing: -0.01em; }
+.sidebar__logo-img { display: block; width: 150px; height: auto; }
 .sidebar__sub {
   font-size: 10.5px;
-  font-weight: 500;
-  color: var(--text-3);
+  font-weight: 600;
+  color: var(--chrome-text-2);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.14em;
   line-height: 1.3;
+  /*
+   * No left padding, and the trailing letter-space is compensated for.
+   * `letter-spacing` adds its gap AFTER the last letter too, so a centred
+   * line sits visibly left of centre unless that gap is given back.
+   */
+  text-align: center;
+  text-indent: 0.14em;
 }
 
 .sidebar__nav {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 10px 12px;
+  padding: 8px 12px 12px;
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
+.sidebar__nav::-webkit-scrollbar-thumb { background: var(--chrome-border); border-color: var(--chrome); }
 .sidebar__group {
-  padding: 14px 10px 6px;
+  padding: 16px 10px 6px;
   font-size: 10.5px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-3);
+  letter-spacing: 0.1em;
+  color: var(--chrome-text-2);
 }
 
 .navlink {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 34px;
-  padding: 0 10px;
+  gap: 11px;
+  min-height: 38px;
+  padding: 0 12px;
   border-radius: var(--r);
-  color: var(--text-2);
-  font-size: 13px;
+  color: var(--chrome-text);
+  font-size: 13.5px;
   font-weight: 500;
   text-decoration: none;
-  transition: background 0.1s, color 0.1s;
+  transition: background 0.12s, color 0.12s;
 }
-.navlink + .navlink { margin-top: 1px; }
-.navlink:hover { background: var(--surface-3); color: var(--text); text-decoration: none; }
-.navlink.is-active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-.navlink__icon { width: 16px; height: 16px; flex-shrink: 0; color: var(--text-3); }
-.navlink:hover .navlink__icon { color: var(--text-2); }
+.navlink + .navlink { margin-top: 2px; }
+.navlink:hover { background: var(--chrome-2); color: #fff; text-decoration: none; }
+.navlink.is-active {
+  background: rgb(244 106 33 / 0.16);
+  color: #fff;
+  font-weight: 600;
+}
+.navlink.is-active::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+.navlink__icon { width: 17px; height: 17px; flex-shrink: 0; color: var(--chrome-text-2); }
+.navlink:hover .navlink__icon { color: var(--chrome-text); }
 .navlink.is-active .navlink__icon { color: var(--accent); }
 .navlink__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .navlink__badge {
   min-width: 20px; height: 18px;
   padding: 0 6px;
   border-radius: var(--r-full);
-  background: var(--danger);
-  color: var(--text-inverse);
+  background: var(--accent);
+  color: #fff;
   font-size: 10.5px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -96,12 +109,12 @@
   align-items: center;
   justify-content: center;
 }
-.navlink__badge--muted { background: var(--surface-3); color: var(--text-2); }
-.navlink.is-active .navlink__badge--muted { background: var(--surface); color: var(--accent); }
+.navlink__badge--muted { background: var(--chrome-2); color: var(--chrome-text); }
+.navlink.is-active .navlink__badge--muted { background: rgb(255 255 255 / 0.12); color: #fff; }
 
 .sidebar__footer {
-  border-top: 1px solid var(--border);
-  padding: 10px;
+  border-top: 1px solid var(--chrome-border);
+  padding: 12px;
   flex-shrink: 0;
 }
 
@@ -119,16 +132,20 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 24px;
+  padding: 0 28px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-.header__lead { min-width: 0; }
-/* Where you are, said quietly: the page's own heading is the title. */
+.header__lead { min-width: 0; display: flex; align-items: center; gap: 12px; }
+/* Only when the sidebar has collapsed away — otherwise the sidebar shows it. */
+.header__logo { display: none; height: 26px; width: auto; }
+:root[data-theme='dark'] .header__logo--ink,
+:root:not([data-theme='dark']) .header__logo--white { display: none !important; }
 .header__title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-2);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -152,7 +169,7 @@
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 28px;
 }
 .content--flush { padding: 0; }
 /* An alert placed straight into a page is spaced from whatever follows it. */
@@ -171,20 +188,20 @@
    instead of squeezing the title into a column one word wide. */
 .page-head > .grow { flex: 1 1 260px; }
 .page-head__title {
-  font-size: 20px;
-  font-weight: 650;
+  font-size: 22px;
+  font-weight: 700;
   line-height: 1.25;
-  letter-spacing: -0.018em;
+  letter-spacing: -0.022em;
   color: var(--text);
 }
-.page-head__sub { font-size: 13px; color: var(--text-2); margin-top: 3px; }
+.page-head__sub { font-size: 13px; color: var(--text-3); margin-top: 4px; font-weight: 500; }
 
 /* --------------------------------------------------------------- user --- */
 .avatar {
-  width: 30px; height: 30px;
+  width: 32px; height: 32px;
   border-radius: 50%;
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--accent);
+  color: #fff;
   display: grid;
   place-items: center;
   font-size: 11px;
@@ -208,13 +225,16 @@
 .user-chip__name {
   font-size: 12.5px;
   font-weight: 600;
+  color: #fff;
   line-height: 1.25;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.user-chip__role { font-size: 11px; color: var(--text-3); line-height: 1.3; }
+.user-chip__role { font-size: 11px; color: var(--chrome-text-2); line-height: 1.3; }
 .user-chip__out { flex-shrink: 0; }
+.sidebar .user-chip__out { color: var(--chrome-text-2); }
+.sidebar .user-chip__out:hover:not(:disabled) { background: var(--chrome-2); color: #fff; }
 
 /* ------------------------------------------------------ header buttons --- */
 /* Icon buttons in the header: quiet until pointed at. */
@@ -261,7 +281,33 @@
   max-width: 320px;
 }
 .sync-all__status.is-warn { color: var(--warn); }
-.sync-all .sync-all__btn:disabled { opacity: 1; cursor: progress; color: var(--text-2); }
+/*
+ * Red, deliberately — this is not a destructive button.
+ *
+ * Asked for 11 October 2026. It is the only control that reaches outside
+ * ERPNext, it costs about half a minute of somebody's SAP box, and in the
+ * default button colour it sat in the header looking like a page refresh.
+ * Red is the only thing in this chrome that reads as "this leaves the
+ * building". The same red in both themes: white on #c62828 clears AA either
+ * way, where `--danger` flips to a pale pink in dark mode and would not.
+ */
+.sync-all .sync-all__btn {
+  background: #c62828;
+  border-color: #c62828;
+  color: #fff;
+}
+.sync-all .sync-all__btn:hover:not(:disabled) {
+  background: #a81f1f;
+  border-color: #a81f1f;
+}
+/* Mid-sync it is disabled but must stay legible, not greyed into the header. */
+.sync-all .sync-all__btn:disabled {
+  opacity: 1;
+  cursor: progress;
+  background: #c62828;
+  border-color: #c62828;
+  color: rgb(255 255 255 / 0.85);
+}
 
 .notif-panel {
   position: fixed;
@@ -353,7 +399,7 @@
 .toast--success .toast__icon { color: var(--ok); }
 .toast--warning .toast__icon { color: var(--warn); }
 .toast--critical .toast__icon { color: var(--danger); }
-.toast--info .toast__icon { color: var(--accent); }
+.toast--info .toast__icon { color: var(--accent-text); }
 .toast--success { border-left: 3px solid var(--ok); }
 .toast--warning { border-left: 3px solid var(--warn); }
 .toast--critical { border-left: 3px solid var(--danger); }
@@ -384,10 +430,12 @@
   margin-bottom: 20px;
 }
 .tile {
+  position: relative;
+  overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  padding: 14px 16px;
+  padding: 16px 18px;
   box-shadow: var(--shadow-1);
   min-width: 0;
   transition: border-color 0.12s, box-shadow 0.12s;
@@ -400,9 +448,19 @@
   letter-spacing: 0.06em;
   color: var(--text-3);
 }
+/* A short brand rule above every figure; the tone recolours it. */
+.tile::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--accent);
+}
+.tile.is-alert::before { background: var(--danger); }
+.tile.is-warn::before { background: var(--warn); }
 .tile__value {
-  font-size: 22px;
-  font-weight: 650;
+  font-size: 24px;
+  font-weight: 700;
   line-height: 1.25;
   letter-spacing: -0.02em;
   margin-top: 6px;
@@ -438,8 +496,8 @@
   }
   .sidebar.is-open { transform: none; box-shadow: var(--shadow-3); }
   .header { padding: 0 16px 0 10px; gap: 6px; }
-  /* No sidebar to say where you are, so the bar does. */
-  .header__title { font-size: 14px; font-weight: 600; color: var(--text); }
+  .header__logo { display: block; }
+  .header__title { font-size: 14px; }
   .content { padding: 16px; }
   .ack-banner { padding: 10px 16px; }
   .page-head { margin-bottom: 16px; }

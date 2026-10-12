@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/attendance_rules.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/services/api.dart';
 
@@ -22,9 +23,33 @@ class _RegularizationApprovalsScreenState
     _future = _load();
   }
 
-  Future<List<Map<String, dynamic>>> _load() => widget.forHR
-      ? Api.getPendingRegularizationsForHR()
-      : Api.getPendingRegularizationsForManager();
+  /// The day's real punches, keyed `rep|date`; null when they could not be
+  /// read, so nothing claims a rep punched nothing when nobody checked.
+  Map<String, Map<String, dynamic>>? _logs;
+
+  Future<List<Map<String, dynamic>>> _load() async {
+    final list = await (widget.forHR
+        ? Api.getPendingRegularizationsForHR()
+        : Api.getPendingRegularizationsForManager());
+    try {
+      _logs = await Api.attendanceLogsFor(list);
+    } catch (_) {
+      _logs = null;
+    }
+    return list;
+  }
+
+  String _actual(Map<String, dynamic> r) {
+    final logs = _logs;
+    if (logs == null) return 'Actual:  could not be read';
+    final a = actualPunchOf(logs['${r['sales_person']}|${r['attendance_date']}']);
+    final times = 'In ${_fmt(a.punchIn)}   ·   Out ${_fmt(a.punchOut)}';
+    return switch (a.kind) {
+      ActualPunchKind.none => 'Actual:  nothing punched',
+      ActualPunchKind.complete => 'Actual:  $times',
+      _ => 'Actual:  $times  (${a.label.toLowerCase()})',
+    };
+  }
 
   void _reload() => setState(() {
     _future = _load();
@@ -90,6 +115,9 @@ class _RegularizationApprovalsScreenState
                             style:
                             const TextStyle(fontWeight: FontWeight.bold)),
                         const SizedBox(height: 6),
+                        Text(_actual(r),
+                            style: const TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w600)),
                         Text(
                             'Requested:  In ${_fmt(r['requested_punch_in'])}   ·   Out ${_fmt(r['requested_punch_out'])}',
                             style: const TextStyle(fontSize: 13)),

@@ -93,7 +93,7 @@
 .stock-chip--ok { background: var(--ok-soft); color: var(--ok); border-color: var(--ok-border); }
 .stock-chip--low { background: var(--warn-soft); color: var(--warn); border-color: var(--warn-border); }
 .stock-chip--out { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
-.stock-chip--aged { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-border); }
+.stock-chip--aged { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent-border); }
 
 .reserved-note {
   font-size: 11px;
@@ -722,7 +722,18 @@
 
 /* --- The GM's follow-up: every order they approved, after the approval --- */
 .fu__table td { vertical-align: top; }
-.fu__link { font-weight: 600; }
+/*
+ * The customer's name, in the ordinary text colour.
+ *
+ * It is a link, so it inherited the global accent — a deep burnt orange that
+ * reads as red at 13px — and a red name on every single row announced that
+ * something was wrong with customers where nothing was. Colour in this table
+ * means state: red for overdue and cancelled, green for open and answered.
+ * A name is an identifier, not a state, so it carries no colour. Weight and
+ * the hover underline are the affordance instead. Asked for 11 Oct 2026.
+ */
+.fu__link { font-weight: 600; color: var(--text); }
+.fu__link:hover { color: var(--accent-text); }
 .fu__cond { max-width: 260px; }
 .fu__clip {
   display: -webkit-box;

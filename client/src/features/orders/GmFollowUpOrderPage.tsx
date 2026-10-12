@@ -209,6 +209,9 @@ export function GmFollowUpOrderPage() {
               </Card>
             ) : (
               conditions.map((c) => {
+                // Red for overdue, green for everything else — the same rule
+                // the follow-up list uses, so one condition does not change
+                // colour between the two screens.
                 const late = conditionOverdue(c.status, c.dueDate, today);
                 const closed = c.status === COND_CLOSED;
                 const canClose = canMoveCondition(c.status, 'close', 'gm');
@@ -219,7 +222,7 @@ export function GmFollowUpOrderPage() {
                     title="Condition"
                     className="commit"
                     actions={
-                      <Badge tone={late ? 'danger' : closed ? 'ok' : c.status === COND_AWAITING ? 'info' : 'warn'}>
+                      <Badge tone={late ? 'danger' : 'ok'}>
                         {late ? 'Overdue' : c.status}
                       </Badge>
                     }

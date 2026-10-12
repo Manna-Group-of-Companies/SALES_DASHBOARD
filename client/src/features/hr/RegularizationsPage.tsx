@@ -93,9 +93,6 @@ export function RegularizationsPage() {
       <div className="page-head">
         <div className="grow">
           <div className="page-head__title">Attendance regularizations</div>
-          <div className="page-head__sub">
-            Corrections to missed punches — HR decides only a manager's own
-          </div>
         </div>
         <RefreshButton onClick={load} loading={loading} />
         <Segmented
@@ -243,17 +240,6 @@ export function RegularizationsPage() {
           )}
         </Card>
       )}
-
-      <p className="note" style={{ marginTop: 12 }}>
-        <b>Approving writes the attendance log.</b> The requested punch times replace that day's
-        record — creating it if the rep never punched at all — in the same action. If the write
-        fails you will see the error here rather than a silent half-done approval.
-      </p>
-      <p className="note" style={{ marginTop: 8 }}>
-        A rep's own regularization is decided by their team manager, so it appears here without
-        buttons — visible because HR reconciles the log, not because it needs a decision. Only a
-        manager's own request comes to HR.
-      </p>
     </div>
   );
 }

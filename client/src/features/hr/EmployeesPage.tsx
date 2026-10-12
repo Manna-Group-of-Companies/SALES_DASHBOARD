@@ -101,8 +101,7 @@ export function EmployeesPage() {
         <div className="grow">
           <div className="page-head__title">Sales people</div>
           <div className="page-head__sub">
-            {staff.length} active across {teams.length} {teams.length === 1 ? 'team' : 'teams'} ·
-            attendance shown for this month
+            {staff.length} active · {teams.length} {teams.length === 1 ? 'team' : 'teams'}
           </div>
         </div>
         <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
@@ -211,9 +210,7 @@ export function EmployeesPage() {
 
       {disabled.length > 0 && (
         <p className="note" style={{ marginTop: 12 }}>
-          {disabled.length} disabled record{disabled.length === 1 ? '' : 's'} hidden (
-          {disabled.map((d) => d.name).join(', ')}), along with the “Sales Team” group node — those
-          are not people and would inflate every headcount.
+          {disabled.length} disabled record{disabled.length === 1 ? '' : 's'} hidden
         </p>
       )}
     </div>

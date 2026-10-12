@@ -214,7 +214,6 @@ export function CalendarPage() {
       <div className="page-head">
         <div className="grow">
           <div className="page-head__title">Monthly calendar</div>
-          <div className="page-head__sub">One person, one month — the basis for payroll</div>
         </div>
       </div>
 
@@ -355,10 +354,6 @@ export function CalendarPage() {
               </tbody>
             </table>
           </div>
-          <p className="note" style={{ padding: '8px 14px 12px' }}>
-            Day-by-day punch times, hours and regularisations for all{' '}
-            {staff.length} representatives are in the Excel download above.
-          </p>
         </Card>
       )}
 

@@ -36,7 +36,9 @@
 .btn--primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--text-inverse);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(244 106 33 / 0.25);
 }
 .btn--primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 
@@ -177,7 +179,7 @@
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
 }
-.card__title { font-size: 14px; font-weight: 600; letter-spacing: -0.005em; }
+.card__title { font-size: 14.5px; font-weight: 650; letter-spacing: -0.01em; color: var(--text); }
 .card__body { padding: 16px; }
 .card__body--flush { padding: 0; }
 .card__footer {
@@ -204,11 +206,11 @@
 }
 .badge .icon { width: 12px; height: 12px; }
 .badge--neutral { background: var(--neutral-soft); color: var(--text-2); border-color: var(--border); }
-.badge--info    { background: var(--info-soft);    color: var(--info);   border-color: var(--accent-border); }
+.badge--info    { background: var(--info-soft);    color: var(--info);   border-color: var(--info-border); }
 .badge--ok      { background: var(--ok-soft);      color: var(--ok);     border-color: var(--ok-border); }
 .badge--warn    { background: var(--warn-soft);    color: var(--warn);   border-color: var(--warn-border); }
 .badge--danger  { background: var(--danger-soft);  color: var(--danger); border-color: var(--danger-border); }
-.badge--accent  { background: var(--accent-soft);  color: var(--accent); border-color: var(--accent-border); }
+.badge--accent  { background: var(--accent-soft);  color: var(--accent-text); border-color: var(--accent-border); }
 
 .badge__dot {
   width: 6px; height: 6px;
@@ -218,6 +220,27 @@
 
 /* -------------------------------------------------------------- table --- */
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/*
+ * A table whose column headings stay put while the rows scroll under them.
+ *
+ * `.table th` below has carried `position: sticky` for a long time and it
+ * never once took effect on the customer list. The wrapper there was
+ * `.scroll-x` (`overflow-x: auto`), and a box that scrolls in one axis is a
+ * scroll container in BOTH — so the header was sticking to a box that never
+ * scrolled vertically, and scrolled away with everything else. Giving the
+ * wrapper a real height is the whole fix; the sticky was already there.
+ *
+ * Bounded by viewport height rather than by a pixel offset from the top of
+ * the page. What sits above this table changes — the alerts, the sync panel,
+ * the tiles, the filters all come and go — so any fixed offset would be wrong
+ * on most screens. A short table never reaches the cap and never scrolls.
+ */
+.table-sticky {
+  overflow: auto;
+  max-height: 65vh;
+  -webkit-overflow-scrolling: touch;
+}
 .table {
   width: 100%;
   border-collapse: collapse;
@@ -230,8 +253,8 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-3);
-  padding: 10px 12px;
+  color: var(--text-2);
+  padding: 11px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
   white-space: nowrap;
@@ -250,7 +273,8 @@
 .table tbody tr { transition: background 0.1s; }
 .table tbody tr:last-child td { border-bottom: none; }
 .table tbody tr.is-clickable { cursor: pointer; }
-.table tbody tr.is-clickable:hover { background: var(--surface-2); }
+.table tbody tr:hover { background: var(--surface-2); }
+.table tbody tr.is-clickable:hover { background: var(--accent-soft); }
 .table tbody tr.is-selected { background: var(--accent-soft); }
 .table .right, .table th.right { text-align: right; }
 
@@ -258,7 +282,7 @@
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgb(9 14 20 / 0.45);
+  background: rgb(18 18 20 / 0.5);
   backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
@@ -288,7 +312,8 @@
   padding: 14px 18px;
   border-bottom: 1px solid var(--border);
 }
-.modal__title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.modal__header { box-shadow: inset 0 3px 0 var(--accent); border-radius: var(--r-lg) var(--r-lg) 0 0; }
+.modal__title { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
 .modal__body { padding: 18px; overflow-y: auto; }
 .modal__footer {
   display: flex;
@@ -332,7 +357,7 @@
   transition: color 0.12s, border-color 0.12s;
 }
 .tab:hover { color: var(--text); }
-.tab.is-active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.tab.is-active { color: var(--accent-text); border-bottom-color: var(--accent); font-weight: 600; }
 .tab__count {
   min-width: 18px;
   height: 18px;
@@ -347,7 +372,7 @@
   justify-content: center;
   font-variant-numeric: tabular-nums;
 }
-.tab.is-active .tab__count { background: var(--accent-soft); color: var(--accent); }
+.tab.is-active .tab__count { background: var(--accent-soft); color: var(--accent-text); }
 
 /* ---------------------------------------------------------- empty/load --- */
 .empty {
@@ -390,7 +415,7 @@
 .alert__icon { flex-shrink: 0; display: flex; padding-top: 1px; }
 .alert__title { font-weight: 600; }
 .alert__title + * { margin-top: 2px; }
-.alert--info   { background: var(--info-soft);   border-color: var(--accent-border); }
+.alert--info   { background: var(--info-soft);   border-color: var(--info-border); }
 .alert--ok     { background: var(--ok-soft);     border-color: var(--ok-border); }
 .alert--warn   { background: var(--warn-soft);   border-color: var(--warn-border); }
 .alert--danger { background: var(--danger-soft); border-color: var(--danger-border); }
@@ -460,7 +485,8 @@
 }
 .segmented__btn:hover { color: var(--text); }
 .segmented__btn.is-active {
-  background: var(--surface);
-  color: var(--text);
+  background: var(--chrome);
+  color: #fff;
+  font-weight: 600;
   box-shadow: var(--shadow-1);
 }

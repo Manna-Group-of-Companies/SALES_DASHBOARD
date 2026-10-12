@@ -51,3 +51,8 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // For the AppCompat themes in res/values*/styles.xml.
+    implementation("androidx.appcompat:appcompat:1.7.1")
+}

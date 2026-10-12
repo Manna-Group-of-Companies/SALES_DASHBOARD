@@ -42,6 +42,7 @@ import 'package:manna_field_sales/services/update_service.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/trip_tracker.dart';
+import 'package:manna_field_sales/widgets/trip_recording_indicator.dart';
 
 class HomeDashboard extends StatefulWidget {
   const HomeDashboard({super.key});
@@ -53,18 +54,51 @@ class _HomeDashboardState extends State<HomeDashboard>
     with WidgetsBindingObserver {
   late Future<List<int>> _counts;
   late Future<Map<String, dynamic>?> _activeTrip;
+  // Held in state, not created in build(). A future made inside build() is a
+  // new request on every setState, and its card dropped back to a loading
+  // placeholder each time, which is part of what made this screen flicker.
+  late Future<List<dynamic>> _target;
   Map<String, dynamic>? _att;
+
+  /// True only until today's attendance has been read once. A later refresh
+  /// keeps the card and its button as they are and swaps the data in when it
+  /// arrives. Hiding them on every refresh is what made Punch Out blink.
   bool _attLoading = true;
+  bool _attLoaded = false;
+  bool _attInFlight = false;
   bool _attBusy = false;
+
+  /// Resumes, AppBus bumps and pull-to-refresh all ask for a refresh. Those
+  /// asks are merged so the screen reloads at most once per [_refreshGap],
+  /// however many arrive. A refresh that writes (flushing route points)
+  /// bumps AppBus, and nothing else stops that from triggering another.
+  Timer? _refreshTimer;
+  DateTime _lastRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+  static const Duration _refreshGap = Duration(seconds: 5);
 
   /// Orders typed with no signal and not yet sent. The tile only appears when
   /// there are some — a permanent "Unsent Orders (0)" would train reps to
   /// ignore the one thing on this screen that means work is outstanding.
   int _unsent = 0;
 
+  void _requestRefresh() {
+    if (!mounted || (_refreshTimer?.isActive ?? false)) return;
+    final wait = _refreshGap - DateTime.now().difference(_lastRefresh);
+    if (wait <= Duration.zero) {
+      _refreshAll();
+    } else {
+      _refreshTimer = Timer(wait, _refreshAll);
+    }
+  }
+
   void _refreshAll() {
     if (!mounted) return;
-    setState(() { _counts = _loadCounts(); _activeTrip = _loadActiveTrip(); });
+    _lastRefresh = DateTime.now();
+    setState(() {
+      _counts = _loadCounts();
+      _activeTrip = _loadActiveTrip();
+      _target = _loadTarget();
+    });
     _loadAtt();
     _loadUnsent();
     // Route points recorded without signal are pushed whenever the app is in
@@ -74,7 +108,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     unawaited(TripTracker.I.flushPending());
     // Recording lives in memory, so an app Android killed comes back not
     // recording even though the trip is still Active. Picked up here rather
-    // than waiting for a rep to notice the banner.
+    // than waiting for a rep to notice the indicator in the top bar.
     unawaited(TripTracker.I.resumeIfNeeded());
   }
 
@@ -92,9 +126,11 @@ class _HomeDashboardState extends State<HomeDashboard>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    AppBus.I.addListener(_refreshAll);
+    AppBus.I.addListener(_requestRefresh);
+    _lastRefresh = DateTime.now();
     _counts = _loadCounts();
     _activeTrip = _loadActiveTrip();
+    _target = _loadTarget();
     _loadAtt();
     _loadUnsent();
     _offerUpdate();
@@ -115,33 +151,64 @@ class _HomeDashboardState extends State<HomeDashboard>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    AppBus.I.removeListener(_refreshAll);
+    AppBus.I.removeListener(_requestRefresh);
+    _refreshTimer?.cancel();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refreshAll();
+    if (state == AppLifecycleState.resumed) _requestRefresh();
   }
 
   Future<void> _loadAtt() async {
     final rep = Session.I.salesPerson;
     if (rep == null) {
-      setState(() => _attLoading = false);
+      if (mounted) setState(() => _attLoading = false);
       return;
     }
-    setState(() => _attLoading = true);
+    if (_attInFlight) return;
+    _attInFlight = true;
+    if (!_attLoaded && mounted) setState(() => _attLoading = true);
     try {
       final list = await Api.getTodayAttendance(rep);
-      if (mounted) setState(() => _att = list.isNotEmpty ? list.first : null);
+      if (mounted) {
+        setState(() {
+          _att = list.isNotEmpty ? list.first : null;
+          _attLoaded = true;
+        });
+      }
     } catch (_) {
     } finally {
+      _attInFlight = false;
       if (mounted) setState(() => _attLoading = false);
     }
   }
 
+  Future<List<dynamic>> _loadTarget() => Future.wait([
+        Api.getMyTarget(),
+        Api.myCurrency(),
+        Api.getMonthSales(Session.I.salesPerson ?? '__none__'),
+      ]);
+
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+  /// A location refusal the rep can only undo in Android's settings. Once
+  /// "Don't allow" has been chosen twice, Android stops showing the dialog, so
+  /// the message points at the one place that still works.
+  void _snackError(Object e) {
+    if (!mounted) return;
+    final msg = humanError(e);
+    if (!msg.toLowerCase().contains('location permission')) return _snack(msg);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: const Text('Location is not allowed for this app. '
+          'Allow it in Settings → Permissions → Location.'),
+      duration: const Duration(seconds: 8),
+      action: SnackBarAction(
+          label: 'Settings', onPressed: TripTracker.I.openLocationSettings),
+    ));
+  }
 
   Future<void> _punchIn() async {
     final rep = Session.I.salesPerson;
@@ -156,7 +223,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     } on AttendanceWindowError catch (e) {
       await _outsidePunchHours(e);
     } catch (e) {
-      _snack(humanError(e));
+      _snackError(e);
     } finally {
       if (mounted) setState(() => _attBusy = false);
     }
@@ -182,7 +249,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     } on AttendanceWindowError catch (e) {
       await _outsidePunchHours(e);
     } catch (e) {
-      _snack(humanError(e));
+      _snackError(e);
     } finally {
       if (mounted) setState(() => _attBusy = false);
     }
@@ -222,131 +289,6 @@ class _HomeDashboardState extends State<HomeDashboard>
     } catch (_) {
       return null;
     }
-  }
-
-  Widget _routeRecordingBanner() {
-    return FutureBuilder<Map<String, dynamic>?>(
-      future: _activeTrip,
-      builder: (context, snap) {
-        final trip = snap.data;
-        if (trip == null) return const SizedBox.shrink();
-        final tripName = '${trip['name']}';
-        final purpose = '${trip['purpose'] ?? tripName}';
-        return ValueListenableBuilder<String?>(
-          valueListenable: TripTracker.I.activeTrip,
-          builder: (context, active, _) {
-            final recording = active == tripName;
-            if (recording) {
-              // Recording on "while using the app" logs the route only while
-              // Android feels like it. Said here, while the trip is running
-              // and can still be fixed, rather than left for the rep to work
-              // out from an empty route this evening.
-              final partial = TripTracker.I.needsAlwaysPermission;
-              return Card(
-                color: partial
-                    ? const Color(0xFFFFF3E0)
-                    : const Color(0xFFE8F5E9),
-                child: Column(children: [
-                  ListTile(
-                    leading: Icon(Icons.fiber_manual_record,
-                        color: partial ? const Color(0xFFD97706) : Colors.red),
-                    title: const Text('Recording trip route',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text('$purpose · a point about every 5 min'),
-                  ),
-                  if (partial)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                                'Location is set to "while using the app", so '
-                                'the route may stop being recorded once your '
-                                'screen is off. Set it to "Allow all the time" '
-                                'to record the whole trip.',
-                                style: TextStyle(
-                                    fontSize: 12, color: Color(0xFF92400E))),
-                            const SizedBox(height: 6),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: OutlinedButton.icon(
-                                onPressed: () =>
-                                    TripTracker.I.openLocationSettings(),
-                                icon: const Icon(Icons.settings, size: 16),
-                                label: const Text('Open settings'),
-                              ),
-                            ),
-                          ]),
-                    ),
-                ]),
-              );
-            }
-            return Card(
-              color: const Color(0xFFFFF3E0),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(children: const [
-                        Icon(Icons.location_off, color: Color(0xFFD97706)),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                              'Route recording is OFF for your active trip',
-                              style: TextStyle(fontWeight: FontWeight.bold)),
-                        ),
-                      ]),
-                      const SizedBox(height: 4),
-                      Text(
-                          '$purpose — points aren\'t being logged right now. Tap resume to keep recording the route.',
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.black54)),
-                      const SizedBox(height: 8),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: FilledButton.icon(
-                          onPressed: () async {
-                            final err = await TripTracker.I.start(tripName);
-                            if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                    content:
-                                    Text(err ?? 'Recording resumed.')));
-                          },
-                          icon: const Icon(Icons.play_arrow),
-                          label: const Text('Resume recording'),
-                        ),
-                      ),
-                    ]),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _missedPunchBanner() {
-    return FutureBuilder<Map<String, dynamic>?>(
-      future: Api.getMissedPunchYesterday(),
-      builder: (context, snap) {
-        final miss = snap.data;
-        if (miss == null) return const SizedBox.shrink();
-        return Card(
-          color: const Color(0xFFFFF7ED),
-          child: ListTile(
-            leading: const Icon(Icons.warning_amber, color: Color(0xFFF59E0B)),
-            title: const Text('Missed punch-out yesterday',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: Text(
-                'You punched in on ${miss['attendance_date']} but never punched out. Tap to regularize.'),
-            onTap: () => _go(const AttendanceCalendarScreen()),
-          ),
-        );
-      },
-    );
   }
 
   Widget _attendanceCard() {
@@ -414,12 +356,17 @@ class _HomeDashboardState extends State<HomeDashboard>
 
   Widget _myTargetCard() {
     return FutureBuilder<List<dynamic>>(
-      future: Future.wait([
-        Api.getMyTarget(),
-        Api.myCurrency(),
-        Api.getMonthSales(Session.I.salesPerson ?? '__none__'),
-      ]),
+      future: _target,
       builder: (context, snap) {
+        if (snap.hasError) {
+          return const Card(
+            child: ListTile(
+              leading: Icon(Icons.flag, color: Colors.grey),
+              title: Text('My Sales Target'),
+              subtitle: Text('Could not load the target. Pull down to retry.'),
+            ),
+          );
+        }
         if (!snap.hasData) {
           return const Card(
             child: Padding(
@@ -524,9 +471,8 @@ class _HomeDashboardState extends State<HomeDashboard>
   Widget build(BuildContext context) {
     final isRep = Session.I.salesPerson != null;
     final tiles = <_Tile>[
-      if (Session.I.isManager)
-        _Tile('Manager', Icons.verified_user,
-                () => _go(const ManagerDashboardScreen())),
+      // A Manager tile sat here too until 11 Oct 2026. The black bar at the
+      // top is the one way in; two was clutter.
       if (Session.I.isGM)
         _Tile('GM Approvals', Icons.gavel,
                 () => _go(const GMApprovalsScreen())),
@@ -583,6 +529,11 @@ class _HomeDashboardState extends State<HomeDashboard>
             ? 'Manna Field Sales'
             : 'Manna · ${Session.I.salesPersonLabel}'),
         actions: [
+          if (isRep)
+            FutureBuilder<Map<String, dynamic>?>(
+              future: _activeTrip,
+              builder: (_, snap) => TripRecordingIndicator(trip: snap.data),
+            ),
           IconButton(
               icon: const Icon(Icons.logout),
               tooltip: 'Logout',
@@ -591,8 +542,8 @@ class _HomeDashboardState extends State<HomeDashboard>
       ),
       body: RefreshIndicator(
         onRefresh: () async {
-          setState(() { _counts = _loadCounts(); _activeTrip = _loadActiveTrip(); });
-          await _loadAtt();
+          _refreshTimer?.cancel();
+          _refreshAll();
         },
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -606,7 +557,7 @@ class _HomeDashboardState extends State<HomeDashboard>
                   title: Text('Manager · ${Session.I.managedTeam} Team',
                       style: const TextStyle(
                           color: Colors.white, fontWeight: FontWeight.bold)),
-                  subtitle: const Text('Approvals & targets',
+                  subtitle: const Text('Team orders & approvals',
                       style: TextStyle(color: Colors.white70)),
                   trailing:
                   const Icon(Icons.chevron_right, color: Colors.white),
@@ -706,8 +657,6 @@ class _HomeDashboardState extends State<HomeDashboard>
                 ),
               ),
             if (Session.I.isHR) const SizedBox(height: 16),
-            if (isRep) _missedPunchBanner(),
-            if (isRep) _routeRecordingBanner(),
             if (isRep) _attendanceCard(),
             if (isRep) const SizedBox(height: 12),
             if (isRep)

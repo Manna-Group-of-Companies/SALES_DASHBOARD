@@ -111,10 +111,17 @@ export function GmFollowUpPage() {
       )}
 
       <div className="tiles" style={{ marginBottom: 14 }}>
+        {/*
+          Green, not amber. A rep who has answered has done what was asked
+          of them, and amber here put a warning colour on the one tile that
+          is good news. Only Overdue goes red, and it goes red only when
+          there is actually something overdue — a red tile reading 0 is how
+          a board teaches people to stop looking at it.
+        */}
         <Tile
           label={FOLLOW_UP_LABEL.answered}
           value={String(count('answered'))}
-          tone={count('answered') ? 'warn' : 'ok'}
+          tone="ok"
           onClick={() => setFilter('answered')}
         />
         <Tile
@@ -128,9 +135,12 @@ export function GmFollowUpPage() {
           value={String(count('awaiting_push'))}
           onClick={() => setFilter('awaiting_push')}
         />
+        {/* A condition that is live and inside its date is the healthy
+            state, not a pending problem. */}
         <Tile
           label={FOLLOW_UP_LABEL.open}
           value={String(count('open'))}
+          tone="ok"
           onClick={() => setFilter('open')}
         />
       </div>
@@ -211,17 +221,24 @@ export function GmFollowUpPage() {
                           <>
                             <div className="fu__clip">{c.condition}</div>
                             <div className="tiny">
-                              <Badge
-                                tone={
-                                  late
-                                    ? 'danger'
-                                    : c.status === COND_CLOSED
-                                      ? 'ok'
-                                      : c.status === 'Awaiting Review'
-                                        ? 'info'
-                                        : 'warn'
-                                }
-                              >
+                              {/*
+                                Red means one thing here: the condition has
+                                run past its due date and somebody must
+                                chase it. Everything else is green — a live
+                                condition inside its date is fine, and a rep
+                                who has answered has done their part.
+
+                                Open and Awaiting Review were amber and blue
+                                until 11 October 2026. Three colours for
+                                three states that are all "nothing wrong"
+                                taught the GM to read the colour as
+                                decoration, which is exactly when the red
+                                one stops being noticed. The badge TEXT
+                                still names the state, and the row's blue
+                                edge and bucket label still single out the
+                                answers waiting on the GM.
+                              */}
+                              <Badge tone={late ? 'danger' : 'ok'}>
                                 {late ? 'Overdue' : c.status}
                               </Badge>{' '}
                               {c.dueDate ? `due ${formatDate(c.dueDate)}` : 'no due date'}

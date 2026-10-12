@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/app_lock.dart';
 import 'package:manna_field_sales/core/auth_store.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/auth/update_required_screen.dart';
@@ -63,6 +64,8 @@ class _LoginScreenState extends State<LoginScreen> {
           builder: (_) => UpdateRequiredScreen(gate: gate, onRetry: _goHome)));
       return;
     }
+    // Everybody opens on the field home, managers included: a sales manager
+    // works the field too, and reaches the team through the Manager bar.
     Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const HomeDashboard()));
   }
@@ -89,6 +92,10 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) setState(() => _restoring = false);
       return;
     }
+    // A saved login is about to be used without the rep typing anything, so
+    // the phone's fingerprint or screen lock has to vouch for them first. The
+    // session is restored behind the lock meanwhile, so unlocking is quick.
+    AppLock.lock();
     await _resume();
   }
 
@@ -96,6 +103,7 @@ class _LoginScreenState extends State<LoginScreen> {
   /// case besides logout where we are allowed to show it.
   Future<void> _useAnotherAccount() async {
     _abandon = true;
+    AppLock.release();
     await AuthStore.clear();
     _password.clear();
     if (mounted) {
@@ -131,7 +139,9 @@ class _LoginScreenState extends State<LoginScreen> {
       }
       if (state == AuthState.rejected) {
         // Stop retrying a credential the server refuses, and make the rep's
-        // next login the one that re-establishes it.
+        // next login the one that re-establishes it. Nothing left to guard,
+        // and the rep is about to type the password anyway.
+        AppLock.release();
         await AuthStore.clear();
         if (mounted) {
           setState(() {

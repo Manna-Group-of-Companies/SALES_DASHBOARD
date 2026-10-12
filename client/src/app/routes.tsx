@@ -24,14 +24,12 @@ import { TakeOrderPage } from '@/features/orders/TakeOrderPage';
 import { OrdersListPage } from '@/features/orders/OrdersListPage';
 import { OrderDetailPage } from '@/features/orders/OrderDetailPage';
 import { LeadOrderPage } from '@/features/orders/LeadOrderPage';
-import { CombinedOrdersPage } from '@/features/orders/CombinedOrdersPage';
 import { GmQueuePage } from '@/features/orders/GmQueuePage';
 import { GmOrderPage } from '@/features/orders/GmOrderPage';
 import { GmFollowUpPage } from '@/features/orders/GmFollowUpPage';
 import { RatesPage } from '@/features/rates/RatesPage';
 import { GmFollowUpOrderPage } from '@/features/orders/GmFollowUpOrderPage';
 import { MannaTreadsOrdersPage } from '@/features/accounts/MannaTreadsOrdersPage';
-import { ApprovalsInboxPage } from '@/features/approvals/ApprovalsInboxPage';
 import { LocationVerificationPage } from '@/features/approvals/LocationVerificationPage';
 import { TeamRegularizationsPage } from '@/features/approvals/TeamRegularizationsPage';
 import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
@@ -195,6 +193,17 @@ export function AppRoutes() {
             </TeamRoute>
           }
         />
+        {/*
+          Team Analysis (11 Oct 2026) is built but hidden: it was shown on
+          invented figures, and is only worth having once SAP's sales history
+          reaches ERPNext. The page, its sample data and the domain module are
+          untouched in features/analysis/ and domain/repAnalysis.ts. To bring it
+          back, render <RepAnalysisPage /> here inside
+          <TeamRoute screen="customers"> (a manager who may see their team's
+          customers may see what those customers bought), swap sampleData.ts
+          for a real loader, and restore its nav item in AppShell.tsx.
+        */}
+        <Route path="analysis" element={<Navigate to="/" replace />} />
         <Route
           path="leads"
           element={
@@ -242,14 +251,13 @@ export function AppRoutes() {
             </TeamRoute>
           }
         />
-        <Route
-          path="combined"
-          element={
-            <TeamRoute screen="combined">
-              <CombinedOrdersPage />
-            </TeamRoute>
-          }
-        />
+        {/*
+          Removed 11 October 2026. Redirected rather than deleted: both were
+          in the sidebar for weeks and are sitting in people's bookmarks and
+          browser history. A dead path would bounce them to their role home
+          with no explanation; this lands them where the work actually moved.
+        */}
+        <Route path="combined" element={<Navigate to="/orders" replace />} />
 
         <Route
           path="gm"
@@ -339,14 +347,8 @@ export function AppRoutes() {
           }
         />
 
-        <Route
-          path="approvals"
-          element={
-            <TeamRoute screen="approvals">
-              <ApprovalsInboxPage />
-            </TeamRoute>
-          }
-        />
+        {/* Sites are verified in Location Checks now — see the note above. */}
+        <Route path="approvals" element={<Navigate to="/locations" replace />} />
 
         <Route
           path="production"
@@ -460,10 +462,12 @@ export function AppRoutes() {
           }
         />
 
+        {/* Stock manager only since 11 October 2026 — nothing is imported
+            from the sales side. */}
         <Route
           path="import"
           element={
-            <RoleRoute allow={['sales_manager', 'stock_manager']}>
+            <RoleRoute allow={['stock_manager']}>
               <Suspense fallback={<div className="muted">Loading importer…</div>}>
                 <ImportPage />
               </Suspense>

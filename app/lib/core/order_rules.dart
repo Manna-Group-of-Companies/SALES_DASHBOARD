@@ -301,8 +301,12 @@ bool orderApproved(Map<String, dynamic> order) =>
 bool orderSignedOff(Map<String, dynamic> order, {required bool isLead}) {
   if ((order['custom_rate_approved'] ?? 0) == 1) return true;
   if (!isLead) return orderApproved(order);
-  const done = {'Approved', 'PO Approved - Ready for SAP'};
-  return done.contains('${order['status'] ?? ''}');
+  // `Converted` is what the dashboard writes when it approves a lead order;
+  // the phone writes `Approved`. Missing it (until 11 Oct 2026) left a lead
+  // order approved on the web open to a second approval here, which raises a
+  // second Sales Order. The twin is `leadOrderApproved` in orderStatus.ts.
+  const done = {'Approved', 'PO Approved - Ready for SAP', 'Converted'};
+  return done.contains('${order['status'] ?? ''}'.trim());
 }
 
 /// True once the sales manager has approved the order's rates, which is what

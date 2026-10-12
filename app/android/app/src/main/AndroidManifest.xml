@@ -15,6 +15,9 @@
       app files; that prompt cannot be skipped outside the Play Store.
     -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+
+    <!-- Fingerprint / face unlock in place of typing the password (lib/core/app_lock.dart). -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     
     <application
         android:label="manna_field_sales"

@@ -119,9 +119,6 @@ export function TripsPage() {
       <div className="page-head">
         <div className="grow">
           <div className="page-head__title">Trips</div>
-          <div className="page-head__sub">
-            Every representative · open one to see its route and GPS log
-          </div>
         </div>
         <div className="cal__nav">
           <ExportButton
@@ -261,13 +258,6 @@ export function TripsPage() {
             </table>
           </div>
         </Card>
-      )}
-
-      {!loading && rows.length > 0 && (
-        <p className="note" style={{ marginTop: 12 }}>
-          Open a trip to see its route, the GPS points the phone actually logged, and how the
-          claimed distance compares with the places the rep checked in at.
-        </p>
       )}
     </div>
   );

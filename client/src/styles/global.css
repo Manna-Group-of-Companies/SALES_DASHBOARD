@@ -1,6 +1,10 @@
 /* ==========================================================================
    Manna Treads — Sales module design tokens and base styles.
 
+   Brand (11 Oct 2026): the Manna Group logo's orange and charcoal, the same
+   pair the reps' app uses (#F46A21 primary, #3F3F3F bar). Orange is the
+   accent and the only fill colour for actions; charcoal carries the chrome.
+
    Dense-but-legible: reps key orders on a laptop in a workshop office, so rows
    are compact, numeric fields are tabular, and every interactive target stays
    at least 32px tall. One accent colour, and status colour is reserved strictly
@@ -24,24 +28,34 @@
   color-scheme: light;
 
   /* --- surfaces ------------------------------------------------------- */
-  --bg: #f4f6f8;
+  --bg: #f5f5f6;
   --surface: #ffffff;
-  --surface-2: #f8fafc;
-  --surface-3: #eef2f6;
-  --border: #dbe2ea;
-  --border-strong: #c3ced9;
+  --surface-2: #fafafa;
+  --surface-3: #f0f0f1;
+  --border: #e4e4e7;
+  --border-strong: #cfcfd4;
 
   /* --- text ------------------------------------------------------------ */
-  --text: #16212e;
-  --text-2: #55647a;
-  --text-3: #76869b;
+  --text: #1f1f22;
+  --text-2: #5a5a62;
+  --text-3: #85858d;
   --text-inverse: #ffffff;
 
   /* --- brand ----------------------------------------------------------- */
-  --accent: #1f5fbf;
-  --accent-hover: #1a51a3;
-  --accent-soft: #e8f0fc;
-  --accent-border: #b9d0f2;
+  /* Fills (buttons, bars, focus rings) use --accent; orange *text* on white
+     uses the deeper --accent-text, which keeps small type readable. */
+  --accent: #f46a21;
+  --accent-hover: #dc5a14;
+  --accent-text: #c4500f;
+  --accent-soft: #fff1e8;
+  --accent-border: #fbcfb3;
+
+  /* The charcoal of the logo's "NN" — the sidebar and other chrome. */
+  --chrome: #2b2b2e;
+  --chrome-2: #36363a;
+  --chrome-border: #424247;
+  --chrome-text: #d4d4d8;
+  --chrome-text-2: #8e8e96;
 
   /* --- status ---------------------------------------------------------- */
   --ok: #16794b;
@@ -58,6 +72,7 @@
 
   --info: #1f5fbf;
   --info-soft: #e8f0fc;
+  --info-border: #b9d0f2;
 
   --neutral: #55647a;
   --neutral-soft: #eef2f6;
@@ -84,12 +99,12 @@
   --r-lg: 11px;
   --r-full: 999px;
 
-  --shadow-1: 0 1px 2px rgb(16 24 40 / 0.05);
-  --shadow-2: 0 4px 8px -2px rgb(16 24 40 / 0.08), 0 2px 4px -2px rgb(16 24 40 / 0.05);
-  --shadow-3: 0 12px 24px -6px rgb(16 24 40 / 0.14), 0 4px 8px -4px rgb(16 24 40 / 0.08);
+  --shadow-1: 0 1px 2px rgb(20 20 24 / 0.05);
+  --shadow-2: 0 4px 8px -2px rgb(20 20 24 / 0.08), 0 2px 4px -2px rgb(20 20 24 / 0.05);
+  --shadow-3: 0 12px 24px -6px rgb(20 20 24 / 0.16), 0 4px 8px -4px rgb(20 20 24 / 0.08);
 
-  --sidebar-w: 232px;
-  --header-h: 56px;
+  --sidebar-w: 244px;
+  --header-h: 60px;
 
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --mono: 'SF Mono', 'Cascadia Mono', 'Roboto Mono', Consolas, monospace;
@@ -103,22 +118,29 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --bg: #0e1319;
-  --surface: #161d26;
-  --surface-2: #1b232e;
-  --surface-3: #212b38;
-  --border: #2a3644;
-  --border-strong: #3b4a5c;
+  --bg: #121214;
+  --surface: #1b1b1e;
+  --surface-2: #202024;
+  --surface-3: #27272b;
+  --border: #303035;
+  --border-strong: #45454b;
 
-  --text: #e6edf5;
-  --text-2: #9fb0c4;
-  --text-3: #6c7f94;
-  --text-inverse: #0e1319;
+  --text: #ededef;
+  --text-2: #a8a8b0;
+  --text-3: #75757d;
+  --text-inverse: #121214;
 
-  --accent: #5b9bf5;
-  --accent-hover: #77aef8;
-  --accent-soft: #16283f;
-  --accent-border: #2c4d78;
+  --accent: #ff7a33;
+  --accent-hover: #ff8f52;
+  --accent-text: #ff9a5c;
+  --accent-soft: #33200f;
+  --accent-border: #6b3a1a;
+
+  --chrome: #0d0d0f;
+  --chrome-2: #1d1d21;
+  --chrome-border: #26262b;
+  --chrome-text: #d4d4d8;
+  --chrome-text-2: #85858d;
 
   --ok: #4ec78d;
   --ok-soft: #11291f;
@@ -134,6 +156,7 @@
 
   --info: #5b9bf5;
   --info-soft: #16283f;
+  --info-border: #2c4d78;
 
   --neutral: #9fb0c4;
   --neutral-soft: #212b38;
@@ -191,7 +214,7 @@ h3 { font-size: 14px; }
 p { margin: 0; }
 
 a {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: none;
 }
 a:hover { text-decoration: underline; }

@@ -18,7 +18,13 @@ import { useEffect, useMemo, useState } from 'react';
 import type { SalesCustomer, SalesPerson, SalesRoute } from '@/domain/types';
 import { activeSalesPeople } from '@/domain/attendance';
 import { creditBreached, hasRoute, scopeFor, teamOf, NO_TEAM_MESSAGE } from '@/domain/sales';
-import { agingOf, bucketsOf, AGING_NO_DATA } from '@/domain/credit';
+import {
+  agingOf,
+  bucketsOf,
+  overduePastTerms,
+  AGING_NO_DATA,
+  OVERDUE_TOLERANCE,
+} from '@/domain/credit';
 import { canAssignOwner, isPooledUnit, visibleReps, type Person } from '@/domain/visibility';
 import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
@@ -26,7 +32,6 @@ import { selectUser } from '@/store/selectors';
 import { Alert, Badge, Card, Empty, Input, Segmented, Select } from '@/components/ui';
 import { RouteCell } from './RouteCell';
 import { OwnerCell } from './OwnerCell';
-import { SapSyncPanel } from './SapSyncPanel';
 import { money } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
@@ -158,7 +163,7 @@ export function CustomersPage() {
     () => ({
       total: rows.length,
       noRoute: rows.filter((c) => !hasRoute(c.route)).length,
-      noRep: rows.filter((c) => !c.assignedRep).length,
+      pastTerms: rows.filter((c) => overduePastTerms(rowOf(c)) >= OVERDUE_TOLERANCE).length,
       overLimit: rows.filter((c) => creditBreached(c.outstanding, c.creditLimit)).length,
       owed: rows.reduce((s, c) => s + c.outstanding, 0),
     }),
@@ -188,22 +193,17 @@ export function CustomersPage() {
         </Alert>
       )}
 
-      {/* Above the figures it refreshes, so "these are stale" and the way to
-          fix it are the same glance. */}
-      <div style={{ marginBottom: 14 }}>
-        <SapSyncPanel />
-      </div>
-
       <div className="tiles" style={{ marginBottom: 14 }}>
         <Tile
           label="No route"
           value={String(stats.noRoute)}
           tone={stats.noRoute ? 'warn' : undefined}
         />
+        {/* Past their SAP payment terms — what escalates an order for approval. */}
         <Tile
-          label="Unassigned"
-          value={String(stats.noRep)}
-          tone={stats.noRep ? 'warn' : undefined}
+          label="Overdue past terms"
+          value={String(stats.pastTerms)}
+          tone={stats.pastTerms ? 'warn' : undefined}
         />
         <Tile
           label="Over credit limit"
@@ -248,7 +248,7 @@ export function CustomersPage() {
           {rows.length === 0 ? (
             <Empty icon="—" title="No customers" />
           ) : (
-            <div className="scroll-x">
+            <div className="table-sticky">
               <table className="table">
                 <thead>
                   <tr>
@@ -311,12 +311,19 @@ export function CustomersPage() {
                           zeros beside a real balance reads as "nothing is
                           overdue", which is a claim nobody has the data for.
                         */}
+                        {/*
+                          The 90+ column is NOT reddened here, though
+                          `b.overdue` still marks it and the customer detail
+                          view still colours its box. Asked for 11 October
+                          2026: in a list of 600 customers a red column is
+                          permanent wallpaper, and it competed with the one
+                          figure that should carry the alarm — the outstanding
+                          total, which turns red only when it breaks the
+                          credit limit. One red per row, and it means
+                          something.
+                        */}
                         {bucketsOf(agingOf(rowOf(c))).map((b) => (
-                          <td
-                            key={b.key}
-                            className={`right num${b.overdue ? ' cell--overdue' : ''}`}
-                            title={b.label}
-                          >
+                          <td key={b.key} className="right num" title={b.label}>
                             {agingOf(rowOf(c)).bucketsKnown ? (
                               money(b.amount, 0)
                             ) : (

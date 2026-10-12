@@ -560,6 +560,37 @@ function saveSession(user: User): void {
 }
 
 /**
+ * Is the restored session still a real one?
+ *
+ * `restoreSession` replays the signed-in user out of localStorage so a refresh
+ * costs no round-trip, but the Frappe `sid` cookie expires on its own schedule
+ * and nothing was checking it. The result, found 11 October 2026: a dashboard
+ * that looked signed in — the sidebar named the user and their role — while
+ * every read came back 403. The screen filled with "Insufficient Permission
+ * for Sales Person" and zero customers, which reads as a broken ERPNext
+ * permission and sent two people looking at Role Permissions Manager. The
+ * session had simply lapsed.
+ *
+ * FAILS OPEN ON A NETWORK ERROR, CLOSED ONLY ON AN AUTHORITATIVE ANSWER.
+ * This is a PWA; someone on a dead connection keeps their cached shell rather
+ * than being thrown to a login page they cannot complete. But Frappe
+ * answering "you are Guest" is not a hiccup, and neither is a 401/403 on this
+ * endpoint — those end the session.
+ */
+async function validateSession(): Promise<boolean> {
+  if (USE_MOCK) return true;
+  try {
+    const { data } = await http.get<{ message: string }>(METHOD.loggedUser);
+    const who = (data?.message ?? '').trim();
+    return who.length > 0 && who !== 'Guest';
+  } catch (e) {
+    const { status } = toApiError(e);
+    // 0 is "could not reach the server at all" — keep the cached user.
+    return !(status === 401 || status === 403);
+  }
+}
+
+/**
  * Resolve the logged-in Frappe user into an app user.
  *
  * This deliberately mirrors `resolveMySalesPerson` + `resolveManagerContext` in
@@ -6173,6 +6204,7 @@ export const Api = {
     login,
     logout,
     restoreSession,
+    validateSession,
   },
 
   catalog: {

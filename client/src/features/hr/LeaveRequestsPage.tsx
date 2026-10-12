@@ -113,9 +113,6 @@ export function LeaveRequestsPage() {
       <div className="page-head">
         <div className="grow">
           <div className="page-head__title">Leave requests</div>
-          <div className="page-head__sub">
-            Manager and HR approve independently — the day is granted only when both have
-          </div>
         </div>
         <RefreshButton onClick={load} loading={loading} />
         <Segmented
@@ -260,12 +257,6 @@ export function LeaveRequestsPage() {
           )}
         </Card>
       )}
-
-      <p className="note" style={{ marginTop: 12 }}>
-        Approving here records HR's decision only. If the manager has not approved yet the request
-        stays open and the rep does not have the day — the two columns above show which side is
-        outstanding.
-      </p>
     </div>
   );
 }
