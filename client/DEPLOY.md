@@ -1,7 +1,41 @@
 # Hosting the dashboard
 
-The code lives on GitHub; **Cloudflare Pages** builds and serves it. Push to
-`main` and the site redeploys.
+The code lives on GitHub; **Cloudflare Pages** serves it. Push to `main` and
+`.github/workflows/deploy-dashboard.yml` builds it and deploys it with
+`wrangler pages deploy`, to `https://manna-sales-dashboard.pages.dev`.
+
+## Why GitHub Actions and not Cloudflare's Git integration
+
+On 17 October 2026 connecting this repository to a Pages project on the Manna
+Group Cloudflare account was refused: *"This repository is being used for a
+Cloudflare Pages project on a different Cloudflare account."* Cloudflare lets a
+repository feed one account only, and nobody could say which account holds the
+earlier connection. A Direct Upload from Actions has no such restriction and
+serves exactly the same `dist/` and `functions/`.
+
+Do not set this up as a **Worker** either. A Git-connected Worker runs
+`npx wrangler deploy`, which finds no Worker config, stops at an interactive
+"Do you want to modify these settings?" prompt nobody can answer, and hangs
+until the build times out at ~30 minutes. Pages Functions (`functions/`) are
+also not served by a Worker, so the login would not work even if it deployed.
+
+### The one secret
+
+The workflow needs `CLOUDFLARE_API_TOKEN` in the repository's Actions secrets:
+
+1. Cloudflare dashboard → profile icon → **My Profile → API Tokens → Create
+   Token → Create Custom Token**.
+2. Permissions: **Account · Cloudflare Pages · Edit**. Account Resources:
+   **Include · Manna Group**. Nothing else.
+3. GitHub → repository **Settings → Secrets and variables → Actions → New
+   repository secret**, name `CLOUDFLARE_API_TOKEN`, paste the token.
+
+The account ID is in the workflow itself; it is not a secret. `ERP_URL` is in
+`client/wrangler.toml`, which overrides anything set in the Cloudflare
+dashboard on each deploy.
+
+The rest of this file describes the original Git-integration setup. The
+build settings and the reasoning in it still hold.
 
 ## Why not GitHub Pages
 
