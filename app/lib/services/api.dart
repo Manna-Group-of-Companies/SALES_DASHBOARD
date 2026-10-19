@@ -1318,17 +1318,14 @@ class Api {
   }
 
   // Rep currency: AED for the UAE (Renjith) team, INR otherwise.
-  static Future<String> myCurrency() async {
-    final me = Session.I.salesPerson;
-    if (me == null) return 'INR';
-    final sp = await _list('Sales Person',
-        fields: '["custom_team_manager"]',
-        filters: '[["name","=","$me"]]',
-        limit: 1);
-    final mgr =
-    sp.isNotEmpty ? (sp.first['custom_team_manager'] ?? '').toString() : '';
-    return mgr == 'Renjith' ? 'AED' : 'INR';
-  }
+  //
+  // Read from the session, not re-queried. `custom_team_manager` is resolved
+  // once at sign-in (resolveMySalesPerson) into `Session.I.teamManager`, and
+  // this used to fetch the same field again on every home-screen refresh — one
+  // of a handful of calls that a single punch-in, through the AppBus refresh,
+  // turned into a burst. The source is identical; only the round-trip is gone.
+  static Future<String> myCurrency() async =>
+      Session.I.teamManager == 'Renjith' ? 'AED' : 'INR';
 
   // -------- Targets --------
   static List<String> get monthNames => const [
@@ -4152,7 +4149,17 @@ class Api {
       'fieldname': fieldname,
       'is_private': 1,
     });
-    final r = await Session.I.dio.post('/api/method/upload_file', data: form);
+    // The session-wide 20 s timeout is sized for JSON, and a banner photo on
+    // one bar of signal cannot clear it — the capture then threw and the rep
+    // was told it failed while the file was still uploading. Two minutes each
+    // way, the same allowance `uploadFileGetUrl` already gives trip and bill
+    // photos (the 11 Oct release fixed those and missed this path).
+    final r = await Session.I.dio.post('/api/method/upload_file',
+        data: form,
+        options: Options(
+          sendTimeout: const Duration(minutes: 2),
+          receiveTimeout: const Duration(minutes: 2),
+        ));
     if (r.statusCode != 200 && r.statusCode != 201) {
       throw Exception(_frappeError(r));
     }
