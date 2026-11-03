@@ -50,6 +50,18 @@
     "approvers":              ["jineesh@mannarubber.com"]
   },
 
+  "order_flow": {
+    "_note":         "Optional. Absent, or mode hitech_direct, is the flow above (PASS A to Hi-Tech on approval, PASS C bills Manna Treads). manna_first (3 Nov 2026): PASS M makes every new order of 'units' created on or after 'since' a Manna Treads Sales Order to the end customer as soon as it is in ERPNext, on the shared finished-goods codes, at the order's rate net of GST, with the tax code from the customer's bill-to state; PASS A leaves those orders alone. Older orders keep the old route. since is required for manna_first. item_allowlist is optional (absent = any item that is the same code and name in Manna Treads SAP). company_db and the login are manna_treads' above. sap.pinned_cert_sha256 (optional, Windows PowerShell 5.1) accepts the Service Layer only with that certificate.",
+    "mode":          "hitech_direct",
+    "since":         null,
+    "units":         ["Manna Treads"],
+    "skip_statuses": ["Rejected"],
+    "tax_by_state":  { "KL": "CG+SG@18", "*": "IGST@18" },
+    "hitech_vendor": "S-1010",
+    "po_series":     199,
+    "_note_po":      "PASS P: right after PASS M, Manna Treads' purchase order to hitech_vendor (Hitech Pretreads-GST) for the same items and kilos, at the order's rate less SAP Pricing Control.intercompany_margin (Rs/kg, GST-inclusive), tax code from the supplier's state. Needs custom_mt_purchase_order and custom_mt_purchase_order_entry on Sales Order - see erpnext-setup.md."
+  },
+
   "log_dir":       "./logs",
   "log_keep_days": 30
 }

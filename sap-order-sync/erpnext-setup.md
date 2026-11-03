@@ -122,6 +122,37 @@ That's the whole trigger. No cooldown logic here — the poller enforces that
 somewhere a browser console can't reach, same reasoning as the credit sync's
 `manna_sap_request_sync`).
 
+### When `order_flow.mode` is `manna_first` (3 Nov 2026)
+
+PASS M wants a run **as soon as an order is created**, not when it is
+approved. Without this the order still goes, but only on the 15-minute
+`Force` task. Before turning `manna_first` on live, widen the condition above
+to (`SINCE` being the same date as `order_flow.since`):
+
+```python
+gate_closed = (
+    doc.get("custom_po_status") == "PO Approved - Ready for SAP"
+    and not doc.get("custom_sap_sales_order")
+)
+manna_first_due = (
+    doc.get("custom_company") == "Manna Treads"
+    and str(doc.creation)[:10] >= "SINCE"
+    and not doc.get("custom_sap_sales_order")
+    and not doc.get("custom_mt_sync_error")
+    and not doc.get("custom_sap_sync_error")
+    and doc.get("custom_po_status") != "Rejected"
+)
+if (gate_closed or manna_first_due) and doc.docstatus < 2:
+```
+
+and add the two fields PASS P writes, on `Sales Order`, both **Data**,
+`read_only`, `allow_on_submit`, `no_copy`, after `custom_mt_sales_order_entry`:
+`custom_mt_purchase_order` ("Manna Treads PO to Hi-Tech") and
+`custom_mt_purchase_order_entry` ("Manna Treads PO DocEntry"). Frappe fails a
+whole list on an unknown field in a filter, so PASS P fails without them.
+Set *SAP Pricing Control → Inter-company margin* to the real margin first: it
+is what every purchase order is priced from.
+
 ---
 
 ## 3. Scheduled Task (on the SAP box)
