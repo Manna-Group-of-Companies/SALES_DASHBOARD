@@ -152,9 +152,8 @@ every list for the team (phone: Manager → Pick Lists; dashboard: Pick Lists).
 
 The doctypes `Manna Pick List` and `Manna Pick List Item` were **created** on
 3 Nov 2026 as in `pick_list_doctypes.json` — System Manager only, so every
-read and write goes through the two scripts. The scripts are **not yet
-installed**: create `manna_pick_list_submit` and `manna_pick_lists` as API
-Server Scripts in Desk, with each file's body as the script.
+read and write goes through the two scripts, `manna_pick_list_submit` and
+`manna_pick_lists`, **installed** the same day as API Server Scripts.
 
 `manna_pick_list_submit` refuses an order that is not approved or is
 cancelled, a caller who is not its rep or their manager, any product not on
