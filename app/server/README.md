@@ -142,3 +142,22 @@ invoiced (`Sales Order Item.custom_sap_invoice`), dated in the month.
 team manager — or System Manager — set that rep's target, one per month.
 `Sales User` carries write on the doctype, so without it a rep can set their
 own target from a browser console.
+
+### `pick_list_submit.py`, `pick_lists.py` and `pick_list_doctypes.json`
+
+Written 3 Nov 2026. A pick list says which products of a manager-approved
+order go from Hi-Tech's stock now; the rest stay on the order to be picked
+later. The rep makes it from the order on the phone; the sales manager sees
+every list for the team (phone: Manager → Pick Lists; dashboard: Pick Lists).
+
+The doctypes `Manna Pick List` and `Manna Pick List Item` were **created** on
+3 Nov 2026 as in `pick_list_doctypes.json` — System Manager only, so every
+read and write goes through the two scripts. The scripts are **not yet
+installed**: create `manna_pick_list_submit` and `manna_pick_lists` as API
+Server Scripts in Desk, with each file's body as the script.
+
+`manna_pick_list_submit` refuses an order that is not approved or is
+cancelled, a caller who is not its rep or their manager, any product not on
+the order, and any quantity above what is still unpicked on its line
+(shared/fixtures/pick_list.json). That Hi-Tech has the stock is checked on the
+phone against the synced SAP figure and recorded on each row.

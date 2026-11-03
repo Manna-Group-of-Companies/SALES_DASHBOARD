@@ -19,6 +19,7 @@ import 'package:manna_field_sales/screens/manager/manager_approvals_screen.dart'
 import 'package:manna_field_sales/screens/manager/manager_customers_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_orders_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_targets_screen.dart';
+import 'package:manna_field_sales/screens/orders/pick_list_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class ManagerDashboardScreen extends StatefulWidget {
@@ -112,6 +113,13 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                 _waitingSubtitle(_orders, 'All orders decided',
                     (n) => '$n order${n == 1 ? '' : 's'} waiting on you'),
                 const _TeamOrdersScreen()),
+          // Pick lists come from orders, so they go with the order pipeline.
+          if (_can(ManagerScreen.orders))
+            _card(
+                Icons.playlist_add_check,
+                'Pick Lists',
+                const Text('What your reps picked from Hi-Tech stock'),
+                const PickListsScreen()),
           if (_can(ManagerScreen.regularizations))
             _card(
                 Icons.event_available,

@@ -36,6 +36,7 @@ import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
 import { ProductionOrderPage } from '@/features/production/ProductionOrderPage';
 import { SalesStockPage } from '@/features/stock/SalesStockPage';
 import { TargetsPage } from '@/features/targets/TargetsPage';
+import { PickListsPage } from '@/features/picklists/PickListsPage';
 import { SalesDashboardPage } from '@/features/dashboard/SalesDashboardPage';
 import { HrDashboardPage } from '@/features/hr/HrDashboardPage';
 import { EmployeesPage } from '@/features/hr/EmployeesPage';
@@ -205,6 +206,15 @@ export function AppRoutes() {
           for a real loader, and restore its nav item in AppShell.tsx.
         */}
         <Route path="analysis" element={<Navigate to="/" replace />} />
+        {/* Pick lists come from orders, so they go with the order pipeline. */}
+        <Route
+          path="pick-lists"
+          element={
+            <TeamRoute screen="orders">
+              <PickListsPage />
+            </TeamRoute>
+          }
+        />
         <Route
           path="targets"
           element={

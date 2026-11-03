@@ -19,6 +19,7 @@ import 'package:manna_field_sales/core/duplicate_order.dart';
 import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/core/trip_totals.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
+import 'package:manna_field_sales/core/pick_list.dart';
 import 'package:manna_field_sales/core/proximity.dart';
 import 'package:manna_field_sales/core/sales_target.dart';
 import 'package:manna_field_sales/core/sap_order_state.dart';
@@ -1477,6 +1478,33 @@ class Api {
     final m = r.data is Map ? r.data['message'] : null;
     if (r.statusCode != 200 || m is! Map) throw Exception(_frappeError(r));
     return TargetMonth.fromJson(m);
+  }
+
+  // -------- Pick lists --------
+  //
+  // Through the `manna_pick_lists` / `manna_pick_list_submit` Server Scripts
+  // (app/server/): the doctypes are System Manager's only, and the submit
+  // refuses an unapproved order or a product not on it. See core/pick_list.dart.
+
+  /// Pick lists this login may see, newest first: a rep's own orders', a
+  /// manager's team's. [salesOrder] narrows to one order.
+  static Future<List<PickList>> getPickLists({String? salesOrder}) async {
+    final r = await Session.I.dio.get('/api/method/manna_pick_lists',
+        queryParameters: {'sales_order': ?salesOrder});
+    final m = r.data is Map ? r.data['message'] : null;
+    if (r.statusCode != 200 || m is! List) throw Exception(_frappeError(r));
+    return m.whereType<Map>().map(PickList.fromJson).toList();
+  }
+
+  /// Submits a pick list for [salesOrder]; returns its name (`PICK-00001`).
+  /// Each line is `{sales_order_item, picked_qty, available_qty}`.
+  static Future<String> submitPickList(
+      String salesOrder, List<Map<String, dynamic>> lines) async {
+    final r = await Session.I.dio.post('/api/method/manna_pick_list_submit',
+        data: {'sales_order': salesOrder, 'lines': jsonEncode(lines)});
+    final m = r.data is Map ? r.data['message'] : null;
+    if (r.statusCode != 200 || m is! Map) throw Exception(_frappeError(r));
+    return '${m['name']}';
   }
 
   // UAE team (Renjith) targets in AED; India teams (Saneesh/Pareeth) in INR.
