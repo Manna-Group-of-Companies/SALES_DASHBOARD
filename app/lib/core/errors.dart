@@ -34,6 +34,23 @@ bool isOffline(Object? e) {
   }
 }
 
+/// True when the request may not have reached the server, or its answer did
+/// not reach the phone — [isOffline] plus the two timeouts that happen after
+/// the connection was made.
+///
+/// Wider than [isOffline] on purpose, and only safe where the caller can cope
+/// with a write that DID land: a timed-out POST may well have been saved. The
+/// punch queue can, because every queued punch first looks for itself on the
+/// server before it is sent (see `Api.sendPendingPunch`). Rounded towards
+/// queueing: a punch held back and found to be already there costs one read;
+/// a punch treated as refused when it merely timed out is lost.
+bool isNetworkFailure(Object? e) {
+  if (isOffline(e)) return true;
+  if (e is! DioException) return false;
+  return e.type == DioExceptionType.sendTimeout ||
+      e.type == DioExceptionType.receiveTimeout;
+}
+
 /// One sentence, fit to show a rep.
 String humanError(Object? e) {
   if (e == null) return 'Something went wrong.';
@@ -115,7 +132,9 @@ String _fromResponse(Response? r) {
 /// `test/errors_test.dart`.
 String? _ownMessage(Object e) {
   final t = e.runtimeType.toString();
-  if (t == 'CoarseFixException' || t == 'CaptureRefused') {
+  if (t == 'CoarseFixException' ||
+      t == 'CaptureRefused' ||
+      t == 'PunchRefused') {
     final s = '$e'.trim();
     if (s.isNotEmpty) return s;
   }

@@ -155,12 +155,24 @@ class OfflineCache {
     }
   }
 
-  /// Drops everything cached. Called on sign-out so one rep's customers are
-  /// never served to the next person to use the handset.
-  static Future<void> clear() async {
+  /// Keys under this survive [clear] unless it is a sign-out: who is signed
+  /// in, the open visit, today's attendance. Every write calls [clear] to
+  /// drop lists it may have changed, and none of those writes changes these
+  /// — but wiping them took away exactly what an app opened, or a punch
+  /// taken, with no signal has to fall back on.
+  static const String sessionPrefix = 'session:';
+
+  /// Drops what is cached. [signOut] drops everything, so one rep's
+  /// customers are never served to the next person to use the handset;
+  /// otherwise the [sessionPrefix] keys are kept.
+  static Future<void> clear({bool signOut = false}) async {
     _lastAge.clear();
     final p = await _prefs;
-    for (final k in p.getKeys().where((k) => k.startsWith(_prefix)).toList()) {
+    final keep = '$_prefix$sessionPrefix';
+    for (final k in p
+        .getKeys()
+        .where((k) => k.startsWith(_prefix) && (signOut || !k.startsWith(keep)))
+        .toList()) {
       await p.remove(k);
     }
   }

@@ -2,9 +2,15 @@
  * One trip, in full — where an odometer reading came from.
  *
  * The verification screen shows a leg out of context; this is the context.
- * Who travelled, when they started and finished, every leg with its own mode
- * and rate, what was spent, which shops were visited, and who else was in the
- * vehicle. It is the page HR opens before deciding a reading is wrong.
+ * Who travelled, when they started and finished, every leg with its own mode,
+ * rate and odometer photos, what was spent, which shops were visited, and who
+ * else was in the vehicle. It is the page HR opens before deciding a reading
+ * is wrong.
+ *
+ * Every odometer photo ERPNext holds for the trip is on this page: each leg's
+ * own, and any the rep sent that reached the trip but no leg. Until Oct 2026
+ * it showed bills and no odometer photos at all, so a trip looked here as if
+ * the rep had sent none while ERPNext's Trip form showed them on every leg.
  *
  * Read-only. Corrections belong on the verification screen, so there is one
  * place to make them.
@@ -32,10 +38,10 @@ import {
   travelClaim,
   tripClaim,
 } from '@/domain/trips';
-import { clockOf } from '@/domain/attendance';
+import { clockOf, shiftIso } from '@/domain/attendance';
 import { formatDate } from '@/domain/orderRules';
 import { checkDistance, hasFix, haversineKm, pathKm, routeOf, waypointsOf } from '@/domain/geo';
-import { Api } from '@/api/client';
+import { Api, type StrayOdometerPhoto } from '@/api/client';
 import { Alert, Badge, Button, Card, Empty } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
@@ -60,27 +66,38 @@ const VERDICT: Record<string, { label: string; tone: 'ok' | 'warn' | 'danger' | 
   unknown: { label: 'Cannot be checked', tone: 'neutral' },
 };
 
+/** A photo enlarged over the page — a bill, or one side of an odometer. */
+interface Viewing {
+  src: string;
+  title: string;
+  /** Shown dim beside the title: the amounts on a bill, the reading on a dial. */
+  detail?: string;
+}
+
 export function TripDetailPage() {
   const { tripId = '' } = useParams();
   /*
-   * The bill being looked at, or null.
+   * The photo being looked at, or null.
    *
-   * HR checks a claim against the receipt, and a link that navigates away
-   * made that a round trip per row — open, squint, come back, lose your
-   * place in the table. The thumbnail answers most rows without a click.
+   * HR checks a claim against the receipt or the dial, and a link that
+   * navigates away made that a round trip per row — open, squint, come back,
+   * lose your place in the table. The thumbnail answers most rows without a
+   * click.
    */
-  const [bill, setBill] = useState<TripExpense | null>(null);
+  const [viewing, setViewing] = useState<Viewing | null>(null);
 
   useEffect(() => {
-    if (!bill) return;
+    if (!viewing) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setBill(null);
+      if (e.key === 'Escape') setViewing(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [bill]);
+  }, [viewing]);
 
   const [trip, setTrip] = useState<Trip | null>(null);
+  /** Odometer photos the rep sent that reached this trip but none of its legs. */
+  const [strays, setStrays] = useState<StrayOdometerPhoto[]>([]);
   /** The leg whose vehicle is being changed, or null. */
   const [changingLeg, setChangingLeg] = useState<TripLeg | null>(null);
   const [visits, setVisits] = useState<SalesVisit[]>([]);
@@ -91,6 +108,33 @@ export function TripDetailPage() {
   const [tick, setTick] = useState(0);
   /** Somebody else travelled too, so an expense has more than one owner. */
   const shared = trip ? isShared(trip) : false;
+
+  /**
+   * This trip's odometer photos that no leg uses, checked against the legs as
+   * they stand now rather than as they were when the photos were listed.
+   */
+  const unlinked = useMemo(() => {
+    if (!trip) return [];
+    const used = new Set(trip.legs.flatMap((l) => [l.startOdometerPhoto, l.endOdometerPhoto]));
+    return strays.filter((p) => !used.has(p.url));
+  }, [trip, strays]);
+
+  /**
+   * Could one of the unlinked photos fill a leg's empty slot? Then it is work
+   * for Odometer check. If every leg already has its own, they are retakes.
+   * The same test Odometer check uses to offer "Use this photo".
+   */
+  const recoverable = useMemo(
+    () =>
+      !!trip &&
+      unlinked.some((p) =>
+        trip.legs.some(
+          (l) => l.hasOdometer && (p.slot === 'start' ? !l.startOdometerPhoto : !l.endOdometerPhoto),
+        ),
+      ),
+    [trip, unlinked],
+  );
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -154,16 +198,25 @@ export function TripDetailPage() {
     setError(null);
     setRoadKm(undefined);
     Promise.all([
-      Api.trips.get(tripId),
+      Api.trips.get(tripId).then(async (t) => ({
+        t,
+        // Needs the legs to know which photos they already use. A failure
+        // costs the unlinked photos, not the page. A day early in case the
+        // trip's date and the upload straddle midnight.
+        s: await Api.trips
+          .listStrayOdometerPhotos([t], shiftIso(t.date, -1))
+          .catch(() => [] as StrayOdometerPhoto[]),
+      })),
       Api.trips.listVisitsForTrip(tripId),
       Api.trips.getRates(),
       // The route is assembled from several documents, so a failure here must
       // not cost the rest of the page.
       Api.trips.getTrack(tripId).catch(() => null),
     ])
-      .then(([t, v, r, k]) => {
+      .then(([{ t, s }, v, r, k]) => {
         if (!live) return;
         setTrip(t);
+        setStrays(s);
         setVisits(v);
         setRates(r);
         setTrack(k);
@@ -325,12 +378,12 @@ export function TripDetailPage() {
                               <button
                                 type="button"
                                 className="odo__photo exp__billthumb"
-                                onClick={() => setBill(e)}
+                                onClick={() => setViewing(billView(e))}
                                 aria-label={`View the bill for ${e.category}`}
                               >
                                 {/* Private files come through Frappe on the same
                                     session cookie, so no extra auth is needed —
-                                    same as the odometer photos above. */}
+                                    same as the odometer photos below. */}
                                 <img src={e.billPhoto} alt="" loading="lazy" />
                               </button>
                             ) : (
@@ -483,6 +536,7 @@ export function TripDetailPage() {
                       <th>Vehicle</th>
                       <th className="right">Start</th>
                       <th className="right">End</th>
+                      <th>Odometer photos</th>
                       <th className="right">Distance</th>
                       <th className="right">Rate</th>
                       <th className="right">Claim</th>
@@ -500,6 +554,27 @@ export function TripDetailPage() {
                           <td className="dim">{leg.vehicleNo || '—'}</td>
                           <td className="right num">{reading.start || '—'}</td>
                           <td className="right num">{reading.end || '—'}</td>
+                          <td>
+                            {leg.hasOdometer || leg.startOdometerPhoto || leg.endOdometerPhoto ? (
+                              <span className="trip__odo">
+                                <OdoThumb
+                                  label="Start"
+                                  src={leg.startOdometerPhoto}
+                                  onOpen={(src) => setViewing(odoView(leg, 'start', src))}
+                                />
+                                <OdoThumb
+                                  label="End"
+                                  src={leg.endOdometerPhoto}
+                                  // Not missing on a leg still running — just not taken yet.
+                                  pending={!(leg.endOdometer > 0)}
+                                  onOpen={(src) => setViewing(odoView(leg, 'end', src))}
+                                />
+                              </span>
+                            ) : (
+                              // Bus, taxi: a fare, not a dial.
+                              <span className="dim">—</span>
+                            )}
+                          </td>
                           <td className="right num">
                             {legDistance(leg)} km
                             {isImplausible(leg) && ' ⚠'}
@@ -527,6 +602,47 @@ export function TripDetailPage() {
                     })}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {/*
+              Shown even when nothing needs doing, because they are in the
+              trip's attachments in ERPNext, and a photo visible there but not
+              here reads as one the dashboard lost.
+            */}
+            {unlinked.length > 0 && (
+              <div className="trip__unlinked">
+                <p className="note">
+                  {unlinked.length === 1
+                    ? 'One more odometer photo is'
+                    : `${unlinked.length} more odometer photos are`}{' '}
+                  attached to this trip in ERPNext but not to any leg.{' '}
+                  {recoverable ? (
+                    <>
+                      A leg is missing its photo — attach it on{' '}
+                      <Link to="/hr/odometer">Odometer check</Link>.
+                    </>
+                  ) : (
+                    'Every leg already has its own, so these are most likely retakes.'
+                  )}
+                </p>
+                <span className="trip__odo">
+                  {unlinked.map((p) => (
+                    <OdoThumb
+                      key={p.url}
+                      label={`${p.slot === 'start' ? 'Start' : 'End'} ${clockOf(p.uploadedAt)}`}
+                      src={p.url}
+                      loose
+                      onOpen={(src) =>
+                        setViewing({
+                          src,
+                          title: `${p.slot === 'start' ? 'Start' : 'End'} odometer photo — not on any leg`,
+                          detail: `uploaded ${formatDate(p.uploadedAt.slice(0, 10))} ${clockOf(p.uploadedAt)}`,
+                        })
+                      }
+                    />
+                  ))}
+                </span>
               </div>
             )}
           </Card>
@@ -583,28 +699,25 @@ export function TripDetailPage() {
         on the backdrop and on Escape both, because a viewer that traps you is
         worse than a link that navigated away.
       */}
-      {bill && (
+      {viewing && (
         <div
           className="lightbox"
           role="dialog"
           aria-modal="true"
-          aria-label={`Bill for ${bill.category}`}
-          onClick={() => setBill(null)}
+          aria-label={viewing.title}
+          onClick={() => setViewing(null)}
         >
           <div className="lightbox__inner" onClick={(e) => e.stopPropagation()}>
-            <img src={bill.billPhoto} alt={`Bill for ${bill.category}`} />
+            <img src={viewing.src} alt={viewing.title} />
             <div className="lightbox__bar">
               <span className="grow">
-                <b>{bill.category}</b>
-                <span className="dim small"> · claimed {money(bill.amount, 2)}</span>
-                {bill.approvedAmount ? (
-                  <span className="dim small"> · approved {money(bill.approvedAmount, 2)}</span>
-                ) : null}
+                <b>{viewing.title}</b>
+                {viewing.detail && <span className="dim small"> · {viewing.detail}</span>}
               </span>
-              <a href={bill.billPhoto} target="_blank" rel="noreferrer" className="small">
+              <a href={viewing.src} target="_blank" rel="noreferrer" className="small">
                 Open original
               </a>
-              <Button size="sm" onClick={() => setBill(null)}>
+              <Button size="sm" onClick={() => setViewing(null)}>
                 Close
               </Button>
             </div>
@@ -612,6 +725,69 @@ export function TripDetailPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function billView(e: TripExpense): Viewing {
+  return {
+    src: e.billPhoto ?? '',
+    title: e.category || e.expenseName || 'Bill',
+    detail:
+      `claimed ${money(e.amount, 2)}` +
+      (e.approvedAmount ? ` · approved ${money(e.approvedAmount, 2)}` : ''),
+  };
+}
+
+/** The dial, captioned with what the rep typed — the figure it is evidence for. */
+function odoView(leg: TripLeg, side: 'start' | 'end', src: string): Viewing {
+  const typed = side === 'start' ? leg.startOdometer : leg.endOdometer;
+  const reading = effectiveReading(leg);
+  const used = side === 'start' ? reading.start : reading.end;
+  return {
+    src,
+    title: `${side === 'start' ? 'Start' : 'End'} odometer — ${leg.id}`,
+    detail:
+      `rep typed ${typed || '—'}` + (reading.corrected && used !== typed ? ` · HR corrected to ${used}` : ''),
+  };
+}
+
+/**
+ * One odometer photo as a thumbnail that enlarges, captioned with its side.
+ *
+ * `pending` is an end photo on a leg still running: not missing, only not
+ * taken yet, so it does not get the "none" that reads as a problem. `loose`
+ * is a photo on the trip but on no leg, dashed as on Odometer check so it
+ * never reads as a leg's own evidence.
+ */
+function OdoThumb({
+  label,
+  src,
+  pending,
+  loose,
+  onOpen,
+}: {
+  label: string;
+  src?: string;
+  pending?: boolean;
+  loose?: boolean;
+  onOpen: (src: string) => void;
+}) {
+  return (
+    <figure className={loose ? 'is-loose' : undefined}>
+      {src ? (
+        <button
+          type="button"
+          className="odo__photo exp__billthumb"
+          onClick={() => onOpen(src)}
+          aria-label={`View the ${label.toLowerCase()} odometer photo`}
+        >
+          <img src={src} alt="" loading="lazy" />
+        </button>
+      ) : (
+        <span className="trip__nophoto">{pending ? 'not yet' : 'no photo'}</span>
+      )}
+      <figcaption>{label}</figcaption>
+    </figure>
   );
 }
 

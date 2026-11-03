@@ -3,8 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:manna_field_sales/core/customer_search.dart';
+import 'package:manna_field_sales/core/party_location.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/core/visibility.dart';
+import 'package:manna_field_sales/services/pending_punches.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/customers/customer_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -20,12 +24,18 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
   static const String _allRoutes = '__all__';
 
   List<Map<String, dynamic>> _all = [];
+  /// Search text per row, keyed by docname — see core/customer_search.dart.
+  Map<String, String> _hay = const {};
   List<Map<String, dynamic>> _reps = [];
   // Routes (Territories) the rep actually has customers on — taken from the
   // loaded list rather than a Territory fetch, so the dropdown never offers a
   // route that would come back empty.
   List<String> _routes = [];
   bool _loading = true;
+
+  /// True while the copy on screen is the last synced one and the live list
+  /// is on its way. Drawn as a thin bar, not a spinner: the rows are usable.
+  bool _refreshing = false;
   String? _error;
 
   /// Set when the list came off the phone rather than the server. Shown, never
@@ -60,68 +70,105 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _all.isEmpty;
+      _refreshing = _all.isNotEmpty;
       _error = null;
     });
-    try {
-      final cached = await Api.getCustomersCached();
-      final all = cached.value;
-      // Sales persons only decorate the list, so a failure there must not cost
-      // the rep their customers when the cached copy would have served.
-      List<Map<String, dynamic>> reps;
-      try {
-        reps = await Api.getSalesPersons();
-      } catch (_) {
-        reps = _reps;
+    // The last synced copy goes up first and the live list replaces it — see
+    // Api.peekCustomers for why a rep should not watch a spinner while six
+    // hundred rows cross a rural connection. The thin bar under the filters
+    // says the copy is being refreshed. It is not the amber offline notice:
+    // that still means the refresh failed and this IS the copy.
+    if (_all.isEmpty) {
+      final peeked = await Api.peekCustomers();
+      if (!mounted) return;
+      if (peeked != null && peeked.value.isNotEmpty) {
+        setState(() {
+          _index(peeked.value);
+          _loading = false;
+          _refreshing = true;
+        });
       }
-      // Best-effort, like the sales persons above: a rep must not lose their
-      // customer list because the visit lookup failed.
-      String? punched;
-      try {
-        final open = await Api.getAnyOpenVisit();
-        final code = '${open?['customer'] ?? ''}'.trim();
-        punched = (code.isEmpty || code == 'null') ? null : code;
-      } catch (_) {
-        punched = _punchedInAt;
-      }
+    }
 
-      final routes = all
-          .map((c) => (c['custom_sales_route'] ?? '').toString())
-          .where((t) => t.isNotEmpty)
-          .toSet()
-          .toList()
-        ..sort();
+    // Sales persons only decorate the list, so a failure there must not cost
+    // the rep their customers when the cached copy would have served.
+    Future<List<Map<String, dynamic>>> reps() async {
+      try {
+        return await Api.getSalesPersons();
+      } catch (_) {
+        return _reps;
+      }
+    }
+
+    // Best-effort, like the sales persons above: a rep must not lose their
+    // customer list because the visit lookup failed. Without the label — this
+    // screen has every customer's name in hand and pins by docname.
+    Future<String?> punched() async {
+      try {
+        // With the punch queue laid over it, so a shop punched in at with no
+        // signal is pinned like any other.
+        final open = PendingPunches.visitView(
+          serverAny: await Api.getAnyOpenVisit(withLabel: false),
+          pending: await PendingPunches.all(),
+          today: today(),
+        ).elsewhere;
+        final code = '${open?['customer'] ?? ''}'.trim();
+        return (code.isEmpty || code == 'null') ? null : code;
+      } catch (_) {
+        return _punchedInAt;
+      }
+    }
+
+    try {
+      // Started together. Awaited one after another they were three round
+      // trips in a row before the first row drew.
+      final customersF = Api.getCustomersCached();
+      final repsF = reps();
+      final punchedF = punched();
+      final cached = await customersF;
+      final repRows = await repsF;
+      final pinned = await punchedF;
       if (!mounted) return;
       setState(() {
-        _all = all;
-        _reps = reps;
-        _punchedInAt = punched;
+        _index(cached.value);
+        _reps = repRows;
+        _punchedInAt = pinned;
         _staleNotice = cached.ageLabel;
-        _routes = routes;
-        if (_route != _allRoutes && !routes.contains(_route)) {
-          _route = _allRoutes;
-        }
         _loading = false;
+        _refreshing = false;
       });
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = humanError(e);
-          _loading = false;
-        });
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _refreshing = false;
+        // With nothing on screen the error is the screen. With the synced
+        // copy already up, the copy stays — but the failure is still said,
+        // because a refused request is a real problem, not a weak signal.
+        if (_all.isEmpty) _error = humanError(e);
+      });
+      if (_all.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not refresh: ${humanError(e)}')));
       }
     }
   }
 
-  bool _match(Map<String, dynamic> c) {
-    if (_route != _allRoutes && '${c['custom_sales_route'] ?? ''}' != _route) {
-      return false;
+  /// Takes a list on board: the rows, their search text, and the routes the
+  /// dropdown may offer. Callers wrap it in setState.
+  void _index(List<Map<String, dynamic>> rows) {
+    _all = rows;
+    _hay = {for (final c in rows) '${c['name']}': customerHaystack(c)};
+    _routes = rows
+        .map((c) => (c['custom_sales_route'] ?? '').toString())
+        .where((t) => t.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    if (_route != _allRoutes && !_routes.contains(_route)) {
+      _route = _allRoutes;
     }
-    if (_q.isEmpty) return true;
-    final hay = [c['customer_name'], c['name'], c['customer_group'], c['custom_sales_route']]
-        .map((e) => (e ?? '').toString().toLowerCase())
-        .join(' ');
-    return hay.contains(_q.toLowerCase());
   }
 
   static double _num(dynamic v) =>
@@ -198,7 +245,11 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
         builder: (_) => CustomerDetailScreen(customer: c, reps: _reps)));
     if (!mounted) return;
     try {
-      final open = await Api.getAnyOpenVisit();
+      final open = PendingPunches.visitView(
+        serverAny: await Api.getAnyOpenVisit(withLabel: false),
+        pending: await PendingPunches.all(),
+        today: today(),
+      ).elsewhere;
       final code = '${open?['customer'] ?? ''}'.trim();
       final next = (code.isEmpty || code == 'null') ? null : code;
       if (mounted && next != _punchedInAt) setState(() => _punchedInAt = next);
@@ -271,10 +322,11 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
   /// checks while working down a route, plus call/navigate shortcuts.
   void _showDetails(Map<String, dynamic> c) {
     final badge = _locationBadge(c);
-    final lat = _num(c['custom_latitude']);
-    final lng = _num(c['custom_longitude']);
-    final mappable = isMappableLatLng(lat, lng);
+    final pos = partyLatLng(c);
+    final lat = pos?.lat ?? 0, lng = pos?.lng ?? 0;
+    final mappable = pos != null && isMappableLatLng(lat, lng);
     final phone = '${c['custom_phone'] ?? ''}'.trim();
+    final route = '${c['custom_sales_route'] ?? ''}';
     final bal = _num(c['custom_outstanding_balance']);
     final lim = _num(c['custom_credit_limit']);
 
@@ -310,8 +362,10 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
                     style: const TextStyle(
                         fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                row('Route',
-                    '${c['custom_sales_route'] ?? ''}'.isEmpty ? '—' : '${c['territory']}'),
+                // The sales route itself. This checked the route and then
+                // printed the territory, so the row read blank or wrong for
+                // exactly the customers whose route had been set.
+                row('Route', route.isEmpty || route == 'null' ? '—' : route),
                 row(
                     'Group',
                     '${c['customer_group'] ?? ''}'.isEmpty
@@ -390,9 +444,9 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
 
   Widget _tile(Map<String, dynamic> c) {
     final badge = _locationBadge(c);
-    final lat = _num(c['custom_latitude']);
-    final lng = _num(c['custom_longitude']);
-    final mappable = isMappableLatLng(lat, lng);
+    final pos = partyLatLng(c);
+    final lat = pos?.lat ?? 0, lng = pos?.lng ?? 0;
+    final mappable = pos != null && isMappableLatLng(lat, lng);
     final bal = _num(c['custom_outstanding_balance']);
     final sub = [c['customer_group'], c['custom_sales_route']]
         .where((x) => x != null && '$x'.isNotEmpty)
@@ -499,7 +553,12 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
   /// out separately, the count and the list disagree by one exactly when a
   /// pinned customer falls outside the filter.
   List<Map<String, dynamic>> _visible() {
-    final rows = _all.where(_match).toList();
+    final filter =
+        CustomerFilter(query: _q, route: _route == _allRoutes ? null : _route);
+    final rows = _all
+        .where((c) =>
+            filter.matches(c, _hay['${c['name']}'] ?? customerHaystack(c)))
+        .toList();
     final pinned = _punchedInAt;
     if (pinned == null) return rows;
 
@@ -509,7 +568,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
     return rows;
   }
 
-  Widget _list() {
+  Widget _list(List<Map<String, dynamic>> customers) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null) {
       return Center(
@@ -517,7 +576,6 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
               padding: const EdgeInsets.all(20), child: Text('Error: $_error')));
     }
     if (_all.isEmpty) return const Center(child: Text('No customers found.'));
-    final customers = _visible();
     if (customers.isEmpty) {
       return Center(
           child: Text(_route == _allRoutes
@@ -533,13 +591,17 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final shown = _loading ? 0 : _visible().length;
+    // Filtered once per build. The header count and the list used to each
+    // filter the six hundred rows for themselves, on every keystroke.
+    final customers = _loading ? const <Map<String, dynamic>>[] : _visible();
+    final shown = customers.length;
     return Scaffold(
       appBar: AppBar(title: const Text('Customers'), actions: [
         IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
       ]),
       body: Column(children: [
         _filters(),
+        if (_refreshing) const LinearProgressIndicator(minHeight: 2),
         if (_staleNotice.isNotEmpty && !_loading)
           Container(
             width: double.infinity,
@@ -567,7 +629,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
                   style: const TextStyle(fontSize: 12, color: Colors.black54)),
             ),
           ),
-        Expanded(child: _list()),
+        Expanded(child: _list(customers)),
       ]),
     );
   }

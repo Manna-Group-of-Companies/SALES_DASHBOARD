@@ -40,7 +40,7 @@ app/android/key.properties
 ```
 
 Add these under **Settings → Secrets and variables → Actions → New repository
-secret**, in `Mannagoc/SALES_DASHBOARD`:
+secret**, in `Manna-Group-of-Companies/SALES_DASHBOARD`:
 
 | Secret | What to put in it |
 |---|---|
@@ -97,7 +97,7 @@ will not parse — all mean "no update", never a prompt. A rep in a shop is not
 helped by a nag they cannot act on. It also never offers a **downgrade**.
 
 `version.json` is read from
-`https://github.com/Mannagoc/SALES_DASHBOARD/releases/latest/download/version.json`
+`https://github.com/Manna-Group-of-Companies/SALES_DASHBOARD/releases/latest/download/version.json`
 — a plain file download, deliberately **not** the GitHub API. The API allows 60
 unauthenticated requests an hour per IP, and a dozen reps in one office share
 one.
@@ -127,7 +127,7 @@ After the first push:
    signing key*, the secrets are missing or misnamed.
 2. **Releases** → a release tagged `android-v1.1.0+<n>` with two assets,
    `manna-field-sales.apk` and `version.json`.
-3. `https://github.com/Mannagoc/SALES_DASHBOARD/releases/latest/download/version.json`
+3. `https://github.com/Manna-Group-of-Companies/SALES_DASHBOARD/releases/latest/download/version.json`
    should return JSON in a browser.
 4. On a phone carrying an **older** build, open the app — the sheet should
    appear. A phone already on the newest build correctly shows nothing.

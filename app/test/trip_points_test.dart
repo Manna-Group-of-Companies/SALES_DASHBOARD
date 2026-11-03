@@ -5,6 +5,7 @@
 // and a failed send dropped them silently — which is why a day's driving came
 // back as three points.
 
+import 'package:dio/dio.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -90,6 +91,100 @@ void main() {
       expect(n, lessThanOrEqualTo(2000));
       expect(n, greaterThan(1900),
           reason: 'it should trim, not empty itself');
+    });
+  });
+
+  group('sending the queue', () {
+    DioException offline() => DioException(
+        requestOptions: RequestOptions(path: '/api/resource/Trip'),
+        type: DioExceptionType.connectionError);
+
+    test('points that go are removed, and nothing else', () async {
+      await TripPoints.add(const TripPoint('TRP-1', 9.5, 76.5, 't1'));
+      await TripPoints.add(const TripPoint('TRP-1', 9.6, 76.6, 't2'));
+      final sent = await TripPoints.flush(send: (_, __) async {});
+      expect(sent, 2);
+      expect(await TripPoints.count(), 0);
+    });
+
+    test('with no signal every point stays', () async {
+      await TripPoints.add(const TripPoint('TRP-1', 9.5, 76.5, 't1'));
+      await TripPoints.add(const TripPoint('TRP-2', 9.6, 76.6, 't2'));
+      final sent = await TripPoints.flush(send: (_, __) async => throw offline());
+      expect(sent, 0);
+      expect(await TripPoints.count(), 2);
+    });
+
+    test('a point taken while an upload is in flight is not wiped', () async {
+      // The run used to write back the copy it read at the start, so a fix
+      // recorded during a slow upload vanished when the upload finished.
+      await TripPoints.add(const TripPoint('TRP-1', 9.5, 76.5, 't1'));
+      await TripPoints.flush(send: (_, __) async {
+        await TripPoints.add(const TripPoint('TRP-1', 9.7, 76.7, 't-during'));
+      });
+      expect(await TripPoints.count(), 1);
+      final left = await TripPoints.flush(send: (_, pts) async {
+        expect(pts.single.at, 't-during');
+      });
+      expect(left, 1);
+    });
+
+    test('a refused trip does not hold up the trips behind it', () async {
+      // It used to stop at the refusal, every run, for good.
+      await TripPoints.add(const TripPoint('TRP-GONE', 9.5, 76.5, 't1'));
+      await TripPoints.add(const TripPoint('TRP-2', 9.6, 76.6, 't2'));
+      final sentTrips = <String>[];
+      await TripPoints.flush(send: (trip, _) async {
+        if (trip == 'TRP-GONE') throw Exception('Trip not found');
+        sentTrips.add(trip);
+      });
+      expect(sentTrips, ['TRP-2']);
+      expect(await TripPoints.count(), 1,
+          reason: "the refused trip's point is kept and retried, not dropped");
+    });
+
+    test('the network going stops the run and keeps the later trips',
+        () async {
+      await TripPoints.add(const TripPoint('TRP-1', 9.5, 76.5, 't1'));
+      await TripPoints.add(const TripPoint('TRP-2', 9.6, 76.6, 't2'));
+      var calls = 0;
+      await TripPoints.flush(send: (_, __) async {
+        calls++;
+        throw offline();
+      });
+      expect(calls, 1, reason: 'the second would only fail the same way');
+      expect(await TripPoints.count(), 2);
+    });
+
+    test('two runs at once send the backlog once', () async {
+      await TripPoints.add(const TripPoint('TRP-1', 9.5, 76.5, 't1'));
+      var calls = 0;
+      Future<void> slow(String _, List<TripPoint> __) async {
+        calls++;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+
+      await Future.wait(
+          [TripPoints.flush(send: slow), TripPoints.flush(send: slow)]);
+      expect(calls, 1);
+    });
+
+    test('a whole-number coordinate is still removed once sent', () async {
+      // Stored as 76, read back as 76.0 — matching on a re-encoding would
+      // never find it, and it would be sent again on every run.
+      SharedPreferences.setMockInitialValues({
+        'tripGpsQueue': ['{"trip":"TRP-1","lat":9,"lng":76,"at":"t1"}'],
+      });
+      await TripPoints.flush(send: (_, __) async {});
+      expect(await TripPoints.count(), 0);
+    });
+
+    test('a row that will not decode is cleared with the rest', () async {
+      SharedPreferences.setMockInitialValues({
+        'tripGpsQueue': ['not json'],
+      });
+      await TripPoints.flush(send: (_, __) async {});
+      expect(await TripPoints.count(), 0);
     });
   });
 }

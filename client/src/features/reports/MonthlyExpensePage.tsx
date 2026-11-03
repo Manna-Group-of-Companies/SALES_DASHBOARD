@@ -180,7 +180,7 @@ export function MonthlyExpensePage() {
                 const joined = participationOf(t, person!.id) === 'joined';
                 return {
                   Date: t.date,
-                  Mode: t.legs.length > 1 ? 'Mixed legs' : t.primaryMode,
+                  Mode: t.legs.length > 1 ? 'Mixed legs' : leg?.mode || t.primaryMode,
                   Trip: t.id,
                   Shared: joined
                     ? `Joined ${t.person}`
@@ -347,7 +347,10 @@ function TripRow({
     <tr className={joined ? 'exp__joined' : undefined}>
       <td className="num">{formatDate(trip.date)}</td>
       <td>
-        {mixedLegs ? <span title={trip.legs.map((l) => l.mode).join(' + ')}>Mixed legs</span> : trip.primaryMode || '—'}
+        {/* The leg's mode before the stored `primary_mode`: that field is a
+            separate copy nothing keeps in step, and a trip with a Bike leg
+            and a blank `primary_mode` showed "—" beside a Bike rate. */}
+        {mixedLegs ? <span title={trip.legs.map((l) => l.mode).join(' + ')}>Mixed legs</span> : leg?.mode || trip.primaryMode || '—'}
       </td>
       <td>
         <Link to={`/hr/trips/${trip.id}`} className="mono small">{trip.id}</Link>
