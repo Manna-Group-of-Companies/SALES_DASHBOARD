@@ -6,7 +6,8 @@
 //
 // Order approval comes first because it is the priority; location checks sit
 // near the end. Targets (none set yet) and Outstanding Limits (SAP supplies
-// them now) were removed on 11 Oct 2026.
+// them now) were removed on 11 Oct 2026. Targets came back on 3 Nov 2026,
+// measured against SAP invoices rather than approved orders.
 
 import 'package:flutter/material.dart';
 
@@ -17,6 +18,7 @@ import 'package:manna_field_sales/screens/leave/leave_approvals_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_approvals_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_customers_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_orders_screen.dart';
+import 'package:manna_field_sales/screens/manager/manager_targets_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class ManagerDashboardScreen extends StatefulWidget {
@@ -128,6 +130,12 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
               'Leave Approvals',
               const Text('Approve your team\'s leave requests'),
               const LeaveApprovalsScreen(forHR: false)),
+          if (_can(ManagerScreen.targets))
+            _card(
+                Icons.flag,
+                'Team Targets',
+                const Text('Set monthly targets · see invoiced sales'),
+                const ManagerTargetsScreen()),
           if (parties)
             _card(
                 Icons.storefront,

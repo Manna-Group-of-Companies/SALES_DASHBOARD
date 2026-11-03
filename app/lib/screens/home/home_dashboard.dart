@@ -6,6 +6,7 @@ import 'package:manna_field_sales/core/app_bus.dart';
 import 'package:manna_field_sales/core/attendance_rules.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/sales_target.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
@@ -24,6 +25,7 @@ import 'package:manna_field_sales/screens/leave/leave_screen.dart';
 import 'package:manna_field_sales/screens/manager/gm_approvals_screen.dart';
 import 'package:manna_field_sales/screens/home/update_sheet.dart';
 import 'package:manna_field_sales/screens/manager/manager_dashboard_screen.dart';
+import 'package:manna_field_sales/screens/manager/manager_targets_screen.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/screens/map/map_screen.dart';
 import 'package:manna_field_sales/screens/orders/min_stock_screen.dart';
@@ -40,6 +42,8 @@ import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/screens/conditions/my_conditions_screen.dart';
 import 'package:manna_field_sales/services/update_service.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
+import 'package:manna_field_sales/services/pending_punches.dart';
+import 'package:manna_field_sales/screens/home/unsent_punches_screen.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/trip_tracker.dart';
 import 'package:manna_field_sales/widgets/trip_recording_indicator.dart';
@@ -57,8 +61,23 @@ class _HomeDashboardState extends State<HomeDashboard>
   // Held in state, not created in build(). A future made inside build() is a
   // new request on every setState, and its card dropped back to a loading
   // placeholder each time, which is part of what made this screen flicker.
-  late Future<List<dynamic>> _target;
+  late Future<TargetMonth> _target;
+
+  /// Today's attendance as shown: the server's row with any punch still on the
+  /// phone laid over it (see PendingPunches.attendanceView). [_attServer] is
+  /// the server's row alone — the last one read, kept when a read fails.
   Map<String, dynamic>? _att;
+  Map<String, dynamic>? _attServer;
+
+  /// Punches taken with no signal and not yet sent. Like [_unsent], the tile
+  /// only appears when there are some.
+  int _unsentPunches = 0;
+
+  /// Tries the punch queue once a minute while anything is waiting. Resume
+  /// and refresh try too, but a rep who walks back into coverage with the app
+  /// open and the phone in their pocket triggers neither.
+  Timer? _punchTimer;
+  static const Duration _punchRetry = Duration(minutes: 1);
 
   /// True only until today's attendance has been read once. A later refresh
   /// keeps the card and its button as they are and swaps the data in when it
@@ -105,16 +124,53 @@ class _HomeDashboardState extends State<HomeDashboard>
     // front of somebody, which in practice is the first moment after a rep
     // gets back into coverage. Waiting for the next five-minute fix would
     // leave a morning's driving sitting on the phone until lunchtime.
-    unawaited(TripTracker.I.flushPending());
+    // Sent from _syncPunches, after an app opened with no signal has
+    // re-confirmed its sign-in — before that a cookie session has no CSRF
+    // token and every write is refused.
     // Recording lives in memory, so an app Android killed comes back not
     // recording even though the trip is still Active. Picked up here rather
     // than waiting for a rep to notice the indicator in the top bar.
     unawaited(TripTracker.I.resumeIfNeeded());
+    unawaited(_syncPunches());
   }
 
   Future<void> _loadUnsent() async {
     final n = await PendingOrders.count();
-    if (mounted && n != _unsent) setState(() => _unsent = n);
+    final p = await PendingPunches.count();
+    if (!mounted) return;
+    if (n != _unsent || p != _unsentPunches) {
+      setState(() {
+        _unsent = n;
+        _unsentPunches = p;
+      });
+    }
+  }
+
+  /// Sends whatever punches are waiting, if there is a signal to send them on.
+  ///
+  /// An app opened with no signal first re-confirms who is signed in — see
+  /// Api.recoverAfterOfflineStart — and sends nothing until it has.
+  Future<void> _syncPunches() async {
+    if (Session.I.offlineStart) {
+      if (!await Api.recoverAfterOfflineStart()) return;
+      // Who this login is has just been re-read; the screen may change.
+      if (mounted) setState(() {});
+    }
+    // Route points too: the same signal, the same moment.
+    unawaited(TripTracker.I.flushPending());
+    if (await PendingPunches.count() == 0) return;
+    final r = await PendingPunches.flush(Api.sendPendingPunch,
+        describe: humanError);
+    if (!mounted) return;
+    await _loadUnsent();
+    if (r.sent > 0) {
+      await _loadAtt();
+      if (!mounted) return;
+      _snack(r.failed.isEmpty
+          ? 'Sent ${r.sent} saved punch${r.sent == 1 ? '' : 'es'} ✓'
+          : 'Sent ${r.sent}; ${r.failed.length} could not be sent — '
+              'see Unsent Punches.');
+    }
   }
 
   /// Offered once per launch. A rep who says "Later" is not asked again until
@@ -134,6 +190,19 @@ class _HomeDashboardState extends State<HomeDashboard>
     _loadAtt();
     _loadUnsent();
     _offerUpdate();
+    unawaited(_syncPunches());
+    _punchTimer = Timer.periodic(_punchRetry, (_) async {
+      // Route points as well as punches: a rep who drives back into coverage
+      // should not wait for the next five-minute fix to send the morning.
+      // Counted afresh, not read off _unsentPunches: a visit punch queued on
+      // a customer's screen does not update this one's count, and the rep is
+      // usually still on that screen when the signal comes back.
+      if (Session.I.offlineStart ||
+          await PendingPunches.count() > 0 ||
+          await TripTracker.I.pendingCount() > 0) {
+        unawaited(_syncPunches());
+      }
+    });
   }
 
   /// Ask GitHub whether there is a newer build, and offer it if so.
@@ -153,6 +222,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     WidgetsBinding.instance.removeObserver(this);
     AppBus.I.removeListener(_requestRefresh);
     _refreshTimer?.cancel();
+    _punchTimer?.cancel();
     super.dispose();
   }
 
@@ -171,10 +241,17 @@ class _HomeDashboardState extends State<HomeDashboard>
     _attInFlight = true;
     if (!_attLoaded && mounted) setState(() => _attLoading = true);
     try {
-      final list = await Api.getTodayAttendance(rep);
+      try {
+        final list = await Api.getTodayAttendance(rep);
+        _attServer = list.isNotEmpty ? list.first : null;
+      } catch (_) {
+        // No signal and nothing cached for today: keep the last row read.
+        // The queue below still says what the rep did since.
+      }
+      final pending = await PendingPunches.all();
       if (mounted) {
         setState(() {
-          _att = list.isNotEmpty ? list.first : null;
+          _att = PendingPunches.attendanceView(_attServer, pending, today());
           _attLoaded = true;
         });
       }
@@ -185,14 +262,25 @@ class _HomeDashboardState extends State<HomeDashboard>
     }
   }
 
-  Future<List<dynamic>> _loadTarget() => Future.wait([
-        Api.getMyTarget(),
-        Api.myCurrency(),
-        Api.getMonthSales(Session.I.salesPerson ?? '__none__'),
-      ]);
+  /// This month's target and what SAP has invoiced against it.
+  Future<TargetMonth> _loadTarget() {
+    final now = ServerClock.I.now();
+    return Api.getTargetMonth(kTargetMonths[now.month - 1], now.year);
+  }
 
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+  /// The words for a punch kept on the phone: kept, not sent, goes by itself.
+  /// The time is in it because it is the time that will be recorded.
+  void _snackSaved(String at) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      duration: const Duration(seconds: 6),
+      content: Text('No signal — punch saved on your phone at ${hhmm(at)}. '
+          'It will be sent by itself when you have signal.'),
+    ));
+  }
 
   /// A location refusal the rep can only undo in Android's settings. Once
   /// "Don't allow" has been chosen twice, Android stops showing the dialog, so
@@ -217,9 +305,26 @@ class _HomeDashboardState extends State<HomeDashboard>
     _snack('Getting GPS…');
     try {
       final pos = await getCurrentLocation();
-      await Api.punchIn(salesPerson: rep, lat: pos.latitude, lng: pos.longitude);
-      _snack('Punched in ✓');
+      // The moment of the punch, kept whether it is sent now or later.
+      final at = nowStamp();
+      try {
+        await Api.punchIn(
+            salesPerson: rep, lat: pos.latitude, lng: pos.longitude, at: at);
+        _snack('Punched in ✓');
+      } catch (e) {
+        // The window was checked before the network was touched, so a
+        // refusal for the hour never lands here — only a missing signal does.
+        if (!isNetworkFailure(e)) rethrow;
+        await PendingPunches.add(
+            kind: PunchKind.attendanceIn,
+            at: at,
+            lat: pos.latitude,
+            lng: pos.longitude,
+            accuracy: pos.accuracy);
+        _snackSaved(at);
+      }
       await _loadAtt();
+      await _loadUnsent();
     } on AttendanceWindowError catch (e) {
       await _outsidePunchHours(e);
     } catch (e) {
@@ -230,22 +335,55 @@ class _HomeDashboardState extends State<HomeDashboard>
   }
 
   Future<void> _punchOut() async {
-    if (_att == null) return;
-    final again = (_att?['punch_out_time']) != null;
+    final att = _att;
+    if (att == null) return;
+    final again = att['punch_out_time'] != null;
     setState(() => _attBusy = true);
     _snack('Getting GPS…');
     try {
       final pos = await getCurrentLocation();
-      final hours = await Api.punchOut(
-        name: _att!['name'],
-        punchInTime: (_att!['punch_in_time'] ?? '').toString(),
-        lat: pos.latitude,
-        lng: pos.longitude,
-      );
-      _snack(again
-          ? 'Punch-out updated ✓  ${hours.toStringAsFixed(2)} h'
-          : 'Punched out ✓  ${hours.toStringAsFixed(2)} h');
+      final at = nowStamp();
+      final punchInAt = (att['punch_in_time'] ?? '').toString();
+      final name = att['name'];
+
+      Future<void> queue({String? docName, String? dependsOn}) async {
+        await PendingPunches.add(
+            kind: PunchKind.attendanceOut,
+            at: at,
+            lat: pos.latitude,
+            lng: pos.longitude,
+            accuracy: pos.accuracy,
+            docName: docName,
+            dependsOn: dependsOn,
+            punchInAt: punchInAt);
+        _snackSaved(at);
+      }
+
+      if (name is String && name.isNotEmpty) {
+        try {
+          final hours = await Api.punchOut(
+            name: name,
+            punchInTime: punchInAt,
+            lat: pos.latitude,
+            lng: pos.longitude,
+            at: at,
+          );
+          _snack(again
+              ? 'Punch-out updated ✓  ${hours.toStringAsFixed(2)} h'
+              : 'Punched out ✓  ${hours.toStringAsFixed(2)} h');
+        } catch (e) {
+          if (!isNetworkFailure(e)) rethrow;
+          await queue(docName: name);
+        }
+      } else {
+        // The punch-in is still on the phone, so there is no record on the
+        // server to close yet. Checked for the hour here, because nothing
+        // else will check it before it waits in the queue.
+        Api.checkPunchOutWindow(ServerClock.I.now());
+        await queue(dependsOn: '${att['pending_in']}');
+      }
       await _loadAtt();
+      await _loadUnsent();
     } on AttendanceWindowError catch (e) {
       await _outsidePunchHours(e);
     } catch (e) {
@@ -330,6 +468,22 @@ class _HomeDashboardState extends State<HomeDashboard>
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 const SizedBox(height: 2),
                 Text(line, style: const TextStyle(color: Colors.black54)),
+                // A punch kept on the phone. Said, so the rep knows the office
+                // cannot see it yet — and does not punch again to make sure.
+                if (!_attLoading &&
+                    (_att?['pending_in'] != null ||
+                        _att?['pending_out'] != null)) ...[
+                  const SizedBox(height: 4),
+                  const Row(children: [
+                    Icon(Icons.cloud_off, size: 14, color: Color(0xFFB35309)),
+                    SizedBox(width: 4),
+                    Expanded(
+                      child: Text('Saved on your phone, not sent yet',
+                          style: TextStyle(
+                              fontSize: 12, color: Color(0xFFB35309))),
+                    ),
+                  ]),
+                ],
               ],
             ),
           ),
@@ -355,7 +509,7 @@ class _HomeDashboardState extends State<HomeDashboard>
   }
 
   Widget _myTargetCard() {
-    return FutureBuilder<List<dynamic>>(
+    return FutureBuilder<TargetMonth>(
       future: _target,
       builder: (context, snap) {
         if (snap.hasError) {
@@ -379,10 +533,9 @@ class _HomeDashboardState extends State<HomeDashboard>
             ),
           );
         }
-        final target = snap.data![0] as Map<String, dynamic>?;
-        final cur = snap.data![1] as String;
-        final actual = snap.data![2] as double;
-        if (target == null) {
+        final m = snap.data!;
+        final row = m.rowFor(Session.I.salesPerson);
+        if (row == null || (!row.hasTarget && !row.hasInvoices)) {
           return const Card(
             child: ListTile(
               leading: Icon(Icons.flag, color: Colors.grey),
@@ -391,54 +544,13 @@ class _HomeDashboardState extends State<HomeDashboard>
             ),
           );
         }
-        final amt = ((target['target_amount'] ?? 0) as num).toDouble();
-        final unit = (target['target_unit'] ?? 'Currency') as String;
-        final isCur = unit == 'Currency';
-        final pct =
-        (isCur && amt > 0) ? (actual / amt).clamp(0.0, 1.0) : 0.0;
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    const Icon(Icons.flag, color: Color(0xFFF46A21)),
-                    const SizedBox(width: 8),
-                    const Text('My Sales Target',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                    const Spacer(),
-                    Text(
-                        isCur
-                            ? '$cur ${amt.toStringAsFixed(0)}'
-                            : '${amt.toStringAsFixed(0)} t',
-                        style: const TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 16)),
-                  ]),
-                  const SizedBox(height: 10),
-                  if (isCur) ...[
-                    Text(
-                        'Sales this month (approved POs): $cur ${actual.toStringAsFixed(0)}',
-                        style: const TextStyle(
-                            fontSize: 13, color: Colors.black54)),
-                    const SizedBox(height: 8),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: LinearProgressIndicator(
-                          value: pct,
-                          minHeight: 10,
-                          backgroundColor: const Color(0xFFE0E0E0)),
-                    ),
-                    const SizedBox(height: 4),
-                    Text('${(pct * 100).toStringAsFixed(0)}% of target',
-                        style: const TextStyle(fontSize: 12)),
-                  ] else
-                    const Text(
-                        'Tonnage achieved is tracked from dispatch (coming via SAP).',
-                        style:
-                        TextStyle(fontSize: 12, color: Colors.deepOrange)),
-                ]),
-          ),
+        return TargetCard(
+          row: row,
+          title: 'My Sales Target · ${m.month}',
+          onOpen: row.hasInvoices
+              ? () => _go(TargetInvoicesScreen(
+                  row: row, title: 'My invoices · ${m.month} ${m.year}'))
+              : null,
         );
       },
     );
@@ -458,6 +570,33 @@ class _HomeDashboardState extends State<HomeDashboard>
   }
 
   Future<void> _logout() async {
+    // Punches still on the phone go with the sign-out — sent under the next
+    // login they would be filed against the wrong person. So the rep is told
+    // how many first, and can stay signed in until they have gone.
+    final waiting = await PendingPunches.count();
+    if (waiting > 0 && mounted) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Punches not sent yet'),
+          content: Text(
+              '$waiting punch${waiting == 1 ? ' has' : 'es have'} not reached '
+              'the office. Signing out deletes ${waiting == 1 ? 'it' : 'them'} '
+              'from this phone.\n\nStay signed in until you have signal and '
+              '${waiting == 1 ? 'it has' : 'they have'} been sent.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Sign out anyway',
+                    style: TextStyle(color: Colors.redAccent))),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Stay signed in')),
+          ],
+        ),
+      );
+      if (go != true) return;
+    }
     // Api.logout clears the stored token, cookie and password.
     await Api.logout();
     if (mounted) {
@@ -483,6 +622,9 @@ class _HomeDashboardState extends State<HomeDashboard>
       if (isRep && _unsent > 0)
         _Tile('Unsent Orders ($_unsent)', Icons.cloud_off,
             () => _go(const UnsentOrdersScreen())),
+      if (isRep && _unsentPunches > 0)
+        _Tile('Unsent Punches ($_unsentPunches)', Icons.cloud_upload_outlined,
+            () => _go(const UnsentPunchesScreen())),
       if (isRep) ...[
         _Tile('Customers', Icons.store, () => _go(const CustomerListScreen())),
         // Reachable from the route filters too, but a rep setting up their

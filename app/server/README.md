@@ -125,3 +125,20 @@ the trip's Version history; no reading, distance or cost changed.
 For anything they leave — a multi-leg trip they will not guess on — the HR
 odometer page finds these photos (it lists each trip's unlinked
 `start_odo…`/`end_odo…` files) and offers "Use this photo".
+
+### `sales_targets.py` and `sales_target_guard.py`
+
+Written 3 Nov 2026. `manna_sales_targets` was **installed** the same day;
+`manna_sales_target_guard` is **not yet installed** — create it as a Server
+Script in Desk, named and typed as its header says, with the file's body as
+the script.
+
+`manna_sales_targets` (API) is what both apps read for monthly targets: the
+rep's own row on the phone's home screen, the team on the manager's Team
+Targets (phone and dashboard). It counts as achieved only order lines SAP has
+invoiced (`Sales Order Item.custom_sap_invoice`), dated in the month.
+
+`manna_sales_target_guard` (Before Save on Sales Target) lets only a rep's own
+team manager — or System Manager — set that rep's target, one per month.
+`Sales User` carries write on the doctype, so without it a rep can set their
+own target from a browser console.

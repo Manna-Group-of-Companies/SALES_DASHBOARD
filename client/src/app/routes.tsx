@@ -35,6 +35,7 @@ import { TeamRegularizationsPage } from '@/features/approvals/TeamRegularization
 import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
 import { ProductionOrderPage } from '@/features/production/ProductionOrderPage';
 import { SalesStockPage } from '@/features/stock/SalesStockPage';
+import { TargetsPage } from '@/features/targets/TargetsPage';
 import { SalesDashboardPage } from '@/features/dashboard/SalesDashboardPage';
 import { HrDashboardPage } from '@/features/hr/HrDashboardPage';
 import { EmployeesPage } from '@/features/hr/EmployeesPage';
@@ -204,6 +205,14 @@ export function AppRoutes() {
           for a real loader, and restore its nav item in AppShell.tsx.
         */}
         <Route path="analysis" element={<Navigate to="/" replace />} />
+        <Route
+          path="targets"
+          element={
+            <TeamRoute screen="targets">
+              <TargetsPage />
+            </TeamRoute>
+          }
+        />
         <Route
           path="leads"
           element={

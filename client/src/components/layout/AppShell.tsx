@@ -172,6 +172,8 @@ export function AppShell() {
     { to: '/orders', label: 'Team Orders', icon: 'clipboard', roles: ['sales_manager'], screen: 'orders', count: myOrders.length, group: 'Sales' },
     { to: '/locations', label: 'Location Checks', icon: 'pin', roles: ['sales_manager'], screen: 'locations', group: 'Sales' },
     { to: '/team/regularizations', label: 'Attendance Corrections', icon: 'clock', roles: ['sales_manager'], screen: 'regularizations', group: 'Sales' },
+    // Monthly targets against SAP invoices, every team (3 Nov 2026).
+    { to: '/targets', label: 'Team Targets', icon: 'chart', roles: ['sales_manager'], screen: 'targets', group: 'Sales' },
     // Approvals and Combined Orders were here until 11 October 2026 — see the
     // note on `ManagerScreen`. Sites are verified in Location Checks; the
     // week rollup is gone.

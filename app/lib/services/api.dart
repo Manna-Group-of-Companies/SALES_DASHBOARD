@@ -14,11 +14,13 @@ import 'package:manna_field_sales/core/credit_commitment.dart';
 import 'package:manna_field_sales/core/expenses.dart';
 import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
+import 'package:manna_field_sales/core/party_location.dart';
 import 'package:manna_field_sales/core/duplicate_order.dart';
 import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/core/trip_totals.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/proximity.dart';
+import 'package:manna_field_sales/core/sales_target.dart';
 import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
@@ -31,6 +33,7 @@ import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/models/sap_rates.dart';
 import 'package:manna_field_sales/services/offline_cache.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
+import 'package:manna_field_sales/services/pending_punches.dart';
 import 'package:manna_field_sales/services/stock_service.dart';
 import 'package:manna_field_sales/services/trip_points.dart';
 
@@ -51,6 +54,14 @@ String _res(String doctype) => '/api/resource/${Uri.encodeComponent(doctype)}';
 class CacheKeys {
   static String get _me => Session.I.salesPerson ?? 'all';
 
+  static String get customers => 'customers:$_me';
+
+  // Kept across the cache clear every write makes — see
+  // OfflineCache.sessionPrefix.
+  static String openVisit(String? rep) =>
+      '${OfflineCache.sessionPrefix}openVisit:$rep';
+  static String attendance(String rep, String day) =>
+      '${OfflineCache.sessionPrefix}attendance:$rep:$day';
   static String get leads => 'leads:$_me';
   static String get visits => 'visits:$_me';
   static String get orders => 'orders:$_me';
@@ -98,6 +109,7 @@ class Api {
   /// Interactive login. Establishes a session, remembers the credentials, then
   /// tries to upgrade to a permanent token.
   static Future<void> login(String email, String password) async {
+    _forgetUser();
     await _passwordLogin(email, password);
     await AuthStore.saveLogin(
         baseUrl: Session.I.baseUrl, email: email, password: password);
@@ -253,6 +265,7 @@ class Api {
   }
 
   static Future<void> logout() async {
+    _forgetUser();
     Session.I.reauthenticate = null;
     try {
       await Session.I.dio.get('/api/method/logout');
@@ -262,8 +275,106 @@ class Api {
     // Handsets get shared and reassigned. Cached customers and unsent orders
     // belong to whoever was signed in, so they go with the session rather than
     // sitting there for the next person.
-    await OfflineCache.clear();
+    await OfflineCache.clear(signOut: true);
     await PendingOrders.clear();
+    // The home screen has already asked the rep before getting here — see
+    // HomeDashboard._logout. Sent under the next login they would be filed
+    // against the wrong person, or refused.
+    await PendingPunches.clear();
+    Session.I.offlineStart = false;
+  }
+
+  // ------------------------------------------------- opening with no signal --
+  //
+  // A rep who opens the app in a dead zone used to sit on the splash until a
+  // signal came, so the one thing they had come to do — punch in — could not
+  // even be reached. Who they are does not change between launches, so the
+  // last identity the server confirmed is kept on the phone and an app that
+  // cannot reach the server opens on it.
+  //
+  // Kept with the offline cache, so it inherits that cache's rules: wiped on
+  // sign-out, and not used once it is more than a week old. Nothing is
+  // widened by it — it is exactly what the server last said this login may
+  // see — and the moment a signal returns [recoverAfterOfflineStart] asks the
+  // server again before anything queued is sent.
+
+  static String get _identityKey =>
+      '${OfflineCache.sessionPrefix}identity:${Session.I.email}';
+
+  /// Remembers who this login resolved to. Called after every successful
+  /// sign-in or restore.
+  static Future<void> rememberIdentity() => OfflineCache.write(_identityKey, {
+        'sales_person': Session.I.salesPerson,
+        'sales_person_label': Session.I.salesPersonLabel,
+        'company': Session.I.company,
+        'team_manager': Session.I.teamManager,
+        'unit_peers': Session.I.unitPeers,
+        'managed_team': Session.I.managedTeam,
+        'managed_team_company': Session.I.managedTeamCompany,
+        'team_reps': Session.I.teamReps,
+        'is_gm': Session.I.isGM,
+        'is_hr': Session.I.isHR,
+        'is_production_manager': Session.I.isProductionManager,
+        'production_company': Session.I.productionCompany,
+        'is_stock_manager': Session.I.isStockManager,
+      });
+
+  /// Puts the last confirmed identity back, for an app opened with no signal.
+  /// False when there is none to use, and the splash keeps waiting.
+  static Future<bool> restoreIdentityOffline() async {
+    if (Session.I.email.isEmpty) return false;
+    final c = await OfflineCache.peek<Map<String, dynamic>>(
+        _identityKey, decodeDoc);
+    final d = c?.value;
+    if (d == null || d.isEmpty) return false;
+    String? s(String k) => d[k] == null ? null : '${d[k]}';
+    List<String> l(String k) =>
+        (d[k] as List? ?? const []).map((e) => '$e').toList();
+    Session.I
+      ..salesPerson = s('sales_person')
+      ..salesPersonLabel = s('sales_person_label')
+      ..company = s('company')
+      ..teamManager = s('team_manager')
+      ..unitPeers = l('unit_peers')
+      ..managedTeam = s('managed_team')
+      ..managedTeamCompany = s('managed_team_company')
+      ..teamReps = l('team_reps')
+      ..isGM = d['is_gm'] == true
+      ..isHR = d['is_hr'] == true
+      ..isProductionManager = d['is_production_manager'] == true
+      ..productionCompany = s('production_company')
+      ..isStockManager = d['is_stock_manager'] == true
+      ..offlineStart = true;
+    return true;
+  }
+
+  /// Once a signal returns to an app opened without one: checks the saved
+  /// sign-in still works, re-reads who this login is, and only then reports
+  /// ready. Nothing queued is sent before this says true.
+  ///
+  /// The CSRF token is the part that would otherwise bite. A cookie session
+  /// needs one for every write and it could not be fetched offline, so the
+  /// first queued punch would have been refused by the server for a reason
+  /// that has nothing to do with the punch.
+  static Future<bool> recoverAfterOfflineStart() async {
+    if (!Session.I.offlineStart) return true;
+    try {
+      // Sign-in first. A sid that expired while offline is repaired by the
+      // interceptor's silent re-login, which fetches its own CSRF token;
+      // asking for the token first, on the dead sid, could fail and stop
+      // here before that re-login was ever given the chance.
+      if (!await testAuth()) return false;
+      if (!Session.I.hasToken && Session.I.csrfToken.isEmpty) {
+        await fetchCsrf();
+        if (Session.I.csrfToken.isEmpty) return false;
+      }
+      await Future.wait([resolveMySalesPerson(), resolveManagerContext()]);
+      await rememberIdentity();
+      Session.I.offlineStart = false;
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<List<Map<String, dynamic>>> _list(String doctype,
@@ -332,8 +443,21 @@ class Api {
   /// move much between visits. The result carries when it was fetched so the
   /// list can say so — an outstanding balance quoted to a customer is exactly
   /// the sort of figure nobody should read off a stale screen unknowingly.
+  /// The customer list as last synced, straight off the phone, or null when
+  /// there is none worth showing.
+  ///
+  /// For a screen to draw *while* [getCustomersCached] is still fetching. Six
+  /// hundred rows over a rural connection take long enough that reps called
+  /// the screen "stuck"; the copy from their last visit is on the phone the
+  /// whole time and is what they would have been shown had the signal dropped.
+  /// Callers must still run the live read and replace this when it lands —
+  /// and say the copy is being refreshed, so nobody quotes a balance off it
+  /// thinking it is live.
+  static Future<Cached<List<Map<String, dynamic>>>?> peekCustomers() =>
+      OfflineCache.peek<List<Map<String, dynamic>>>(
+          CacheKeys.customers, decodeRows);
+
   static Future<Cached<List<Map<String, dynamic>>>> getCustomersCached() {
-    final rep = Session.I.salesPerson;
     // `custom_assigned_reps` is a Link to Sales Person now, holding a bare
     // name. It used to be free text wrapped in pipes — "|Subhash|" — matched
     // with a LIKE. That match cannot succeed against a Link value, so the
@@ -341,7 +465,7 @@ class Api {
     // In a pooled unit this is every rep in the unit, not just this one — see
     // core/visibility.dart. Ownership is untouched; only the filter widens.
     return OfflineCache.read<List<Map<String, dynamic>>>(
-      'customers:${rep ?? 'all'}',
+      CacheKeys.customers,
       () => _visibleRows(
           'Customer', kFieldCustomerOwner,
           // The outstanding fields come from `kOutstandingFields` rather than
@@ -377,24 +501,53 @@ class Api {
     await OfflineCache.clear();
   }
 
-  static Future<String?> _loggedUser() async {
-    try {
-      final r =
-      await Session.I.dio.get('/api/method/frappe.auth.get_logged_user');
-      final m = (r.data is Map) ? r.data['message'] : null;
-      return (m is String && m.isNotEmpty) ? m : null;
-    } catch (_) {
-      return null;
-    }
+  /// Who the server says is signed in. Asked once per sign-in and remembered:
+  /// it was being fetched again on every screen that needed the rep's own
+  /// Sales Person, and on a rural connection each of those is a full round
+  /// trip spent learning something that cannot change until the next login.
+  ///
+  /// The in-flight future is what is memoised, not just the answer, so two
+  /// callers starting together share one request. A failure clears it, so
+  /// the next caller asks again rather than inheriting a dead answer.
+  static Future<String?>? _loggedUserMemo;
+
+  static Future<String?> _loggedUser() {
+    return _loggedUserMemo ??= () async {
+      try {
+        final r =
+        await Session.I.dio.get('/api/method/frappe.auth.get_logged_user');
+        final m = (r.data is Map) ? r.data['message'] : null;
+        final user = (m is String && m.isNotEmpty) ? m : null;
+        if (user == null) _loggedUserMemo = null;
+        return user;
+      } catch (_) {
+        _loggedUserMemo = null;
+        return null;
+      }
+    }();
+  }
+
+  /// The signed-in rep's own Sales Person rows, remembered for the session for
+  /// the same reason as [_loggedUser]. Cleared with it.
+  static List<Map<String, dynamic>>? _mySalesPersons;
+
+  /// Forgets who is signed in. Called whenever credentials change hands.
+  static void _forgetUser() {
+    _loggedUserMemo = null;
+    _mySalesPersons = null;
   }
 
   static Future<List<Map<String, dynamic>>> getSalesPersons() async {
+    final memo = _mySalesPersons;
+    if (memo != null) return memo;
     final user = await _loggedUser();
     if (user == null) return [];
-    return _list('Sales Person',
+    final rows = await _list('Sales Person',
         fields: '["name","sales_person_name","custom_company",'
             '"custom_team_manager"]',
         filters: '[["is_group","=",0],["custom_user","=","$user"]]');
+    _mySalesPersons = rows;
+    return rows;
   }
 
   static Future<void> resolveMySalesPerson() async {
@@ -503,16 +656,21 @@ class Api {
     final peers = Session.I.unitPeers;
     if (peers.isEmpty) return const [];
 
-    final owned = await _list(doctype,
+    final ownedFuture = _list(doctype,
         fields: fields,
         filters: peers.length == 1
             ? '[["$field","=","${peers.first}"]]'
             : '[["$field","in",${_inList(peers)}]]',
         orderBy: orderBy);
 
-    if (!isPooledUnit(Session.I.company)) return owned;
+    if (!isPooledUnit(Session.I.company)) return ownedFuture;
 
-    final territories = await _poolTerritories();
+    // The territory tree does not depend on the owned rows, so the two are
+    // fetched together: a UAE rep was waiting three round trips in a row to
+    // see their customer list, and this is one of them.
+    final territoriesFuture = _poolTerritories();
+    final owned = await ownedFuture;
+    final territories = await territoriesFuture;
     if (territories.isEmpty) return owned;
 
     final unclaimed = await _list(doctype,
@@ -1303,49 +1461,22 @@ class Api {
     return _put('Lead', name, {'custom_location_status': 'Rejected'});
   }
 
-  // ---- Logged-in rep's own target (shown on their home dashboard) ----
-  static Future<Map<String, dynamic>?> getMyTarget() async {
-    final me = Session.I.salesPerson;
-    if (me == null) return null;
-    final now = DateTime.now();
-    final month = monthNames[now.month - 1];
-    final list = await _list('Sales Target',
-        fields: '["name","target_amount","target_unit"]',
-        filters:
-        '[["sales_person","=","$me"],["month","=","$month"],["year","=",${now.year}]]',
-        limit: 1);
-    return list.isEmpty ? null : list.first;
-  }
-
-  // Rep currency: AED for the UAE (Renjith) team, INR otherwise.
-  static Future<String> myCurrency() async {
-    final me = Session.I.salesPerson;
-    if (me == null) return 'INR';
-    final sp = await _list('Sales Person',
-        fields: '["custom_team_manager"]',
-        filters: '[["name","=","$me"]]',
-        limit: 1);
-    final mgr =
-    sp.isNotEmpty ? (sp.first['custom_team_manager'] ?? '').toString() : '';
-    return mgr == 'Renjith' ? 'AED' : 'INR';
-  }
-
   // -------- Targets --------
-  static List<String> get monthNames => const [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-  ];
+  //
+  // Read through the `manna_sales_targets` Server Script (app/server/
+  // sales_targets.py), which decides both whose targets this login sees and
+  // what counts as achieved: lines SAP has invoiced in that month, nothing
+  // else. `Sales Order Item` answers 403 to the phone, so the invoice lines
+  // could not be read from here anyway.
 
-  static Future<List<Map<String, dynamic>>> getTargets(
-      String month, int year) {
-    final team = Session.I.teamReps;
-    if (team.isEmpty) return Future.value([]);
-    return _list('Sales Target',
-        fields:
-        '["name","sales_person","month","year","target_amount","target_unit"]',
-        filters:
-        '[["month","=","$month"],["year","=",$year],["sales_person","in",${_inList(team)}]]',
-        orderBy: 'sales_person asc');
+  /// Targets and invoiced achievement for [month] (`Jan`..`Dec`) of [year].
+  /// A rep gets their own row; a team manager their team's.
+  static Future<TargetMonth> getTargetMonth(String month, int year) async {
+    final r = await Session.I.dio.get('/api/method/manna_sales_targets',
+        queryParameters: {'month': month, 'year': year});
+    final m = r.data is Map ? r.data['message'] : null;
+    if (r.statusCode != 200 || m is! Map) throw Exception(_frappeError(r));
+    return TargetMonth.fromJson(m);
   }
 
   // UAE team (Renjith) targets in AED; India teams (Saneesh/Pareeth) in INR.
@@ -1390,27 +1521,6 @@ class Api {
     double t = 0;
     for (final e in list) {
       t += ((e['amount'] ?? 0) as num).toDouble();
-    }
-    return t;
-  }
-
-  // Sales achieved this month = manager-approved POs (ready for SAP),
-  // across both Sales Orders and Lead Orders for this rep.
-  static Future<double> getMonthSales(String rep) async {
-    double t = 0;
-    final so = await _list('Sales Order',
-        fields: '["grand_total"]',
-        filters:
-        '[["custom_sales_person","=","$rep"],["custom_po_status","=","PO Approved - Ready for SAP"],["transaction_date","Timespan","this month"]]');
-    for (final e in so) {
-      t += ((e['grand_total'] ?? 0) as num).toDouble();
-    }
-    final lo = await _list('Lead Order',
-        fields: '["total_amount"]',
-        filters:
-        '[["sales_person","=","$rep"],["status","=","PO Approved - Ready for SAP"],["order_date","Timespan","this month"]]');
-    for (final e in lo) {
-      t += ((e['total_amount'] ?? 0) as num).toDouble();
     }
     return t;
   }
@@ -1741,97 +1851,53 @@ class Api {
   //
   // Pass [forRep] to scope to someone else — the day map does this so a
   // manager viewing a UAE rep gets that rep's routes, not their own.
-  static Future<List<String>> getRoutes({String? forRep}) async {
-    final tree = await _list('Territory',
-        fields: '["name","is_group","parent_territory"]', orderBy: 'name asc');
-    final parent = <String, String>{};
-    final leaves = <String>[];
-    for (final t in tree) {
-      final name = '${t['name'] ?? ''}';
-      if (name.isEmpty) continue;
-      final p = '${t['parent_territory'] ?? ''}';
-      if (p.isNotEmpty) parent[name] = p;
-      if ('${t['is_group'] ?? 0}' != '1') leaves.add(name);
-    }
+  // ---- What sits on a sales route, for the Day Map ----
+  //
+  // Matched on `custom_sales_route`, never on `territory`. Routes moved to
+  // their own doctype, and the Day Map was left listing Territories and
+  // matching parties on the territory field — so every customer and lead
+  // created since, which carries a route and no territory at all, was missing
+  // from the map of its own route, and the picker offered territories nobody
+  // had assigned anything to in months. The Customers screen already filtered
+  // by the route field; the map simply disagreed with it. See
+  // `core/visibility.dart` for the field.
 
-    final rep = forRep ?? Session.I.salesPerson;
-    if (rep == null || rep.isEmpty) return leaves;
+  /// Every customer on one route, regardless of which rep owns them — a route
+  /// on the map is the whole run, not one rep's share of it. The verified pair
+  /// travels with the captured one so a legacy row with only the former still
+  /// gets a pin; see `core/party_location.dart`.
+  static Future<List<Map<String, dynamic>>> getCustomersOnRoute(String route) =>
+      _list('Customer',
+          fields: '["name","customer_name","customer_group",'
+              '"$kFieldPartyRoute","custom_latitude","custom_longitude",'
+              '"custom_verified_latitude","custom_verified_longitude",'
+              '"custom_phone"]',
+          filters: '[["$kFieldPartyRoute","=",${jsonEncode(route)}]]',
+          orderBy: 'customer_name asc');
 
-    // Nothing on the rep's book yet means no region to infer — show them
-    // everything rather than an empty dropdown.
-    final regions = (await _repTerritories(rep))
-        .map((t) => _regionOf(t, parent))
-        .where((r) => r.isNotEmpty)
-        .toSet();
-    if (regions.isEmpty) return leaves;
+  /// Every site put on one route. A customer's godown can be on a different
+  /// run from their shop, and the van has to reach the godown.
+  static Future<List<Map<String, dynamic>>> getSitesOnRoute(String route) =>
+      _list('Customer Site',
+          fields: '["name","site_name","customer","lead","route","latitude",'
+              '"longitude","verified_latitude","verified_longitude",'
+              '"location_status"]',
+          filters: '[["route","=",${jsonEncode(route)}]]',
+          orderBy: 'site_name asc');
 
-    final scoped =
-        leaves.where((l) => regions.contains(_regionOf(l, parent))).toList();
-    return scoped.isEmpty ? leaves : scoped;
-  }
-
-  // The top-level group a territory sits under — 'UAE' or 'India', not the
-  // 'All Territories' root. Stopping one short of the root is what keeps the
-  // regions apart. A flat tree with no region groups degrades to the territory
-  // itself, which still scopes the dropdown to what the rep actually works.
-  static String _regionOf(String territory, Map<String, String> parent) {
-    var cur = territory;
-    final seen = <String>{};
-    while (seen.add(cur)) {
-      final p = parent[cur];
-      if (p == null || p.isEmpty) return cur; // cur is the root
-      final gp = parent[p];
-      if (gp == null || gp.isEmpty) return cur; // cur's parent is the root
-      cur = p;
-    }
-    return cur; // a cycle in the tree — bail out rather than spin
-  }
-
-  // Every route the rep is already working, from both sides of their book.
-  static Future<Set<String>> _repTerritories(String rep) async {
-    Future<List<Map<String, dynamic>>> pull(String doctype, String filters) async {
-      try {
-        return await _list(doctype,
-            fields: '["territory"]', filters: filters, orderBy: 'modified desc');
-      } catch (_) {
-        // One side failing shouldn't cost us the other side's routes.
-        return const [];
-      }
-    }
-
-    final res = await Future.wait([
-      pull('Customer', '[["custom_assigned_reps","=","$rep"]]'),
-      pull('Lead', '[["custom_sales_person","=","$rep"]]'),
-    ]);
-    return res
-        .expand((l) => l)
-        .map((e) => '${e['territory'] ?? ''}')
-        .where((t) => t.isNotEmpty)
-        .toSet();
-  }
-
-  // Every customer on one route (Territory), regardless of which rep they are
-  // assigned to — the day map uses this to draw the whole route.
-  static Future<List<Map<String, dynamic>>> getCustomersInTerritory(
-      String territory) {
-    return _list('Customer',
-        fields:
-        '["name","customer_name","customer_group","territory","custom_latitude","custom_longitude","custom_phone"]',
-        filters: '[["territory","=","$territory"]]',
-        orderBy: 'customer_name asc');
-  }
-
-  // Leads that have had their location captured — the day map draws these as
-  // an overlay. Pass a route (Territory) to narrow it to that route's leads.
+  /// Leads that have had their location captured — the day map draws these
+  /// as an overlay. Pass a route to narrow it to that route's leads.
   static Future<List<Map<String, dynamic>>> getLeadsWithLocation(
-      {String? territory}) {
+      {String? route}) {
     final f = <String>['["custom_latitude","is","set"]'];
-    if (territory != null && territory.isNotEmpty) {
-      f.add('["territory","=","$territory"]');
+    if (route != null && route.isNotEmpty) {
+      f.add('["$kFieldPartyRoute","=",${jsonEncode(route)}]');
     }
     return _list('Lead',
-        fields:
-            '["name","lead_name","company_name","territory","status","custom_latitude","custom_longitude","custom_location_status"]',
+        fields: '["name","lead_name","company_name","$kFieldPartyRoute",'
+            '"status","custom_latitude","custom_longitude",'
+            '"custom_verified_latitude","custom_verified_longitude",'
+            '"custom_location_status"]',
         filters: '[${f.join(',')}]',
         orderBy: 'lead_name asc');
   }
@@ -3250,7 +3316,8 @@ class Api {
       {String? customer, String? lead}) async {
     final rep = Session.I.salesPerson;
     if (rep == null) return null;
-    final today = DateTime.now().toIso8601String().substring(0, 10);
+    // The server's day, as the visit was stamped with — not the phone's.
+    final day = today();
     final party = customer != null
         ? '["customer","=","$customer"]'
         : '["custom_lead","=","$lead"]';
@@ -3258,8 +3325,32 @@ class Api {
         fields:
         '["name","check_in_time","check_in_latitude","check_in_longitude"]',
         filters:
-        '[["sales_person","=","$rep"],["visit_date","=","$today"],["check_out_time","is","not set"],$party]',
+        '[["sales_person","=","$rep"],["visit_date","=","$day"],["check_out_time","is","not set"],$party]',
         orderBy: 'check_in_time desc',
+        limit: 1);
+    return list.isEmpty ? null : list.first;
+  }
+
+  /// This rep's last finished visit at one party today, or null.
+  ///
+  /// What the visit card shows once the rep has punched out. It used to hold
+  /// the minutes in the screen's own memory, so leaving the shop's screen and
+  /// coming back wiped them — and a rep who had just punched out was told
+  /// "Not on a visit" with no trace of the visit, and reasonably took it as
+  /// lost.
+  static Future<Map<String, dynamic>?> getLastClosedVisit(
+      {String? customer, String? lead}) async {
+    final rep = Session.I.salesPerson;
+    if (rep == null) return null;
+    final party = customer != null
+        ? '["customer","=","$customer"]'
+        : '["custom_lead","=","$lead"]';
+    final list = await _list('Sales Visit',
+        fields:
+        '["name","check_in_time","check_out_time","custom_duration_minutes"]',
+        filters:
+        '[["sales_person","=","$rep"],["visit_date","=","${today()}"],["check_out_time","is","set"],$party]',
+        orderBy: 'check_out_time desc',
         limit: 1);
     return list.isEmpty ? null : list.first;
   }
@@ -3274,18 +3365,52 @@ class Api {
   /// Restricted to today for the same reason the per-party lookup is: a visit
   /// somebody forgot to close last week should not stop them working this
   /// morning. Those are cleaned up separately.
-  static Future<Map<String, dynamic>?> getAnyOpenVisit() async {
+  ///
+  /// [withLabel] false skips the second round trip that resolves the party's
+  /// readable name — for a caller that only needs the docname, such as the
+  /// customer list pinning the row, and already has every name in hand.
+  ///
+  /// With no signal it answers with the last open visit the phone saw today,
+  /// rather than throwing. A rep who punched in at one shop and lost signal
+  /// on the way to the next must still be told they are checked in at the
+  /// first — the punch queue relies on it, since an offline punch-in is
+  /// otherwise judged against nothing. Yesterday's copy is never served.
+  static Future<Map<String, dynamic>?> getAnyOpenVisit(
+      {bool withLabel = true}) async {
     final rep = Session.I.salesPerson;
     if (rep == null) return null;
-    final today = DateTime.now().toIso8601String().substring(0, 10);
-    final list = await _list('Sales Visit',
-        fields: '["name","check_in_time","customer","custom_lead"]',
-        filters: '[["sales_person","=","$rep"],["visit_date","=","$today"],'
-            '["check_out_time","is","not set"]]',
-        orderBy: 'check_in_time desc',
-        limit: 1);
-    if (list.isEmpty) return null;
-    return _withPartyLabel(list.first);
+    // The server's day: a visit is stamped off its clock, and a phone set to
+    // the wrong date would otherwise never find the one it just opened.
+    final day = today();
+    final cached = await OfflineCache.read<Map<String, dynamic>?>(
+      CacheKeys.openVisit(rep),
+      () async {
+        final list = await _list('Sales Visit',
+            fields: '["name","check_in_time","customer","custom_lead"]',
+            filters: '[["sales_person","=","$rep"],["visit_date","=","$day"],'
+                '["check_out_time","is","not set"]]',
+            orderBy: 'check_in_time desc',
+            limit: 1);
+        if (list.isEmpty) return null;
+        if (withLabel) return _withPartyLabel(list.first);
+        // This answer is also the offline copy, which the punch card quotes
+        // as "still checked in at …". Keep the label an earlier read put on
+        // the same visit, or the customer list's unlabelled read leaves a
+        // lead's docname in that sentence.
+        final prev = (await OfflineCache.peek<Map<String, dynamic>>(
+                CacheKeys.openVisit(rep), decodeDoc))
+            ?.value;
+        final label = prev?['party_label'];
+        return (label != null && prev?['name'] == list.first['name'])
+            ? {...list.first, 'party_label': label}
+            : list.first;
+      },
+      decode: (j) => j is Map ? Map<String, dynamic>.from(j) : null,
+    );
+    final v = cached.value;
+    if (v == null) return null;
+    final checkedIn = '${v['check_in_time'] ?? ''}';
+    return checkedIn.startsWith(day) ? v : null;
   }
 
   /// Put a readable party name on a visit, under `party_label`.
@@ -3348,21 +3473,11 @@ class Api {
       {String? customer, String? lead}) async {
     final out = <RegisteredPlace>[];
 
-    double n(dynamic v) =>
-        v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
-
+    // Read as the maps read it, so the pin a rep is judged by is the pin
+    // they are shown — see core/party_location.dart.
     void addFrom(Map<String, dynamic> d, String label, String prefix) {
-      final vLat = n(d['${prefix}verified_latitude']);
-      final vLng = n(d['${prefix}verified_longitude']);
-      if (isRealCoordinate(vLat, vLng)) {
-        out.add(RegisteredPlace(label, vLat, vLng));
-        return;
-      }
-      final cLat = n(d['${prefix}latitude']);
-      final cLng = n(d['${prefix}longitude']);
-      if (isRealCoordinate(cLat, cLng)) {
-        out.add(RegisteredPlace(label, cLat, cLng));
-      }
+      final p = partyLatLng(d, prefix: prefix);
+      if (p != null) out.add(RegisteredPlace(label, p.lat, p.lng));
     }
 
     try {
@@ -3386,11 +3501,20 @@ class Api {
     return out;
   }
 
+  /// [at] is the moment of the punch, `yyyy-MM-dd HH:mm:ss`; omitted, it is
+  /// now. A punch sent from the queue passes its own, so it records when the
+  /// rep was there. [trip] likewise: the trip running at the punch, not
+  /// whichever is running when it arrives.
+  ///
+  /// Stamped off the server's clock. This took `DateTime.now()` — the one
+  /// punch in the app the rep's own clock decided.
   static Future<String> punchInVisit(
       {String? customer,
         String? lead,
         required double lat,
-        required double lng}) async {
+        required double lng,
+        String? at,
+        String? trip}) async {
     final rep = Session.I.salesPerson!;
 
     // One visit at a time. The screen checks this first and explains it
@@ -3406,15 +3530,13 @@ class Api {
           'Punch out there before starting another visit.');
     }
 
-    final stamp = DateTime.now()
-        .toIso8601String()
-        .substring(0, 19)
-        .replaceFirst('T', ' ');
+    final stamp = at ?? nowStamp();
     // Link to the trip that's running, so the visit shows on the trip.
-    String? trip;
-    try {
-      trip = (await getActiveTrip())?['name'] as String?;
-    } catch (_) {}
+    if (trip == null) {
+      try {
+        trip = (await getActiveTrip())?['name'] as String?;
+      } catch (_) {}
+    }
     final body = {
       'visit_date': stamp.substring(0, 10),
       'sales_person': rep,
@@ -3428,24 +3550,36 @@ class Api {
     };
     final r = await Session.I.dio.post(_res('Sales Visit'), data: body);
     if (r.statusCode == 200 || r.statusCode == 201) {
-      return r.data['data']['name'] as String;
+      final name = r.data['data']['name'] as String;
+      // What getAnyOpenVisit answers with when the signal goes next — the
+      // shop the rep is now checked in at.
+      await OfflineCache.write(CacheKeys.openVisit(rep), {
+        'name': name,
+        'check_in_time': stamp,
+        'customer': customer,
+        'custom_lead': lead,
+      });
+      return name;
     }
     throw Exception(_frappeError(r));
   }
 
+  /// [at] as on [punchInVisit]. The minutes are measured from the check-in to
+  /// [at], not to now — a punch-out sent an hour late must not add the hour
+  /// spent looking for a signal to the time in the shop.
   static Future<double> punchOutVisit(
       {required String name,
         required double lat,
         required double lng,
-        required String checkInTime}) async {
-    final stamp = DateTime.now()
-        .toIso8601String()
-        .substring(0, 19)
-        .replaceFirst('T', ' ');
+        required String checkInTime,
+        String? at}) async {
+    final stamp = at ?? nowStamp();
     double mins = 0;
     try {
       final inT = DateTime.parse(checkInTime.replaceFirst(' ', 'T'));
-      mins = DateTime.now().difference(inT).inSeconds / 60.0;
+      final outT = DateTime.parse(stamp.replaceFirst(' ', 'T'));
+      mins = outT.difference(inT).inSeconds / 60.0;
+      if (mins < 0) mins = 0;
     } catch (_) {}
     await _put('Sales Visit', name, {
       'check_out_time': stamp,
@@ -3454,7 +3588,113 @@ class Api {
       'custom_duration_minutes': double.parse(mins.toStringAsFixed(1)),
       'visit_status': 'Completed',
     });
+    // The open visit is cached for offline use; it is not open any more.
+    await OfflineCache.write(CacheKeys.openVisit(Session.I.salesPerson), null);
     return mins;
+  }
+
+  /// Sends one punch from the phone's queue and returns the document it
+  /// created or closed. The sender behind [PendingPunches.flush].
+  ///
+  /// **Every punch-in looks for itself first.** A send whose answer was lost
+  /// may well have been saved, and the queue sends it again; without this the
+  /// second send would make a second Attendance Log or a second visit. So the
+  /// server is asked for the record this punch would have made, and if it is
+  /// there that record is the answer. A punch-out needs no such look: writing
+  /// the same close twice changes nothing.
+  ///
+  /// A lead visit whose duplicate check could not run at the punch runs it
+  /// here, before anything is written, and is refused if it fails — see
+  /// `pending_punches.dart`.
+  static Future<String?> sendPendingPunch(PendingPunch p) async {
+    switch (p.kind) {
+      case PunchKind.attendanceIn:
+        final existing = await _list('Attendance Log',
+            fields: '["name","punch_in_time"]',
+            filters: jsonEncode([
+              ['sales_person', '=', p.salesPerson],
+              ['attendance_date', '=', p.date],
+            ]),
+            limit: 1);
+        // Already punched in that day, from this punch's lost answer or from
+        // another phone. The server's time stands; this one stands down.
+        if (existing.isNotEmpty) return '${existing.first['name']}';
+        return punchIn(
+            salesPerson: p.salesPerson, lat: p.lat, lng: p.lng, at: p.at);
+
+      case PunchKind.attendanceOut:
+        final name = p.docName;
+        if (name == null || name.isEmpty) {
+          throw Exception('This punch-out has no attendance record to close.');
+        }
+        // Hours run from the punch-in the record actually holds. When the
+        // queued punch-in stood down to one already on the server — another
+        // phone, or Desk — that time is not the one this punch-out carries,
+        // and measuring from the phone's copy would write hours that do not
+        // match the record's own punch-in.
+        final rec = await _list('Attendance Log',
+            fields: '["punch_in_time"]',
+            filters: jsonEncode([
+              ['name', '=', name]
+            ]),
+            limit: 1);
+        final serverIn =
+            rec.isEmpty ? '' : '${rec.first['punch_in_time'] ?? ''}';
+        await punchOut(
+            name: name,
+            punchInTime: serverIn.isEmpty || serverIn == 'null'
+                ? (p.punchInAt ?? '')
+                : serverIn,
+            lat: p.lat,
+            lng: p.lng,
+            at: p.at);
+        return name;
+
+      case PunchKind.visitIn:
+        final existing = await _list('Sales Visit',
+            fields: '["name"]',
+            filters: jsonEncode([
+              ['sales_person', '=', p.salesPerson],
+              ['check_in_time', '=', p.at],
+              if (p.customer != null) ['customer', '=', p.customer],
+              if (p.lead != null) ['custom_lead', '=', p.lead],
+            ]),
+            limit: 1);
+        if (existing.isNotEmpty) return '${existing.first['name']}';
+
+        if (p.checkNearby && p.lead != null) {
+          final near = await nearbyPlaces(
+              lat: p.lat, lng: p.lng, exclude: {p.lead!});
+          if (near.isNotEmpty) {
+            final n = near.first;
+            throw PunchRefused(
+                '${n.label} (${n.kind.toLowerCase()} of ${n.ownerLabel}) is '
+                'already on record ${n.distanceLabel}, so this visit was not '
+                'recorded. Discard it, or ask your manager to remove the '
+                'duplicate.');
+          }
+        }
+        return punchInVisit(
+            customer: p.customer,
+            lead: p.lead,
+            lat: p.lat,
+            lng: p.lng,
+            at: p.at,
+            trip: p.trip);
+
+      case PunchKind.visitOut:
+        final name = p.docName;
+        if (name == null || name.isEmpty) {
+          throw Exception('This punch-out has no visit to close.');
+        }
+        await punchOutVisit(
+            name: name,
+            lat: p.lat,
+            lng: p.lng,
+            checkInTime: p.punchInAt ?? '',
+            at: p.at);
+        return name;
+    }
   }
 
   /// Raises a Sales Order.
@@ -4192,14 +4432,22 @@ class Api {
   }
 
   // -------- Attendance --------
+  /// Today's Attendance Log, falling back to the last copy the phone saw
+  /// today when there is no signal — so a rep who punched in this morning and
+  /// lost signal is still shown Punch Out, not Punch In. Keyed by the day, so
+  /// yesterday's row can never be served as today's.
   static Future<List<Map<String, dynamic>>> getTodayAttendance(
-      String salesPerson) =>
-      _list('Attendance Log',
-          fields:
-          '["name","sales_person","attendance_date","status","punch_in_time","punch_out_time","working_hours"]',
-          filters:
-          '[["sales_person","=","$salesPerson"],["attendance_date","=","${today()}"]]',
-          limit: 1);
+      String salesPerson) {
+    final day = today();
+    return _cachedRows(
+        CacheKeys.attendance(salesPerson, day),
+        () => _list('Attendance Log',
+            fields:
+            '["name","sales_person","attendance_date","status","punch_in_time","punch_out_time","working_hours"]',
+            filters:
+            '[["sales_person","=","$salesPerson"],["attendance_date","=","$day"]]',
+            limit: 1));
+  }
 
   // ---- Attendance calendar + regularization ----
   static String _monthBounds(int year, int month, bool last) {
@@ -4356,12 +4604,22 @@ class Api {
   static String _stamp(DateTime t) =>
       t.toIso8601String().substring(0, 19).replaceFirst('T', ' ');
 
+  /// The inverse of [_stamp], or null for nothing or for junk — which the
+  /// callers read as "now".
+  static DateTime? _parseStamp(String? s) =>
+      (s == null || s.isEmpty) ? null : DateTime.tryParse(s.replaceFirst(' ', 'T'));
+
+  /// [at] is the moment of the punch, `yyyy-MM-dd HH:mm:ss`; omitted, it is
+  /// now on the server's clock. The window is judged on [at], not on when the
+  /// write happens to go: a punch taken at 08:55 with no signal and sent at
+  /// noon was a punch at 08:55.
   static Future<String> punchIn({
     required String salesPerson,
     required double lat,
     required double lng,
+    String? at,
   }) async {
-    final now = ServerClock.I.now();
+    final now = _parseStamp(at) ?? ServerClock.I.now();
     if (minuteOfDay(now) < kPunchInFromMinute) {
       throw const AttendanceWindowError(
           'Punch-in opens at 5:00 AM. If you started before that, punch in now '
@@ -4386,13 +4644,12 @@ class Api {
   /// Records the moment the rep finished. Punching out a second time is
   /// allowed and simply replaces the first — the last one is the official
   /// punch-out, and the hours are recomputed from it.
-  static Future<double> punchOut({
-    required String name,
-    required String punchInTime,
-    required double lat,
-    required double lng,
-  }) async {
-    final now = ServerClock.I.now();
+  ///
+  /// Throws [AttendanceWindowError] when [now] is past the punch-out cut-off.
+  /// The one copy of that rule: [punchOut] runs it, and so does a punch-out
+  /// queued behind a punch-in that is itself still on the phone, which
+  /// nothing else checks before it waits.
+  static void checkPunchOutWindow(DateTime now) {
     if (minuteOfDay(now) > kPunchOutUntilMinute) {
       throw AttendanceWindowError(
         'Punch-out closed at 9:30 PM. Request a regularization for today and '
@@ -4400,6 +4657,19 @@ class Api {
         regularizeDate: DateTime(now.year, now.month, now.day),
       );
     }
+  }
+
+  /// [at] as on [punchIn]. The hours run to [at], so a punch-out sent late
+  /// does not pay the rep for the drive back into coverage.
+  static Future<double> punchOut({
+    required String name,
+    required String punchInTime,
+    required double lat,
+    required double lng,
+    String? at,
+  }) async {
+    final now = _parseStamp(at) ?? ServerClock.I.now();
+    checkPunchOutWindow(now);
     double hours = 0;
     try {
       final tin = DateTime.parse(punchInTime.replaceFirst(' ', 'T'));
