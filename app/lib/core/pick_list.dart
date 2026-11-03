@@ -23,6 +23,14 @@ double orderedForPick(Map line) {
   return _num(line['qty']);
 }
 
+/// The unit [orderedForPick] counts in. Tread rubber's `stock_uom` is `Kg`
+/// while its qty is rolls, so the unit cannot be read off the line's UOM.
+String pickUnit(Map line) {
+  if (_int(line['custom_rolls']) > 0) return 'rolls';
+  final u = '${line['stock_uom'] ?? line['uom'] ?? ''}'.trim();
+  return u == 'null' ? '' : u;
+}
+
 /// Ordered less what earlier Submitted lists already took. Never below zero.
 double remainingToPick(Map line, double alreadyPicked) {
   final r = orderedForPick(line) - alreadyPicked;

@@ -36,7 +36,7 @@ class _PickRow {
 
   String get id => '${line['name'] ?? ''}';
   String get title => '${line['item_name'] ?? line['item_code'] ?? ''}';
-  String get unit => '${line['stock_uom'] ?? line['uom'] ?? ''}';
+  String get unit => pickUnit(line);
   double get ordered => orderedForPick(line);
 }
 

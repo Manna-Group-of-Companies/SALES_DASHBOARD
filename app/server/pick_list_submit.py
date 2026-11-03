@@ -101,7 +101,8 @@ for l in lines:
         "sales_order_item": key,
         "item_code": it.item_code,
         "item_name": it.item_name,
-        "unit": it.stock_uom or it.uom or "",
+        # Tread rubber's stock_uom is Kg while its qty is rolls.
+        "unit": "rolls" if frappe.utils.cint(it.custom_rolls) > 0 else (it.stock_uom or it.uom or ""),
         "ordered_qty": ordered_of(it),
         "available_qty": frappe.utils.flt(l.get("available_qty")),
         "picked_qty": q,

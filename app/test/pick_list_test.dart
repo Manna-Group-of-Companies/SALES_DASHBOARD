@@ -31,6 +31,12 @@ void main() {
     }
   });
 
+  test('tread rubber is counted in rolls though its stock UOM is Kg', () {
+    expect(pickUnit({'custom_rolls': 2, 'stock_uom': 'Kg', 'qty': 2}), 'rolls');
+    expect(pickUnit({'custom_rolls': 0, 'stock_uom': 'Kg', 'qty': 50}), 'Kg');
+    expect(pickUnit({'custom_rolls': 0, 'stock_uom': 'Nos', 'qty': 4}), 'Nos');
+  });
+
   test('only Submitted lists count towards what is already picked', () {
     final lists = [
       PickList.fromJson({
