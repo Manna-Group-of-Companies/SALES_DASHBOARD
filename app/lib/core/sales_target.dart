@@ -59,6 +59,12 @@ class TargetRow {
   final String unit;
   final double invoicedAmount;
   final double invoicedKg;
+
+  /// What the rep's customers owe, from the SAP credit sync. Not month-bound.
+  final double outstanding;
+
+  /// The part of [outstanding] overdue past the customers' payment terms.
+  final double overdue;
   final List<InvoicedLine> lines;
 
   /// How many lines were invoiced: `lines.length`, unless `line_count` says
@@ -73,6 +79,8 @@ class TargetRow {
     required this.unit,
     required this.invoicedAmount,
     required this.invoicedKg,
+    this.outstanding = 0,
+    this.overdue = 0,
     this.lines = const [],
     int? lineCount,
   }) : lineCount = lineCount ?? lines.length;
@@ -91,6 +99,8 @@ class TargetRow {
       unit: unit == 'Tonnes' ? 'Tonnes' : 'Currency',
       invoicedAmount: _num(m['invoiced_amount']),
       invoicedKg: _num(m['invoiced_kg']),
+      outstanding: _num(m['outstanding']),
+      overdue: _num(m['overdue']),
       lines: lines,
       lineCount: (m['line_count'] as num?)?.toInt(),
     );
@@ -106,6 +116,9 @@ class TargetRow {
   /// Achieved over target, not capped — past target reads past 1.0. Zero when
   /// there is no target. Clamp it for a progress bar, never for the number.
   double get fraction => hasTarget ? achieved / targetAmount : 0;
+
+  /// Money in the rep's currency, whatever the target's unit.
+  String money(double v) => '$currency ${v.toStringAsFixed(0)}';
 
   /// "AED 1,20,000" or "12.5 t".
   String format(double v) => isTonnes

@@ -17,6 +17,7 @@ import { getTargetMonth, upsertTarget } from '@/api/salesTargets';
 import {
   TARGET_MONTHS,
   achieved,
+  formatMoney,
   formatTarget,
   fraction,
   hasInvoices,
@@ -79,6 +80,8 @@ export function TargetsPage() {
           <div className="page-head__title">Team Targets</div>
           <div className="tiny dim">
             Achieved = SAP invoices dated in the month, before GST. Approved orders not yet invoiced do not count.
+            <br />
+            Outstanding = what the rep's customers owe today, from SAP.
           </div>
         </div>
         <Button size="sm" onClick={() => setYm(ym - 1)} aria-label="Previous month">
@@ -116,6 +119,7 @@ export function TargetsPage() {
                   <th className="right">Target</th>
                   <th className="right">Achieved (invoiced)</th>
                   <th style={{ minWidth: 180 }}>Progress</th>
+                  <th className="right">Outstanding</th>
                   <th />
                 </tr>
               </thead>
@@ -157,6 +161,14 @@ export function TargetsPage() {
                           </div>
                         ) : (
                           <span className="tiny dim">—</span>
+                        )}
+                      </td>
+                      <td className="right">
+                        <div>{formatMoney(r, r.outstanding)}</div>
+                        {r.overdue > 0 && (
+                          <div className="tiny" style={{ color: 'var(--danger)' }}>
+                            {formatMoney(r, r.overdue)} overdue
+                          </div>
                         )}
                       </td>
                       <td className="right">

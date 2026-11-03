@@ -39,6 +39,10 @@ export interface TargetRow {
   unit: TargetUnit;
   invoicedAmount: number;
   invoicedKg: number;
+  /** What the rep's customers owe, from the SAP credit sync. Not month-bound. */
+  outstanding: number;
+  /** The part of `outstanding` overdue past the customers' payment terms. */
+  overdue: number;
   lines: InvoicedLine[];
   lineCount: number;
 }
@@ -85,6 +89,8 @@ export function toTargetRow(m: Record<string, unknown>): TargetRow {
     unit: m.target_unit === 'Tonnes' ? 'Tonnes' : 'Currency',
     invoicedAmount: num(m.invoiced_amount),
     invoicedKg: num(m.invoiced_kg),
+    outstanding: num(m.outstanding),
+    overdue: num(m.overdue),
     lines,
     // The fixture states a count without listing lines.
     lineCount: m.line_count != null ? num(m.line_count) : lines.length,
@@ -115,6 +121,12 @@ export function achieved(r: TargetRow): number {
  */
 export function fraction(r: TargetRow): number {
   return hasTarget(r) ? achieved(r) / r.targetAmount : 0;
+}
+
+/** Money in the rep's currency, whatever the target's unit. */
+export function formatMoney(r: TargetRow, v: number): string {
+  const locale = r.currency === 'AED' ? 'en-AE' : 'en-IN';
+  return `${r.currency} ${Math.round(v).toLocaleString(locale)}`;
 }
 
 /** "INR 1,20,000" / "AED 120,000" or "12.5 t". */

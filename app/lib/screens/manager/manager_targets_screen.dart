@@ -268,6 +268,16 @@ class TargetCard extends StatelessWidget {
                 if (!r.hasInvoices)
                   const Text('No SAP invoices yet this month',
                       style: TextStyle(fontSize: 12, color: Colors.black54)),
+                // What the rep's customers owe today, from SAP.
+                Text.rich(TextSpan(
+                    style: const TextStyle(fontSize: 13, color: Colors.black87),
+                    children: [
+                      TextSpan(text: 'Outstanding: ${r.money(r.outstanding)}'),
+                      if (r.overdue > 0)
+                        TextSpan(
+                            text: '  ·  ${r.money(r.overdue)} overdue',
+                            style: const TextStyle(color: Colors.red)),
+                    ])),
                 ...[
                   if (r.hasTarget) ...[
                     const SizedBox(height: 8),

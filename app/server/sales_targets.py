@@ -157,6 +157,23 @@ if reps:
             "kg": frappe.utils.flt(i.custom_total_weight),
         })
 
+# What each rep's customers owe (3 Nov 2026): the SAP credit sync's total,
+# and the part overdue past the customer's payment terms. Summed over the
+# customers assigned to the rep, as the phone's getRepOutstanding does.
+# Plain assignments: safe_exec refuses `x[k] += ...` on items.
+owed = {}
+overdue = {}
+if reps:
+    for c in frappe.get_all(
+        "Customer",
+        filters={"custom_assigned_reps": ["in", reps], "disabled": 0},
+        fields=["custom_assigned_reps", "custom_outstanding_balance", "custom_overdue_past_terms"],
+        limit_page_length=0,
+    ):
+        k = c.custom_assigned_reps
+        owed[k] = owed.get(k, 0) + frappe.utils.flt(c.custom_outstanding_balance)
+        overdue[k] = overdue.get(k, 0) + frappe.utils.flt(c.custom_overdue_past_terms)
+
 rows = []
 for p in scope:
     t = targets.get(p.name)
@@ -170,6 +187,8 @@ for p in scope:
         "target_unit": (t.target_unit or "Currency") if t else "Currency",
         "invoiced_amount": sum([l["amount"] for l in lines]),
         "invoiced_kg": sum([l["kg"] for l in lines]),
+        "outstanding": owed.get(p.name, 0),
+        "overdue": overdue.get(p.name, 0),
         "lines": lines,
     })
 
