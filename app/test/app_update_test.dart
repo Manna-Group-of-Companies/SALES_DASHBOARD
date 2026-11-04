@@ -9,7 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:manna_field_sales/core/app_update.dart';
 
-const _apk = 'https://github.com/Mannagoc/SALES_DASHBOARD/releases/download/'
+const _apk = 'https://github.com/Manna-Group-of-Companies/SALES_DASHBOARD/releases/download/'
     'android-v1.1.0+143/manna-field-sales.apk';
 
 Map<String, dynamic> _manifest({

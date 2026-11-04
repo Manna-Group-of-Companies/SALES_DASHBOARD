@@ -5,8 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/proximity.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
+import 'package:manna_field_sales/services/pending_punches.dart';
+import 'package:manna_field_sales/services/trip_tracker.dart';
 import 'package:manna_field_sales/widgets/proximity_gate.dart';
 
 class VisitPunchCard extends StatefulWidget {
@@ -27,12 +30,23 @@ class VisitPunchCard extends StatefulWidget {
   /// from the office would write the office.
   final VoidCallback? onLocationWrong;
 
+  /// The place's own pin, from the row the screen already holds. Measured
+  /// against when the full list of its pins cannot be fetched — no signal —
+  /// so the 2 km check still runs offline rather than waving the punch
+  /// through. See `services/pending_punches.dart`.
+  final List<RegisteredPlace> fallbackPlaces;
+
+  /// What to call the place on the unsent-punches list.
+  final String? partyLabel;
+
   const VisitPunchCard(
       {super.key,
       this.customer,
       this.lead,
       required this.locationCaptured,
-      this.onLocationWrong});
+      this.onLocationWrong,
+      this.fallbackPlaces = const [],
+      this.partyLabel});
   @override
   State<VisitPunchCard> createState() => _VisitPunchCardState();
 }
@@ -40,7 +54,10 @@ class VisitPunchCard extends StatefulWidget {
 class _VisitPunchCardState extends State<VisitPunchCard> {
   Map<String, dynamic>? _open;
   bool _busy = false, _loading = true;
-  String? _lastDuration;
+
+  /// Today's last finished visit here, read back on every load so it survives
+  /// the rep leaving this screen and coming back.
+  ({String checkIn, String checkOut, double minutes})? _last;
 
   @override
   void initState() {
@@ -52,23 +69,83 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
   /// say so before the rep taps, rather than only when they are refused.
   Map<String, dynamic>? _openElsewhere;
 
+  /// True when a punch for this place is on the phone and not yet sent.
+  bool _unsent = false;
+
   Future<void> _load() async {
     setState(() => _loading = true);
-    try {
-      _open =
-      await Api.getOpenVisit(customer: widget.customer, lead: widget.lead);
-    } catch (_) {}
-    try {
-      final any = await Api.getAnyOpenVisit();
-      // The visit at this counter is not "elsewhere" — that one is what the
-      // punch-out button is for.
-      _openElsewhere = (any == null || (_open != null && any['name'] == _open!['name']))
-          ? null
-          : any;
-    } catch (_) {
-      _openElsewhere = null;
-    }
+    // Two lookups that do not depend on each other, started together. This
+    // card was the slowest thing on the customer screen, and half of that was
+    // waiting for the first answer before asking the second question. Either
+    // failing reads as "no visit", as before.
+    final hereF = Api.getOpenVisit(customer: widget.customer, lead: widget.lead)
+        .catchError((_) => null);
+    final anyF = Api.getAnyOpenVisit().catchError((_) => null);
+    final lastF =
+        Api.getLastClosedVisit(customer: widget.customer, lead: widget.lead)
+            .catchError((_) => null);
+    final pendingF = PendingPunches.all();
+    final serverHere = await hereF;
+    final serverAny = await anyF;
+    final serverLast = await lastF;
+    final pending = await pendingF;
+    // Punches still on the phone laid over what the server said, so a visit
+    // punched in with no signal reads as open here — not as "Punch in" again.
+    // The visit at this counter is not "elsewhere"; visitView sees to that.
+    final view = PendingPunches.visitView(
+      serverHere: serverHere,
+      serverAny: serverAny,
+      pending: pending,
+      today: today(),
+      customer: widget.customer,
+      lead: widget.lead,
+    );
+    _open = view.here;
+    _openElsewhere = view.elsewhere;
+    _last = PendingPunches.lastVisitView(
+      server: serverLast,
+      pending: pending,
+      today: today(),
+      customer: widget.customer,
+      lead: widget.lead,
+    );
+    _unsent = pending.any((p) =>
+        p.isVisit &&
+        ((widget.customer != null && p.customer == widget.customer) ||
+            (widget.lead != null && p.lead == widget.lead) ||
+            (_open?['name'] != null && p.docName == _open!['name'])));
     if (mounted) setState(() => _loading = false);
+  }
+
+  /// Puts a punch on the phone and says so in the words the rest of the app
+  /// uses for unsent work: kept, not sent, will go by itself.
+  Future<void> _queue(PunchKind kind, {
+    required String at,
+    required double lat,
+    required double lng,
+    double? accuracy,
+    String? docName,
+    String? dependsOn,
+    String? punchInAt,
+    bool checkNearby = false,
+  }) async {
+    await PendingPunches.add(
+      kind: kind,
+      at: at,
+      lat: lat,
+      lng: lng,
+      accuracy: accuracy,
+      docName: docName,
+      dependsOn: dependsOn,
+      punchInAt: punchInAt,
+      customer: widget.customer,
+      lead: widget.lead,
+      partyLabel: widget.partyLabel,
+      trip: kind == PunchKind.visitIn ? TripTracker.I.activeTrip.value : null,
+      checkNearby: checkNearby,
+    );
+    _snack('No signal — saved on your phone at ${hhmm(at)}. '
+        'It will be sent by itself when you have signal.');
   }
 
   void _snack(String m) {
@@ -89,7 +166,17 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
     // satellites only to refuse them is a worse way to say the same thing.
     setState(() => _busy = true);
     try {
-      final open = await Api.getAnyOpenVisit();
+      // Offline, getAnyOpenVisit answers from the last open visit the phone
+      // saw, and the queue adds any visit punched in since without a signal.
+      // A failed lookup is only the server's half: the queue's half is on the
+      // phone and must still be checked, or a second visit is queued here
+      // and refused once it is sent.
+      final view = PendingPunches.visitView(
+        serverAny: await Api.getAnyOpenVisit().catchError((_) => null),
+        pending: await PendingPunches.all(),
+        today: today(),
+      );
+      final open = view.elsewhere;
       if (open != null && mounted) {
         setState(() => _busy = false);
         return _showStillCheckedIn(open);
@@ -103,7 +190,16 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
 
     _snack('Getting GPS...');
     try {
+      // Asked for while the GPS settles rather than after it. The shop's pin
+      // and its sites are two round trips, and they used to start only once
+      // the fix was in — end to end with the slowest thing on the phone.
+      // registeredPlacesFor never throws; it returns what it gathered.
+      final placesF = Api.registeredPlacesFor(
+          customer: widget.customer, lead: widget.lead);
       final pos = await getCurrentLocation();
+      // Taken now, before any of the checks below spend time on the network:
+      // this is the moment the rep pressed the button at the counter.
+      final at = nowStamp();
 
       // Punching in from somewhere else entirely is what this stops. Measured
       // against the nearest registered place — the shop's own pin or any of
@@ -113,8 +209,13 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
       // A null result means nothing usable is on record to measure against.
       // That is a data gap, not a rep in the wrong place, and refusing would
       // strand them at a counter they are genuinely standing in.
-      final places = await Api.registeredPlacesFor(
-          customer: widget.customer, lead: widget.lead);
+      //
+      // With no signal the full list cannot be read, so the shop's own pin
+      // from the row on screen stands in. Its sites are not on the phone, so
+      // a rep at a godown can be refused offline; that rounds the safe way —
+      // the radius must not open up because the network is down.
+      var places = await placesF;
+      if (places.isEmpty) places = widget.fallbackPlaces;
       final near = nearestRegistered(pos.latitude, pos.longitude, places);
       if (near != null &&
           punchIsTooFar(near.metres, pos.accuracy,
@@ -128,23 +229,49 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
       // town, and blocking a rep from starting a visit at a shop they already
       // sell to would stop real work to prevent a duplicate that cannot happen
       // — the customer is already on record.
+      //
+      // With no signal the check cannot run, and it must not be skipped. The
+      // punch is queued with the check still owed; it runs when the punch is
+      // sent, and the visit is only recorded if it passes.
+      var checkLater = false;
       if (widget.lead != null) {
         if (!mounted) return;
-        final clear = await ensureNothingNearby(
+        final gate = await nearbyGate(
           context,
           lat: pos.latitude,
           lng: pos.longitude,
           subject: 'start a visit',
           exclude: {widget.lead!},
         );
-        if (!clear || !mounted) return;
+        if (gate == NearbyGate.blocked || !mounted) return;
+        checkLater = gate == NearbyGate.unreachable;
       }
-      await Api.punchInVisit(
-          customer: widget.customer,
-          lead: widget.lead,
+
+      Future<void> queueIt() => _queue(PunchKind.visitIn,
+          at: at,
           lat: pos.latitude,
-          lng: pos.longitude);
-      _snack('Punched in ✓');
+          lng: pos.longitude,
+          accuracy: pos.accuracy,
+          checkNearby: checkLater);
+
+      if (checkLater) {
+        // Not even tried live. A signal that came back in the last second
+        // would write the visit with its duplicate check never run.
+        await queueIt();
+      } else {
+        try {
+          await Api.punchInVisit(
+              customer: widget.customer,
+              lead: widget.lead,
+              lat: pos.latitude,
+              lng: pos.longitude,
+              at: at);
+          _snack('Punched in ✓');
+        } catch (e) {
+          if (!isNetworkFailure(e)) rethrow;
+          await queueIt();
+        }
+      }
       await _load();
     } catch (e) {
       _snack(humanError(e));
@@ -266,19 +393,47 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
   }
 
   Future<void> _punchOut() async {
-    if (_open == null) return;
+    final open = _open;
+    if (open == null) return;
     setState(() => _busy = true);
     _snack('Getting GPS...');
     try {
       final pos = await getCurrentLocation();
-      final mins = await Api.punchOutVisit(
-        name: _open!['name'] as String,
-        lat: pos.latitude,
-        lng: pos.longitude,
-        checkInTime: '${_open!['check_in_time'] ?? ''}',
-      );
-      _lastDuration = mins.toStringAsFixed(0);
-      _snack('Punched out ✓ — ${mins.toStringAsFixed(0)} min');
+      final at = nowStamp();
+      final checkIn = '${open['check_in_time'] ?? ''}';
+      final name = open['name'];
+      if (name is String && name.isNotEmpty) {
+        try {
+          final mins = await Api.punchOutVisit(
+            name: name,
+            lat: pos.latitude,
+            lng: pos.longitude,
+            checkInTime: checkIn,
+            at: at,
+          );
+          _snack('Punched out ✓ — ${mins.toStringAsFixed(0)} min');
+        } catch (e) {
+          if (!isNetworkFailure(e)) rethrow;
+          await _queue(PunchKind.visitOut,
+              at: at,
+              lat: pos.latitude,
+              lng: pos.longitude,
+              accuracy: pos.accuracy,
+              docName: name,
+              punchInAt: checkIn);
+        }
+      } else {
+        // The punch-in is itself still on the phone, so there is no visit on
+        // the server to close yet. Not tried live: this waits behind it and
+        // is pointed at the visit it creates when the two are sent.
+        await _queue(PunchKind.visitOut,
+            at: at,
+            lat: pos.latitude,
+            lng: pos.longitude,
+            accuracy: pos.accuracy,
+            dependsOn: '${open['pending_in']}',
+            punchInAt: checkIn);
+      }
       await _load();
     } catch (e) {
       _snack(humanError(e));
@@ -320,13 +475,30 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
                     ? 'Visit timer...'
                     : open
                     ? 'On visit since ${_fmtT(_open!['check_in_time'])}  ·  ${_elapsed()}'
-                    : (_lastDuration != null
-                    ? 'Last visit: $_lastDuration min'
+                    : (_last != null
+                    ? 'Last visit: ${_fmtT(_last!.checkIn)}–'
+                        '${_fmtT(_last!.checkOut)}  ·  '
+                        '${_last!.minutes.toStringAsFixed(0)} min'
                     : 'Not on a visit'),
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
           ]),
+          // A punch here that is still on the phone. Said so the rep knows the
+          // office cannot see it yet — and does not punch again to make sure.
+          if (!_loading && _unsent) ...[
+            const SizedBox(height: 6),
+            Row(children: const [
+              Icon(Icons.cloud_off, size: 16, color: Color(0xFFB35309)),
+              SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                    'Saved on your phone, not sent yet — it goes by itself '
+                    'when you have signal.',
+                    style: TextStyle(fontSize: 12, color: Color(0xFFB35309))),
+              ),
+            ]),
+          ],
           // Said on the card, not just when the button is tapped, so a rep who
           // forgot to punch out two shops ago finds out on arrival.
           if (!_loading && !open && _openElsewhere != null) ...[

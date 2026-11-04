@@ -5,6 +5,7 @@ import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
 import 'package:manna_field_sales/screens/orders/combined_order_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
+import 'package:manna_field_sales/screens/orders/pick_list_screen.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -19,6 +20,25 @@ class MyOrdersScreen extends StatelessWidget {
       title: 'My Orders',
       loader: Api.getMyOrders,
       cacheKey: CacheKeys.orders,
+      // One button for the whole list (4 Nov 2026): it opens every product on
+      // the rep's manager-approved orders to pick from Hi-Tech's stock.
+      header: (reload) => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+        child: SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: Colors.teal),
+            onPressed: () async {
+              final done = await Navigator.of(context).push<bool>(
+                  MaterialPageRoute(
+                      builder: (_) => const GeneratePickListScreen()));
+              if (done == true) reload();
+            },
+            icon: const Icon(Icons.playlist_add_check),
+            label: const Text('Generate pick list'),
+          ),
+        ),
+      ),
       tileBuilder: (ctx, r, _) {
         // A combined order arrives as one row standing for all of its orders.
         // Its members are not listed separately — see Api.getMyOrders — so the

@@ -42,6 +42,12 @@ class Session {
   /// True when this rep's records are shared with colleagues, so lists have to
   /// say who owns each row.
   bool get sharesUnit => unitPeers.length > 1;
+
+  /// True while the app is running on the identity saved from the last
+  /// sign-in, because it was opened with no signal. Cleared by
+  /// `Api.recoverAfterOfflineStart` once the server has confirmed it again;
+  /// nothing queued is sent until then.
+  bool offlineStart = false;
   bool isGM = false;
   bool isHR = false;
   String? company;

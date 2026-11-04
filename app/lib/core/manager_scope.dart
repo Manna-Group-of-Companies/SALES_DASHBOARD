@@ -10,15 +10,25 @@
 // dashboard would not show them. Both read `shared/fixtures/manager_scope.json`
 // now; the TypeScript twin is `screensFor` in `client/src/domain/sales.ts`.
 
-enum ManagerScreen { customers, leads, locations, regularizations, orders, stock }
+enum ManagerScreen {
+  customers,
+  leads,
+  locations,
+  regularizations,
+  orders,
+  stock,
+  targets
+}
 
 const List<ManagerScreen> _full = ManagerScreen.values;
 
+// Every manager sets their own team's monthly targets (3 Nov 2026).
 const List<ManagerScreen> _partyOnly = [
   ManagerScreen.customers,
   ManagerScreen.leads,
   ManagerScreen.locations,
   ManagerScreen.regularizations,
+  ManagerScreen.targets,
 ];
 
 /// Keyed by the team token on `Sales Person.custom_team_manager`.

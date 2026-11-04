@@ -5,6 +5,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/party_location.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/map_service.dart';
@@ -42,7 +43,8 @@ class _DayMapScreenState extends State<DayMapScreen> {
   String? _error;
   List<_MapPoint> _points = [];
 
-  // Route (Territory) overlay — pick one and its customers show on the map.
+  // Sales route overlay — pick one and everything on it shows on the map:
+  // its customers, its leads (when switched on), and every site put on it.
   static const String _allRoutes = '__all__';
   List<String> _routes = [];
   String _route = _allRoutes;
@@ -91,10 +93,12 @@ class _DayMapScreenState extends State<DayMapScreen> {
   }
 
   // Scoped to whoever is being viewed, so a manager looking at a UAE rep is
-  // offered that rep's routes rather than their own region's.
+  // offered that rep's routes rather than their own. Sales Routes — the same
+  // list the Customers screen filters by. This offered Territories long after
+  // routes had moved to their own doctype, and nothing created since had one.
   Future<void> _loadRoutes() async {
     try {
-      final r = await Api.getRoutes(forRep: _rep);
+      final r = await Api.getSalesRoutes(forRep: _rep);
       if (!mounted) return;
       setState(() {
         _routes = r;
@@ -117,15 +121,17 @@ class _DayMapScreenState extends State<DayMapScreen> {
       _error = null;
     });
     try {
-      final list = await Api.getCustomersInTerritory(route);
+      final customersF = Api.getCustomersOnRoute(route);
+      final sitesF = Api.getSitesOnRoute(route);
+      final customers = await customersF;
+      final sites = await sitesF;
       final pts = <_MapPoint>[];
-      for (final c in list) {
-        final lat = _num(c['custom_latitude']);
-        final lng = _num(c['custom_longitude']);
-        if (!isMappableLatLng(lat, lng)) continue;
+      for (final c in customers) {
+        final p = partyLatLng(c);
+        if (p == null || !isMappableLatLng(p.lat, p.lng)) continue;
         pts.add(_MapPoint(
-            lat: lat,
-            lng: lng,
+            lat: p.lat,
+            lng: p.lng,
             kind: 'customer',
             title: '${c['customer_name'] ?? c['name']}',
             subtitle: [route, c['customer_group']]
@@ -133,6 +139,26 @@ class _DayMapScreenState extends State<DayMapScreen> {
                 .join(' · '),
             color: const Color(0xFFDB2777),
             icon: Icons.location_pin));
+      }
+      // A site is its own drop, drawn apart from the shop it belongs to: a
+      // van planned off this map has to reach the godown as well as the
+      // counter, and the godown may be the only thing of theirs on this run.
+      for (final s in sites) {
+        final p = partyLatLng(s, prefix: '');
+        if (p == null || !isMappableLatLng(p.lat, p.lng)) continue;
+        final owner = '${s['customer'] ?? s['lead'] ?? ''}'.trim();
+        pts.add(_MapPoint(
+            lat: p.lat,
+            lng: p.lng,
+            kind: 'site',
+            title: '${s['site_name'] ?? s['name']}',
+            subtitle: [
+              owner.isEmpty || owner == 'null' ? 'Site' : 'Site of $owner',
+              route,
+              s['location_status'],
+            ].where((x) => x != null && '$x'.isNotEmpty).join(' · '),
+            color: const Color(0xFF0891B2),
+            icon: Icons.warehouse));
       }
       if (mounted) setState(() => _routePoints = pts);
     } catch (e) {
@@ -153,21 +179,20 @@ class _DayMapScreenState extends State<DayMapScreen> {
     });
     try {
       final list = await Api.getLeadsWithLocation(
-          territory: _route == _allRoutes ? null : _route);
+          route: _route == _allRoutes ? null : _route);
       final pts = <_MapPoint>[];
       for (final l in list) {
-        final lat = _num(l['custom_latitude']);
-        final lng = _num(l['custom_longitude']);
-        if (!isMappableLatLng(lat, lng)) continue;
+        final p = partyLatLng(l);
+        if (p == null || !isMappableLatLng(p.lat, p.lng)) continue;
         pts.add(_MapPoint(
-            lat: lat,
-            lng: lng,
+            lat: p.lat,
+            lng: p.lng,
             kind: 'lead',
             title: '${l['lead_name'] ?? l['name']}',
             subtitle: [
               'Lead',
               l['status'],
-              l['territory'],
+              l['custom_sales_route'],
               l['custom_location_status'],
             ].where((x) => x != null && '$x'.isNotEmpty).join(' · '),
             color: const Color(0xFF4338CA),
@@ -226,7 +251,8 @@ class _DayMapScreenState extends State<DayMapScreen> {
     }
   }
 
-  double _num(dynamic v) => (v is num) ? v.toDouble() : 0.0;
+  // Through coordOf, so a coordinate sent as text is a point and not (0, 0).
+  double _num(dynamic v) => coordOf(v);
 
   String _dateStr(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -547,9 +573,14 @@ class _DayMapScreenState extends State<DayMapScreen> {
         chip(const Color(0xFF0F766E), Icons.person_pin_circle, 'Lead visit'),
         chip(const Color(0xFF2563EB), Icons.play_circle_fill, 'Trip start'),
         chip(const Color(0xFF7C3AED), Icons.flag, 'Trip end'),
-        if (_route != _allRoutes)
+        if (_route != _allRoutes) ...[
           chip(const Color(0xFFDB2777), Icons.location_pin,
-              '$_route customer (${_routePoints.length})'),
+              'Customer on route '
+              '(${_routePoints.where((p) => p.kind == 'customer').length})'),
+          chip(const Color(0xFF0891B2), Icons.warehouse,
+              'Site on route '
+              '(${_routePoints.where((p) => p.kind == 'site').length})'),
+        ],
         if (_showLeads)
           chip(const Color(0xFF4338CA), Icons.person_pin,
               'Lead (${_leadPoints.length})'),
@@ -570,7 +601,8 @@ class _DayMapScreenState extends State<DayMapScreen> {
     ];
     if (all.isEmpty) {
       final overlays = <String>[
-        if (_route != _allRoutes) 'no customer on this route has coordinates',
+        if (_route != _allRoutes)
+          'nothing on this route has a captured location',
         if (_showLeads) 'no lead has a captured location',
         if (_showVisits) 'no visit in the last $_visitDays days has a location',
         if (_showLeadVisits)

@@ -5,6 +5,8 @@ import 'package:image_picker/image_picker.dart' show XFile;
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
+import 'package:manna_field_sales/core/party_location.dart';
+import 'package:manna_field_sales/core/proximity.dart' show RegisteredPlace;
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/leads/add_lead_screen.dart';
 import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
@@ -409,7 +411,13 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
             VisitPunchCard(
                 lead: l['name'] as String,
                 locationCaptured: _locationCaptured,
-                onLocationWrong: () => _capture(recapture: true)),
+                onLocationWrong: () => _capture(recapture: true),
+                partyLabel: '${l['lead_name'] ?? l['company_name'] ?? l['name']}',
+                fallbackPlaces: [
+                  if (partyLatLng(l) case final p?)
+                    RegisteredPlace(
+                        '${l['lead_name'] ?? l['name']}', p.lat, p.lng),
+                ]),
             const SizedBox(height: 12),
             SizedBox(
                 width: double.infinity,
