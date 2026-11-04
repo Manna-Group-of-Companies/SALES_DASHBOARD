@@ -57,9 +57,8 @@
     "units":         ["Manna Treads"],
     "skip_statuses": ["Rejected"],
     "tax_by_state":  { "KL": "CG+SG@18", "*": "IGST@18" },
-    "hitech_vendor": "S-1010",
-    "po_series":     199,
-    "_note_po":      "PASS P: right after PASS M, Manna Treads' purchase order to hitech_vendor (Hitech Pretreads-GST) for the same items and kilos, at the order's rate less SAP Pricing Control.intercompany_margin (Rs/kg, GST-inclusive), tax code from the supplier's state. Needs custom_mt_purchase_order and custom_mt_purchase_order_entry on Sales Order - see erpnext-setup.md."
+    "b1if_wait_minutes": 30,
+    "_note_b1if":    "B1if (sap-b1if/, 4 Nov 2026) makes Manna Treads' purchase order to Hi-Tech and Hi-Tech's sales order from it, for the sales orders PASS M made; this script never does. PASS P and PASS H only find them by NumAtCard = the ERPNext name and write them back (custom_mt_purchase_order / _entry, custom_sap_sales_order - so PASS B follows it), and refuse an order still without one after b1if_wait_minutes. intercompany may be left out; \"script\" is refused. Needs custom_mt_purchase_order and custom_mt_purchase_order_entry on Sales Order - see erpnext-setup.md."
   },
 
   "log_dir":       "./logs",

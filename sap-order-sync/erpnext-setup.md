@@ -150,8 +150,11 @@ and add the two fields PASS P writes, on `Sales Order`, both **Data**,
 `custom_mt_purchase_order` ("Manna Treads PO to Hi-Tech") and
 `custom_mt_purchase_order_entry` ("Manna Treads PO DocEntry"). Frappe fails a
 whole list on an unknown field in a filter, so PASS P fails without them.
-Set *SAP Pricing Control → Inter-company margin* to the real margin first: it
-is what every purchase order is priced from.
+B1if makes the purchase order and Hi-Tech's sales order (`sap-b1if/`, 4 Nov
+2026), priced from `MARGIN` in Manna Treads' `@MANNA_IC`; PASS P and PASS H
+only write their numbers into these fields and `custom_sap_sales_order`.
+*SAP Pricing Control → Inter-company margin* still prices Hi-Tech's price list,
+so keep the two margins the same.
 
 ---
 

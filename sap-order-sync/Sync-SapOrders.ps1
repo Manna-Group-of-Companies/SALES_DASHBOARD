@@ -147,14 +147,14 @@
     created on or after order_flow.since (which PASS A then leaves alone):
     PASS M, as soon as it exists, a Manna Treads Sales Order to the end
     customer at the order's rate net of GST, tax code by bill-to state;
-    PASS P, straight after, Manna Treads' Purchase Order to Hi-Tech
-    (order_flow.hitech_vendor) for the same kilos at the rate less SAP
-    Pricing Control.intercompany_margin; PASS H, straight after, Hi-Tech's
-    Sales Order to fixed_card_code made from that purchase order as SAP
-    holds it, written to custom_sap_sales_order so PASS B follows it.
-    Shared finished-goods codes only. Adopt by NumAtCard first; refusals go
-    in custom_mt_sync_error (M, P) or custom_sap_sync_error (H). See
-    shared/SAP_ORDER_SYNC.md, "Manna Treads first".
+    then B1if (sap-b1if/, 4 Nov 2026), not this script, makes Manna Treads'
+    Purchase Order to Hi-Tech and Hi-Tech's Sales Order from it. PASS P and
+    PASS H only find them by NumAtCard = the ERPNext name and write them
+    back - Hi-Tech's to custom_sap_sales_order, so PASS B follows it - and
+    refuse an order B1if has not followed in order_flow.b1if_wait_minutes.
+    Shared finished-goods codes only. PASS M adopts by NumAtCard first;
+    refusals go in custom_mt_sync_error (M, P) or custom_sap_sync_error (H).
+    See shared/SAP_ORDER_SYNC.md, "Manna Treads first".
 
   NO PRODUCTION ORDERS. Decided 24 Sep 2026: under MRP one production order
   pools the demand of many sales orders and SAP does not record which order it
@@ -233,13 +233,13 @@ $script:Result = [ordered]@{
     mfAdopted         = 0
     mfRefused         = 0
     mpInScope         = 0
-    mpCreated         = 0
     mpAdopted         = 0
     mpRefused         = 0
+    mpWaiting         = 0
     htInScope         = 0
-    htCreated         = 0
     htAdopted         = 0
     htRefused         = 0
+    htWaiting         = 0
     repUnmatched      = 0
     writeErrors       = 0
     failures          = 0
@@ -275,8 +275,8 @@ $script:F_MT_SO     = 'custom_mt_sales_order'         # DocNum
 $script:F_MT_ENTRY  = 'custom_mt_sales_order_entry'   # DocEntry - DocNum is not unique in SAP
 $script:F_MT_ERR    = 'custom_mt_sync_error'
 $script:F_MT_SYNCED = 'custom_mt_synced_at'
-# manna_first (3 Nov 2026): Manna Treads' purchase order to Hi-Tech - written
-# by PASS P. Its refusals share custom_mt_sync_error, prefixed, because one
+# manna_first (3 Nov 2026): Manna Treads' purchase order to Hi-Tech - B1if
+# makes it, PASS P writes it here. Its refusals share custom_mt_sync_error, prefixed, because one
 # order has one thing wrong with it at a time and the SO comes first.
 $script:F_MT_PO       = 'custom_mt_purchase_order'         # DocNum
 $script:F_MT_PO_ENTRY = 'custom_mt_purchase_order_entry'   # DocEntry
@@ -805,7 +805,8 @@ function Invoke-MtSalesOrderPost {
     # does not throw: it hands back the HTTP status and SAP's error body, so
     # Get-MtPostFailure can tell SAP refusing THIS order from the call itself
     # failing. @{ Created = <SAP order, or $null>; Status; Body; Text }
-    # PASS P posts its purchase order through it too (-Entity PurchaseOrders).
+    # -Entity posts another document set; PASS P used it for its purchase
+    # order until B1if took that over (4 Nov 2026), and nothing passes it now.
     param([string] $BaseUrl, $Session, $Payload, [bool] $UseSkipCert, [string] $Entity = 'Orders')
     $splat = @{
         Method = 'Post'; Uri = "$BaseUrl/$Entity"
@@ -2353,22 +2354,44 @@ function Get-FlowSettings {
     $hasAllow = ($ap -and $null -ne $ap.Value)
     if ($hasAllow) { foreach ($a in @($ap.Value)) { $t = "$a".Trim(); if ($t -ne '' -and -not $allow.Contains($t)) { [void]$allow.Add($t) } } }
 
-    # PASS P's supplier and series in Manna Treads, as its own hand-made
-    # purchase orders from Hi-Tech carry them (POs 228-233, read 3 Nov 2026).
+    # B1if makes the purchase order and Hi-Tech's sales order (sap-b1if/, 4 Nov
+    # 2026); this script only finds them and writes them back (PASS P, H). An
+    # order still without one after b1if_wait_minutes is refused, so somebody
+    # looks at B1if's message log. intercompany "script" is refused rather
+    # than ignored: the script no longer makes them, and a config saying it
+    # does would be believed.
+    $ic = Get-OptionalString $b 'intercompany' 'b1if'
+    if ($ic -ne 'b1if') { throw "config: order_flow.intercompany can only be b1if - B1if makes the purchase order and Hi-Tech's sales order, this script no longer does (got '$ic')." }
+    $wait = Get-OptionalNullableInt $b 'b1if_wait_minutes' 30
+    if ($null -eq $wait -or $wait -lt 1) { throw "config: order_flow.b1if_wait_minutes must be a whole number of minutes, 1 or more." }
+
     $out = @{
+        B1ifWait      = [int]$wait
         Mode          = $mode
         Since         = $since
         Units         = [string[]]@($units)
         SkipStatuses  = [string[]]@($skip)
         TaxByState    = $tax
         ItemAllowlist = $null
-        HitechVendor  = (Get-OptionalString $b 'hitech_vendor' 'S-1010')
-        PoSeries      = (Get-OptionalNullableInt $b 'po_series' 199)
     }
     # Assigned, not $(if ...): a subexpression unrolls an empty list to $null,
     # and an empty allowlist - which allows nothing - would allow everything.
     if ($hasAllow) { $out.ItemAllowlist = [string[]]@($allow) }
     return $out
+}
+
+function Test-B1ifLate {
+    # Whether B1if has had long enough to make a document and has not: the
+    # order's last write from this script ($Since, ERPNext's yyyy-MM-dd
+    # HH:mm:ss) is $Minutes or more before $Now. A time that cannot be read
+    # is late - a refusal somebody reads beats an order that waits forever
+    # without a word. Pure.
+    param([string] $Since, [Parameter(Mandatory = $true)] [datetime] $Now, [Parameter(Mandatory = $true)] [int] $Minutes)
+    $t = [datetime]::MinValue
+    $s = "$Since".Trim()
+    if ($s.Length -gt 19) { $s = $s.Substring(0, 19) }
+    if (-not [datetime]::TryParseExact($s, 'yyyy-MM-dd HH:mm:ss', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$t)) { return $true }
+    return (($Now - $t).TotalMinutes -ge $Minutes)
 }
 
 function Test-MfOwns {
@@ -2524,216 +2547,14 @@ function New-MfSalesOrderBody {
     return $body
 }
 
-<#
-.SYNOPSIS
-  What Manna Treads' purchase order to Hi-Tech for one ERPNext order buys,
-  and at what price. Pure.
-
-.DESCRIPTION
-  The same lines and kilos as its sales order (Get-MfOrderPlan): Manna
-  Treads holds no stock, so it buys exactly what it sold. The price is the
-  order's rate less the inter-company margin - rupees per kilo, GST-inclusive
-  like the rate, from SAP Pricing Control.intercompany_margin, the master the
-  MD's /rates screen sets. The user's choice, 3 Nov 2026, and what the hand
-  POs carry: PO 233 is 232.46 gross against SO 554's 253, PO 232 223.02
-  against 243 - about Rs 20 below the customer's own rate, which is the
-  margin. Not Manna Treads' list price: most items have none.
-
-.OUTPUTS
-  @{ Lines = <ArrayList of @{ Item; Kg; Rate; Amount; UnitPriceNet }>;
-     Total; Problems = <ArrayList of string> }
-#>
-function Get-MfPurchasePlan {
-    param([Parameter(Mandatory = $true)] $SalesPlan, $Margin)
-    $divisor = 1 + ((Get-MtGstPercent) / 100)
-    $lines = New-Object System.Collections.ArrayList
-    $problems = New-Object System.Collections.ArrayList
-    foreach ($p in @($SalesPlan.Problems)) { [void]$problems.Add($p) }
-    $m = Get-RoundedHalfUp (ConvertTo-Number $Margin) 2
-    if ($m -le 0) {
-        [void]$problems.Add('No inter-company margin is set (SAP Pricing Control) - refusing to buy from Hi-Tech at the customer''s price.')
-        return @{ Lines = $lines; Total = 0.0; Problems = $problems }
-    }
-    $total = 0.0
-    foreach ($l in @($SalesPlan.Lines)) {
-        $rate = Get-RoundedHalfUp ($l.Rate - $m) 2
-        if ($rate -le 0) { [void]$problems.Add(("{0} sells at {1}/kg, not more than the margin of {2}" -f $l.Item, $l.Rate, $m)); continue }
-        $amount = Get-RoundedHalfUp ($l.Kg * $rate) 2
-        $total += $amount
-        [void]$lines.Add(@{
-            Item         = "$($l.Item)"
-            Kg           = [double]$l.Kg
-            Rate         = [double]$rate
-            Amount       = [double]$amount
-            UnitPriceNet = (Get-RoundedHalfUp ($rate / $divisor) 6)
-        })
-    }
-    return @{ Lines = $lines; Total = (Get-RoundedHalfUp $total 2); Problems = $problems }
-}
-
-function New-MfPurchaseOrderBody {
-    # The POST /PurchaseOrders body, to Hi-Tech as Manna Treads' supplier.
-    # NumAtCard is the ERPNext name, which the next run adopts by - Manna
-    # Treads' hand POs from Hi-Tech leave it empty (read 3 Nov 2026). The
-    # comment names the Manna Treads sales order, never the customer: it is
-    # what Hi-Tech's own sales order will be made from. Pure.
-    param(
-        [Parameter(Mandatory = $true)] $Plan,
-        [Parameter(Mandatory = $true)] [string] $CardCode,
-        [Parameter(Mandatory = $true)] [string] $OrderName,
-        [Parameter(Mandatory = $true)] [string] $MtSalesOrder,
-        [Parameter(Mandatory = $true)] [string] $TaxCode,
-        [Parameter(Mandatory = $true)] [string] $DocDate,
-        [Parameter(Mandatory = $true)] [string] $DueDate,
-        $Series,
-        [Parameter(Mandatory = $true)] $Settings
-    )
-    $lines = New-Object System.Collections.ArrayList
-    foreach ($l in @($Plan.Lines)) {
-        $dl = [ordered]@{
-            ItemCode        = "$($l.Item)"
-            Quantity        = [double]$l.Kg
-            UnitPrice       = [double]$l.UnitPriceNet
-            DiscountPercent = 0.0
-            TaxCode         = $TaxCode
-        }
-        if ("$($Settings.Warehouse)".Trim() -ne '') { $dl.WarehouseCode = "$($Settings.Warehouse)".Trim() }
-        if ($null -ne $Settings.LocationCode)       { $dl.LocationCode  = [int]$Settings.LocationCode }
-        [void]$lines.Add($dl)
-    }
-    $body = [ordered]@{
-        CardCode        = $CardCode
-        DocDate         = $DocDate
-        DocDueDate      = $DueDate
-        NumAtCard       = $OrderName
-        Comments        = "From ERPNext $OrderName - for Manna Treads SO $MtSalesOrder"
-        DiscountPercent = 0.0
-    }
-    if ($null -ne $Settings.BplId) { $body.BPL_IDAssignedToInvoice = [int]$Settings.BplId }
-    if ($null -ne $Series)         { $body.Series = [int]$Series }
-    $body.DocumentLines = $lines
-    return $body
-}
-
-function Test-MfPurchaseItems {
-    # '' when every item can be bought in Manna Treads SAP - live, not
-    # frozen, a purchase item - else why not. PASS M has already held the
-    # names to ERPNext's. $Rows is the one Items read. Pure.
-    param([string[]] $Codes, $Rows)
-    $byCode = @{}
-    foreach ($r in @($Rows)) { if ($null -ne $r) { $byCode["$(Get-JsonProp $r 'ItemCode')".Trim().ToUpperInvariant()] = $r } }
-    $bad = New-Object System.Collections.ArrayList
-    foreach ($c in @($Codes)) {
-        $r = $byCode["$c".Trim().ToUpperInvariant()]
-        if ($null -eq $r -or "$(Get-JsonProp $r 'Valid')".Trim() -ne 'tYES' -or "$(Get-JsonProp $r 'Frozen')".Trim() -ne 'tNO' -or "$(Get-JsonProp $r 'PurchaseItem')".Trim() -ne 'tYES') { [void]$bad.Add($c) }
-    }
-    if ($bad.Count -eq 0) { return '' }
-    return ("{0} cannot be bought in Manna Treads SAP (missing, inactive, frozen or not a purchase item)" -f ($bad -join ', '))
-}
-
-function Test-MfVendor {
-    # '' when Hi-Tech, as Manna Treads' supplier, can take the order, else
-    # why not. $Rows is the BusinessPartners read by CardCode. Pure.
-    param($Rows, [string] $CardCode)
-    $bp = @($Rows | Where-Object { $null -ne $_ -and "$(Get-JsonProp $_ 'CardCode')".Trim() -eq $CardCode })[0]
-    if (-not $bp) { return "Supplier $CardCode (order_flow.hitech_vendor) is not in Manna Treads SAP." }
-    if ("$(Get-JsonProp $bp 'CardType')".Trim() -ne 'cSupplier') { return "$CardCode is not a supplier in Manna Treads SAP." }
-    if ("$(Get-JsonProp $bp 'Valid')".Trim() -ne 'tYES' -or "$(Get-JsonProp $bp 'Frozen')".Trim() -ne 'tNO') { return "Supplier $CardCode is inactive or frozen in Manna Treads SAP." }
-    return ''
-}
-
-function Get-ErpIntercompanyMargin {
-    # Rupees per kilo Hi-Tech bills Manna Treads below the customer's rate:
-    # SAP Pricing Control.intercompany_margin, the one master for it
-    # (sap-pricing uses it for Hi-Tech's price list). $null when unset.
-    $resp = Invoke-ErpApi -Method 'GET' -Path '/api/resource/SAP%20Pricing%20Control/SAP%20Pricing%20Control'
-    $doc = Get-JsonProp $resp 'data'
-    if ($null -eq $doc) { throw "ERPNext returned no 'data' for SAP Pricing Control" }
-    $v = Get-JsonProp $doc 'intercompany_margin'
-    if ($null -eq $v -or "$v".Trim() -eq '') { return $null }
-    return (ConvertTo-Number $v)
-}
-
 # ------------------------------------------------------------------------------
-# PASS H - Hi-Tech's Sales Order for Manna Treads' purchase order (manna_first)
+# PASS P and PASS H - link what B1if made (manna_first)
 # ------------------------------------------------------------------------------
 #
-# The factory's half of the inter-company order: to 10118 (fixed_card_code),
-# made from the purchase order AS SAP HOLDS IT - its items, kilos and net
-# price - so the two companies cannot disagree about what was bought. Only a
-# sales order: production and the invoice stay manual (3 Nov 2026). It is
-# written to custom_sap_sales_order like PASS A's, so PASS B follows it as it
-# always has. The commercial boundary is PASS A's: nothing that names the end
-# customer; the comment names only Manna Treads' purchase order.
-
-function Get-HtPoProblem {
-    # '' when Manna Treads' purchase order (read with its lines) can be made
-    # into Hi-Tech's sales order, else why not. Pure.
-    param($Po, [string] $Vendor, [string] $PoNum)
-    if ($null -eq $Po) { return "Manna Treads purchase order $PoNum is not in SAP." }
-    if ("$(Get-JsonProp $Po 'Cancelled')".Trim() -eq 'tYES') { return "Manna Treads purchase order $PoNum is cancelled - nothing to make." }
-    $card = "$(Get-JsonProp $Po 'CardCode')".Trim()
-    if ($card -ne $Vendor) { return "Manna Treads purchase order $PoNum is to $card, not Hi-Tech ($Vendor)." }
-    $lines = @(Get-JsonProp $Po 'DocumentLines' | Where-Object { $null -ne $_ })
-    if ($lines.Count -eq 0) { return "Manna Treads purchase order $PoNum has no lines." }
-    $bad = @($lines | Where-Object { (ConvertTo-Number (Get-JsonProp $_ 'Quantity')) -le 0 -or (ConvertTo-Number (Get-JsonProp $_ 'UnitPrice')) -le 0 } | ForEach-Object { "$(Get-JsonProp $_ 'ItemCode')" })
-    if ($bad.Count -gt 0) { return ("Manna Treads purchase order {0} has no quantity or price on {1}." -f $PoNum, ($bad -join ', ')) }
-    return ''
-}
-
-function New-HtSalesOrderBody {
-    # The POST /Orders body in Hi-Tech, from the purchase order's own lines.
-    # CardCode, NumAtCard, SalesPersonCode and the warehouse as PASS A sends
-    # them; UnitPrice is what Manna Treads pays, net, and the tax code puts
-    # GST back, as on Hi-Tech's hand-made orders to 10118. DiscountPercent 0
-    # everywhere, so 10118's own discounts cannot reprice it. Pure.
-    param(
-        [Parameter(Mandatory = $true)] $Po,
-        [Parameter(Mandatory = $true)] [string] $CardCode,
-        [Parameter(Mandatory = $true)] [string] $OrderName,
-        [Parameter(Mandatory = $true)] [string] $PoNum,
-        [Parameter(Mandatory = $true)] [string] $TaxCode,
-        [Parameter(Mandatory = $true)] [string] $DocDate,
-        [string] $Warehouse = '',
-        $Series = $null,
-        $SalesPersonCode = $null
-    )
-    $due = Get-MfDueDate -DeliveryDate (Get-JsonProp $Po 'DocDueDate') -Today $DocDate
-    $lines = New-Object System.Collections.ArrayList
-    foreach ($l in @(Get-JsonProp $Po 'DocumentLines' | Where-Object { $null -ne $_ })) {
-        $dl = [ordered]@{
-            ItemCode        = "$(Get-JsonProp $l 'ItemCode')".Trim()
-            Quantity        = [double](ConvertTo-Number (Get-JsonProp $l 'Quantity'))
-            UnitPrice       = [double](ConvertTo-Number (Get-JsonProp $l 'UnitPrice'))
-            DiscountPercent = 0.0
-            TaxCode         = $TaxCode
-        }
-        if ("$Warehouse".Trim() -ne '') { $dl.WarehouseCode = "$Warehouse".Trim() }
-        [void]$lines.Add($dl)
-    }
-    $body = [ordered]@{
-        CardCode        = $CardCode
-        DocDate         = $DocDate
-        DocDueDate      = $due
-        NumAtCard       = $OrderName
-        Comments        = "Manna Treads PO $PoNum"
-        DiscountPercent = 0.0
-    }
-    if ($null -ne $Series -and "$Series".Trim() -ne '') { $body.Series = [int]$Series }
-    if ($null -ne $SalesPersonCode) { $body.SalesPersonCode = [int]$SalesPersonCode }
-    $body.DocumentLines = $lines
-    return $body
-}
-
-function Test-HtCustomer {
-    # '' when 10118 can take Hi-Tech's order, else why not. Pure.
-    param($Rows, [string] $CardCode)
-    $bp = @($Rows | Where-Object { $null -ne $_ -and "$(Get-JsonProp $_ 'CardCode')".Trim() -eq $CardCode })[0]
-    if (-not $bp) { return "Customer $CardCode (order_sync.fixed_card_code) is not in Hi-Tech SAP." }
-    if ("$(Get-JsonProp $bp 'CardType')".Trim() -ne 'cCustomer') { return "$CardCode is not a customer in Hi-Tech SAP." }
-    if ("$(Get-JsonProp $bp 'Valid')".Trim() -ne 'tYES' -or "$(Get-JsonProp $bp 'Frozen')".Trim() -ne 'tNO') { return "Customer $CardCode is inactive or frozen in Hi-Tech SAP." }
-    return ''
-}
+# B1if makes Manna Treads' purchase order to Hi-Tech and Hi-Tech's sales order
+# to Manna Treads (sap-b1if/, 4 Nov 2026). These two passes only find them by
+# NumAtCard = the ERPNext name and write them back to the order; Hi-Tech's goes
+# in custom_sap_sales_order like PASS A's, so PASS B follows it as it always has.
 
 function Get-HtList {
     # PASS H's working set: orders with Manna Treads' purchase order and no
@@ -4091,15 +3912,16 @@ try {
             }
         }
 
-        # ======== PASS P - Manna Treads purchase order to Hi-Tech (manna_first) ========
+        # ===== PASS P - link Manna Treads' purchase order to Hi-Tech (manna_first) =====
         #
-        # Manna Treads holds no stock, so every sales order PASS M made is
-        # bought from Hi-Tech: a purchase order to order_flow.hitech_vendor
-        # for the same items and kilos, at the order's rate less the
-        # inter-company margin (Get-MfPurchasePlan). Read again here so an
-        # order PASS M created this run gets its purchase order in the same
-        # run. Same session shape, lock, adoption by NumAtCard and refusal
-        # rules as PASS M; a refusal is prefixed "Purchase order to Hi-Tech:".
+        # B1if makes the purchase order (sap-b1if/, step 1) the moment PASS M's
+        # sales order is added in Manna Treads. This script never makes one
+        # (4 Nov 2026): one maker, so there can never be two. This pass only
+        # finds it, by NumAtCard = the ERPNext name, which B1if copies across,
+        # and writes it back to the order. One still missing after
+        # order_flow.b1if_wait_minutes is refused, prefixed "Purchase order to
+        # Hi-Tech:", so somebody looks at B1if's message log. Read again here so
+        # an order PASS M created this run is looked for in the same run.
         if ($flow.Mode -eq 'manna_first' -and $runPass['P'] -and ($mpList.Count -gt 0 -or $script:Result.mfCreated -gt 0 -or $script:Result.mfAdopted -gt 0)) {
             try { $mpList = @(Get-MpList -Flow $flow) }
             catch {
@@ -4127,17 +3949,10 @@ try {
             if ($mpGo) {
               try {
                 $mp = Get-MtSettings -Config $config
-                $mpNow   = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-                $mpToday = (Get-Date).ToString('yyyy-MM-dd')
-                # The margin is read once a run, from its one master. Unreadable
-                # is transient (nothing written); unset refuses each order.
-                $margin = Get-ErpIntercompanyMargin
-                Write-Log INFO ("PASS P settings: db={0} supplier={1} series={2} branch={3} warehouse={4} location={5} margin={6}/kg (SAP Pricing Control, GST-inclusive)" -f `
-                    $mp.CompanyDb, $flow.HitechVendor, $(if ($null -eq $flow.PoSeries) { '<SAP default>' } else { $flow.PoSeries }),
-                    $(if ($null -eq $mp.BplId) { '<omit>' } else { $mp.BplId }), $mp.Warehouse,
-                    $(if ($null -eq $mp.LocationCode) { '<omit>' } else { $mp.LocationCode }), $(if ($null -eq $margin) { '<unset>' } else { $margin }))
+                $mpNow = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                Write-Log INFO ("PASS P settings: db={0} - purchase orders are B1if's, found by NumAtCard; refused after {1} minutes without one" -f $mp.CompanyDb, $flow.B1ifWait)
 
-                # ---- 1. ERPNext only: re-read and plan ----
+                # ---- 1. ERPNext only: re-read ----
                 $mpWork = New-Object System.Collections.ArrayList
                 $doneP = 0
                 foreach ($row in $mpList) {
@@ -4154,10 +3969,7 @@ try {
                         if ((ConvertTo-CleanText (Get-JsonProp $doc $script:F_MT_ERR)) -ne '') { Write-Log INFO ("PASS P {0}: an error is recorded on it - skipping." -f $name); continue }
                         if ([int](ConvertTo-Number (Get-JsonProp $doc 'docstatus')) -eq 2) { Write-Log INFO ("PASS P {0}: cancelled (docstatus 2) - skipping." -f $name); continue }
                         if (@($flow.SkipStatuses) -contains (ConvertTo-CleanText (Get-JsonProp $doc 'custom_po_status'))) { Write-Log INFO ("PASS P {0}: approval status is '{1}' - skipping." -f $name, (Get-JsonProp $doc 'custom_po_status')); continue }
-                        [void]$mpWork.Add(@{
-                            Name = $name; Doc = $doc; MtSo = $mtSo; MtEntry = $mtEntry
-                            Plan = (Get-MfPurchasePlan -SalesPlan (Get-MfOrderPlan -Doc $doc) -Margin $margin)
-                        })
+                        [void]$mpWork.Add(@{ Name = $name; Doc = $doc; MtSo = $mtSo; MtEntry = $mtEntry })
                     } catch {
                         Write-Log ERROR ("PASS P {0}: could not be read - left for the next run: {1}" -f $name, "$_")
                         $script:Result.failures++
@@ -4165,7 +3977,7 @@ try {
                 }
 
                 if ($mpWork.Count -gt 0) {
-                    # ---- 2. one Manna Treads session ----
+                    # ---- 2. one Manna Treads session, reading only ----
                     $mpSess = $null
                     try {
                         Assert-MtCompanyDb -CompanyDb $mp.CompanyDb -HitechCompanyDb $companyDb
@@ -4175,24 +3987,9 @@ try {
                         $mpSess = New-SapWebSession -BaseUrl $sapUrl -Username $mpUser -Password $mpPass `
                             -CompanyDb $mp.CompanyDb -CompanyName 'Manna Treads' -UseSkipCert $useSkip
 
-                        # The supplier once a run: whether it can take orders, and the
-                        # tax code its state calls for.
-                        $vq = "CardCode eq '$($flow.HitechVendor -replace "'", "''")'"
-                        $vrel = "BusinessPartners?`$filter=$([uri]::EscapeDataString($vq))&`$select=CardCode,CardName,CardType,Valid,Frozen,BillToState"
-                        $vRows = @(Invoke-SapGet -BaseUrl $sapUrl -Session $mpSess -RelUrl $vrel -PageSize $pageSize -UseSkipCert $useSkip -Label 'Manna Treads supplier')
-                        $vendorWhy = Test-MfVendor -Rows $vRows -CardCode $flow.HitechVendor
-                        $poTax = ''
-                        if (-not $vendorWhy) {
-                            $vState = "$(Get-JsonProp @($vRows | Where-Object { "$(Get-JsonProp $_ 'CardCode')".Trim() -eq $flow.HitechVendor })[0] 'BillToState')".Trim()
-                            $poTax = Get-MfTaxCode -State $vState -TaxByState $flow.TaxByState
-                            if ($poTax -eq '') { $vendorWhy = "Supplier $($flow.HitechVendor) has no bill-to state the tax map knows ('$vState')." }
-                        }
-
                         foreach ($w in $mpWork) {
                             $name = $w.Name
-                            $plan = $w.Plan
                             try {
-                                # (a) FIRST: has a previous run already posted it?
                                 $q = "NumAtCard eq '$($name -replace "'", "''")'"
                                 $rel = "PurchaseOrders?`$filter=$([uri]::EscapeDataString($q))&`$select=DocEntry,DocNum,Cancelled,DocumentStatus"
                                 $hits = @(Invoke-SapGet -BaseUrl $sapUrl -Session $mpSess -RelUrl $rel -PageSize $pageSize -UseSkipCert $useSkip -Label 'Manna Treads PurchaseOrders by NumAtCard')
@@ -4201,14 +3998,14 @@ try {
                                 if ($adopt.Adopt) {
                                     $aNum = "$(Get-JsonProp $adopt.Adopt 'DocNum')".Trim()
                                     $aEntry = "$(Get-JsonProp $adopt.Adopt 'DocEntry')".Trim()
-                                    Write-Log WARN ("PASS P {0}: Manna Treads SAP already has a purchase order with NumAtCard = '{0}' (DocNum {1}, DocEntry {2}) - ADOPTING it, not creating another." -f $name, $aNum, $aEntry)
+                                    Write-Log INFO ("PASS P {0}: B1if's purchase order to Hi-Tech found - DocNum {1} (DocEntry {2}), for Manna Treads SO {3}." -f $name, $aNum, $aEntry, $w.MtSo)
                                     if ($DryRun) {
                                         Write-Log INFO ("PASS P {0}: WOULD write {1}={2}, {3}={4}, {5}." -f $name, $script:F_MT_PO, $aNum, $script:F_MT_PO_ENTRY, $aEntry, $script:F_MT_SYNCED)
                                     } else {
                                         try {
                                             Update-ErpSalesOrder -Name $name -Fields @{ $script:F_MT_PO = $aNum; $script:F_MT_PO_ENTRY = $aEntry; $script:F_MT_SYNCED = $mpNow }
                                         } catch {
-                                            Write-Log ERROR ("PASS P {0}: could not record the adopted purchase order DocNum {1} - the next run adopts it again: {2}" -f $name, $aNum, "$_")
+                                            Write-Log ERROR ("PASS P {0}: could not record purchase order DocNum {1} - the next run finds it again: {2}" -f $name, $aNum, "$_")
                                             $script:Result.writeErrors++; $script:Result.failures++
                                             continue
                                         }
@@ -4217,56 +4014,11 @@ try {
                                     continue
                                 }
 
-                                # (b) the order, the supplier, and its own sales order
-                                $why = ''
-                                if (@($plan.Problems).Count -gt 0) { $why = ($plan.Problems -join '; ') }
-                                elseif ($vendorWhy) { $why = $vendorWhy }
-                                if (-not $why) {
-                                    # Buy nothing for a sales order nobody can fill any more.
-                                    $so = Invoke-SapGet -BaseUrl $sapUrl -Session $mpSess -RelUrl ("Orders?`$filter=$([uri]::EscapeDataString("DocEntry eq $([int]$w.MtEntry)"))&`$select=DocEntry,DocNum,Cancelled,DocumentStatus") -PageSize $pageSize -UseSkipCert $useSkip -Label 'Manna Treads sales order'
-                                    $so = @($so)[0]
-                                    if (-not $so) { $why = "Manna Treads sales order $($w.MtSo) (DocEntry $($w.MtEntry)) is not in SAP." }
-                                    elseif ("$(Get-JsonProp $so 'Cancelled')" -eq 'tYES') { $why = "Manna Treads sales order $($w.MtSo) is cancelled - nothing to buy." }
-                                }
-                                $codes = @($plan.Lines | ForEach-Object { "$($_.Item)" })
-                                if (-not $why) {
-                                    $iq = ($codes | ForEach-Object { "ItemCode eq '$($_ -replace "'", "''")'" }) -join ' or '
-                                    $irel = "Items?`$filter=$([uri]::EscapeDataString($iq))&`$select=ItemCode,Valid,Frozen,PurchaseItem"
-                                    $why = Test-MfPurchaseItems -Codes $codes -Rows @(Invoke-SapGet -BaseUrl $sapUrl -Session $mpSess -RelUrl $irel -PageSize $pageSize -UseSkipCert $useSkip -Label 'Manna Treads Items')
-                                }
-                                if ($why) { $null = Write-MfRefusal -Name $name -Message $why -When $mpNow -IsDryRun ([bool]$DryRun) -Pass 'P'; continue }
-
-                                # (c) build and create
-                                $body = New-MfPurchaseOrderBody -Plan $plan -CardCode $flow.HitechVendor -OrderName $name -MtSalesOrder $w.MtSo -TaxCode $poTax `
-                                            -DocDate $mpToday -DueDate (Get-MfDueDate -DeliveryDate (Get-JsonProp $w.Doc 'delivery_date') -Today $mpToday) `
-                                            -Series $flow.PoSeries -Settings $mp
-                                if ($DryRun) {
-                                    Write-Log INFO ("PASS P {0}: WOULD POST /PurchaseOrders to {1} ({2} line(s), {3} incl. GST at the rate less {4}/kg, {5}):`n{6}" -f `
-                                        $name, $mp.CompanyDb, $plan.Lines.Count, $plan.Total, $margin, $poTax, ($body | ConvertTo-Json -Depth 8))
-                                    Write-Log INFO ("PASS P {0}: WOULD then write {1}=<DocNum>, {2}=<DocEntry>, {3}." -f $name, $script:F_MT_PO, $script:F_MT_PO_ENTRY, $script:F_MT_SYNCED)
-                                    continue
-                                }
-
-                                $post = Invoke-MtSalesOrderPost -BaseUrl $sapUrl -Session $mpSess -Payload $body -UseSkipCert $useSkip -Entity 'PurchaseOrders'
-                                if ($null -eq $post.Created) {
-                                    $pf = Get-MtPostFailure -Status $post.Status -Body $post.Body
-                                    if ($pf.Kind -eq 'refusal') { $null = Write-MfRefusal -Name $name -Message ($pf.Message -replace 'refused the order', 'refused it') -When $mpNow -IsDryRun $false -Pass 'P' }
-                                    else {
-                                        Write-Log ERROR ("PASS P {0}: the POST failed and was not SAP refusing it - left for the next run (which adopts it by NumAtCard if it was created after all): {1}" -f $name, $post.Text)
-                                        $script:Result.failures++
-                                    }
-                                    continue
-                                }
-                                $poNum   = "$(Get-JsonProp $post.Created 'DocNum')".Trim()
-                                $poEntry = "$(Get-JsonProp $post.Created 'DocEntry')".Trim()
-                                Write-Log INFO ("PASS P {0}: purchase order to Hi-Tech created - DocNum {1} (DocEntry {2}), {3} line(s), {4} incl. GST, for Manna Treads SO {5}." -f `
-                                    $name, $poNum, $poEntry, $plan.Lines.Count, $plan.Total, $w.MtSo)
-                                try {
-                                    Update-ErpSalesOrder -Name $name -Fields @{ $script:F_MT_PO = $poNum; $script:F_MT_PO_ENTRY = $poEntry; $script:F_MT_SYNCED = $mpNow }
-                                    $script:Result.mpCreated++; $script:Result.changed++
-                                } catch {
-                                    Write-Log ERROR ("PASS P {0}: purchase order DocNum {1} WAS CREATED but the ERPNext write-back FAILED: {2}  ==> the next run adopts it via NumAtCard." -f $name, $poNum, $_)
-                                    $script:Result.writeErrors++; $script:Result.failures++
+                                if (Test-B1ifLate -Since (Get-JsonProp $w.Doc $script:F_MT_SYNCED) -Now (Get-Date) -Minutes $flow.B1ifWait) {
+                                    $null = Write-MfRefusal -Name $name -Message ("B1if has not made it in {0} minutes - see B1if's message log for Manna Treads SO {1}, and @MANNA_IC in Manna Treads SAP." -f $flow.B1ifWait, $w.MtSo) -When $mpNow -IsDryRun ([bool]$DryRun) -Pass 'P'
+                                } else {
+                                    Write-Log INFO ("PASS P {0}: no purchase order with NumAtCard = '{0}' yet - waiting for B1if." -f $name)
+                                    $script:Result.mpWaiting++
                                 }
                             } catch {
                                 Write-Log ERROR ("PASS P {0}: FAILED - left for the next run: {1}" -f $name, "$_")
@@ -4289,14 +4041,17 @@ try {
             }
         }
 
-        # ====== PASS H - Hi-Tech's Sales Order for Manna Treads' PO (manna_first) ======
+        # ===== PASS H - link Hi-Tech's Sales Order for Manna Treads' PO (manna_first) =====
         #
-        # Read again so a purchase order PASS P made this run gets its Hi-Tech
-        # order in the same run. Two sessions, one after the other: Manna
-        # Treads, read-only, for each purchase order with its lines; then
-        # Hi-Tech, to make the orders. Its own lock, because it posts to
-        # Hi-Tech by NumAtCard where PASS M and P post to Manna Treads.
-        if ($flow.Mode -eq 'manna_first' -and $runPass['H'] -and ($htList.Count -gt 0 -or $script:Result.mpCreated -gt 0 -or $script:Result.mpAdopted -gt 0)) {
+        # B1if makes Hi-Tech's order (sap-b1if/, step 2) the moment its purchase
+        # order is added; as with PASS P, this script never makes one. This pass
+        # finds it in Hi-Tech by NumAtCard = the ERPNext name and writes it to
+        # custom_sap_sales_order, which is what PASS B follows its status and
+        # invoices by. One still missing after order_flow.b1if_wait_minutes is
+        # refused in custom_sap_sync_error. Read again so a purchase order PASS P
+        # linked this run is looked for in the same run. Its own lock, because it
+        # reads Hi-Tech by NumAtCard where PASS M and P read Manna Treads.
+        if ($flow.Mode -eq 'manna_first' -and $runPass['H'] -and ($htList.Count -gt 0 -or $script:Result.mpAdopted -gt 0)) {
             try { $htList = @(Get-HtList -Flow $flow) }
             catch {
                 Write-Log ERROR ("PASS H: could not read its orders - skipped this run: {0}" -f "$_")
@@ -4322,12 +4077,8 @@ try {
 
             if ($htGo) {
               try {
-                $ht = Get-MtSettings -Config $config
-                $htNow   = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-                $htToday = (Get-Date).ToString('yyyy-MM-dd')
-                Write-Log INFO ("PASS H settings: db={0} customer={1} series={2} warehouse={3} purchase orders read from {4}" -f `
-                    $companyDb, $fixedCardCode, $(if ($series -eq '') { '<SAP default>' } else { $series }),
-                    $(if ($lineWarehouse -eq '') { '<SAP default>' } else { $lineWarehouse }), $ht.CompanyDb)
+                $htNow = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                Write-Log INFO ("PASS H settings: db={0} - Hi-Tech's orders are B1if's, found by NumAtCard; refused after {1} minutes without one" -f $companyDb, $flow.B1ifWait)
 
                 # ---- 1. ERPNext: re-read ----
                 $htWork = New-Object System.Collections.ArrayList
@@ -4340,81 +4091,42 @@ try {
                         $doc = Get-ErpSalesOrder -Name $name
                         $hasSo = ConvertTo-CleanText (Get-JsonProp $doc $script:F_SO)
                         $poNum = ConvertTo-CleanText (Get-JsonProp $doc $script:F_MT_PO)
-                        $poEntry = ConvertTo-CleanText (Get-JsonProp $doc $script:F_MT_PO_ENTRY)
                         if ($hasSo -ne '') { Write-Log INFO ("PASS H {0}: already has Hi-Tech order {1} - skipping." -f $name, $hasSo); continue }
-                        if ($poNum -eq '' -or $poEntry -notmatch '^\d+$') { Write-Log INFO ("PASS H {0}: no Manna Treads purchase order recorded - skipping." -f $name); continue }
+                        if ($poNum -eq '') { Write-Log INFO ("PASS H {0}: no Manna Treads purchase order recorded - skipping." -f $name); continue }
                         if ((ConvertTo-CleanText (Get-JsonProp $doc $script:F_ERR)) -ne '') { Write-Log INFO ("PASS H {0}: a Hi-Tech error is recorded on it - skipping." -f $name); continue }
                         if ([int](ConvertTo-Number (Get-JsonProp $doc 'docstatus')) -eq 2) { Write-Log INFO ("PASS H {0}: cancelled (docstatus 2) - skipping." -f $name); continue }
-                        $names = @{}
-                        foreach ($it in @(Get-JsonProp $doc 'items')) {
-                            $ic = ConvertTo-CleanText (Get-JsonProp $it 'item_code')
-                            if ($ic -ne '' -and -not $names.ContainsKey($ic)) { $names[$ic] = ConvertTo-CleanText (Get-JsonProp $it 'item_name') }
-                        }
-                        [void]$htWork.Add(@{ Name = $name; Doc = $doc; PoNum = $poNum; PoEntry = [int]$poEntry; Names = $names; Po = $null })
+                        [void]$htWork.Add(@{ Name = $name; Doc = $doc; PoNum = $poNum })
                     } catch {
                         Write-Log ERROR ("PASS H {0}: could not be read - left for the next run: {1}" -f $name, "$_")
                         $script:Result.failures++
                     }
                 }
 
-                # ---- 2. Manna Treads, read-only: each purchase order with its lines ----
-                $poRead = $false
+                # ---- 2. Hi-Tech, reading only: each order by NumAtCard ----
                 if ($htWork.Count -gt 0) {
-                    $rdSess = $null
-                    try {
-                        Assert-MtCompanyDb -CompanyDb $ht.CompanyDb -HitechCompanyDb $companyDb
-                        $rdUser = $sapUser; $rdPass = $sapPass
-                        if ($ht.Username) { $rdUser = $ht.Username; $rdPass = $ht.Password }
-                        try { [System.Net.ServicePointManager]::FindServicePoint([System.Uri]$sapUrl).Expect100Continue = $false } catch { }
-                        $rdSess = New-SapWebSession -BaseUrl $sapUrl -Username $rdUser -Password $rdPass `
-                            -CompanyDb $ht.CompanyDb -CompanyName 'Manna Treads' -UseSkipCert $useSkip
-                        foreach ($w in $htWork) {
-                            $prel = "PurchaseOrders?`$filter=$([uri]::EscapeDataString("DocEntry eq $($w.PoEntry)"))&`$select=DocEntry,DocNum,CardCode,Cancelled,DocumentStatus,DocDueDate,DocumentLines"
-                            $w.Po = @(Invoke-SapGet -BaseUrl $sapUrl -Session $rdSess -RelUrl $prel -PageSize $pageSize -UseSkipCert $useSkip -Label 'Manna Treads purchase order')[0]
-                        }
-                        $poRead = $true
-                    } catch {
-                        Write-Log ERROR ("PASS H: could not read Manna Treads' purchase orders - {0} order(s) left for the next run: {1}" -f $htWork.Count, "$_")
-                        $script:Result.failures++
-                    } finally {
-                        Invoke-SapLogout -BaseUrl $sapUrl -Session $rdSess -UseSkipCert $useSkip
-                    }
-                }
-
-                # ---- 3. Hi-Tech: make the orders ----
-                if ($poRead) {
                     $hSess = $null
                     try {
                         try { [System.Net.ServicePointManager]::FindServicePoint([System.Uri]$sapUrl).Expect100Continue = $false } catch { }
                         $hSess = New-SapWebSession -BaseUrl $sapUrl -Username $sapUser -Password $sapPass `
                             -CompanyDb $companyDb -CompanyName $companyName -UseSkipCert $useSkip
-                        $htReps = Get-SapSalesPersonMap -BaseUrl $sapUrl -Session $hSess -PageSize $pageSize -UseSkipCert $useSkip
-                        $cq = "CardCode eq '$($fixedCardCode -replace "'", "''")'"
-                        $cRows = @(Invoke-SapGet -BaseUrl $sapUrl -Session $hSess -RelUrl ("BusinessPartners?`$filter=$([uri]::EscapeDataString($cq))&`$select=CardCode,CardName,CardType,Valid,Frozen,BillToState") -PageSize $pageSize -UseSkipCert $useSkip -Label 'Hi-Tech customer')
-                        $custWhy = Test-HtCustomer -Rows $cRows -CardCode $fixedCardCode
-                        $htTax = ''
-                        if (-not $custWhy) {
-                            $cState = "$(Get-JsonProp @($cRows | Where-Object { "$(Get-JsonProp $_ 'CardCode')".Trim() -eq $fixedCardCode })[0] 'BillToState')".Trim()
-                            $htTax = Get-MfTaxCode -State $cState -TaxByState $flow.TaxByState
-                            if ($htTax -eq '') { $custWhy = "Customer $fixedCardCode has no bill-to state the tax map knows ('$cState')." }
-                        }
 
                         foreach ($w in $htWork) {
                             $name = $w.Name
                             try {
-                                # (a) FIRST: has a previous run already made it?
                                 $q = "NumAtCard eq '$($name -replace "'", "''")'"
                                 $hits = @(Invoke-SapGet -BaseUrl $sapUrl -Session $hSess -RelUrl ("Orders?`$filter=$([uri]::EscapeDataString($q))&`$select=DocEntry,DocNum,Cancelled,DocumentStatus") -PageSize $pageSize -UseSkipCert $useSkip -Label 'Hi-Tech Orders by NumAtCard')
                                 $adopt = Select-MtAdoptable -Hits $hits
                                 if ($adopt.Error) { Write-HtRefusal -Name $name -Message ($adopt.Error -replace '^Manna Treads SAP', 'Hi-Tech SAP') -When $htNow -IsDryRun ([bool]$DryRun); continue }
                                 if ($adopt.Adopt) {
                                     $aNum = "$(Get-JsonProp $adopt.Adopt 'DocNum')".Trim()
-                                    Write-Log WARN ("PASS H {0}: Hi-Tech SAP already has an Order with NumAtCard = '{0}' (DocNum {1}) - ADOPTING it, not creating another." -f $name, $aNum)
-                                    if (-not $DryRun) {
+                                    Write-Log INFO ("PASS H {0}: B1if's Hi-Tech order found - DocNum {1}, for Manna Treads PO {2}." -f $name, $aNum, $w.PoNum)
+                                    if ($DryRun) {
+                                        Write-Log INFO ("PASS H {0}: WOULD write {1}={2}, {3}, {4}." -f $name, $script:F_SO, $aNum, $script:F_SO_STAT, $script:F_SYNCED)
+                                    } else {
                                         try {
                                             Update-ErpSalesOrder -Name $name -Fields @{ $script:F_SO = $aNum; $script:F_SO_STAT = (Resolve-SoStatus $adopt.Adopt); $script:F_SYNCED = $htNow; $script:F_ERR = '' }
                                         } catch {
-                                            Write-Log ERROR ("PASS H {0}: could not record the adopted Hi-Tech order DocNum {1} - the next run adopts it again: {2}" -f $name, $aNum, "$_")
+                                            Write-Log ERROR ("PASS H {0}: could not record Hi-Tech order DocNum {1} - the next run finds it again: {2}" -f $name, $aNum, "$_")
                                             $script:Result.writeErrors++; $script:Result.failures++
                                             continue
                                         }
@@ -4423,46 +4135,11 @@ try {
                                     continue
                                 }
 
-                                # (b) the purchase order, the customer, the items
-                                $why = Get-HtPoProblem -Po $w.Po -Vendor $flow.HitechVendor -PoNum $w.PoNum
-                                if (-not $why -and $custWhy) { $why = $custWhy }
-                                if (-not $why) {
-                                    $codes = @(@(Get-JsonProp $w.Po 'DocumentLines') | ForEach-Object { "$(Get-JsonProp $_ 'ItemCode')".Trim() } | Select-Object -Unique)
-                                    $iq = ($codes | ForEach-Object { "ItemCode eq '$($_ -replace "'", "''")'" }) -join ' or '
-                                    $iRows = @(Invoke-SapGet -BaseUrl $sapUrl -Session $hSess -RelUrl ("Items?`$filter=$([uri]::EscapeDataString($iq))&`$select=ItemCode,ItemName,Valid,Frozen,SalesItem") -PageSize $pageSize -UseSkipCert $useSkip -Label 'Hi-Tech Items')
-                                    $why = Test-MtItems -Codes $codes -Rows $iRows -Names $w.Names -Company 'Hi-Tech'
-                                }
-                                if ($why) { Write-HtRefusal -Name $name -Message $why -When $htNow -IsDryRun ([bool]$DryRun); continue }
-
-                                # (c) build and create - the rep as PASS A tags them
-                                $sp = Resolve-SapSalesPersonCode -RepName "$(Get-JsonProp $w.Doc 'custom_sales_person')" -Map $htReps -Fallback $salesPersonCode
-                                if ($sp.Warning) { Write-Log WARN ("PASS H {0}: {1}." -f $name, $sp.Warning); $script:Result.repUnmatched++ }
-                                $body = New-HtSalesOrderBody -Po $w.Po -CardCode $fixedCardCode -OrderName $name -PoNum $w.PoNum -TaxCode $htTax `
-                                            -DocDate $htToday -Warehouse $lineWarehouse -Series $series -SalesPersonCode $sp.Code
-                                if ($DryRun) {
-                                    Write-Log INFO ("PASS H {0}: WOULD POST /Orders to {1} for Manna Treads PO {2}:`n{3}" -f $name, $companyDb, $w.PoNum, ($body | ConvertTo-Json -Depth 8))
-                                    Write-Log INFO ("PASS H {0}: WOULD then write {1}=<DocNum>, {2}=<status>, {3}." -f $name, $script:F_SO, $script:F_SO_STAT, $script:F_SYNCED)
-                                    continue
-                                }
-
-                                $post = Invoke-MtSalesOrderPost -BaseUrl $sapUrl -Session $hSess -Payload $body -UseSkipCert $useSkip
-                                if ($null -eq $post.Created) {
-                                    $pf = Get-MtPostFailure -Status $post.Status -Body $post.Body
-                                    if ($pf.Kind -eq 'refusal') { Write-HtRefusal -Name $name -Message ($pf.Message -replace '^Manna Treads SAP', 'Hi-Tech SAP') -When $htNow -IsDryRun $false }
-                                    else {
-                                        Write-Log ERROR ("PASS H {0}: the POST failed and was not SAP refusing it - left for the next run (which adopts it by NumAtCard if it was created after all): {1}" -f $name, ($post.Text -replace 'Manna Treads SAP', 'Hi-Tech SAP'))
-                                        $script:Result.failures++
-                                    }
-                                    continue
-                                }
-                                $hNum = "$(Get-JsonProp $post.Created 'DocNum')".Trim()
-                                Write-Log INFO ("PASS H {0}: Hi-Tech Order created - DocNum {1} (DocEntry {2}) to {3}, for Manna Treads PO {4}." -f $name, $hNum, "$(Get-JsonProp $post.Created 'DocEntry')", $fixedCardCode, $w.PoNum)
-                                try {
-                                    Update-ErpSalesOrder -Name $name -Fields @{ $script:F_SO = $hNum; $script:F_SO_STAT = (Resolve-SoStatus $post.Created); $script:F_SYNCED = $htNow; $script:F_ERR = '' }
-                                    $script:Result.htCreated++; $script:Result.changed++
-                                } catch {
-                                    Write-Log ERROR ("PASS H {0}: Hi-Tech Order DocNum {1} WAS CREATED but the ERPNext write-back FAILED: {2}  ==> the next run adopts it via NumAtCard." -f $name, $hNum, $_)
-                                    $script:Result.writeErrors++; $script:Result.failures++
+                                if (Test-B1ifLate -Since (Get-JsonProp $w.Doc $script:F_MT_SYNCED) -Now (Get-Date) -Minutes $flow.B1ifWait) {
+                                    Write-HtRefusal -Name $name -Message ("B1if has not made Hi-Tech's order in {0} minutes - see B1if's message log for Manna Treads PO {1}, and @MANNA_IC in Hi-Tech SAP." -f $flow.B1ifWait, $w.PoNum) -When $htNow -IsDryRun ([bool]$DryRun)
+                                } else {
+                                    Write-Log INFO ("PASS H {0}: no Hi-Tech order with NumAtCard = '{0}' yet - waiting for B1if." -f $name)
+                                    $script:Result.htWaiting++
                                 }
                             } catch {
                                 Write-Log ERROR ("PASS H {0}: FAILED - left for the next run: {1}" -f $name, "$_")
@@ -4791,7 +4468,7 @@ try {
             $modeWord, $companyName, $r.inScopeNew, $r.created, $r.adopted, $r.createFailed, $r.repUnmatched, $r.openPolled, $r.linesInvoiced, $r.ordersInvoiced, $r.linesWritten, $r.linesCorrected, $r.linesRemoved, $r.invoiceUnresolved, $r.writeErrors, $r.failures,
             $r.linesKgWritten, $r.mtRequested, $r.mtCreated, $r.mtAdopted, $r.mtRefused, $r.followPolled, $r.mtFailedWaiting)
         if ($flow.Mode -eq 'manna_first') {
-            $summary += (" | manna_first new: {0} | mf created: {1} | mf adopted: {2} | mf refused: {3} | po due: {4} | po created: {5} | po adopted: {6} | po refused: {7} | hitech due: {8} | hitech created: {9} | hitech adopted: {10} | hitech refused: {11}" -f $r.mfInScope, $r.mfCreated, $r.mfAdopted, $r.mfRefused, $r.mpInScope, $r.mpCreated, $r.mpAdopted, $r.mpRefused, $r.htInScope, $r.htCreated, $r.htAdopted, $r.htRefused)
+            $summary += (" | manna_first new: {0} | mf created: {1} | mf adopted: {2} | mf refused: {3} | po due: {4} | po linked: {5} | po waiting for b1if: {6} | po refused: {7} | hitech due: {8} | hitech linked: {9} | hitech waiting for b1if: {10} | hitech refused: {11}" -f $r.mfInScope, $r.mfCreated, $r.mfAdopted, $r.mfRefused, $r.mpInScope, $r.mpAdopted, $r.mpWaiting, $r.mpRefused, $r.htInScope, $r.htAdopted, $r.htWaiting, $r.htRefused)
         }
         Write-Log INFO $summary
         $script:Result.summary = $summary

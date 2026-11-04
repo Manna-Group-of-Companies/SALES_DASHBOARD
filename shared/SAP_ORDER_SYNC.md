@@ -533,22 +533,29 @@ Manna Treads sells, Hi-Tech makes and holds the stock. So an order goes:
    Manna Treads Sales Order to the end customer (`Customer.custom_bp_code`),
    at the order's rate net of GST, tax code from the customer's bill-to
    state (KL `CG+SG@18`, any other `IGST@18`).
-2. **PASS P** — straight after, Manna Treads' Purchase Order to Hi-Tech
+2. **B1if, step 1** (4 Nov 2026; `sap-b1if/`) — the moment that sales order
+   is added in Manna Treads, Manna Treads' Purchase Order to Hi-Tech
    (supplier `S-1010`, series 199) for the same items and kilos, at the
    order's rate **less the inter-company margin** — rupees per kg,
-   GST-inclusive, from *SAP Pricing Control → Inter-company margin*, the same
-   master the `/rates` screen uses. The hand-made POs it replaces sit about
-   ₹20 under the customer's rate (PO 233: 232.46 against SO 554's 253).
-3. **PASS H** — straight after, Hi-Tech's Sales Order to `10118`, made from
-   that purchase order **as SAP holds it** (items, kilos, the net price
-   Manna Treads pays; tax from 10118's state), warehouse and rep as PASS A
-   sends them, `NumAtCard` the ERPNext name, comment *"Manna Treads PO
-   235"* and nothing about the end customer. Its DocNum goes in
+   GST-inclusive, from `MARGIN` in Manna Treads' `@MANNA_IC`. The hand-made
+   POs it replaces sit about ₹20 under the customer's rate (PO 233: 232.46
+   against SO 554's 253). Only sales orders PASS M made from ERPNext; one
+   keyed in SAP is left alone.
+3. **B1if, step 2** — the moment that purchase order is added, Hi-Tech's
+   Sales Order to `10118`, made from it **as SAP holds it** (items, kilos,
+   the net price Manna Treads pays; tax from 10118's state), `NumAtCard` the
+   ERPNext name, `U_MannaMtSoNo` the Manna Treads SO number, comment
+   *"Manna Treads PO 235"* and nothing about the end customer. No production
+   order and no invoice: those stay manual.
+4. **PASS P and PASS H** — the script no longer makes either document. They
+   find B1if's by `NumAtCard` and write the PO into
+   `custom_mt_purchase_order` and Hi-Tech's order into
    `custom_sap_sales_order`, so **PASS B follows it exactly as it follows
-   PASS A's** — status, line reconcile, invoices, Hi-Tech's kilos. A refusal
-   goes in `custom_sap_sync_error`, where PASS A's go. No production order
-   and no invoice: those stay manual.
-4. *Not built yet:* the pick list, Hi-Tech's invoice for what was picked,
+   PASS A's** — status, line reconcile, invoices, Hi-Tech's kilos. An order
+   B1if has not followed within `order_flow.b1if_wait_minutes` (30) is
+   refused: PASS P's in `custom_mt_sync_error`, PASS H's in
+   `custom_sap_sync_error`, naming B1if's message log.
+5. *Not built yet:* the pick list, Hi-Tech's invoice for what was picked,
    Manna Treads' goods receipt and delivery note.
 
 Manna Treads rounds a document to the rupee and Hi-Tech keeps paise, so PO
@@ -565,8 +572,8 @@ PASS M):
 
 | field | type | written by | means |
 |---|---|---|---|
-| `custom_mt_purchase_order` | Data | sync, PASS P | Manna Treads' PO to Hi-Tech, DocNum |
-| `custom_mt_purchase_order_entry` | Data | sync, PASS P | its DocEntry |
+| `custom_mt_purchase_order` | Data | sync, PASS P (made by B1if) | Manna Treads' PO to Hi-Tech, DocNum |
+| `custom_mt_purchase_order_entry` | Data | sync, PASS P (made by B1if) | its DocEntry |
 
 Both `read_only`, `allow_on_submit`, `no_copy`, after
 `custom_mt_sales_order_entry`. A refusal by either pass goes in
