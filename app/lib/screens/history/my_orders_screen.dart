@@ -5,6 +5,7 @@ import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
 import 'package:manna_field_sales/screens/orders/combined_order_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
+import 'package:manna_field_sales/screens/orders/pick_list_screen.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -161,14 +162,70 @@ class MyOrdersScreen extends StatelessWidget {
           },
         );
 
-        if (!showDup) return tile;
+        // Pick lists (3 Nov 2026): straight from the list, on a manager-
+        // approved order only, as the order's own page also offers.
+        final pickable = !isLead &&
+            '${r['custom_po_status'] ?? ''}' == 'PO Approved - Ready for SAP' &&
+            '${r['docstatus'] ?? 0}' != '2';
+
+        if (!showDup && !pickable) return tile;
         return Column(mainAxisSize: MainAxisSize.min, children: [
           tile,
-          _DuplicateWarning(orderName: '${r['name']}', duplicateOf: dupOf),
+          if (pickable) _PickListButton(orderName: '${r['name']}'),
+          if (showDup)
+            _DuplicateWarning(orderName: '${r['name']}', duplicateOf: dupOf),
         ]);
       },
     );
   }
+}
+
+/// "Generate pick list" under an approved order. The list row does not carry
+/// the order's lines, so the order is read first.
+class _PickListButton extends StatefulWidget {
+  final String orderName;
+  const _PickListButton({required this.orderName});
+  @override
+  State<_PickListButton> createState() => _PickListButtonState();
+}
+
+class _PickListButtonState extends State<_PickListButton> {
+  bool _busy = false;
+
+  Future<void> _open() async {
+    setState(() => _busy = true);
+    try {
+      final order = await Api.getOrder(widget.orderName);
+      if (!mounted) return;
+      await Navigator.push<bool>(context,
+          MaterialPageRoute(builder: (_) => GeneratePickListScreen(order: order)));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(humanError(e))));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: OutlinedButton.icon(
+            onPressed: _busy ? null : _open,
+            icon: _busy
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.playlist_add_check, size: 18),
+            label: const Text('Generate pick list'),
+          ),
+        ),
+      );
 }
 
 /// The duplicate banner under an order row, with the way to make it go away.
