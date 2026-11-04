@@ -3,6 +3,23 @@
 The code lives on GitHub; **Cloudflare Pages** builds and serves it. Push to
 `main` and the site redeploys.
 
+| | |
+|---|---|
+| Cloudflare account | **it@mannarubber.com's Account** (`767937da…`) |
+| Pages project | `sales-dashboard`, Git-connected to this repository |
+| Production URL | `https://sales-dashboard-cf5.pages.dev` |
+
+Between 17 and 20 October 2026, while that account was out of reach, the
+dashboard was also deployed from GitHub Actions to a `manna-sales-dashboard`
+project on the Manna Group account. That was undone once access came back; if
+the account is ever lost again, the reverted commit (`e6c2cf6`) is the recipe.
+
+Do not set this up as a **Worker**. A Git-connected Worker runs
+`npx wrangler deploy`, which finds no Worker config, stops at an interactive
+"Do you want to modify these settings?" prompt nobody can answer, and hangs
+until the build times out at ~30 minutes. Pages Functions (`functions/`) are
+also not served by a Worker, so the login would not work even if it deployed.
+
 ## Why not GitHub Pages
 
 It cannot work for this app, and the reason is worth recording so nobody tries

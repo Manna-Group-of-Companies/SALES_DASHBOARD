@@ -60,8 +60,40 @@ Future<Position> getCurrentLocation({bool requireAccurate = false}) async {
       perm == LocationPermission.deniedForever) {
     throw Exception('Location permission denied.');
   }
-  final pos = await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
+  // Two things the request did not do before, and both cost reps real time:
+  //
+  //  - No time limit. `getCurrentPosition` with no `timeLimit` waits as long
+  //    as it takes, and a rep punches in *inside a shop* where a high-accuracy
+  //    fix can hunt for satellites for a minute or more. Punch-in appeared to
+  //    hang. It is bounded now and fails with a sentence a rep can act on.
+  //
+  //  - High accuracy for everything. A capture is written down as a place and
+  //    must be a real GPS fix, so it stays on high. A punch-in or a visit only
+  //    has to land inside the proximity circle, which has up to
+  //    kMaxAccuracyAllowanceMetres of slack — medium accuracy resolves from
+  //    wifi and cell towers in about a second where high stalls, and its ~100 m
+  //    error is well inside that slack.
+  final limit = Duration(seconds: requireAccurate ? 30 : 12);
+  Position pos;
+  try {
+    pos = await Geolocator.getCurrentPosition(
+        locationSettings: LocationSettings(
+      accuracy:
+          requireAccurate ? LocationAccuracy.high : LocationAccuracy.medium,
+      timeLimit: limit,
+    ));
+  } on TimeoutException {
+    // A capture must be fresh — a remembered pin is the stale-position bug the
+    // top of this file warns about, so it is never substituted. A punch-in or
+    // visit may fall back to the last known fix: a rep in a shed with no live
+    // signal can still punch in, and the proximity slack absorbs its age.
+    if (!requireAccurate) {
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null) return last;
+    }
+    throw Exception(
+        'GPS is taking too long. Step outside for a moment and try again.');
+  }
 
   // A non-positive accuracy means the platform did not say. Treated as usable
   // rather than refused: rounding the other way would block every capture on a

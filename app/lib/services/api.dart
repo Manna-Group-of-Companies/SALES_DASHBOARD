@@ -4420,7 +4420,17 @@ class Api {
       'fieldname': fieldname,
       'is_private': 1,
     });
-    final r = await Session.I.dio.post('/api/method/upload_file', data: form);
+    // The session-wide 20 s timeout is sized for JSON, and a banner photo on
+    // one bar of signal cannot clear it — the capture then threw and the rep
+    // was told it failed while the file was still uploading. Two minutes each
+    // way, the same allowance `uploadFileGetUrl` already gives trip and bill
+    // photos (the 11 Oct release fixed those and missed this path).
+    final r = await Session.I.dio.post('/api/method/upload_file',
+        data: form,
+        options: Options(
+          sendTimeout: const Duration(minutes: 2),
+          receiveTimeout: const Duration(minutes: 2),
+        ));
     if (r.statusCode != 200 && r.statusCode != 201) {
       throw Exception(_frappeError(r));
     }

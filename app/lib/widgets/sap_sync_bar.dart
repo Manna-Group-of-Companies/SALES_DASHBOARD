@@ -72,9 +72,11 @@ class _SapSyncBarState extends State<SapSyncBar> {
   void initState() {
     super.initState();
     _read();
-    // Once a second, so "12 minutes ago" stays honest without asking the
-    // server anything.
-    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+    // The freshness line reads in minutes ("12 minutes ago"), so a once-a-
+    // second rebuild of this bar redrew the whole customer header sixty times
+    // to change nothing fifty-nine of them. Every 30 s keeps the minute count
+    // honest at a fraction of the work. No server call either way.
+    _tick = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted) setState(() {});
     });
   }
