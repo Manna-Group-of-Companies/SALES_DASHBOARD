@@ -254,7 +254,8 @@ export type ManagerScreen =
   | 'locations'
   | 'regularizations'
   | 'orders'
-  | 'stock';
+  | 'stock'
+  | 'targets';
 
 /** Everything. */
 const FULL: ManagerScreen[] = [
@@ -264,10 +265,14 @@ const FULL: ManagerScreen[] = [
   'regularizations',
   'orders',
   'stock',
+  'targets',
 ];
 
-/** Party records and their own people. */
-const PARTY_ONLY: ManagerScreen[] = ['customers', 'leads', 'locations', 'regularizations'];
+/**
+ * Party records and their own people. Every manager sets their own team's
+ * monthly targets (3 Nov 2026).
+ */
+const PARTY_ONLY: ManagerScreen[] = ['customers', 'leads', 'locations', 'regularizations', 'targets'];
 
 /**
  * Keyed by the team token on `Sales Person.custom_team_manager`, which is what

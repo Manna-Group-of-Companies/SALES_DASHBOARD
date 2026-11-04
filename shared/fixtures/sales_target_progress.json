@@ -1,0 +1,35 @@
+{
+  "about": "How far a rep is towards a monthly Sales Target. What counts as achieved is decided once, on the server, by the manna_sales_targets Server Script (app/server/sales_targets.py): only lines SAP has invoiced, dated in the target's month. It returns invoiced_amount (line amount, before GST) and invoiced_kg. Both apps then turn that into the figure on screen with this rule — app/lib/core/sales_target.dart and client/src/domain/salesTarget.ts. A Tonnes target is measured in invoiced kg / 1000, a Currency target in invoiced amount. `fraction` is not capped: a rep past target reads over 100%, and only the bar is clamped. With no invoice in the month both apps still show achieved 0 and 0% against a target, and say no invoice has come yet.",
+  "cases": [
+    {
+      "why": "Half of a money target invoiced.",
+      "row": { "target_amount": 100000, "target_unit": "Currency", "invoiced_amount": 50000, "invoiced_kg": 900, "line_count": 3 },
+      "has_target": true, "has_invoices": true, "achieved": 50000, "fraction": 0.5
+    },
+    {
+      "why": "A tonnes target is measured in invoiced kilos, not money.",
+      "row": { "target_amount": 4, "target_unit": "Tonnes", "invoiced_amount": 250000, "invoiced_kg": 1000, "line_count": 2 },
+      "has_target": true, "has_invoices": true, "achieved": 1, "fraction": 0.25
+    },
+    {
+      "why": "Past target reads past 100% — the number is not capped, only the bar is.",
+      "row": { "target_amount": 100000, "target_unit": "Currency", "invoiced_amount": 125000, "invoiced_kg": 0, "line_count": 1 },
+      "has_target": true, "has_invoices": true, "achieved": 125000, "fraction": 1.25
+    },
+    {
+      "why": "Nothing invoiced yet this month: achieved is 0 and so is the fraction, shown with a note that no invoice has come yet.",
+      "row": { "target_amount": 100000, "target_unit": "Currency", "invoiced_amount": 0, "invoiced_kg": 0, "line_count": 0 },
+      "has_target": true, "has_invoices": false, "achieved": 0, "fraction": 0
+    },
+    {
+      "why": "No target set: invoices still show, but there is no fraction of nothing.",
+      "row": { "target_amount": 0, "target_unit": "Currency", "invoiced_amount": 40000, "invoiced_kg": 0, "line_count": 1 },
+      "has_target": false, "has_invoices": true, "achieved": 40000, "fraction": 0
+    },
+    {
+      "why": "An unknown or missing unit is money, as the doctype's default is.",
+      "row": { "target_amount": 200000, "target_unit": "", "invoiced_amount": 50000, "invoiced_kg": 3000, "line_count": 1 },
+      "has_target": true, "has_invoices": true, "achieved": 50000, "fraction": 0.25
+    }
+  ]
+}

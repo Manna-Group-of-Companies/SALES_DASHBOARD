@@ -37,7 +37,11 @@ import 'package:manna_field_sales/core/app_version.dart';
 class UpdateService {
   /// Where CI publishes. Fixed rather than derived: the app has to know one
   /// repository, and this is the one releases are cut from.
-  static const String repo = 'Mannagoc/SALES_DASHBOARD';
+  ///
+  /// It moved from `Mannagoc/SALES_DASHBOARD`. Builds that still name the old
+  /// path reach this one only through GitHub's redirect, which lasts until
+  /// somebody claims the old name.
+  static const String repo = 'Manna-Group-of-Companies/SALES_DASHBOARD';
 
   static const String _manifestUrl =
       'https://github.com/$repo/releases/latest/download/version.json';

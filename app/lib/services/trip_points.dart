@@ -17,6 +17,7 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 /// One recorded position, with the moment it was actually taken.
@@ -82,16 +83,36 @@ class TripPoints {
     }
   }
 
+  static Future<int>? _inFlight;
+
   /// Sends everything queued, oldest first, and returns how many got through.
   ///
-  /// Stops at the first failure and keeps the rest. Carrying on would spend a
-  /// dead network on every point in the queue, and the order matters — a route
-  /// drawn out of sequence is worse than one that is simply short.
+  /// The network going stops the run and keeps the rest. Carrying on would
+  /// spend a dead network on every point in the queue, and the order matters —
+  /// a route drawn out of sequence is worse than one that is simply short.
+  ///
+  /// A trip the server REFUSES does not stop it. That used to: the refused
+  /// trip stayed at the head of the queue, every later trip queued behind it
+  /// for good, and past [_maxQueued] their points started falling off the
+  /// end. Its points are kept and retried; the other trips go.
   ///
   /// Points are grouped per trip so a day's backlog is one write per trip
   /// rather than one per point: [Api.appendTripGpsPoints] re-reads the trip and
   /// appends the lot.
-  static Future<int> flush() async {
+  ///
+  /// One run at a time. A fix arrives every five minutes and the home screen
+  /// flushes on every resume; two runs overlapping read the same trip, and
+  /// the second write replaces the first.
+  ///
+  /// [send] is for tests; it defaults to [Api.appendTripGpsPoints].
+  static Future<int> flush(
+      {Future<void> Function(String trip, List<TripPoint> points)? send}) {
+    return _inFlight ??= _flush(send ?? Api.appendTripGpsPoints)
+        .whenComplete(() => _inFlight = null);
+  }
+
+  static Future<int> _flush(
+      Future<void> Function(String trip, List<TripPoint> points) send) async {
     List<String> raw;
     try {
       raw = (await _prefs).getStringList(_key) ?? <String>[];
@@ -100,57 +121,58 @@ class TripPoints {
     }
     if (raw.isEmpty) return 0;
 
-    final points = <TripPoint>[];
+    // Each point travels with the exact stored string it came from, which is
+    // what removing it matches on. Re-encoding the point would not do: a
+    // coordinate stored as 76 comes back as 76.0, and the sent point would
+    // stay queued and be sent again on every run.
+    //
+    // Rows that will not decode are dropped along with what is sent: they can
+    // never go, and left in place the queue would never empty.
+    final done = <String>{};
+    final byTrip = <String, List<(String, TripPoint)>>{};
     for (final s in raw) {
-      try {
-        final p = TripPoint.fromJson(
-            (jsonDecode(s) as Map).cast<String, dynamic>());
-        if (p != null) points.add(p);
-      } catch (_) {
-        // A row that will not decode can never be sent. Dropping it is the
-        // only way the queue ever empties.
+      final p = _decode(s);
+      if (p == null) {
+        done.add(s);
+        continue;
       }
-    }
-    if (points.isEmpty) {
-      await _clear();
-      return 0;
-    }
-
-    // Grouped in the order the trips first appear, so the oldest trip's
-    // backlog goes first.
-    final byTrip = <String, List<TripPoint>>{};
-    for (final p in points) {
-      byTrip.putIfAbsent(p.trip, () => []).add(p);
+      // Grouped in the order the trips first appear, so the oldest trip's
+      // backlog goes first.
+      byTrip.putIfAbsent(p.trip, () => []).add((s, p));
     }
 
     var sent = 0;
-    final remaining = <TripPoint>[];
-    var failed = false;
     for (final entry in byTrip.entries) {
-      if (failed) {
-        remaining.addAll(entry.value);
-        continue;
-      }
       try {
-        await Api.appendTripGpsPoints(entry.key, entry.value);
+        await send(entry.key, [for (final (_, p) in entry.value) p]);
         sent += entry.value.length;
-      } catch (_) {
-        failed = true;
-        remaining.addAll(entry.value);
+        done.addAll([for (final (s, _) in entry.value) s]);
+      } catch (e) {
+        if (isNetworkFailure(e)) break;
+        // Refused. Kept for the next run; the other trips still go.
       }
     }
 
-    try {
-      final prefs = await _prefs;
-      await prefs.setStringList(
-          _key, [for (final p in remaining) jsonEncode(p.toJson())]);
-    } catch (_) {}
+    // Removes what went, from the queue AS IT IS NOW — never writes back the
+    // copy read at the start. A fix recorded while the upload was in flight
+    // is in the queue now and was not in that copy, and writing the copy back
+    // is exactly how it used to be wiped.
+    if (done.isNotEmpty) {
+      try {
+        final prefs = await _prefs;
+        final now = prefs.getStringList(_key) ?? <String>[];
+        await prefs.setStringList(
+            _key, now.where((s) => !done.contains(s)).toList());
+      } catch (_) {}
+    }
     return sent;
   }
 
-  static Future<void> _clear() async {
+  static TripPoint? _decode(String s) {
     try {
-      await (await _prefs).remove(_key);
-    } catch (_) {}
+      return TripPoint.fromJson((jsonDecode(s) as Map).cast<String, dynamic>());
+    } catch (_) {
+      return null;
+    }
   }
 }

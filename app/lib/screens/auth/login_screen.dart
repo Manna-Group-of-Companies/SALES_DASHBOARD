@@ -74,12 +74,17 @@ class _LoginScreenState extends State<LoginScreen> {
     final state = await Api.restore();
     if (state != AuthState.ok) return state;
     try {
-      await Api.resolveMySalesPerson();
-      await Api.resolveManagerContext();
+      // Independent of each other — each only needs to know who is signed
+      // in, and Api asks that once for the pair. In series they were the
+      // longest stretch of the splash.
+      await Future.wait(
+          [Api.resolveMySalesPerson(), Api.resolveManagerContext()]);
     } on DioException {
       return AuthState.unreachable;
     }
-    return _hasRole ? AuthState.ok : AuthState.rejected;
+    if (!_hasRole) return AuthState.rejected;
+    await Api.rememberIdentity();
+    return AuthState.ok;
   }
 
   Future<void> _loadSaved() async {
@@ -152,6 +157,18 @@ class _LoginScreenState extends State<LoginScreen> {
         }
         return;
       }
+      // No signal. A rep in a dead zone came to punch in, and a punch can be
+      // taken and queued without one — so open on who this login was last
+      // confirmed to be, rather than holding them on a splash until a signal
+      // arrives. Only after a real attempt has failed, and only with an
+      // identity to open on; without one there is nothing to do but wait.
+      // The home screen re-checks with the server before sending anything.
+      if (await Api.restoreIdentityOffline() && _hasRole) {
+        if (!mounted) return;
+        await _goHome();
+        return;
+      }
+      if (!mounted) return;
       setState(() {
         _waiting = true;
         // Never shown automatically, but after a few failed attempts give the
@@ -185,12 +202,13 @@ class _LoginScreenState extends State<LoginScreen> {
       // Credentials accepted. Hand over to the splash so the form is not left
       // sitting there looking frozen while the roles resolve.
       if (mounted) setState(() => _restoring = true);
-      await Api.resolveMySalesPerson();
-      await Api.resolveManagerContext();
+      await Future.wait(
+          [Api.resolveMySalesPerson(), Api.resolveManagerContext()]);
       if (!_hasRole) {
         throw Exception(
             'This login is not linked to a Sales Person or team. Contact admin.');
       }
+      await Api.rememberIdentity();
       if (mounted) await _goHome();
     } catch (e) {
       // Back to the form with the reason spelled out.

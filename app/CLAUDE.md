@@ -47,7 +47,7 @@ with "No such file or directory", that is why.)
 ```bash
 cd app
 flutter analyze          # expect 0 errors; ~75 infos/warnings are pre-existing
-flutter test             # 628 tests, all should pass
+flutter test             # ~940 tests, all should pass
 flutter build apk --release
 ```
 
@@ -95,9 +95,13 @@ have to uninstall and reinstall.
 
 ### The version has never been bumped
 
-`pubspec.yaml` still says `1.1.0+2`. `Manna App Settings.minimum_app_version` in
-ERPNext gates old builds out. Bump both together when you ship something reps
-must have.
+`pubspec.yaml` says `1.1.2` since 3 October 2026 (the first build to carry the
+25 September odometer photo fix under a name of its own; before that it shipped
+as a second `1.1.1`, so the gate could not tell the two apart).
+`Manna App Settings.minimum_app_version` in ERPNext gates old builds out. Bump
+both together when you ship something reps must have — and raise the minimum
+only once the new build can actually be downloaded, or the gate strands reps on
+a screen with nothing to install.
 
 ### iOS / TestFlight
 

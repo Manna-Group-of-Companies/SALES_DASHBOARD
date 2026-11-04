@@ -295,3 +295,36 @@ button.month__cell:focus-visible { outline: 2px solid var(--accent); outline-off
      the row height even; the full image is one click away. */
   object-fit: cover;
 }
+
+/* --------------------------------- odometer photos on the trip page --- */
+/*
+ * Each leg's start and end dial, in its row, the same size as a bill
+ * thumbnail so the row stays a row. Captioned, because a cropped dial does
+ * not say which end of the journey it is.
+ */
+.trip__odo { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+.trip__odo figure {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.trip__odo figcaption { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.trip__nophoto {
+  width: 54px;
+  height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--text-3);
+}
+/* On the trip, on no leg — dashed as on Odometer check. */
+.trip__odo .is-loose .odo__photo { border-style: dashed; }
+.trip__unlinked { padding: 10px 12px 12px; border-top: 1px solid var(--border); }
+.trip__unlinked .note { margin: 0 0 8px; }

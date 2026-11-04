@@ -5,6 +5,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/party_location.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/map_service.dart';
 
@@ -27,22 +28,40 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _customers.isEmpty;
       _error = null;
     });
+    // The last synced list draws first and the live one replaces it, for the
+    // same reason as the customer list — see Api.peekCustomers.
+    if (_customers.isEmpty) {
+      final peeked = await Api.peekCustomers();
+      if (!mounted) return;
+      if (peeked != null && peeked.value.isNotEmpty) {
+        setState(() {
+          _customers = _mappable(peeked.value);
+          _loading = false;
+        });
+      }
+    }
     try {
       final list = await Api.getCustomers();
-      _customers = list
-          .where((c) => isMappableLatLng(
-              _num(c['custom_latitude']), _num(c['custom_longitude'])))
-          .toList();
+      _customers = _mappable(list);
     } catch (e) {
       _error = humanError(e);
     }
     if (mounted) setState(() => _loading = false);
   }
 
-  double _num(dynamic v) => (v is num) ? v.toDouble() : 0.0;
+  /// Only the customers with a pin the map can project. Read through
+  /// core/party_location.dart: this screen used to take `(v is num) ? v : 0`
+  /// and silently dropped every coordinate the backend sent as text, so a
+  /// customer the list showed with figures was missing from the map.
+  static List<Map<String, dynamic>> _mappable(
+          List<Map<String, dynamic>> all) =>
+      all.where((c) {
+        final p = partyLatLng(c);
+        return p != null && isMappableLatLng(p.lat, p.lng);
+      }).toList();
 
   void _showCustomer(Map<String, dynamic> c, double lat, double lng) {
     showModalBottomSheet(
@@ -106,8 +125,9 @@ class _MapScreenState extends State<MapScreen> {
     final latlngs = <LatLng>[];
     final markers = <Marker>[];
     for (final c in _customers) {
-      final lat = _num(c['custom_latitude']);
-      final lng = _num(c['custom_longitude']);
+      // Never null: _mappable kept only rows with a pin.
+      final p = partyLatLng(c)!;
+      final lat = p.lat, lng = p.lng;
       latlngs.add(LatLng(lat, lng));
       markers.add(Marker(
         point: LatLng(lat, lng),

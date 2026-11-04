@@ -50,6 +50,58 @@ Future<bool> ensureNothingNearby(
   return false;
 }
 
+/// What [nearbyGate] found.
+enum NearbyGate {
+  /// Nothing of another rep's is nearby.
+  clear,
+
+  /// Something is, or the check was refused; the rep has been told.
+  blocked,
+
+  /// There is no signal to check with. Nothing has been shown, and nothing
+  /// has been decided — the caller must not treat this as [clear].
+  unreachable,
+}
+
+/// [ensureNothingNearby] for a caller that can wait for the answer.
+///
+/// The punch card can: a lead visit punched in with no signal is queued, and
+/// the check runs when it is sent, before anything is written (see
+/// `services/pending_punches.dart`). So "no signal" comes back as its own
+/// answer instead of a refusal. That is not the guard opening — the visit is
+/// still never recorded without the check passing.
+Future<NearbyGate> nearbyGate(
+  BuildContext context, {
+  required double lat,
+  required double lng,
+  required String subject,
+  Set<String> exclude = const {},
+  double radiusMetres = kDuplicateRadiusMetres,
+}) async {
+  late final List<NearbyPlace> near;
+  try {
+    near = await Api.nearbyPlaces(
+        lat: lat, lng: lng, radiusMetres: radiusMetres, exclude: exclude);
+  } catch (e) {
+    if (isNetworkFailure(e)) return NearbyGate.unreachable;
+    if (context.mounted) {
+      await _tell(
+        context,
+        title: 'Could not check for duplicates',
+        body: 'The app could not read what is already on record here, so it '
+            'will not $subject.\n\n${humanError(e)}',
+      );
+    }
+    return NearbyGate.blocked;
+  }
+  if (near.isEmpty) return NearbyGate.clear;
+  if (context.mounted) {
+    await _showBlocked(context,
+        near: near, subject: subject, radius: radiusMetres);
+  }
+  return NearbyGate.blocked;
+}
+
 Future<void> _showBlocked(
   BuildContext context, {
   required List<NearbyPlace> near,

@@ -5163,6 +5163,9 @@ async function listStrayOdometerPhotos(trips: Trip[], sinceIso: string): Promise
     fields: ['file_url', 'file_name', 'attached_to_name', 'creation'],
     filters: [
       ['attached_to_doctype', '=', DOCTYPE.trip],
+      // The trip page asks about one trip; without this it would pull every
+      // photo uploaded to any trip since that one's date.
+      ...(trips.length === 1 ? [['attached_to_name', '=', trips[0].id] as Filter] : []),
       ['creation', '>=', sinceIso],
       ['file_name', 'like', '%odo%'],
     ],
@@ -5181,6 +5184,7 @@ async function listStrayOdometerPhotos(trips: Trip[], sinceIso: string): Promise
   }
 
   const out: StrayOdometerPhoto[] = [];
+  const seen = new Set<string>();
   for (const r of rows) {
     const tripId = str(r.attached_to_name);
     const url = str(r.file_url);
@@ -5189,6 +5193,10 @@ async function listStrayOdometerPhotos(trips: Trip[], sinceIso: string): Promise
     const onTrip = tripId ? linked.get(tripId) : undefined;
     // A trip outside the list is one this caller is not showing.
     if (!tripId || !url || !slot || !onTrip || onTrip.has(url)) continue;
+    // Frappe gives an identical upload the same url under a second File row,
+    // so one picture can come back twice.
+    if (seen.has(url)) continue;
+    seen.add(url);
     out.push({ tripId, url, slot, uploadedAt: str(r.creation) ?? '' });
   }
   return out;

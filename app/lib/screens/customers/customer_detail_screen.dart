@@ -5,6 +5,8 @@ import 'package:image_picker/image_picker.dart' show XFile;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:manna_field_sales/core/credit.dart';
+import 'package:manna_field_sales/core/party_location.dart';
+import 'package:manna_field_sales/core/proximity.dart' show RegisteredPlace;
 import 'package:manna_field_sales/widgets/credit_conditions_section.dart';
 import 'package:manna_field_sales/widgets/sap_sync_bar.dart';
 import 'package:manna_field_sales/core/errors.dart';
@@ -512,7 +514,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           VisitPunchCard(
               customer: c['name'] as String,
               locationCaptured: _locationCaptured,
-              onLocationWrong: () => _capture(recapture: true)),
+              onLocationWrong: () => _capture(recapture: true),
+              partyLabel: '${c['customer_name'] ?? c['name']}',
+              fallbackPlaces: [
+                if (partyLatLng(c) case final p?)
+                  RegisteredPlace(
+                      '${c['customer_name'] ?? c['name']}', p.lat, p.lng),
+              ]),
           const SizedBox(height: 16),
           SitesSection(customer: c['name'] as String),
           const SizedBox(height: 16),

@@ -1,0 +1,46 @@
+{
+  "about": "The two doctypes behind pick lists (3 Nov 2026). Created as custom doctypes, so their fields carry no custom_ prefix. Only System Manager has permissions: every read and write goes through the manna_pick_list_submit and manna_pick_lists Server Scripts, which check the order, the products and the person. ERPNext's own Pick List was not used: Sales User has no permission on it, and it re-plans locations from warehouse kilos, which this site cannot express in rolls.",
+  "doctypes": [
+    {
+      "doctype": "DocType",
+      "name": "Manna Pick List Item",
+      "module": "Selling",
+      "custom": 1,
+      "istable": 1,
+      "editable_grid": 1,
+      "fields": [
+        { "fieldname": "sales_order_item", "label": "Sales Order Item", "fieldtype": "Data", "reqd": 1, "in_list_view": 0 },
+        { "fieldname": "item_code", "label": "Item", "fieldtype": "Link", "options": "Item", "reqd": 1, "in_list_view": 1 },
+        { "fieldname": "item_name", "label": "Item Name", "fieldtype": "Data", "in_list_view": 1 },
+        { "fieldname": "unit", "label": "Unit", "fieldtype": "Data", "in_list_view": 1 },
+        { "fieldname": "ordered_qty", "label": "Ordered", "fieldtype": "Float", "in_list_view": 1 },
+        { "fieldname": "available_qty", "label": "Hi-Tech Stock When Picked", "fieldtype": "Float", "in_list_view": 1 },
+        { "fieldname": "picked_qty", "label": "Picked", "fieldtype": "Float", "reqd": 1, "in_list_view": 1 }
+      ],
+      "permissions": []
+    },
+    {
+      "doctype": "DocType",
+      "name": "Manna Pick List",
+      "module": "Selling",
+      "custom": 1,
+      "autoname": "format:PICK-{#####}",
+      "naming_rule": "Expression",
+      "track_changes": 1,
+      "fields": [
+        { "fieldname": "sales_order", "label": "Sales Order", "fieldtype": "Link", "options": "Sales Order", "reqd": 1, "in_list_view": 1, "in_standard_filter": 1 },
+        { "fieldname": "customer", "label": "Customer", "fieldtype": "Link", "options": "Customer" },
+        { "fieldname": "customer_name", "label": "Customer Name", "fieldtype": "Data", "in_list_view": 1 },
+        { "fieldname": "sales_person", "label": "Sales Person", "fieldtype": "Link", "options": "Sales Person", "in_standard_filter": 1 },
+        { "fieldname": "team", "label": "Team", "fieldtype": "Data" },
+        { "fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "Submitted\nCancelled", "default": "Submitted", "in_list_view": 1 },
+        { "fieldname": "picked_on", "label": "Picked On", "fieldtype": "Datetime" },
+        { "fieldname": "picked_by", "label": "Picked By", "fieldtype": "Link", "options": "User" },
+        { "fieldname": "items", "label": "Items", "fieldtype": "Table", "options": "Manna Pick List Item", "reqd": 1 }
+      ],
+      "permissions": [
+        { "role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1 }
+      ]
+    }
+  ]
+}
