@@ -131,11 +131,13 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                   final done = await Navigator.push<bool>(
                       context,
                       MaterialPageRoute(
-                          builder: (_) => GeneratePickListScreen(order: {
-                                ..._order,
-                                'customer_name':
-                                    _customer['customer_name'] ?? _order['customer'],
-                              })));
+                          builder: (_) => GeneratePickListScreen(orders: [
+                                {
+                                  ..._order,
+                                  'customer_name': _customer['customer_name'] ??
+                                      _order['customer'],
+                                }
+                              ])));
                   if (done == true && mounted) {
                     setState(() => _init = _load());
                   }

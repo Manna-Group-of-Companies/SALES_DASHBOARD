@@ -20,11 +20,16 @@ class HistoryList extends StatefulWidget {
   /// that is not cached.
   final String? cacheKey;
 
+  /// Shown between the search box and the rows — one action for the whole
+  /// list rather than one per row. Its argument reloads the list.
+  final Widget Function(VoidCallback reload)? header;
+
   const HistoryList(
       {required this.title,
       required this.loader,
       required this.tileBuilder,
-      this.cacheKey});
+      this.cacheKey,
+      this.header});
   @override
   State<HistoryList> createState() => _HistoryListState();
 }
@@ -67,6 +72,7 @@ class _HistoryListState extends State<HistoryList> {
             onChanged: (v) => setState(() => _q = v),
           ),
         ),
+        if (widget.header != null) widget.header!(_reload),
         Expanded(
           child: FutureBuilder<List<Map<String, dynamic>>>(
             future: _future,
