@@ -20,7 +20,7 @@
 	<xsl:output method="xml"/>
 	<xsl:param name="atom"/>
 	<!-- The Call SQL atom that read Manna Treads. Change it if the atoms were placed in another order. -->
-	<xsl:param name="mtAtom" select="'atom1'"/>
+	<xsl:param name="mtAtom" select="'atom2'"/>
 
 	<xsl:template match="/">
 		<vpf:Msg>

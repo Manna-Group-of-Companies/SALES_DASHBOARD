@@ -83,7 +83,7 @@ function SoRow { param([hashtable] $Over = @{})
 	foreach ($k in $Over.Keys) { $r[$k] = $Over[$k] }
 	return $r
 }
-function Step1 { param([object[]] $Rows) return Invoke-Xsl 'step1-mt-po\final.xsl' (Msg @((Event '557'), (Rows 'atom1' $Rows))) 'atom2' }
+function Step1 { param([object[]] $Rows) return Invoke-Xsl 'step1-mt-po\final.xsl' (Msg @((Event '557'), (Rows 'atom2' $Rows))) 'atom3' }
 
 $o = Step1 @((SoRow), (SoRow @{ LineNum = '1'; ItemCode = 'PMB00101502'; Quantity = '80'; PriceAfVAT = '243' }))
 Check 'a_clean_sales_order_makes_a_purchase_order' ((XS $o '//Decision/Make') -eq 'Y') (XS $o '//Decision/Reason')
@@ -136,6 +136,14 @@ Check 'a_frozen_item_is_refused' (Refused (Step1 @(SoRow @{ ItemFrozen = 'Y' }))
 Check 'a_line_with_no_kilos_is_refused' (Refused (Step1 @(SoRow @{ Quantity = '0' })) 'a line has no quantity')
 Check 'a_rate_not_above_the_margin_is_refused' (Refused (Step1 @(SoRow @{ PriceAfVAT = '20' })) '*no more than the margin*')
 
+# ---------------------------------------------------------------- step 1 bom (atom6, before B1 Object)
+function Bom1 { param($Decision) return Invoke-Xsl 'step1-mt-po\bom.xsl' $Decision.OuterXml 'atom6' }
+$o = Bom1 (Step1 @(SoRow))
+Check 'step1_bom_hands_the_B1_Object_atom_only_the_purchase_order' ((XS $o '//*[@id="atom6"]/BOM/BO/AdmInfo/Object') -eq 'oPurchaseOrders')
+Check 'step1_bom_payload_holds_nothing_but_the_bom' (($o.SelectSingleNode('//*[@id="atom6"]')).ChildNodes.Count -eq 1)
+$o = Bom1 (Step1 @(SoRow @{ Enabled = 'N' }))
+Check 'step1_bom_of_a_refusal_is_empty_so_nothing_is_written' (($o.SelectSingleNode('//*[@id="atom6"]')).ChildNodes.Count -eq 0)
+
 # ---------------------------------------------------------------- step 2 sql
 $o = Invoke-Xsl 'step2-ht-so\sql-mt.xsl' (Msg (Event '239' '22')) 'atom0'
 Check 'step2_sql_mt_reads_the_purchase_order_of_the_event' ((XS $o '//Sql/Statement') -match 'WHERE P\.DocEntry = 239\b')
@@ -150,12 +158,12 @@ function PoRow { param([hashtable] $Over = @{})
 	foreach ($k in $Over.Keys) { $r[$k] = $Over[$k] }
 	return $r
 }
-$o = Invoke-Xsl 'step2-ht-so\sql-ht.xsl' (Msg @((Event '239' '22'), (Rows 'atom1' @((PoRow), (PoRow @{ LineNum = '1'; ItemCode = "PMB'X" }))))) 'atom2'
+$o = Invoke-Xsl 'step2-ht-so\sql-ht.xsl' (Msg @((Event '239' '22'), (Rows 'atom2' @((PoRow), (PoRow @{ LineNum = '1'; ItemCode = "PMB'X" }))))) 'atom3'
 $st = XS $o '//Sql/Statement'
 Check 'step2_sql_ht_lists_every_item_of_the_purchase_order' ($st -match "\(N'PMB00101002'\), \(N'PMB''X'\)") $st
 Check 'step2_sql_ht_quotes_the_reps_name' ($st -match "SlpName = N'Arun D''Souza'")
 Check 'step2_sql_ht_finds_an_earlier_order_by_U_MannaMtPo' ($st -match "U_MannaMtPo = N'239'")
-$o = Invoke-Xsl 'step2-ht-so\sql-ht.xsl' (Msg @((Event '239' '22'), (Rows 'atom1' @()))) 'atom2'
+$o = Invoke-Xsl 'step2-ht-so\sql-ht.xsl' (Msg @((Event '239' '22'), (Rows 'atom2' @()))) 'atom3'
 Check 'step2_sql_ht_asks_nothing_when_there_is_no_purchase_order' ((XS $o '//Sql/Statement').Trim() -eq 'SELECT TOP 0 1 AS ItemCode')
 
 # -------------------------------------------------------------- step 2 final
@@ -168,7 +176,7 @@ function HtRow { param([hashtable] $Over = @{})
 	foreach ($k in $Over.Keys) { $r[$k] = $Over[$k] }
 	return $r
 }
-function Step2 { param([object[]] $Po, [object[]] $Ht) return Invoke-Xsl 'step2-ht-so\final.xsl' (Msg @((Event '239' '22'), (Rows 'atom1' $Po), (Rows 'atom3' $Ht))) 'atom4' }
+function Step2 { param([object[]] $Po, [object[]] $Ht) return Invoke-Xsl 'step2-ht-so\final.xsl' (Msg @((Event '239' '22'), (Rows 'atom2' $Po), (Rows 'atom4' $Ht))) 'atom5' }
 
 $o = Step2 @((PoRow), (PoRow @{ LineNum = '1'; ItemCode = 'PMB00101502'; Quantity = '80'; Price = '188.983051' })) @((HtRow), (HtRow @{ ItemCode = 'PMB00101502' }))
 Check 'a_b1if_purchase_order_makes_a_hitech_order' ((XS $o '//Decision/Make') -eq 'Y') (XS $o '//Decision/Reason')

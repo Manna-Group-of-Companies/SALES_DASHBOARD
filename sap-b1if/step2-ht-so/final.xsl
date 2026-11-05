@@ -22,8 +22,8 @@
 	<xsl:output method="xml"/>
 	<xsl:param name="atom"/>
 	<!-- The two Call SQL atoms. Change them if the atoms were placed in another order. -->
-	<xsl:param name="mtAtom" select="'atom1'"/>
-	<xsl:param name="htAtom" select="'atom3'"/>
+	<xsl:param name="mtAtom" select="'atom2'"/>
+	<xsl:param name="htAtom" select="'atom4'"/>
 
 	<xsl:template match="/">
 		<vpf:Msg>

@@ -30,7 +30,7 @@
 	<xsl:output method="xml"/>
 	<xsl:param name="atom"/>
 	<!-- The Call SQL atom's id. Change it if the atoms were placed in another order. -->
-	<xsl:param name="sqlAtom" select="'atom1'"/>
+	<xsl:param name="sqlAtom" select="'atom2'"/>
 
 	<xsl:template match="/">
 		<vpf:Msg>
