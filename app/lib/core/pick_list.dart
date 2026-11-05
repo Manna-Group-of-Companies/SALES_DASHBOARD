@@ -9,6 +9,9 @@
 // The `manna_pick_list_submit` Server Script (app/server/pick_list_submit.py)
 // applies the same ordered/remaining rule again and refuses any product that
 // is not on the order, so a phone cannot talk its way round it.
+//
+// Since 5 Nov 2026 a production manager approves each list on the dashboard
+// (the `manna_pick_list_approve` Server Script); the phone only shows it.
 
 double _num(Object? v) => v is num ? v.toDouble() : double.tryParse('$v') ?? 0;
 int _int(Object? v) => v is num ? v.toInt() : int.tryParse('$v') ?? 0;
@@ -84,6 +87,11 @@ class PickList {
   final String salesPerson;
   final String status;
   final String pickedOn;
+
+  /// `Pending` or `Approved`. A list made before approval existed is Pending.
+  final String approvalStatus;
+  final String approvedByName;
+  final String approvedOn;
   final List<PickListItem> items;
 
   const PickList({
@@ -93,6 +101,9 @@ class PickList {
     required this.salesPerson,
     required this.status,
     required this.pickedOn,
+    this.approvalStatus = 'Pending',
+    this.approvedByName = '',
+    this.approvedOn = '',
     required this.items,
   });
 
@@ -103,6 +114,11 @@ class PickList {
         salesPerson: '${m['sales_person'] ?? ''}',
         status: '${m['status'] ?? 'Submitted'}',
         pickedOn: '${m['picked_on'] ?? ''}',
+        approvalStatus:
+            '${m['approval_status'] ?? ''}' == 'Approved' ? 'Approved' : 'Pending',
+        approvedByName:
+            '${m['approved_by_name'] ?? m['approved_by'] ?? ''}',
+        approvedOn: '${m['approved_on'] ?? ''}',
         items: ((m['items'] as List?) ?? const [])
             .whereType<Map>()
             .map(PickListItem.fromJson)
@@ -110,6 +126,9 @@ class PickList {
       );
 
   bool get isSubmitted => status == 'Submitted';
+
+  /// Approved by production. A cancelled list never counts as approved.
+  bool get isApproved => isSubmitted && approvalStatus == 'Approved';
 }
 
 /// What Submitted lists already took, per `Sales Order Item` name.

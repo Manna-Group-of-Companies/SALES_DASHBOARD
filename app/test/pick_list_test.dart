@@ -64,4 +64,19 @@ void main() {
     ];
     expect(pickedSoFar(lists), {'a': 5.0, 'b': 1.0});
   });
+
+  test('approval by production: blank is Pending, a cancelled list is never approved', () {
+    PickList l(Map m) => PickList.fromJson({'status': 'Submitted', 'items': [], ...m});
+    expect(l({}).approvalStatus, 'Pending');
+    expect(l({}).isApproved, isFalse);
+    final ok = l({
+      'approval_status': 'Approved',
+      'approved_by': 'ajith@x.com',
+      'approved_by_name': 'Ajith',
+      'approved_on': '2026-11-05 10:30:00',
+    });
+    expect(ok.isApproved, isTrue);
+    expect(ok.approvedByName, 'Ajith');
+    expect(l({'approval_status': 'Approved', 'status': 'Cancelled'}).isApproved, isFalse);
+  });
 }

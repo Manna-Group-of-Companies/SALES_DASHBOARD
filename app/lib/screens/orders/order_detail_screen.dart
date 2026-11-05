@@ -118,7 +118,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       const SizedBox(height: 2),
       const Text(
           'Tick the products Hi-Tech has in stock to send now; the rest can '
-          'be picked later. Your manager sees every pick list.',
+          'be picked later. Production approves each list; it shows '
+          'Approved here once they have.',
           style: TextStyle(fontSize: 12, color: Colors.black54)),
       const SizedBox(height: 8),
       for (final l in _pickLists) PickListCard(list: l, showOrder: false),
