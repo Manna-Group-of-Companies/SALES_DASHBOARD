@@ -27,6 +27,19 @@
     custom_outstanding_90_plus   /
     custom_sap_last_synced       <- run timestamp, only when something changed
 
+  Payment terms (added 11 Oct 2026; written only once the three fields exist
+  on the ERPNext Customer - until then the run logs a WARN and skips them):
+    custom_payment_terms         <- the SAP term's name (BP PayTermsGrpCode)
+    custom_overdue_past_terms    <- open amount on INVOICES whose SAP due date
+                                    (set from the payment terms) has passed,
+                                    capped at CurrentAccountBalance so payments
+                                    on account count; 0 when the customer has no
+                                    term set (SAP '- Cash Basic -', code -1)
+    custom_overdue_days          <- days the oldest of those invoices is past due
+  Both apps escalate an order to the GM when custom_overdue_past_terms > 1
+  (shared/fixtures/credit.json, past_terms). This script is the ONE place that
+  decides what "overdue past terms" means.
+
   Credit-limit rules (unchanged):
     - A SAP CreditLimit of 0 is the Business One default meaning "no figure",
       not "a deliberate 0" - it is SKIPPED so a hand-typed limit is never wiped.
@@ -113,6 +126,11 @@ $script:F_B2      = 'custom_outstanding_30_60'
 $script:F_B3      = 'custom_outstanding_60_90'
 $script:F_B4      = 'custom_outstanding_90_plus'
 $script:F_STAMP   = 'custom_sap_last_synced'
+$script:F_TERMS   = 'custom_payment_terms'       # 11 Oct 2026
+$script:F_OVERDUE = 'custom_overdue_past_terms'  # 11 Oct 2026
+$script:F_ODAYS   = 'custom_overdue_days'        # 11 Oct 2026
+$script:NO_TERMS_CODE = -1                       # SAP '- Cash Basic -' = no term set
+$script:TermsFieldsReady = $false                # set at run start: do the three fields exist?
 $script:MONEY_EPS = 0.005   # treat differences below this as "equal"
 
 # --------------------------------------------------------------------------------
@@ -285,12 +303,28 @@ function Invoke-ErpApi {
     }
 }
 
+function Test-ErpTermsFields {
+    # Do the three payment-terms fields exist on ERPNext Customer yet? Asked by
+    # reading one customer with them: Frappe refuses a field list naming a
+    # column it does not have. Any refusal means "not yet" - the run then
+    # carries on exactly as it did before 11 Oct 2026.
+    $fields = '["name","' + $script:F_TERMS + '","' + $script:F_OVERDUE + '","' + $script:F_ODAYS + '"]'
+    $query  = 'fields=' + [uri]::EscapeDataString($fields) + '&limit_page_length=1'
+    try {
+        $null = Invoke-ErpApi -Method 'GET' -Path '/api/resource/Customer' -Query $query
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Get-ErpCodedCustomers {
     # ONE request for every coded customer, then an in-memory index.
     # limit_page_length=0 disables Frappe paging.
     $fieldList = @('name', 'custom_bp_code',
         $script:F_LIMIT, $script:F_BAL,
         $script:F_B1, $script:F_B2, $script:F_B3, $script:F_B4)
+    if ($script:TermsFieldsReady) { $fieldList += @($script:F_TERMS, $script:F_OVERDUE, $script:F_ODAYS) }
     $fields  = '[' + (($fieldList | ForEach-Object { '"' + $_ + '"' }) -join ',') + ']'
     $filters = '[["custom_bp_code","is","set"]]'
     $query   = 'fields='  + [uri]::EscapeDataString($fields) +
@@ -317,6 +351,9 @@ function Get-ErpCodedCustomers {
             CurB2      = [double](ConvertTo-Number (Get-JsonProp $row $script:F_B2))
             CurB3      = [double](ConvertTo-Number (Get-JsonProp $row $script:F_B3))
             CurB4      = [double](ConvertTo-Number (Get-JsonProp $row $script:F_B4))
+            CurTerms   = "$(Get-JsonProp $row $script:F_TERMS)".Trim()
+            CurOverdue = [double](ConvertTo-Number (Get-JsonProp $row $script:F_OVERDUE))
+            CurODays   = [int](ConvertTo-Number (Get-JsonProp $row $script:F_ODAYS))
         }
     }
     if ($dupes.Count -gt 0) {
@@ -543,6 +580,8 @@ function Get-SapCustomerData {
     $bpRows      = $null
     $arAvailable = $false
     $ar          = @{}   # code -> @{ B1;B2;B3;B4; n }
+    $pastDue     = @{}   # code -> @{ Amt; Late }  open invoices past their SAP due date (11 Oct 2026)
+    $termNames   = @{}   # PayTermsGrpCode -> PaymentTermsGroupName
     $basisField  = if ($AgeingBasis -eq 'due_date') { 'DocDueDate' } else { 'DocDate' }
     $today       = (Get-Date).Date
 
@@ -551,11 +590,22 @@ function Get-SapCustomerData {
             -CompanyDb $CompanyDb -CompanyName $CompanyName -UseSkipCert $useSkip
 
         # ---- customers ----
-        $bpSel = [uri]::EscapeDataString('CardCode,CardName,CreditLimit,CurrentAccountBalance')
+        $bpSel = [uri]::EscapeDataString('CardCode,CardName,CreditLimit,CurrentAccountBalance,PayTermsGrpCode')
         $bpFlt = [uri]::EscapeDataString("CardType eq 'cCustomer'")
         $bpRows = Get-SapPagedValue -BaseUrl $BaseUrl -Session $sess -PageSize $PageSize -UseSkipCert $useSkip `
             -Label "BusinessPartners [$CompanyName]" `
             -StartUrl "$BaseUrl/BusinessPartners?`$select=$bpSel&`$filter=$bpFlt"
+
+        # ---- payment-term names (11 Oct 2026). A failure costs only the names. ----
+        try {
+            $ptSel  = [uri]::EscapeDataString('GroupNumber,PaymentTermsGroupName')
+            $ptRows = Get-SapPagedValue -BaseUrl $BaseUrl -Session $sess -PageSize $PageSize -UseSkipCert $useSkip `
+                -Label "PaymentTermsTypes [$CompanyName]" `
+                -StartUrl "$BaseUrl/PaymentTermsTypes?`$select=$ptSel"
+            foreach ($t in $ptRows) { $termNames["$(Get-JsonProp $t 'GroupNumber')".Trim()] = "$(Get-JsonProp $t 'PaymentTermsGroupName')".Trim() }
+        } catch {
+            Write-Log WARN ("SAP payment-term names could not be read - the terms field will be left as it is. Reason: {0}" -f $_.Exception.Message)
+        }
 
         # ---- open AR documents (only if we are going to write buckets) ----
         if ($SyncOutstanding) {
@@ -578,6 +628,23 @@ function Get-SapCustomerData {
                     $k = Get-AgeBucketKey $age
                     $ar[$code][$k] += ($sign * $open)
                     $ar[$code].n++
+
+                    # Overdue past the payment terms (11 Oct 2026): an INVOICE still
+                    # open after its SAP due date, which SAP set from the terms.
+                    if ($sign -gt 0 -and $open -gt $script:MONEY_EPS) {
+                        $dueRaw = Get-JsonProp $d 'DocDueDate'
+                        if ($dueRaw) {
+                            try {
+                                $dueDay = ([datetime]$dueRaw).Date
+                                if ($dueDay -lt $today) {
+                                    $lateDays = [int][math]::Floor(($today - $dueDay).TotalDays)
+                                    if (-not $pastDue.ContainsKey($code)) { $pastDue[$code] = @{ Amt = 0.0; Late = 0 } }
+                                    $pastDue[$code].Amt += $open
+                                    if ($lateDays -gt $pastDue[$code].Late) { $pastDue[$code].Late = $lateDays }
+                                }
+                            } catch { }
+                        }
+                    }
                 }
 
                 $invRows = Get-SapPagedValue -BaseUrl $BaseUrl -Session $sess -PageSize $PageSize -UseSkipCert $useSkip `
@@ -629,17 +696,39 @@ function Get-SapCustomerData {
             $b4 = [math]::Round($ar[$code].B4, 2)
             $hasDocs = ($ar[$code].n -gt 0)
         }
+        $acctBal = [double](ConvertTo-Number (Get-JsonProp $bp 'CurrentAccountBalance'))
+
+        # Payment terms (11 Oct 2026). No term set (SAP code -1, '- Cash Basic -')
+        # means nothing can be "past the terms", so its figure is 0. The amount
+        # is capped at the account balance: a payment on account that SAP has
+        # not reconciled against the invoices still counts as paid.
+        $payRaw   = Get-JsonProp $bp 'PayTermsGrpCode'
+        $payCode  = if ($null -eq $payRaw -or "$payRaw".Trim() -eq '') { $script:NO_TERMS_CODE } else { [int](ConvertTo-Number $payRaw) }
+        $termsSet = ($payCode -ne $script:NO_TERMS_CODE)
+        $termName = if ($termNames.ContainsKey("$payCode")) { $termNames["$payCode"] } else { '' }
+        $odAmt = $null; $odDays = $null           # $null = unknown this run: leave the fields alone
+        if ($arAvailable) {
+            $odAmt = 0.0; $odDays = 0
+            if ($termsSet -and $pastDue.ContainsKey($code)) {
+                $odAmt = [math]::Round([math]::Max(0.0, [math]::Min([double]$pastDue[$code].Amt, $acctBal)), 2)
+                if ($odAmt -gt 0) { $odDays = [int]$pastDue[$code].Late }
+            }
+        }
+
         $byCode[$code] = [pscustomobject]@{
             CardCode       = $code
             CardName       = "$(Get-JsonProp $bp 'CardName')"
             CreditLimit    = [double](ConvertTo-Number (Get-JsonProp $bp 'CreditLimit'))
-            AccountBalance = [double](ConvertTo-Number (Get-JsonProp $bp 'CurrentAccountBalance'))
+            AccountBalance = $acctBal
             B1             = $b1
             B2             = $b2
             B3             = $b3
             B4             = $b4
             BucketSum      = [math]::Round($b1 + $b2 + $b3 + $b4, 2)
             HasArDocs      = $hasDocs
+            PaymentTerms   = $termName
+            OverduePastTerms = $odAmt
+            OverdueDays    = $odDays
         }
     }
     return @{ ByCode = $byCode; ArAvailable = $arAvailable }
@@ -755,6 +844,14 @@ try {
 
     try {
         # ---- 1. ERPNext bulk read ----
+        # Payment terms (11 Oct 2026) are written only once their three fields
+        # exist on Customer; before that the run is exactly what it always was.
+        $script:TermsFieldsReady = Test-ErpTermsFields
+        if ($script:TermsFieldsReady) {
+            Write-Log INFO ("payment-terms fields found on Customer ({0}, {1}, {2}) - they will be synced." -f $script:F_TERMS, $script:F_OVERDUE, $script:F_ODAYS)
+        } else {
+            Write-Log WARN ("payment-terms fields are not on ERPNext Customer yet ({0}, {1}, {2}) - skipped this run." -f $script:F_TERMS, $script:F_OVERDUE, $script:F_ODAYS)
+        }
         Write-Log INFO "Loading ERPNext customers that carry a custom_bp_code ..."
         $erpIndex = Get-ErpCodedCustomers
         Write-Log INFO ("ERPNext: {0} coded customer(s) indexed." -f $erpIndex.Count)
@@ -779,6 +876,8 @@ try {
         $sapNoFigure      = New-Object System.Collections.Generic.List[string]
         $limitChangeCount = 0
         $balChangeCount   = 0
+        $termsChangeCount = 0
+        $overdueNow       = 0     # matched customers overdue past their terms this run
 
         foreach ($code in ($sapByCode.Keys | Sort-Object)) {
             if ($skipCodes -contains $code) { $skippedByConfig.Add($code); continue }
@@ -827,6 +926,28 @@ try {
                 }
             }
 
+            # -- payment terms + overdue past them (11 Oct 2026) --
+            $termsFrom = $null; $termsTo = $null
+            if ($null -ne $sapCust.OverduePastTerms -and [double]$sapCust.OverduePastTerms -gt 1) { $overdueNow++ }
+            if ($script:TermsFieldsReady) {
+                # The name is only written when SAP gave one; a failed name read
+                # never blanks a stored term.
+                if ($sapCust.PaymentTerms -ne '' -and $sapCust.PaymentTerms -ne $erpCust.CurTerms) {
+                    $fields[$script:F_TERMS] = $sapCust.PaymentTerms
+                }
+                # $null = the open-document read failed: leave the figures alone.
+                if ($null -ne $sapCust.OverduePastTerms) {
+                    $odChanged = $false
+                    if ([math]::Abs([double]$sapCust.OverduePastTerms - [double]$erpCust.CurOverdue) -ge $script:MONEY_EPS) {
+                        $fields[$script:F_OVERDUE] = [double]$sapCust.OverduePastTerms; $odChanged = $true
+                    }
+                    if ([int]$sapCust.OverdueDays -ne [int]$erpCust.CurODays) {
+                        $fields[$script:F_ODAYS] = [int]$sapCust.OverdueDays; $odChanged = $true
+                    }
+                    if ($odChanged) { $termsFrom = [double]$erpCust.CurOverdue; $termsTo = [double]$sapCust.OverduePastTerms; $termsChangeCount++ }
+                }
+            }
+
             if ($fields.Count -eq 0) { continue }
 
             $plannedWrites.Add([pscustomobject]@{
@@ -842,6 +963,10 @@ try {
                 B2             = [double]$sapCust.B2
                 B3             = [double]$sapCust.B3
                 B4             = [double]$sapCust.B4
+                OverdueFrom    = $termsFrom
+                OverdueTo      = $termsTo
+                OverdueDays    = $sapCust.OverdueDays
+                Terms          = $sapCust.PaymentTerms
             })
         }
 
@@ -855,12 +980,15 @@ try {
         Write-Log INFO "---- planned changes ----"
         Write-Log INFO ("customers with at least one field to change: {0}  (credit-limit: {1} | outstanding-balance: {2})" -f `
             $plannedWrites.Count, $limitChangeCount, $balChangeCount)
+        Write-Log INFO ("payment terms: {0} matched customer(s) overdue past their terms right now; {1} overdue figure(s) to change{2}." -f `
+            $overdueNow, $termsChangeCount, $(if ($script:TermsFieldsReady) { '' } else { ' (fields not on ERPNext yet - nothing written)' }))
         foreach ($w in ($plannedWrites | Select-Object -First 200)) {
             $nm = $w.Name; if ($nm.Length -gt 34) { $nm = $nm.Substring(0, 34) }
             $parts = New-Object System.Collections.Generic.List[string]
             if ($null -ne $w.LimitTo) { $parts.Add(("limit {0:N2}->{1:N2}" -f $w.LimitFrom, $w.LimitTo)) }
             if ($null -ne $w.BalTo)   { $parts.Add(("bal {0:N2}->{1:N2}"   -f $w.BalFrom,   $w.BalTo)) }
             if ($w.BucketsChanged)    { $parts.Add(("buckets [{0:N0}/{1:N0}/{2:N0}/{3:N0}]" -f $w.B1, $w.B2, $w.B3, $w.B4)) }
+            if ($null -ne $w.OverdueTo) { $parts.Add(("overdue past {0} {1:N0}->{2:N0} ({3}d)" -f $(if ($w.Terms) { $w.Terms } else { 'terms' }), $w.OverdueFrom, $w.OverdueTo, $w.OverdueDays)) }
             Write-Log INFO ("  {0,-10} {1,-34}  {2}" -f $w.Code, $nm, ($parts -join ' | '))
         }
         if ($plannedWrites.Count -gt 200) {
