@@ -10,6 +10,7 @@ and tread-rubber manufacturer.
 | `shared/` | Rules both must obey, as fixtures. Read `shared/README.md` first |
 | `sap-order-sync/` | PowerShell. The ERPNext ⇄ SAP B1 order sync. Runs on the **SAP server**, not hosted. Needs the factory LAN; `config.json` is gitignored |
 | `whatsapp/` | ERPNext Server Scripts that WhatsApp the customer when an order is approved and when it is delivered in SAP (Meta Cloud API). Lives entirely in ERPNext; see its README |
+| `sap-credit-sync/` | PowerShell. SAP B1 → ERPNext credit limits, outstanding/ageing, payment terms and new customers, run when someone presses Sync. The live copy is `C:\Users\eldhose\sap-credit-sync` on the office server; see its README |
 | `sap-pricing/` | PowerShell behind the MD's `/rates` screen: the read-only snapshot of Manna Treads' prices (the master, where the dealers are) and Hi-Tech's (kept a margin below), plus the office server's own check of them. Reads SAP only; the screen hands out DTW files. Every price is GST-inclusive as it stands. The real rules and the margin live in ERPNext, not here; see its README |
 
 They were separate repositories until 13 August 2026. They are one repository

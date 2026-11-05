@@ -13,7 +13,19 @@ ERPNext-side "Treads customers" filter and the script does not invent one.
 | -------------------------- | -------------------------------------------------------- |
 | `Sync-SapCreditLimits.ps1` | The whole job. Dry-run first, then schedule it.          |
 | `config.example.json`      | Template. Copy to `config.json`, fill in, keep out of git. |
-| `.gitignore`               | Keeps `config.json` / `login.json` / logs out of git.   |
+| `Invoke-SapSyncPoller.ps1` | Run by the `SAP-Watch-Credit` flag watcher when someone presses Sync; claims a run and starts the sync. |
+| `poller.config.example.json` | Template for the poller's `poller.config.json` (bot key, paths). Keep out of git. |
+| `rep-map.json`             | SAP sales employee -> ERPNext Sales Person, for the new-customer step. Read on every run. |
+| `.gitignore`               | Keeps `config.json` / `poller.config.json` / `login.json` / logs out of git. |
+
+## Where it runs
+
+The copy that runs is **`C:\Users\eldhose\sap-credit-sync`** on the office
+server, not this folder. `sap-order-sync/Register-FlagWatchTasks.ps1` points the
+`SAP-Watch-Credit` task there. This folder was brought into git on
+5 Nov 2026 from that copy and its `.bak-*` files (see the git log). Change it
+here, then copy the changed files across to deploy; the live `config.json` and
+`poller.config.json` stay only on the server.
 
 ## Config keys — exactly what the script reads
 
