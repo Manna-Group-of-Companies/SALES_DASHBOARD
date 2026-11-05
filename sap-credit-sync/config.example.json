@@ -31,6 +31,9 @@
   "new_customer_max":  25,
   "rep_map_file":      "rep-map.json",
 
+  "sync_invoices":     true,
+  "invoices_since":    "2026-04-01",
+
   "log_dir":       "./logs",
   "log_keep_days": 30
 }
