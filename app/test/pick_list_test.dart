@@ -34,12 +34,12 @@ void main() {
   group('shared/fixtures/pick_list.json kilos', () {
     for (final c in (fixture['kg_cases'] as List).cast<Map<String, dynamic>>()) {
       test(c['why'] as String, () {
-        final line = c['line'] as Map;
-        final already = (c['already_kg'] as num).toDouble();
-        expect(orderedKg(line), (c['ordered_kg'] as num).toDouble());
-        expect(remainingKg(line, already), (c['remaining_kg'] as num).toDouble());
-        expect(maxPickKg(line, alreadyKg: already), (c['max_kg'] as num).toDouble());
-        expect(kgFollowsQty(line), c['kg_follows_qty']);
+        expect(
+            pickKg(c['line'] as Map, (c['picked'] as num).toDouble(),
+                alreadyPicked: (c['already_picked'] as num).toDouble(),
+                alreadyKg: (c['already_kg'] as num).toDouble(),
+                itemWeightPerRoll: (c['item_weight_per_roll'] as num).toDouble()),
+            closeTo((c['kg'] as num).toDouble(), 1e-9));
       });
     }
   });

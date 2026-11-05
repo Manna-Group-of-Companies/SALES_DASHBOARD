@@ -36,9 +36,6 @@ class _PickRow {
   final double max;
   final double alreadyKg;
   final TextEditingController qty;
-  // Weighed kilos (5 Nov 2026): SAP's documents are made from them. Empty for
-  // the rep to fill, except on a line counted in kg, where qty is the kilos.
-  final TextEditingController kg = TextEditingController();
   bool ticked = false;
 
   _PickRow(this.order, this.line, this.already, this.available, this.max,
@@ -52,8 +49,19 @@ class _PickRow {
   String get unit => pickUnit(line);
   double get ordered => orderedForPick(line);
   bool get kgIsQty => kgFollowsQty(line);
-  double get maxKg => maxPickKg(line, alreadyKg: alreadyKg);
+
+  /// The kilos the list will carry for what is typed, as the server works
+  /// them out (5 Nov 2026: rolls x the order's weight per roll). Shown, never
+  /// asked for; null on a line with loose belts, whose figure needs the item.
+  double? get kg {
+    final q = double.tryParse(qty.text.trim()) ?? 0;
+    if (q <= 0) return 0;
+    if (!kgIsQty && _int(line['custom_loose_belts']) > 0) return null;
+    return pickKg(line, q, alreadyPicked: already, alreadyKg: alreadyKg);
+  }
 }
+
+int _int(Object? v) => v is num ? v.toInt() : int.tryParse('$v') ?? 0;
 
 const String _kApproved = 'PO Approved - Ready for SAP';
 
@@ -130,20 +138,11 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
       if (q > r.max + 1e-9) {
         return _snack('${r.title}: at most ${trimQty(r.max)} ${r.unit}.');
       }
-      final kg = r.kgIsQty ? q : double.tryParse(r.kg.text.trim());
-      if (kg == null || kg <= 0) {
-        return _snack('Enter the weighed kilos of ${r.title}.');
-      }
-      if (kg > r.maxKg + 5e-4) {
-        return _snack('${r.title}: at most ${trimQty(r.maxKg)} kg - '
-            'what the order has left.');
-      }
       perItem[r.itemCode] = (perItem[r.itemCode] ?? 0) + q;
       stockOf[r.itemCode] = r.available;
       (byOrder[r.orderName] ??= []).add({
         'sales_order_item': r.id,
         'picked_qty': q,
-        'picked_kg': kg,
         'available_qty': r.available,
       });
     }
@@ -215,6 +214,7 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
             child: TextField(
               controller: r.qty,
               enabled: r.ticked && !_busy,
+              onChanged: (_) => setState(() {}),
               textAlign: TextAlign.right,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
@@ -225,25 +225,14 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
               ),
             ),
           ),
-        if (can && !r.kgIsQty) ...[
-          const SizedBox(width: 6),
+        if (can && !r.kgIsQty)
           SizedBox(
-            width: 80,
-            child: TextField(
-              controller: r.kg,
-              enabled: r.ticked && !_busy,
-              textAlign: TextAlign.right,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                isDense: true,
-                labelText: 'kg',
-                helperText: 'weighed',
-                border: OutlineInputBorder(),
-              ),
-            ),
+            width: 64,
+            child: Text(
+                r.kg == null ? 'by roll wt' : '${trimQty(r.kg!)} kg',
+                textAlign: TextAlign.right,
+                style: const TextStyle(fontSize: 12, color: Colors.black54)),
           ),
-        ],
       ]),
     );
   }
@@ -289,8 +278,8 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
               padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: Text(
                   "Manager-approved products. Tick what goes from Hi-Tech's "
-                  'stock now and enter the weighed kilos; the rest stays on '
-                  'the order to pick later.',
+                  'stock now; the kilos follow from the rolls. The rest stays '
+                  'on the order to pick later.',
                   style: TextStyle(fontSize: 13, color: Colors.black87)),
             ),
             if (rows.isEmpty)

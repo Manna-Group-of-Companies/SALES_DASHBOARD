@@ -49,12 +49,19 @@ double maxPick(Map line, {required double alreadyPicked, required double availab
 //
 // SAP counts every line in kilos: Hi-Tech's pick list, its invoice to Manna
 // Treads, Manna Treads' goods receipt and its delivery are all made from the
-// kilos on this list, the moment it reaches SAP. A roll is weighed, so the rep
-// types the kilos; a line counted in kilos already (bonding gum) uses its qty.
-// No more than the order has left: SAP refuses a pick list line released for
-// more than its sales order line still has open ("Released quantity exceeds
-// open quantity", TEST, 5 Nov 2026), so a roll weighed heavier than the
-// order's estimate cannot go over it - the order's kilos must be right first.
+// kilos on this list, the moment it reaches SAP. Nobody types them (decided
+// 5 Nov 2026): rolls become kilos by the weight per roll, as the order did.
+//
+// The weight per roll is the ORDER's - its kilos over its rolls - not today's
+// item master: the order was priced and sent to SAP at that figure, and a list
+// over the order line's kilos is refused by SAP ("Released quantity exceeds
+// open quantity", TEST, 5 Nov 2026). SAL-ORD-2026-00167 is 2 rolls at 48.4 kg
+// while its item says 25 kg a roll; 2 x 25 would be refused. Only a line that
+// also carries loose belts, whose kilos are not all rolls, falls back to the
+// item's weight per roll. The last rolls of a line take exactly the kilos
+// left, so rounding never leaves a crumb open on the order.
+//
+// A line counted in kilos already (bonding gum) takes its picked qty.
 
 /// How far over the order's remaining kilos a list may go: not at all, above.
 const double kKgTolerance = 0;
@@ -84,6 +91,32 @@ double remainingKg(Map line, double alreadyKg) {
 /// The most kilos this list may carry for [line].
 double maxPickKg(Map line, {required double alreadyKg}) =>
     _r3(remainingKg(line, alreadyKg) * (1 + kKgTolerance));
+
+/// What one roll on [line] weighs: the order's own figure, else (a line with
+/// loose belts) [itemWeightPerRoll], the item's `custom_weight_per_roll`.
+/// 0 when neither is known - the list is then refused, never guessed.
+double kgPerRoll(Map line, {double itemWeightPerRoll = 0}) {
+  final rolls = _int(line['custom_rolls']);
+  if (rolls <= 0) return 0;
+  final total = _num(line['custom_total_weight']);
+  if (_int(line['custom_loose_belts']) == 0 && total > 0) return total / rolls;
+  return itemWeightPerRoll > 0 ? itemWeightPerRoll : 0;
+}
+
+/// The kilos [picked] puts on the list for [line]: rolls x [kgPerRoll], or
+/// the picked qty on a kilo line. The rolls that finish a line without loose
+/// belts take exactly what is left of its kilos.
+double pickKg(Map line, double picked,
+    {double alreadyPicked = 0, double alreadyKg = 0, double itemWeightPerRoll = 0}) {
+  if (picked <= 0) return 0;
+  if (kgFollowsQty(line)) return _r3(picked);
+  final perRoll = kgPerRoll(line, itemWeightPerRoll: itemWeightPerRoll);
+  if (perRoll <= 0) return 0;
+  final finishes = _int(line['custom_loose_belts']) == 0 &&
+      (picked - remainingToPick(line, alreadyPicked)).abs() < 1e-9;
+  if (finishes) return remainingKg(line, alreadyKg);
+  return _r3(picked * perRoll);
+}
 
 /// One product on a pick list.
 class PickListItem {

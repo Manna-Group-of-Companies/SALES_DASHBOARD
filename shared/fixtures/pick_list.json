@@ -93,10 +93,10 @@
       "max_pick": 0
     }
   ],
-  "kg_about": "Kilos on a pick list (5 Nov 2026). SAP counts every line in kilos, and Hi-Tech's pick list, its invoice, Manna Treads' goods receipt and delivery are made from these. Ordered kilos are the line's custom_total_weight, else its qty when the line is counted in kg. Remaining is ordered less the kilos earlier Submitted lists hold. A list may carry no more than what remains (rounded to 3 places): SAP refuses a pick list line released for more than its sales order line has open, so a roll weighed heavier than the order's estimate cannot go over it. A line counted in kg takes its kilos from the picked qty. Implemented in app/lib/core/pick_list.dart and enforced again by manna_pick_list_submit.",
+  "kg_about": "Kilos on a pick list (5 Nov 2026). SAP counts every line in kilos, and Hi-Tech's pick list, its invoice, Manna Treads' goods receipt and delivery are made from these. Nobody types them: rolls become kilos by the weight per roll the ORDER was priced at, its custom_total_weight over its custom_rolls, because SAP refuses a pick list line released over its order line's kilos. Only a line with loose belts falls back to the item's custom_weight_per_roll. The rolls that finish a line without loose belts take exactly the kilos left. A line counted in kg takes its picked qty. Rounded to 3 places. Implemented in app/lib/core/pick_list.dart and computed again, authoritatively, by manna_pick_list_submit.",
   "kg_cases": [
     {
-      "why": "Rolls are weighed: 10 rolls ordered at 240 kg, nothing picked yet, so up to 240 kg - SAP refuses more than the order line holds.",
+      "why": "Two of ten rolls at the order's 24 kg a roll: 48 kg.",
       "line": {
         "custom_rolls": 10,
         "custom_loose_belts": 0,
@@ -104,26 +104,71 @@
         "custom_total_weight": 240,
         "stock_uom": "Kg"
       },
+      "item_weight_per_roll": 25,
+      "picked": 2,
+      "already_picked": 0,
       "already_kg": 0,
-      "ordered_kg": 240,
-      "remaining_kg": 240,
-      "max_kg": 240,
-      "kg_follows_qty": false
+      "kg": 48
     },
     {
-      "why": "An earlier list took 150 kg of 240, so 90 remain and at most 90 may go.",
+      "why": "The order's weight per roll, not the item master's: 2 rolls of an order at 48.4 kg is 48.4, though the item says 25 a roll.",
       "line": {
-        "custom_rolls": 10,
+        "custom_rolls": 2,
         "custom_loose_belts": 0,
-        "qty": 10,
-        "custom_total_weight": 240,
+        "qty": 2,
+        "custom_total_weight": 48.4,
         "stock_uom": "Kg"
       },
-      "already_kg": 150,
-      "ordered_kg": 240,
-      "remaining_kg": 90,
-      "max_kg": 90,
-      "kg_follows_qty": false
+      "item_weight_per_roll": 25,
+      "picked": 2,
+      "already_picked": 0,
+      "already_kg": 0,
+      "kg": 48.4
+    },
+    {
+      "why": "The last rolls take exactly what is left, so rounding leaves nothing open: 3 rolls at 100 kg, 1 picked (33.333), then the last 2 take 66.667.",
+      "line": {
+        "custom_rolls": 3,
+        "custom_loose_belts": 0,
+        "qty": 3,
+        "custom_total_weight": 100,
+        "stock_uom": "Kg"
+      },
+      "item_weight_per_roll": 0,
+      "picked": 2,
+      "already_picked": 1,
+      "already_kg": 33.333,
+      "kg": 66.667
+    },
+    {
+      "why": "One of three rolls at 100 kg is 33.333.",
+      "line": {
+        "custom_rolls": 3,
+        "custom_loose_belts": 0,
+        "qty": 3,
+        "custom_total_weight": 100,
+        "stock_uom": "Kg"
+      },
+      "item_weight_per_roll": 0,
+      "picked": 1,
+      "already_picked": 0,
+      "already_kg": 0,
+      "kg": 33.333
+    },
+    {
+      "why": "A line with loose belts uses the item's weight per roll: its kilos are not all rolls.",
+      "line": {
+        "custom_rolls": 4,
+        "custom_loose_belts": 2,
+        "qty": 4.5,
+        "custom_total_weight": 110,
+        "stock_uom": "Kg"
+      },
+      "item_weight_per_roll": 25,
+      "picked": 4,
+      "already_picked": 0,
+      "already_kg": 0,
+      "kg": 100
     },
     {
       "why": "Bonding gum is counted in kg: its picked qty is its kilos.",
@@ -134,40 +179,26 @@
         "custom_total_weight": 50,
         "stock_uom": "Kg"
       },
+      "item_weight_per_roll": 0,
+      "picked": 20,
+      "already_picked": 0,
       "already_kg": 0,
-      "ordered_kg": 50,
-      "remaining_kg": 50,
-      "max_kg": 50,
-      "kg_follows_qty": true
+      "kg": 20
     },
     {
-      "why": "A kg line with no total weight still has its qty as its kilos.",
-      "line": {
-        "custom_rolls": 0,
-        "custom_loose_belts": 0,
-        "qty": 20,
-        "stock_uom": "Kgs"
-      },
-      "already_kg": 0,
-      "ordered_kg": 20,
-      "remaining_kg": 20,
-      "max_kg": 20,
-      "kg_follows_qty": true
-    },
-    {
-      "why": "Heavier rolls on earlier lists leave nothing, not a negative.",
+      "why": "No weight per roll anywhere: 0, and the list is refused rather than guessed.",
       "line": {
         "custom_rolls": 4,
-        "custom_loose_belts": 0,
-        "qty": 4,
-        "custom_total_weight": 96.4,
+        "custom_loose_belts": 2,
+        "qty": 4.5,
+        "custom_total_weight": 110,
         "stock_uom": "Kg"
       },
-      "already_kg": 100,
-      "ordered_kg": 96.4,
-      "remaining_kg": 0,
-      "max_kg": 0,
-      "kg_follows_qty": false
+      "item_weight_per_roll": 0,
+      "picked": 4,
+      "already_picked": 0,
+      "already_kg": 0,
+      "kg": 0
     }
   ]
 }

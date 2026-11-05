@@ -2,7 +2,7 @@
 #   Name          : manna_pick_list_submit
 #   Script Type   : API
 #   API Method    : manna_pick_list_submit
-#   Args (POST)   : sales_order, lines = JSON [{sales_order_item, picked_qty, picked_kg, available_qty}]
+#   Args (POST)   : sales_order, lines = JSON [{sales_order_item, picked_qty, available_qty}]
 #
 # A pick list: which products of an approved order are to go from Hi-Tech's
 # stock now (3 Nov 2026). The rep ticks what Hi-Tech has in stock — five of an
@@ -15,11 +15,16 @@
 #   - every line is a line OF THIS ORDER — nothing from outside it;
 #   - each quantity is above zero and no more than what is still unpicked on
 #     that line: ordered, less what earlier Submitted lists for it hold;
-#   - each line carries its weighed kilos (5 Nov 2026), above zero and no more
-#     than the line's kilos not yet on a list - SAP refuses a pick list line
-#     released for more than its order line has open. SAP's pick list, Hi-Tech's
-#     invoice and Manna Treads' goods receipt and delivery are made from them the
-#     moment the list reaches SAP. A line counted in kg takes them from its qty.
+#   - each line's kilos can be worked out (5 Nov 2026). Nobody types them: they
+#     are the picked rolls x the weight per roll the ORDER was priced at (its
+#     kilos over its rolls; the item's custom_weight_per_roll only for a line
+#     with loose belts), and the rolls that finish a line take exactly the
+#     kilos left. A line counted in kg takes its qty. Never more than the line's
+#     kilos not yet on a list - SAP refuses a pick list line released over its
+#     order line. SAP's pick list, Hi-Tech's invoice and Manna Treads' goods
+#     receipt and delivery are made from them the moment the list reaches SAP.
+#     Any picked_kg the phone sends is ignored. Same rule as
+#     app/lib/core/pick_list.dart (pickKg), pinned by shared/fixtures/pick_list.json.
 #
 # Ordered is counted in the stock unit Hi-Tech's stock is shown in: whole rolls
 # for tread rubber, else the line's qty (kg, cans). Loose belts are not picked.
@@ -88,6 +93,16 @@ def ordered_kg(it):
     return frappe.utils.flt(it.qty) if kg_follows_qty(it) else 0
 
 
+def kg_per_roll(it):
+    rolls = frappe.utils.cint(it.custom_rolls)
+    if rolls <= 0:
+        return 0
+    total = frappe.utils.flt(it.custom_total_weight)
+    if frappe.utils.cint(it.custom_loose_belts) == 0 and total > 0:
+        return total / rolls
+    return frappe.utils.flt(frappe.db.get_value("Item", it.item_code, "custom_weight_per_roll"))
+
+
 already = {}
 already_kg = {}
 for pl in frappe.get_all("Manna Pick List",
@@ -118,10 +133,16 @@ for l in lines:
         frappe.throw("Enter how much of %s to pick." % it.item_name)
     if q > remaining + 0.0001:
         frappe.throw("%s: only %s left to pick on this order." % (it.item_name, remaining))
-    kg = q if kg_follows_qty(it) else frappe.utils.flt(l.get("picked_kg"))
-    if kg <= 0:
-        frappe.throw("Enter the weighed kilos of %s." % it.item_name)
     left_kg = max(ordered_kg(it) - already_kg.get(key, 0), 0)
+    if kg_follows_qty(it):
+        kg = q
+    elif frappe.utils.cint(it.custom_loose_belts) == 0 and abs(q - remaining) < 0.0001:
+        kg = left_kg
+    else:
+        kg = q * kg_per_roll(it)
+    kg = frappe.utils.flt(kg, 3)
+    if kg <= 0:
+        frappe.throw("%s has no weight per roll - set it on the item before picking." % it.item_name)
     max_kg = frappe.utils.flt(left_kg * (1 + KG_TOLERANCE), 3)
     if kg > max_kg + 0.0005:
         frappe.throw("%s: %s kg is more than this order has left (%s kg). SAP cannot invoice more than the order holds."
