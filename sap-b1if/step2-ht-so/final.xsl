@@ -96,7 +96,7 @@
 					<xsl:variable name="numAtCard" select="normalize-space($h/*[local-name()='NumAtCard'])"/>
 					<BOM>
 						<BO>
-							<AdmInfo><Object>oOrders</Object></AdmInfo>
+							<AdmInfo><Object>17</Object><Version>2</Version></AdmInfo>
 							<Documents>
 								<row>
 									<CardCode><xsl:value-of select="normalize-space($s/*[local-name()='Customer'])"/></CardCode>
@@ -110,9 +110,9 @@
 										</xsl:choose>
 									</NumAtCard>
 									<Comments><xsl:value-of select="concat('Manna Treads PO ', normalize-space($h/*[local-name()='DocNum']), ' - made by B1if')"/></Comments>
-									<DiscPrcnt>0</DiscPrcnt>
+									<DiscountPercent>0</DiscountPercent>
 									<xsl:if test="normalize-space($s/*[local-name()='SoSeries']) != ''"><Series><xsl:value-of select="normalize-space($s/*[local-name()='SoSeries'])"/></Series></xsl:if>
-									<xsl:if test="number($s/*[local-name()='SlpCode']) &gt; 0"><SlpCode><xsl:value-of select="normalize-space($s/*[local-name()='SlpCode'])"/></SlpCode></xsl:if>
+									<xsl:if test="number($s/*[local-name()='SlpCode']) &gt; 0"><SalesPersonCode><xsl:value-of select="normalize-space($s/*[local-name()='SlpCode'])"/></SalesPersonCode></xsl:if>
 									<U_MannaMtPo><xsl:value-of select="normalize-space($h/*[local-name()='DocEntry'])"/></U_MannaMtPo>
 									<!-- The number people see on Manna Treads' sales order, so Hi-Tech's
 									     orders can be searched by it. U_MannaMtPo is the machine's link. -->
@@ -125,9 +125,9 @@
 										<ItemCode><xsl:value-of select="normalize-space(*[local-name()='ItemCode'])"/></ItemCode>
 										<Quantity><xsl:value-of select="format-number(number(*[local-name()='Quantity']), '0.######')"/></Quantity>
 										<Price><xsl:value-of select="format-number(number(*[local-name()='Price']), '0.######')"/></Price>
-										<DiscPrcnt>0</DiscPrcnt>
+										<DiscountPercent>0</DiscountPercent>
 										<TaxCode><xsl:value-of select="$tax"/></TaxCode>
-										<xsl:if test="normalize-space($s/*[local-name()='SoWhs']) != ''"><WhsCode><xsl:value-of select="normalize-space($s/*[local-name()='SoWhs'])"/></WhsCode></xsl:if>
+										<xsl:if test="normalize-space($s/*[local-name()='SoWhs']) != ''"><WarehouseCode><xsl:value-of select="normalize-space($s/*[local-name()='SoWhs'])"/></WarehouseCode></xsl:if>
 									</row>
 								</xsl:for-each>
 							</Document_Lines>

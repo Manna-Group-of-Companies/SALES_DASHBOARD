@@ -5,9 +5,11 @@
   atom the purchase order and nothing else.
 
   The B1 Object atom sends whatever this payload holds to the DI API, so it is
-  only the BOM final.xsl built. It runs inside the branch's path, which only
-  runs when final.xsl said Make = Y; with no BOM there it writes nothing, so a
-  path condition that ever let a refusal through still makes no order.
+  only the BOM final.xsl built, and only when it said Make = Y. There is no
+  branch around it (this B1if never runs a step with one): on N this payload is
+  empty and the atom's Method, read from the decision, is a retrieval of the
+  sales order, which ignores the payload. Empty on N also means a Method that
+  somehow said Insert would have nothing to insert.
 -->
 <xsl:stylesheet version="1.0"
 	xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
@@ -26,8 +28,12 @@
 			<xsl:copy-of select="/vpf:Msg/vpf:Header"/>
 			<vpf:Body>
 				<xsl:copy-of select="/vpf:Msg/vpf:Body/*"/>
+				<!-- The BO's contents only (Documents, Document_Lines): the B1 Object
+				     atom wraps the payload in its own BOM/BO/AdmInfo, from its Object
+				     field, and a second BOM inside that one is not DI's format (seen in
+				     the first real call, 5 Nov 2026). -->
 				<vpf:Payload Role="X" id="{$atom}">
-					<xsl:copy-of select="/vpf:Msg/vpf:Body/vpf:Payload[@id=$decisionAtom]/Decision[Make='Y']/BOM"/>
+					<xsl:copy-of select="/vpf:Msg/vpf:Body/vpf:Payload[@id=$decisionAtom]/Decision[Make='Y']/BOM/BO/*[local-name() != 'AdmInfo']"/>
 				</vpf:Payload>
 			</vpf:Body>
 		</vpf:Msg>

@@ -3,9 +3,11 @@
   Step 1, atom "final": Manna Treads' purchase order to Hi-Tech for one
   Manna Treads sales order, or the reason there is none.
 
-  Output: <Decision><Make>Y|N</Make><Reason/><BOM/></Decision>. The condition
-  atom after this calls the B1 Object atom only on Make = Y; on N the reason
-  stays in the message log and nothing is written to SAP.
+  Output: <Decision><CallMethod/><CallObject/><CallKey/><Make>Y|N</Make>
+  <Reason/><BOM/></Decision>. The B1 Object atom always runs and takes its
+  Method, Object and Key Value from the Call fields: on Make = Y it inserts the
+  purchase order in BOM; on N it only reads the sales order back, the reason
+  stays in the message log, and nothing is written to SAP.
 
   The rules are the sync's PASS P (Sync-SapOrders.ps1, Get-MfPurchasePlan),
   so a purchase order looks the same whichever of the two made it:
@@ -107,8 +109,29 @@
 			</xsl:choose>
 		</xsl:variable>
 
+		<!-- The sales order's key from the B1 event itself, so a "not found" still
+		     names it. -->
+		<xsl:variable name="eventKey" select="normalize-space(/vpf:Msg/vpf:Body/vpf:Payload[@Role='T']//*[local-name()='key'][normalize-space(*[local-name()='name'])='DocEntry'][1]/*[local-name()='value'])"/>
+
 		<Decision xmlns="">
 			<SalesOrder><xsl:value-of select="normalize-space($h/*[local-name()='DocNum'])"/></SalesOrder>
+			<!-- What the B1 Object atom does, read by its Method, Object and Key
+			     Value fields as XPaths. B1if 1.x on this server never runs a step
+			     that has a branch in it (5 Nov 2026, tested five ways), so the atom
+			     always runs and this decides what it does: on N it only reads the
+			     sales order back (object 17), and nothing is written. -->
+			<xsl:choose>
+				<xsl:when test="string($why) != ''">
+					<CallMethod>Synchronous Retrieval</CallMethod>
+					<CallObject>17</CallObject>
+					<CallKey><xsl:value-of select="$eventKey"/></CallKey>
+				</xsl:when>
+				<xsl:otherwise>
+					<CallMethod>Synchronous Insert</CallMethod>
+					<CallObject>22</CallObject>
+					<CallKey/>
+				</xsl:otherwise>
+			</xsl:choose>
 			<xsl:choose>
 				<xsl:when test="string($why) != ''">
 					<Make>N</Make>
@@ -141,7 +164,7 @@
 		<xsl:variable name="erpName" select="normalize-space($h/*[local-name()='NumAtCard'])"/>
 		<BOM>
 			<BO>
-				<AdmInfo><Object>oPurchaseOrders</Object></AdmInfo>
+				<AdmInfo><Object>22</Object><Version>2</Version></AdmInfo>
 				<Documents>
 					<row>
 						<CardCode><xsl:value-of select="normalize-space($h/*[local-name()='Vendor'])"/></CardCode>
@@ -152,9 +175,9 @@
 							<xsl:if test="string($erpName) != ''"><xsl:value-of select="concat(' - ERPNext ', $erpName)"/></xsl:if>
 							<xsl:text> - made by B1if</xsl:text>
 						</Comments>
-						<DiscPrcnt>0</DiscPrcnt>
+						<DiscountPercent>0</DiscountPercent>
 						<xsl:if test="normalize-space($h/*[local-name()='PoSeries']) != ''"><Series><xsl:value-of select="normalize-space($h/*[local-name()='PoSeries'])"/></Series></xsl:if>
-						<xsl:if test="normalize-space($h/*[local-name()='PoBranch']) != ''"><BPLId><xsl:value-of select="normalize-space($h/*[local-name()='PoBranch'])"/></BPLId></xsl:if>
+						<xsl:if test="normalize-space($h/*[local-name()='PoBranch']) != ''"><BPL_IDAssignedToInvoice><xsl:value-of select="normalize-space($h/*[local-name()='PoBranch'])"/></BPL_IDAssignedToInvoice></xsl:if>
 						<U_MannaMtSo><xsl:value-of select="normalize-space($h/*[local-name()='DocEntry'])"/></U_MannaMtSo>
 					</row>
 				</Documents>
@@ -166,10 +189,10 @@
 							<ItemCode><xsl:value-of select="normalize-space(*[local-name()='ItemCode'])"/></ItemCode>
 							<Quantity><xsl:value-of select="format-number(number(*[local-name()='Quantity']), '0.######')"/></Quantity>
 							<Price><xsl:value-of select="format-number(round(round($gross * 100) div 100 div (1 + $vat div 100) * 1000000) div 1000000, '0.######')"/></Price>
-							<DiscPrcnt>0</DiscPrcnt>
+							<DiscountPercent>0</DiscountPercent>
 							<TaxCode><xsl:value-of select="$tax"/></TaxCode>
-							<xsl:if test="normalize-space($h/*[local-name()='PoWhs']) != ''"><WhsCode><xsl:value-of select="normalize-space($h/*[local-name()='PoWhs'])"/></WhsCode></xsl:if>
-							<xsl:if test="normalize-space($h/*[local-name()='PoLocation']) != ''"><LocCode><xsl:value-of select="normalize-space($h/*[local-name()='PoLocation'])"/></LocCode></xsl:if>
+							<xsl:if test="normalize-space($h/*[local-name()='PoWhs']) != ''"><WarehouseCode><xsl:value-of select="normalize-space($h/*[local-name()='PoWhs'])"/></WarehouseCode></xsl:if>
+							<xsl:if test="normalize-space($h/*[local-name()='PoLocation']) != ''"><LocationCode><xsl:value-of select="normalize-space($h/*[local-name()='PoLocation'])"/></LocationCode></xsl:if>
 						</row>
 					</xsl:for-each>
 				</Document_Lines>
