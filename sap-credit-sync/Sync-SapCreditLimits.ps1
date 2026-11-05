@@ -58,6 +58,22 @@
   Never touched: ERPNext's standard `credit_limits` child table (writing it would
   switch on ERPNext's own order-blocking credit control).
 
+  NEW CUSTOMERS (added 11 Oct 2026, the user's request). A SAP customer with no
+  ERPNext customer carrying its code is CREATED in ERPNext - but only when SAP
+  assigns it to a sales employee who is an ERPNext rep. It is created under
+  that rep (custom_assigned_reps), so it appears on their phone at once, with
+  its credit figures filled in the same run. Anything SAP leaves unassigned, or
+  assigns to a sales employee with no ERPNext rep, stays in SAP. Also skipped,
+  and named in the log: an inactive or frozen SAP customer, a non-standard code,
+  config.skip_codes, and a name ERPNext already holds (link that one by hand -
+  creating it would make a duplicate).
+
+  Sales employee -> rep: rep-map.json beside this script (SAP name -> ERPNext
+  Sales Person), else the same name spelled the same way. Only an ENABLED,
+  non-group Sales Person counts. Capped at new_customer_max (default 25) per
+  run; config create_customers=false switches it off. Runs whenever this sync
+  does, i.e. on a Sync press.
+
 .PARAMETER ConfigPath
   Path to the JSON config file. Required. Credentials never live in this script.
 
@@ -110,6 +126,8 @@ $script:Result           = [ordered]@{
     balanceChanges   = 0
     bucketsWritten   = $false
     customersChanged = 0
+    customersCreated = 0
+    newPlanned       = 0
     failures         = 0
     summary          = $null
     error            = $null
@@ -132,6 +150,8 @@ $script:F_ODAYS   = 'custom_overdue_days'        # 11 Oct 2026
 $script:NO_TERMS_CODE = -1                       # SAP '- Cash Basic -' = no term set
 $script:TermsFieldsReady = $false                # set at run start: do the three fields exist?
 $script:MONEY_EPS = 0.005   # treat differences below this as "equal"
+$script:F_REP     = 'custom_assigned_reps'       # Link to Sales Person: who owns the customer
+$script:NO_SLP    = -1                           # SAP '-No Sales Employee-'
 
 # --------------------------------------------------------------------------------
 # Helpers
@@ -363,6 +383,107 @@ function Get-ErpCodedCustomers {
     return $index
 }
 
+# ---------------------------------------------------- new customers (11 Oct 2026)
+
+function Get-ErpReps {
+    # Lowercased name -> exact name, for ENABLED, non-group Sales Persons: the
+    # only people a new customer may be put under.
+    $fields = '["name","enabled","is_group"]'
+    $resp = Invoke-ErpApi -Method 'GET' -Path '/api/resource/Sales Person' `
+        -Query ('fields=' + [uri]::EscapeDataString($fields) + '&limit_page_length=0')
+    $reps = @{}
+    foreach ($r in @(Get-JsonProp $resp 'data')) {
+        if ([int](ConvertTo-Number (Get-JsonProp $r 'enabled')) -ne 1) { continue }
+        if ([int](ConvertTo-Number (Get-JsonProp $r 'is_group')) -eq 1) { continue }
+        $n = "$(Get-JsonProp $r 'name')".Trim()
+        if ($n) { $reps[$n.ToLowerInvariant()] = $n }
+    }
+    return $reps
+}
+
+function Get-ErpCustomerNames {
+    # Lowercased customer_name -> @{ Name; Code } for EVERY customer, coded or
+    # not. A SAP customer whose name ERPNext already holds is not created:
+    # ERPNext would make "Name - 1", a second record for what is most likely the
+    # same shop entered by hand without its SAP code.
+    $fields = '["name","customer_name","custom_bp_code"]'
+    $resp = Invoke-ErpApi -Method 'GET' -Path '/api/resource/Customer' `
+        -Query ('fields=' + [uri]::EscapeDataString($fields) + '&limit_page_length=0')
+    $byName = @{}
+    foreach ($r in @(Get-JsonProp $resp 'data')) {
+        foreach ($k in @("$(Get-JsonProp $r 'customer_name')", "$(Get-JsonProp $r 'name')")) {
+            $key = ($k -replace '\s+', ' ').Trim().ToLowerInvariant()
+            if ($key -and -not $byName.ContainsKey($key)) {
+                $byName[$key] = @{ Name = "$(Get-JsonProp $r 'name')"; Code = "$(Get-JsonProp $r 'custom_bp_code')".Trim() }
+            }
+        }
+    }
+    return $byName
+}
+
+function Read-RepMap {
+    # rep-map.json: { "map": { "<SAP sales employee name>": "<ERPNext Sales Person>" } }
+    # Keys are matched case-insensitively. A missing file is an empty map: the
+    # same-name rule still applies.
+    param([string] $Path)
+    $map = @{}
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Log WARN ("rep map not found at {0} - only SAP sales employees spelled exactly like an ERPNext rep will be matched." -f $Path)
+        return $map
+    }
+    $j = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $m = Get-JsonProp $j 'map'
+    if ($m) {
+        foreach ($p in $m.PSObject.Properties) {
+            $k = "$($p.Name)".Trim().ToLowerInvariant(); $v = "$($p.Value)".Trim()
+            if ($k -and $v) { $map[$k] = $v }
+        }
+    }
+    return $map
+}
+
+function Resolve-ErpRep {
+    # Pure: the ERPNext rep a SAP sales employee stands for, or $null.
+    # The map first, then the same name. Either way the rep must be enabled.
+    param([string] $SapName, [hashtable] $RepMap, [hashtable] $Reps)
+    $key = "$SapName".Trim().ToLowerInvariant()
+    if ($key -eq '') { return $null }
+    $target = if ($RepMap.ContainsKey($key)) { $RepMap[$key] } else { $SapName }
+    $tk = "$target".Trim().ToLowerInvariant()
+    if ($Reps.ContainsKey($tk)) { return $Reps[$tk] }
+    return $null
+}
+
+function Format-SapPhone {
+    # ERPNext's custom_phone is a Phone field: Frappe refuses anything outside
+    # digits, spaces and + - ( ), and more than 20 characters. SAP often holds
+    # two numbers ("9995133846 / 9447..."), so the first is taken. '' when
+    # nothing usable is left - the customer is still created, without a phone.
+    param([string] $Raw)
+    $first = (("$Raw" -split '[/;,]')[0])
+    $clean = ($first -replace '[^0-9+\-() ]', '' -replace '\s+', ' ').Trim()
+    if ($clean.Length -gt 20) { $clean = $clean.Substring(0, 20).Trim() }
+    if ($clean -notmatch '\d{6,}|\d[\d ]{6,}') { return '' }
+    return $clean
+}
+
+function Format-SapAddress {
+    # "Street, Block, City, State, PIN, Country" - the shape the 5 Aug 2026
+    # import gave the existing Treads customers. Bill-to first, else any.
+    param($Addresses)
+    $all  = @($Addresses | Where-Object { $_ })
+    $bill = @($all | Where-Object { "$(Get-JsonProp $_ 'AddressType')" -eq 'bo_BillTo' })
+    $a = if ($bill.Count) { $bill[0] } elseif ($all.Count) { $all[0] } else { $null }
+    if ($null -eq $a) { return @{ Text = ''; State = ''; Gstin = '' } }
+    $parts = foreach ($f in 'Street', 'Block', 'City', 'State', 'ZipCode', 'Country') {
+        $v = ("$(Get-JsonProp $a $f)" -replace '\s+', ' ').Trim()
+        if ($v) { $v }
+    }
+    $gstin = ''
+    foreach ($x in @($bill + $all)) { $g = "$(Get-JsonProp $x 'GSTIN')".Trim(); if ($g) { $gstin = $g; break } }
+    return @{ Text = ($parts -join ', '); State = "$(Get-JsonProp $a 'State')".Trim(); Gstin = $gstin }
+}
+
 # --------------------------------------------------------------------------------
 # SAP Business One Service Layer
 # --------------------------------------------------------------------------------
@@ -582,6 +703,9 @@ function Get-SapCustomerData {
     $ar          = @{}   # code -> @{ B1;B2;B3;B4; n }
     $pastDue     = @{}   # code -> @{ Amt; Late }  open invoices past their SAP due date (11 Oct 2026)
     $termNames   = @{}   # PayTermsGrpCode -> PaymentTermsGroupName
+    $slpNames    = @{}   # SalesEmployeeCode -> SalesEmployeeName (11 Oct 2026, new customers)
+    $slpOk       = $false
+    $stateNames  = @{}   # India state code ('KL') -> name ('Kerala')
     $basisField  = if ($AgeingBasis -eq 'due_date') { 'DocDueDate' } else { 'DocDate' }
     $today       = (Get-Date).Date
 
@@ -590,7 +714,8 @@ function Get-SapCustomerData {
             -CompanyDb $CompanyDb -CompanyName $CompanyName -UseSkipCert $useSkip
 
         # ---- customers ----
-        $bpSel = [uri]::EscapeDataString('CardCode,CardName,CreditLimit,CurrentAccountBalance,PayTermsGrpCode')
+        # SalesPersonCode .. BPAddresses: what a NEW customer is created from (11 Oct 2026).
+        $bpSel = [uri]::EscapeDataString('CardCode,CardName,CreditLimit,CurrentAccountBalance,PayTermsGrpCode,SalesPersonCode,Valid,Frozen,Phone1,Cellular,BPAddresses')
         $bpFlt = [uri]::EscapeDataString("CardType eq 'cCustomer'")
         $bpRows = Get-SapPagedValue -BaseUrl $BaseUrl -Session $sess -PageSize $PageSize -UseSkipCert $useSkip `
             -Label "BusinessPartners [$CompanyName]" `
@@ -605,6 +730,30 @@ function Get-SapCustomerData {
             foreach ($t in $ptRows) { $termNames["$(Get-JsonProp $t 'GroupNumber')".Trim()] = "$(Get-JsonProp $t 'PaymentTermsGroupName')".Trim() }
         } catch {
             Write-Log WARN ("SAP payment-term names could not be read - the terms field will be left as it is. Reason: {0}" -f $_.Exception.Message)
+        }
+
+        # ---- sales employees and state names, for new customers (11 Oct 2026) ----
+        # Without the sales employees nobody can be placed under a rep, so no
+        # customer is created this run; the credit figures still sync.
+        try {
+            $spRows = Get-SapPagedValue -BaseUrl $BaseUrl -Session $sess -PageSize $PageSize -UseSkipCert $useSkip `
+                -Label "SalesPersons [$CompanyName]" `
+                -StartUrl "$BaseUrl/SalesPersons?`$select=$([uri]::EscapeDataString('SalesEmployeeCode,SalesEmployeeName,Active'))"
+            foreach ($s in $spRows) {
+                if ("$(Get-JsonProp $s 'Active')" -ne 'tYES') { continue }
+                $slpNames["$(Get-JsonProp $s 'SalesEmployeeCode')".Trim()] = "$(Get-JsonProp $s 'SalesEmployeeName')".Trim()
+            }
+            $slpOk = $true
+        } catch {
+            Write-Log WARN ("SAP sales employees could not be read - no new customers this run. Reason: {0}" -f $_.Exception.Message)
+        }
+        try {
+            $stRows = Get-SapPagedValue -BaseUrl $BaseUrl -Session $sess -PageSize $PageSize -UseSkipCert $useSkip `
+                -Label "States [$CompanyName]" `
+                -StartUrl "$BaseUrl/States?`$select=$([uri]::EscapeDataString('Code,Country,Name'))&`$filter=$([uri]::EscapeDataString("Country eq 'IN'"))"
+            foreach ($s in $stRows) { $stateNames["$(Get-JsonProp $s 'Code')".Trim()] = "$(Get-JsonProp $s 'Name')".Trim() }
+        } catch {
+            Write-Log WARN ("SAP state names could not be read - new customers get the state code instead. Reason: {0}" -f $_.Exception.Message)
         }
 
         # ---- open AR documents (only if we are going to write buckets) ----
@@ -715,7 +864,18 @@ function Get-SapCustomerData {
             }
         }
 
+        $slpRaw  = Get-JsonProp $bp 'SalesPersonCode'
+        $slpCode = if ($null -eq $slpRaw -or "$slpRaw".Trim() -eq '') { $script:NO_SLP } else { [int](ConvertTo-Number $slpRaw) }
+        $addr    = Format-SapAddress (Get-JsonProp $bp 'BPAddresses')
+        $cell    = "$(Get-JsonProp $bp 'Cellular')".Trim()
         $byCode[$code] = [pscustomobject]@{
+            SalesPersonCode = $slpCode
+            SalesEmployee  = $(if ($slpNames.ContainsKey("$slpCode")) { $slpNames["$slpCode"] } else { '' })
+            Active         = ("$(Get-JsonProp $bp 'Valid')" -ne 'tNO' -and "$(Get-JsonProp $bp 'Frozen')" -ne 'tYES')
+            Phone          = (Format-SapPhone $(if ($cell) { $cell } else { "$(Get-JsonProp $bp 'Phone1')".Trim() }))
+            Address        = $addr.Text
+            StateName      = $(if ($stateNames.ContainsKey($addr.State)) { $stateNames[$addr.State] } else { $addr.State })
+            Gstin          = $addr.Gstin
             CardCode       = $code
             CardName       = "$(Get-JsonProp $bp 'CardName')"
             CreditLimit    = [double](ConvertTo-Number (Get-JsonProp $bp 'CreditLimit'))
@@ -731,7 +891,7 @@ function Get-SapCustomerData {
             OverdueDays    = $odDays
         }
     }
-    return @{ ByCode = $byCode; ArAvailable = $arAvailable }
+    return @{ ByCode = $byCode; ArAvailable = $arAvailable; SalesEmployeesRead = $slpOk }
 }
 
 # --------------------------------------------------------------------------------
@@ -796,6 +956,15 @@ try {
         $skipCodes = @($scp.Value | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne '' })
     }
 
+    # New customers (11 Oct 2026). All three are optional.
+    $createCustomers = Get-OptionalBool $config 'create_customers' $true
+    $newCustomerMax  = 25
+    $ncm = $config.PSObject.Properties['new_customer_max']
+    if ($ncm -and $null -ne $ncm.Value) { $newCustomerMax = [int]$ncm.Value }
+    $repMapFile = 'rep-map.json'
+    $rmf = $config.PSObject.Properties['rep_map_file']
+    if ($rmf -and "$($rmf.Value)".Trim()) { $repMapFile = "$($rmf.Value)".Trim() }
+
     # ---- Logging ----
     $scriptRoot = $PSScriptRoot
     if (-not $scriptRoot) { $scriptRoot = (Get-Location).Path }
@@ -814,7 +983,9 @@ try {
 
     Write-UnknownKeyWarnings $config @('erpnext', 'sap', 'write_mode',
         'sync_credit_limit', 'sync_outstanding', 'ageing_basis', 'outstanding_total',
-        'skip_codes', 'log_dir', 'log_keep_days') '(root)'
+        'skip_codes', 'log_dir', 'log_keep_days',
+        'create_customers', 'new_customer_max', 'rep_map_file') '(root)'
+    if (-not [System.IO.Path]::IsPathRooted($repMapFile)) { $repMapFile = Join-Path $scriptRoot $repMapFile }
 
     Write-Log INFO ("==== run start ==== company='{0}' db='{1}' DryRun={2} Limit={3} writeMode={4} syncLimit={5} syncOutstanding={6} ageing={7} total={8} PS={9}" -f `
         $companyName, $companyDb, [bool]$DryRun, $Limit, $writeMode, $syncLimit, $syncOutstanding, $ageingBasis, $outstandingTot, $PSVersionTable.PSVersion)
@@ -976,6 +1147,44 @@ try {
             if (-not $erpIndex[$k].Matched) { $erpCodesNoSap.Add($k) }
         }
 
+        # ---- 3b. New customers: in SAP, assigned to a rep, not in ERPNext (11 Oct 2026) ----
+        # SAP decides the owner. Unassigned in SAP, or assigned to a sales
+        # employee with no ERPNext rep: the customer stays in SAP.
+        $planNew       = New-Object System.Collections.Generic.List[object]
+        $newUnassigned = 0
+        $newNoRep      = @{}    # SAP sales employee -> how many customers wait on a rep for them
+        $newSkipped    = New-Object System.Collections.Generic.List[string]
+        if ($createCustomers -and -not $sapData.SalesEmployeesRead) {
+            Write-Log WARN "new customers: SAP sales employees were not read - none created this run."
+        } elseif ($createCustomers) {
+            $reps   = Get-ErpReps
+            $repMap = Read-RepMap -Path $repMapFile
+            $byName = Get-ErpCustomerNames
+            foreach ($code in $sapCodesNoErp) {
+                $s = $sapByCode[$code]
+                if ($s.SalesPersonCode -eq $script:NO_SLP -or -not $s.SalesEmployee) { $newUnassigned++; continue }
+                $rep = Resolve-ErpRep -SapName $s.SalesEmployee -RepMap $repMap -Reps $reps
+                if (-not $rep) {
+                    if ($newNoRep.ContainsKey($s.SalesEmployee)) { $newNoRep[$s.SalesEmployee]++ } else { $newNoRep[$s.SalesEmployee] = 1 }
+                    continue
+                }
+                if ($code -notmatch '^C-\d+$') { $newSkipped.Add(("{0} ({1}): non-standard SAP code" -f $code, $rep)); continue }
+                if (-not $s.Active)            { $newSkipped.Add(("{0} ({1}): inactive or frozen in SAP" -f $code, $rep)); continue }
+                $nm = ($s.CardName -replace '\s+', ' ').Trim()
+                if ($nm.Length -gt 140) { $nm = $nm.Substring(0, 140).Trim() }
+                if (-not $nm) { $newSkipped.Add(("{0} ({1}): no name in SAP" -f $code, $rep)); continue }
+                $hit = $byName[$nm.ToLowerInvariant()]
+                if ($hit) {
+                    $newSkipped.Add(("{0} ({1}): ERPNext already has '{2}'{3} - put {0} on it by hand rather than make a second record" -f `
+                        $code, $rep, $hit.Name, $(if ($hit.Code) { " (code $($hit.Code))" } else { ' with no SAP code' })))
+                    continue
+                }
+                $byName[$nm.ToLowerInvariant()] = @{ Name = $nm; Code = $code }   # two SAP customers, one name: only the first
+                $planNew.Add([pscustomobject]@{ Code = $code; Name = $nm; Rep = $rep; Sap = $s })
+            }
+        }
+        $script:Result.newPlanned = $planNew.Count
+
         # ---- 4. Report BEFORE changing anything ----
         Write-Log INFO "---- planned changes ----"
         Write-Log INFO ("customers with at least one field to change: {0}  (credit-limit: {1} | outstanding-balance: {2})" -f `
@@ -1007,6 +1216,16 @@ try {
         }
         if ($skippedByConfig.Count -gt 0) {
             Write-Log WARN ("SAP code(s) skipped via config.skip_codes: {0}" -f ($skippedByConfig -join ', '))
+        }
+        if ($createCustomers) {
+            Write-Log INFO ("new customers: {0} to create in ERPNext{1}" -f $planNew.Count, $(if ($planNew.Count -gt $newCustomerMax) { " ($newCustomerMax this run, new_customer_max; the rest on the next Sync)" } else { '' }))
+            foreach ($p in $planNew) { Write-Log INFO ("  + {0,-10} {1,-40} -> {2}  (SAP: {3})" -f $p.Code, $p.Name, $p.Rep, $p.Sap.SalesEmployee) }
+            Write-Log INFO ("new customers: {0} not in ERPNext and unassigned in SAP - left in SAP." -f $newUnassigned)
+            if ($newNoRep.Count) {
+                Write-Log INFO ("new customers: left in SAP because their SAP sales employee has no enabled ERPNext rep (map one in rep-map.json to bring them in): {0}" -f `
+                    (($newNoRep.GetEnumerator() | Sort-Object Value -Descending | ForEach-Object { "$($_.Key) x$($_.Value)" }) -join ', '))
+            }
+            foreach ($x in $newSkipped) { Write-Log WARN ("new customer not created: {0}" -f $x) }
         }
 
         # ---- 5. Apply ----
@@ -1045,6 +1264,54 @@ try {
             }
         }
 
+        # ---- 5b. Create the new customers, credit figures included (11 Oct 2026) ----
+        $created = 0
+        if ($planNew.Count -and $DryRun) {
+            Write-Log INFO ("DRY RUN - no customer created ({0} would have been)." -f [math]::Min($planNew.Count, $newCustomerMax))
+        } elseif ($planNew.Count) {
+            $stampNew = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+            foreach ($p in @($planNew | Select-Object -First $newCustomerMax)) {
+                $s = $p.Sap
+                # The shape the existing Treads customers have (5 Aug 2026 import).
+                # Customer group is left for the office: SAP's groups are sales
+                # areas, not ERPNext's business types.
+                $doc = [ordered]@{
+                    customer_name  = $p.Name
+                    customer_type  = 'Company'
+                    gst_category   = 'Unregistered'
+                    territory      = 'India'
+                    custom_bp_code = $p.Code
+                }
+                $doc[$script:F_REP] = $p.Rep
+                if ($s.Phone)     { $doc['custom_phone'] = $s.Phone }
+                if ($s.Address)   { $doc['custom_address'] = $s.Address; $doc['custom_billing_address'] = $s.Address }
+                if ($s.StateName) { $doc['custom_state'] = $s.StateName }
+                if ($s.Gstin)     { $doc['custom_gstin'] = $s.Gstin }
+                if ($syncLimit -and [double]$s.CreditLimit -gt 0) { $doc[$script:F_LIMIT] = [double]$s.CreditLimit }
+                if ($syncOutstanding) {
+                    $doc[$script:F_BAL] = [math]::Round($(if ($outstandingTot -eq 'bucket_sum' -and $writeBuckets) { [double]$s.BucketSum } else { [double]$s.AccountBalance }), 2)
+                    if ($writeBuckets) {
+                        $doc[$script:F_B1] = [double]$s.B1; $doc[$script:F_B2] = [double]$s.B2
+                        $doc[$script:F_B3] = [double]$s.B3; $doc[$script:F_B4] = [double]$s.B4
+                    }
+                }
+                if ($script:TermsFieldsReady) {
+                    if ($s.PaymentTerms) { $doc[$script:F_TERMS] = $s.PaymentTerms }
+                    if ($null -ne $s.OverduePastTerms) { $doc[$script:F_OVERDUE] = [double]$s.OverduePastTerms; $doc[$script:F_ODAYS] = [int]$s.OverdueDays }
+                }
+                $doc[$script:F_STAMP] = $stampNew
+                try {
+                    $r = Invoke-ErpApi -Method 'POST' -Path '/api/resource/Customer' -Body $doc
+                    $created++
+                    Write-Log INFO ("created {0,-10} '{1}' under {2}" -f $p.Code, "$(Get-JsonProp (Get-JsonProp $r 'data') 'name')", $p.Rep)
+                } catch {
+                    $writeFailures++
+                    Write-Log ERROR ("create FAILED {0} {1}: {2}" -f $p.Code, $p.Name, $_)
+                }
+            }
+        }
+        $script:Result.customersCreated = $created
+
         # ---- 6. One-line summary ----
         $matched = @($erpIndex.Values | Where-Object { $_.Matched }).Count
         if ($DryRun) { $changeWord = 'would-change'; $changeCount = $plannedWrites.Count; $modeWord = 'DRY-RUN' }
@@ -1054,6 +1321,11 @@ try {
             $companyName, $sapByCode.Count, $erpIndex.Count, $matched, $erpCodesNoSap.Count, `
             $sapCodesNoErp.Count, $sapNoFigure.Count, $limitChangeCount, $balChangeCount, `
             ($(if ($writeBuckets) { 'written' } else { 'skipped' })), $changeWord, $changeCount, $modeWord, $writeFailures)
+        if ($createCustomers) {
+            $summaryLine += (" | new customers {0}: {1} (unassigned in SAP: {2}, no ERPNext rep: {3})" -f `
+                $(if ($DryRun) { 'would-create' } else { 'created' }), $(if ($DryRun) { [math]::Min($planNew.Count, $newCustomerMax) } else { $created }), `
+                $newUnassigned, (($newNoRep.Values | Measure-Object -Sum).Sum -as [int]))
+        }
         Write-Log INFO $summaryLine
 
         $script:Result.company          = $companyName
