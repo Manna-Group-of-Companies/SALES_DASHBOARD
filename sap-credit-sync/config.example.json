@@ -15,13 +15,22 @@
     "companies": [
       {
         "name":       "Manna Treads",
-        "company_db": "PUT_TREADS_COMPANYDB_HERE"
+        "company_db": "MANNA_TREADS_LIVE"
       }
     ]
   },
 
-  "write_mode":    "overwrite",
-  "skip_codes":    [],
+  "write_mode":        "overwrite",
+  "sync_credit_limit": true,
+  "sync_outstanding":  true,
+  "ageing_basis":      "posting_date",
+  "outstanding_total": "account_balance",
+  "skip_codes":        [],
+
+  "create_customers":  true,
+  "new_customer_max":  25,
+  "rep_map_file":      "rep-map.json",
+
   "log_dir":       "./logs",
   "log_keep_days": 30
 }
