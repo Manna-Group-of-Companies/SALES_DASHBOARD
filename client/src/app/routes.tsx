@@ -36,7 +36,10 @@ import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
 import { ProductionOrderPage } from '@/features/production/ProductionOrderPage';
 import { SalesStockPage } from '@/features/stock/SalesStockPage';
 import { TargetsPage } from '@/features/targets/TargetsPage';
-import { PickListsPage } from '@/features/picklists/PickListsPage';
+import { ProductSalesPage } from '@/features/products/ProductSalesPage';
+import { ProductsListPage } from '@/features/products/ProductsListPage';
+import { ProductDetailPage } from '@/features/products/ProductDetailPage';
+import { PickListApprovalPage } from '@/features/picklists/PickListApprovalPage';
 import { SalesDashboardPage } from '@/features/dashboard/SalesDashboardPage';
 import { HrDashboardPage } from '@/features/hr/HrDashboardPage';
 import { EmployeesPage } from '@/features/hr/EmployeesPage';
@@ -95,6 +98,16 @@ function StockRoute({ children }: { children: ReactElement }) {
   if (!user) return <Navigate to="/login" replace />;
   const byRole = user.role === 'stock_manager' || user.role === 'production_manager';
   if (!byRole && !canOpen(user.managedTeam, 'stock')) return <Navigate to="/" replace />;
+  return children;
+}
+
+/** Team Targets: a team's manager, or the GM read-only. */
+function TargetsRoute({ children }: { children: ReactElement }) {
+  const user = useAppSelector(selectUser);
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== 'general_manager' && !canOpenAs(user.role, user.managedTeam, 'targets')) {
+    return <Navigate to="/" replace />;
+  }
   return children;
 }
 
@@ -206,21 +219,31 @@ export function AppRoutes() {
           for a real loader, and restore its nav item in AppShell.tsx.
         */}
         <Route path="analysis" element={<Navigate to="/" replace />} />
-        {/* Pick lists come from orders, so they go with the order pipeline. */}
+        {/*
+          Pick lists come from orders, so they go with the order pipeline. The
+          production manager's page, read-only (5 Nov 2026): the sales manager
+          sees what production approved but cannot approve.
+        */}
         <Route
           path="pick-lists"
           element={
             <TeamRoute screen="orders">
-              <PickListsPage />
+              <PickListApprovalPage readOnly />
             </TeamRoute>
           }
         />
+        {/*
+          The GM opens it too, read-only (5 Nov 2026): every team's targets,
+          orders and what is owed. The GM has no team screens otherwise
+          (screensForUser), so they are let in on the role here; the server
+          gives the GM nothing to edit.
+        */}
         <Route
           path="targets"
           element={
-            <TeamRoute screen="targets">
+            <TargetsRoute>
               <TargetsPage />
-            </TeamRoute>
+            </TargetsRoute>
           }
         />
         <Route
@@ -321,6 +344,31 @@ export function AppRoutes() {
             </RoleRoute>
           }
         />
+        {/* Which products sell most, and the best and slowest days (5 Nov 2026). */}
+        <Route
+          path="product-sales"
+          element={
+            <RoleRoute allow={GM}>
+              <ProductSalesPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="product-sales/products"
+          element={
+            <RoleRoute allow={GM}>
+              <ProductsListPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="product-sales/products/:code"
+          element={
+            <RoleRoute allow={GM}>
+              <ProductDetailPage />
+            </RoleRoute>
+          }
+        />
         <Route
           path="follow-up/:orderId"
           element={
@@ -386,6 +434,18 @@ export function AppRoutes() {
           untouched) and restore its nav item in AppShell.tsx.
         */}
         <Route path="production/dispatch" element={<Navigate to="/production" replace />} />
+        {/*
+          The production manager approves the reps' pick lists (5 Nov 2026).
+          A static path, so it outranks `production/:orderId` below.
+        */}
+        <Route
+          path="production/pick-lists"
+          element={
+            <RoleRoute allow={['production_manager']}>
+              <PickListApprovalPage />
+            </RoleRoute>
+          }
+        />
         <Route
           path="production/:orderId"
           element={
