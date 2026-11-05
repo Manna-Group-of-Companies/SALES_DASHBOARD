@@ -1028,8 +1028,13 @@ try {
                     # The standard `credit_limits` child table is never named.
                     $body = $w.Fields.Clone()
                     $body[$script:F_STAMP] = $stamp
+                    # A name ending in a full stop ("Sajeev Mathew & Co.") 404ed on
+                    # every run: Windows PowerShell's .NET Uri silently drops a
+                    # trailing "." from a path segment, so ERPNext was asked for
+                    # "...Co" (found 11 Oct 2026; curl sends it intact). %2E
+                    # survives .NET, and Frappe decodes it back to ".".
                     $null = Invoke-ErpApi -Method 'PUT' `
-                        -Path ('/api/resource/Customer/' + [uri]::EscapeDataString($w.Name)) `
+                        -Path ('/api/resource/Customer/' + ([uri]::EscapeDataString($w.Name) -replace '\.', '%2E')) `
                         -Body $body
                     $changed++
                     Write-Log INFO ("wrote {0,-10} {1}: {2}" -f $w.Code, $w.Name, (($w.Fields.Keys | Sort-Object) -join ', '))
