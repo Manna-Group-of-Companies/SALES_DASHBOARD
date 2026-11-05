@@ -47,7 +47,8 @@ heads = frappe.get_all(
     "Manna Pick List",
     filters=filters,
     fields=["name", "sales_order", "customer", "customer_name", "sales_person",
-            "team", "status", "picked_on", "picked_by"],
+            "team", "status", "picked_on", "picked_by",
+            "sap_pick_list", "hitech_invoice", "mt_goods_receipt", "mt_delivery", "sap_sync_error"],
     order_by="creation desc",
     limit_page_length=200,
 )
@@ -58,7 +59,7 @@ if names:
         "Manna Pick List Item",
         filters={"parent": ["in", names], "parenttype": "Manna Pick List"},
         fields=["parent", "idx", "sales_order_item", "item_code", "item_name", "unit",
-                "ordered_qty", "available_qty", "picked_qty"],
+                "ordered_qty", "available_qty", "picked_qty", "picked_kg"],
         order_by="parent asc, idx asc",
         limit_page_length=0,
     ):
@@ -70,6 +71,7 @@ if names:
             "ordered_qty": frappe.utils.flt(r.ordered_qty),
             "available_qty": frappe.utils.flt(r.available_qty),
             "picked_qty": frappe.utils.flt(r.picked_qty),
+            "picked_kg": frappe.utils.flt(r.picked_kg),
         })
 
 out = []
@@ -85,6 +87,11 @@ for h in heads:
         "picked_on": str(h.picked_on or ""),
         "picked_by": h.picked_by or "",
         "items": items.get(h.name, []),
+        "sap_pick_list": h.sap_pick_list or "",
+        "hitech_invoice": h.hitech_invoice or "",
+        "mt_goods_receipt": h.mt_goods_receipt or "",
+        "mt_delivery": h.mt_delivery or "",
+        "sap_sync_error": h.sap_sync_error or "",
     })
 
 frappe.response["message"] = out

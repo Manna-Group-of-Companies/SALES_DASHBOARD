@@ -240,5 +240,121 @@ $o = Step2 @(PoRow @{ MtSo = '' }) @(HtRow)
 $b = Invoke-Xsl 'step2-ht-so\bom.xsl' $o.OuterXml 'atom6'
 Check 'step2_bom_of_a_refusal_is_empty_so_nothing_is_written' (($b.SelectSingleNode('//*[@id="atom6"]')).ChildNodes.Count -eq 0)
 
+# ---------------------------------------------------------------- step 3 (stage 4: the pick list)
+$o = Invoke-Xsl 'step3-pick\sql-ht.xsl' (Msg @()) 'atom1'
+$st = XS $o '//Sql/Statement'
+Check 'step3_sql_ht_needs_no_event_it_runs_on_a_timer' ($st -match 'FROM OPKL K' -and $st -notmatch 'AbsEntry = \d') $st
+Check 'step3_sql_ht_takes_only_lists_whose_remarks_carry_an_erpnext_name' ($st -match "LIKE 'ERPNext % - %'" -and $st -match "X\.PickName <> ''")
+Check 'step3_sql_ht_skips_a_list_an_invoice_already_carries' ($st -match "NOT EXISTS \(SELECT 1 FROM OINV V WHERE V\.NumAtCard = X\.PickName AND V\.CANCELED = 'N'\)")
+Check 'step3_sql_ht_skips_a_closed_list' ($st -match "K\.Status <> 'C'")
+Check 'step3_sql_ht_takes_waiting_lists_in_turn_so_a_refused_one_cannot_block_the_rest' ($st -match "W\.Rn = DATEDIFF\(MINUTE, '20260101', GETDATE\(\)\) % W\.N \+ 1")
+Check 'step3_sql_ht_always_returns_the_settings_row' ($st -match "FROM \(\s*SELECT\s+MAX\(CASE WHEN Code = 'ENABLED'" -and $st -match 'LEFT JOIN \(\s*SELECT W\.AbsEntry')
+Check 'step3_sql_ht_starts_with_select_for_the_call_sql_atom' ($st.TrimStart().StartsWith('SELECT'))
+
+function PkRow { param([hashtable] $Over = @{})
+	$r = [ordered]@{
+		PickEntry = '7'; PickName = 'PICK-00012'; Waiting = '1'; PickLine = '0'; BaseObject = '17'; OrderEntry = '3040'; OrderLine = '1'; Kg = '31.400000'
+		SoNum = '555'; SoCancelled = 'N'; SoCard = '10118'; MtPo = '2023'; OrderName = 'SAL-ORD-2026-00167'
+		ItemCode = 'PMB00101502'; SoLineStatus = 'O'; WhsCode = '07'; Batch = 'Y'
+		Enabled = 'Y'; Customer = '10118'; InvSeries = ''; Today = '2026-11-05'
+	}
+	foreach ($k in $Over.Keys) { $r[$k] = $Over[$k] }
+	return $r
+}
+function BtRow { param([string] $Batch, [string] $Avail, [string] $Item = 'PMB00101502', [string] $Whs = '07')
+	return [ordered]@{ ItemCode = $Item; WhsCode = $Whs; BatchNum = $Batch; Avail = $Avail }
+}
+function MtRow { param([hashtable] $Over = @{})
+	$r = [ordered]@{
+		Kind = 'PO'; DocEntry = '2023'; DocNum = '241'; CardCode = 'S-1010'; Cancelled = 'N'; MtSo = '6915'; LineNum = '1'; ItemCode = 'PMB00101502'; LineStatus = 'O'
+		Enabled = 'Y'; Vendor = 'S-1010'; Branch = '1'; GrpoSeries = ''; DnSeries = '211'; GrpoCount = '0'; DnCount = '0'
+	}
+	foreach ($k in $Over.Keys) { $r[$k] = $Over[$k] }
+	return $r
+}
+function MtRows { param([hashtable] $Over = @{})
+	return @(
+		(MtRow (@{ Kind = 'PO'; LineNum = '0'; ItemCode = 'PMB00101002' } + $Over)),
+		(MtRow (@{ Kind = 'PO'; LineNum = '1' } + $Over)),
+		(MtRow (@{ Kind = 'SO'; DocEntry = '6915'; DocNum = '576'; CardCode = 'C-1687'; MtSo = ''; LineNum = '0'; ItemCode = 'PMB00101002' } + $Over)),
+		(MtRow (@{ Kind = 'SO'; DocEntry = '6915'; DocNum = '576'; CardCode = 'C-1687'; MtSo = ''; LineNum = '1' } + $Over))
+	)
+}
+
+$o = Invoke-Xsl 'step3-pick\sql-batch.xsl' (Msg @((Event '7' '156'), (Rows 'atom2' @((PkRow), (PkRow @{ ItemCode = "PMB'X"; WhsCode = '01' }))))) 'atom3'
+$st = XS $o '//Sql/Statement'
+Check 'step3_sql_batch_reads_each_batch_item_in_its_own_warehouse' ($st -match "Q\.ItemCode = N'PMB00101502' AND Q\.WhsCode = N'07'" -and $st -match "Q\.ItemCode = N'PMB''X' AND Q\.WhsCode = N'01'") $st
+Check 'step3_sql_batch_reads_oldest_first' ($st -match 'ORDER BY Q\.ItemCode, Q\.WhsCode, N\.InDate, N\.AbsEntry')
+$o = Invoke-Xsl 'step3-pick\sql-batch.xsl' (Msg @((Event '7' '156'), (Rows 'atom2' @((PkRow @{ Batch = 'N' }))))) 'atom3'
+Check 'step3_sql_batch_asks_nothing_when_no_item_is_batch_managed' ((XS $o '//Sql/Statement').Trim() -eq "SELECT TOP 0 '' AS ItemCode")
+
+$o = Invoke-Xsl 'step3-pick\sql-mt.xsl' (Msg @((Event '7' '156'), (Rows 'atom2' @((PkRow @{ PickName = "PICK-0'1" }))))) 'atom5'
+$st = XS $o '//Sql/Statement'
+Check 'step3_sql_mt_reads_the_purchase_order_hitechs_order_was_made_for' ($st -match 'WHERE P\.DocEntry = 2023\b') $st
+Check 'step3_sql_mt_reads_the_sales_order_that_purchase_order_was_made_for' ($st -match 'FROM OPOR WHERE DocEntry = 2023\)')
+Check 'step3_sql_mt_quotes_the_list_name' ($st -match "NumAtCard = N'PICK-0''1'")
+$o = Invoke-Xsl 'step3-pick\sql-mt.xsl' (Msg @((Event '7' '156'), (Rows 'atom2' @((PkRow @{ MtPo = '' }))))) 'atom5'
+$st = XS $o '//Sql/Statement'
+Check 'step3_sql_mt_without_a_purchase_order_still_reads_the_settings_the_vendor_read_needs' ($st -match "SELECT '' AS Kind, S\.\*" -and $st -match "Code = 'VENDOR'" -and $st -notmatch 'OPOR') $st
+
+function Step3 { param([object[]] $Pk, [object[]] $Bt, [object[]] $Mt)
+	return Invoke-Xsl 'step3-pick\final.xsl' (Msg @((Event '7' '156'), (Rows 'atom2' $Pk), (Rows 'atom4' $Bt), (Rows 'atom6' $Mt))) 'atom7'
+}
+$two = @((PkRow @{ PickLine = '0'; OrderLine = '0'; ItemCode = 'PMB00101002'; Batch = 'N'; Kg = '48.6' }), (PkRow))
+$bts = @((BtRow 'OLD-01' '20'), (BtRow 'NEW-02' '100'))
+$o = Step3 $two $bts (MtRows)
+Check 'step3_makes_all_three_for_a_list_from_erpnext' ((XS $o '//Decision/Make') -eq 'Y') (XS $o '//Decision/Reason')
+Check 'step3_inserts_hitechs_invoice_on_hitech' ((XS $o '//Decision/Inv/CallMethod') -eq 'Synchronous Insert' -and (XS $o '//Decision/Inv/CallObject') -eq '13')
+Check 'step3_inserts_the_goods_receipt_and_delivery' ((XS $o '//Decision/Grpo/CallObject') -eq '20' -and (XS $o '//Decision/Dn/CallObject') -eq '15')
+Check 'step3_invoice_is_to_manna_treads_and_carries_the_list_name' ((XS $o '//Inv//Documents/row/CardCode') -eq '10118' -and (XS $o '//Inv//Documents/row/NumAtCard') -eq 'PICK-00012')
+Check 'step3_invoice_is_due_today_so_payment_terms_cannot_put_it_outside_the_periods' ((XS $o '//Inv//Documents/row/DocDueDate') -eq '20261105')
+$il = $o.SelectNodes('//Inv//Document_Lines/row')
+Check 'step3_invoice_lines_are_based_on_hitechs_order_lines_for_the_picked_kilos' ($il.Count -eq 2 -and $il[0].BaseType -eq '17' -and $il[0].BaseEntry -eq '3040' -and $il[0].BaseLine -eq '0' -and $il[0].Quantity -eq '48.6' -and $il[1].BaseLine -eq '1' -and $il[1].Quantity -eq '31.4')
+$bn = $o.SelectNodes('//Inv//BatchNumbers/row')
+Check 'step3_batches_are_taken_oldest_first_until_the_kilos_are_covered' ($bn.Count -eq 2 -and $bn[0].BatchNumber -eq 'OLD-01' -and $bn[0].Quantity -eq '20' -and $bn[1].BatchNumber -eq 'NEW-02' -and $bn[1].Quantity -eq '11.4') (($bn | ForEach-Object { "$($_.BatchNumber)=$($_.Quantity)" }) -join ',')
+Check 'step3_batches_go_on_the_invoice_line_of_their_item' ($bn[0].BaseLineNumber -eq '1' -and $bn[1].BaseLineNumber -eq '1')
+$o1 = Step3 @((PkRow)) @((BtRow 'OLD-01' '50'), (BtRow 'NEW-02' '100')) (MtRows)
+Check 'step3_one_batch_that_holds_enough_is_the_only_one_used' ($o1.SelectNodes('//Inv//BatchNumbers/row').Count -eq 1 -and (XS $o1 '//Inv//BatchNumbers/row/Quantity') -eq '31.4')
+Check 'step3_no_batch_item_no_batch_table' ($null -eq (X (Step3 @((PkRow @{ Batch = 'N' })) @() (MtRows)) '//Inv//BatchNumbers'))
+$gl = $o.SelectNodes('//Grpo//Document_Lines/row')
+Check 'step3_goods_receipt_lines_are_based_on_the_purchase_order_line_for_the_same_item' ($gl.Count -eq 2 -and $gl[0].BaseType -eq '22' -and $gl[0].BaseEntry -eq '2023' -and $gl[0].BaseLine -eq '0' -and $gl[1].BaseLine -eq '1' -and $gl[1].Quantity -eq '31.4')
+Check 'step3_goods_receipt_is_from_hitech_on_the_branch' ((XS $o '//Grpo//Documents/row/CardCode') -eq 'S-1010' -and (XS $o '//Grpo//Documents/row/BPL_IDAssignedToInvoice') -eq '1' -and (XS $o '//Grpo//Documents/row/NumAtCard') -eq 'PICK-00012')
+$dl = $o.SelectNodes('//Dn//Document_Lines/row')
+Check 'step3_delivery_lines_are_based_on_manna_treads_sales_order_lines' ($dl.Count -eq 2 -and $dl[0].BaseType -eq '17' -and $dl[0].BaseEntry -eq '6915' -and $dl[1].BaseLine -eq '1' -and $dl[1].Quantity -eq '31.4')
+Check 'step3_delivery_is_to_the_customer_in_its_own_series' ((XS $o '//Dn//Documents/row/CardCode') -eq 'C-1687' -and (XS $o '//Dn//Documents/row/Series') -eq '211' -and (XS $o '//Dn//Documents/row/BPL_IDAssignedToInvoice') -eq '1')
+$o1 = Step3 @((PkRow @{ ItemCode = 'PMB00101002'; OrderLine = '0'; Batch = 'N' })) @() (MtRows)
+Check 'step3_a_product_left_off_the_list_is_on_none_of_the_three' ($o1.SelectNodes('//Inv//Document_Lines/row').Count -eq 1 -and $o1.SelectNodes('//Grpo//Document_Lines/row').Count -eq 1 -and $o1.SelectNodes('//Dn//Document_Lines/row').Count -eq 1 -and (XS $o1 '//Dn//Document_Lines/row/BaseLine') -eq '0')
+
+function Refused3 { param($Doc, [string] $Like) $r = XS $Doc '//Decision/Reason'; return ((XS $Doc '//Decision/Make') -eq 'N' -and $r -like $Like) }
+Check 'step3_a_pick_list_keyed_in_sap_is_left_alone' (Refused3 (Step3 @((PkRow @{ PickName = '' })) $bts (MtRows)) 'skip: not from ERPNext*')
+$idle = Step3 @((PkRow @{ PickEntry = ''; PickName = ''; Waiting = '0'; PickLine = ''; OrderEntry = ''; ItemCode = ''; MtPo = ''; Batch = 'N' })) @() @((MtRow @{ Kind = ''; DocEntry = ''; LineNum = ''; ItemCode = '' }))
+Check 'step3_a_run_with_no_list_waiting_makes_nothing' (Refused3 $idle 'skip: no ERPNext pick list waiting*') (XS $idle '//Decision/Reason')
+Check 'step3_a_run_with_no_list_waiting_still_has_keys_to_read_by' ((XS $idle '//Inv/CallKey') -eq '10118' -and (XS $idle '//Grpo/CallKey') -eq 'S-1010' -and (XS $idle '//Dn/CallKey') -eq 'S-1010')
+Check 'step3_a_goods_receipt_already_made_makes_nothing' (Refused3 (Step3 @((PkRow)) $bts (MtRows @{ GrpoCount = '1' })) 'skip: Manna Treads already has*')
+Check 'step3_hitech_switched_off_makes_nothing' (Refused3 (Step3 @((PkRow @{ Enabled = 'N' })) $bts (MtRows)) "skip: Hi-Tech's @MANNA_IC ENABLED*")
+Check 'step3_manna_treads_switched_off_makes_nothing' (Refused3 (Step3 @((PkRow)) $bts (MtRows @{ Enabled = 'N' })) "skip: Manna Treads' @MANNA_IC ENABLED*")
+Check 'step3_too_little_in_batches_refuses_all_three' (Refused3 (Step3 @((PkRow)) @((BtRow 'OLD-01' '20')) (MtRows)) 'not enough in batches: PMB00101502 (20 kg*')
+Check 'step3_a_batch_in_another_warehouse_does_not_count' (Refused3 (Step3 @((PkRow)) @((BtRow 'OLD-01' '100' 'PMB00101502' '01')) (MtRows)) 'not enough in batches*')
+Check 'step3_an_item_closed_on_the_purchase_order_refuses_all_three' (Refused3 (Step3 @((PkRow)) $bts (MtRows @{ LineStatus = 'C' })) 'not open on Manna Treads purchase order 241: PMB00101502*')
+Check 'step3_an_item_closed_on_hitechs_order_refuses_all_three' (Refused3 (Step3 @((PkRow @{ SoLineStatus = 'C' })) $bts (MtRows)) 'PMB00101502 is closed on Hi-Tech sales order 555')
+Check 'step3_no_delivery_series_refuses_all_three' (Refused3 (Step3 @((PkRow)) $bts (MtRows @{ DnSeries = '' })) "*has no DN_SERIES*")
+Check 'step3_a_hitech_order_not_made_by_b1if_is_left_alone' (Refused3 (Step3 @((PkRow @{ MtPo = '' })) $bts @()) 'skip: Hi-Tech*not made by B1if*')
+Check 'step3_a_list_over_two_orders_is_refused' (Refused3 (Step3 @((PkRow), (PkRow @{ OrderEntry = '3041' })) $bts (MtRows)) '*more than one sales order')
+$n = Step3 @((PkRow @{ PickName = '' })) $bts (MtRows)
+Check 'step3_a_refusal_only_reads_business_partners' ((XS $n '//Inv/CallMethod') -eq 'Synchronous Retrieval' -and (XS $n '//Inv/CallKey') -eq '10118' -and (XS $n '//Grpo/CallObject') -eq '2' -and (XS $n '//Grpo/CallKey') -eq 'S-1010' -and (XS $n '//Dn/CallKey') -eq 'S-1010')
+Check 'step3_a_refusal_carries_no_documents' ($null -eq (X $n '//BOM'))
+
+foreach ($part in 'Inv', 'Grpo', 'Dn') {
+	$b = Invoke-Xsl 'step3-pick\bom.xsl' $o.OuterXml 'atom8' @{ part = $part }
+	$p = $b.SelectSingleNode('//*[@id="atom8"]')
+	$want = @{ Inv = '10118'; Grpo = 'S-1010'; Dn = 'C-1687' }[$part]
+	Check "step3_bom_$($part)_hands_its_atom_only_its_own_document" ((XS $b '//*[@id="atom8"]/Documents/row/CardCode') -eq $want -and $null -eq (X $b '//*[@id="atom8"]//AdmInfo') -and $null -eq (X $b '//*[@id="atom8"]/BOM'))
+}
+$b = Invoke-Xsl 'step3-pick\bom.xsl' $o.OuterXml 'atom8' @{ part = 'Inv' }
+Check 'step3_bom_of_the_invoice_carries_its_batches' ($b.SelectNodes('//*[@id="atom8"]/BatchNumbers/row').Count -eq 2)
+$b = Invoke-Xsl 'step3-pick\bom.xsl' $n.OuterXml 'atom8' @{ part = 'Grpo' }
+Check 'step3_bom_of_a_refusal_is_empty_so_nothing_is_written' (($b.SelectSingleNode('//*[@id="atom8"]')).ChildNodes.Count -eq 0)
+
+
 Write-Host ("{0} passed, {1} failed" -f $script:pass, $script:fail)
 if ($script:fail -gt 0) { exit 1 }

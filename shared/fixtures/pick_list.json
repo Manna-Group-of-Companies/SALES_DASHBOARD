@@ -3,45 +3,171 @@
   "cases": [
     {
       "why": "Tread rubber is picked in whole rolls: 10 ordered, 8 in stock, so at most 8.",
-      "line": { "custom_rolls": 10, "custom_loose_belts": 0, "qty": 10 },
-      "already_picked": 0, "available": 8,
-      "ordered": 10, "remaining": 10, "max_pick": 8
+      "line": {
+        "custom_rolls": 10,
+        "custom_loose_belts": 0,
+        "qty": 10
+      },
+      "already_picked": 0,
+      "available": 8,
+      "ordered": 10,
+      "remaining": 10,
+      "max_pick": 8
     },
     {
       "why": "Half a roll of belts rides on qty; only the whole rolls are picked.",
-      "line": { "custom_rolls": 4, "custom_loose_belts": 2, "qty": 4.5 },
-      "already_picked": 0, "available": 20,
-      "ordered": 4, "remaining": 4, "max_pick": 4
+      "line": {
+        "custom_rolls": 4,
+        "custom_loose_belts": 2,
+        "qty": 4.5
+      },
+      "already_picked": 0,
+      "available": 20,
+      "ordered": 4,
+      "remaining": 4,
+      "max_pick": 4
     },
     {
       "why": "A line of loose belts only cannot be picked.",
-      "line": { "custom_rolls": 0, "custom_loose_belts": 3, "qty": 0.75 },
-      "already_picked": 0, "available": 20,
-      "ordered": 0, "remaining": 0, "max_pick": 0
+      "line": {
+        "custom_rolls": 0,
+        "custom_loose_belts": 3,
+        "qty": 0.75
+      },
+      "already_picked": 0,
+      "available": 20,
+      "ordered": 0,
+      "remaining": 0,
+      "max_pick": 0
     },
     {
       "why": "Bonding gum is ordered and stocked in kg, so qty is the measure.",
-      "line": { "custom_rolls": 0, "custom_loose_belts": 0, "qty": 50 },
-      "already_picked": 0, "available": 200,
-      "ordered": 50, "remaining": 50, "max_pick": 50
+      "line": {
+        "custom_rolls": 0,
+        "custom_loose_belts": 0,
+        "qty": 50
+      },
+      "already_picked": 0,
+      "available": 200,
+      "ordered": 50,
+      "remaining": 50,
+      "max_pick": 50
     },
     {
       "why": "What an earlier list took is not offered again: 10 ordered, 6 already picked.",
-      "line": { "custom_rolls": 10, "custom_loose_belts": 0, "qty": 10 },
-      "already_picked": 6, "available": 8,
-      "ordered": 10, "remaining": 4, "max_pick": 4
+      "line": {
+        "custom_rolls": 10,
+        "custom_loose_belts": 0,
+        "qty": 10
+      },
+      "already_picked": 6,
+      "available": 8,
+      "ordered": 10,
+      "remaining": 4,
+      "max_pick": 4
     },
     {
       "why": "Nothing in Hi-Tech's stock: the product stays on the order but cannot be picked now.",
-      "line": { "custom_rolls": 5, "custom_loose_belts": 0, "qty": 5 },
-      "already_picked": 0, "available": 0,
-      "ordered": 5, "remaining": 5, "max_pick": 0
+      "line": {
+        "custom_rolls": 5,
+        "custom_loose_belts": 0,
+        "qty": 5
+      },
+      "already_picked": 0,
+      "available": 0,
+      "ordered": 5,
+      "remaining": 5,
+      "max_pick": 0
     },
     {
       "why": "Fully picked already: nothing left, whatever the stock.",
-      "line": { "custom_rolls": 3, "custom_loose_belts": 0, "qty": 3 },
-      "already_picked": 3, "available": 50,
-      "ordered": 3, "remaining": 0, "max_pick": 0
+      "line": {
+        "custom_rolls": 3,
+        "custom_loose_belts": 0,
+        "qty": 3
+      },
+      "already_picked": 3,
+      "available": 50,
+      "ordered": 3,
+      "remaining": 0,
+      "max_pick": 0
+    }
+  ],
+  "kg_about": "Kilos on a pick list (5 Nov 2026). SAP counts every line in kilos, and Hi-Tech's pick list, its invoice, Manna Treads' goods receipt and delivery are made from these. Ordered kilos are the line's custom_total_weight, else its qty when the line is counted in kg. Remaining is ordered less the kilos earlier Submitted lists hold. A list may carry no more than what remains (rounded to 3 places): SAP refuses a pick list line released for more than its sales order line has open, so a roll weighed heavier than the order's estimate cannot go over it. A line counted in kg takes its kilos from the picked qty. Implemented in app/lib/core/pick_list.dart and enforced again by manna_pick_list_submit.",
+  "kg_cases": [
+    {
+      "why": "Rolls are weighed: 10 rolls ordered at 240 kg, nothing picked yet, so up to 240 kg - SAP refuses more than the order line holds.",
+      "line": {
+        "custom_rolls": 10,
+        "custom_loose_belts": 0,
+        "qty": 10,
+        "custom_total_weight": 240,
+        "stock_uom": "Kg"
+      },
+      "already_kg": 0,
+      "ordered_kg": 240,
+      "remaining_kg": 240,
+      "max_kg": 240,
+      "kg_follows_qty": false
+    },
+    {
+      "why": "An earlier list took 150 kg of 240, so 90 remain and at most 90 may go.",
+      "line": {
+        "custom_rolls": 10,
+        "custom_loose_belts": 0,
+        "qty": 10,
+        "custom_total_weight": 240,
+        "stock_uom": "Kg"
+      },
+      "already_kg": 150,
+      "ordered_kg": 240,
+      "remaining_kg": 90,
+      "max_kg": 90,
+      "kg_follows_qty": false
+    },
+    {
+      "why": "Bonding gum is counted in kg: its picked qty is its kilos.",
+      "line": {
+        "custom_rolls": 0,
+        "custom_loose_belts": 0,
+        "qty": 50,
+        "custom_total_weight": 50,
+        "stock_uom": "Kg"
+      },
+      "already_kg": 0,
+      "ordered_kg": 50,
+      "remaining_kg": 50,
+      "max_kg": 50,
+      "kg_follows_qty": true
+    },
+    {
+      "why": "A kg line with no total weight still has its qty as its kilos.",
+      "line": {
+        "custom_rolls": 0,
+        "custom_loose_belts": 0,
+        "qty": 20,
+        "stock_uom": "Kgs"
+      },
+      "already_kg": 0,
+      "ordered_kg": 20,
+      "remaining_kg": 20,
+      "max_kg": 20,
+      "kg_follows_qty": true
+    },
+    {
+      "why": "Heavier rolls on earlier lists leave nothing, not a negative.",
+      "line": {
+        "custom_rolls": 4,
+        "custom_loose_belts": 0,
+        "qty": 4,
+        "custom_total_weight": 96.4,
+        "stock_uom": "Kg"
+      },
+      "already_kg": 100,
+      "ordered_kg": 96.4,
+      "remaining_kg": 0,
+      "max_kg": 0,
+      "kg_follows_qty": false
     }
   ]
 }

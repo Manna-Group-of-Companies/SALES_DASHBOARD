@@ -102,12 +102,25 @@ export function PickListsPage() {
             <div className="tiny dim" style={{ padding: '8px 16px 0' }}>
               {l.salesPerson} · {l.pickedOn.slice(0, 16)}
             </div>
+            {l.sapError ? (
+              <div className="tiny" style={{ padding: '4px 16px 0', color: 'var(--danger, #c0392b)' }}>
+                SAP: {l.sapError}
+              </div>
+            ) : l.sapPickList ? (
+              <div className="tiny dim" style={{ padding: '4px 16px 0' }}>
+                SAP pick list {l.sapPickList}
+                {l.hitechInvoice && <> · Hi-Tech invoice {l.hitechInvoice}</>}
+                {l.mtGoodsReceipt && <> · goods receipt {l.mtGoodsReceipt}</>}
+                {l.mtDelivery && <> · delivery {l.mtDelivery}</>}
+              </div>
+            ) : null}
             <div className="scroll-x">
               <table className="table">
                 <thead>
                   <tr>
                     <th>Product</th>
                     <th className="right">Picked</th>
+                    <th className="right">Kg</th>
                     <th className="right">Ordered</th>
                     <th className="right">Hi-Tech stock then</th>
                   </tr>
@@ -121,6 +134,7 @@ export function PickListsPage() {
                           {qty(i.pickedQty)} {i.unit}
                         </strong>
                       </td>
+                      <td className="right">{i.pickedKg > 0 ? qty(i.pickedKg) : '—'}</td>
                       <td className="right">{qty(i.orderedQty)}</td>
                       <td className="right dim">{qty(i.availableQty)}</td>
                     </tr>

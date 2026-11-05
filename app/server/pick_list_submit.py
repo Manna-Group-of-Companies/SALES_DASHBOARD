@@ -2,7 +2,7 @@
 #   Name          : manna_pick_list_submit
 #   Script Type   : API
 #   API Method    : manna_pick_list_submit
-#   Args (POST)   : sales_order, lines = JSON [{sales_order_item, picked_qty, available_qty}]
+#   Args (POST)   : sales_order, lines = JSON [{sales_order_item, picked_qty, picked_kg, available_qty}]
 #
 # A pick list: which products of an approved order are to go from Hi-Tech's
 # stock now (3 Nov 2026). The rep ticks what Hi-Tech has in stock — five of an
@@ -14,7 +14,12 @@
 #   - the caller is the order's rep, that rep's team manager, or System Manager;
 #   - every line is a line OF THIS ORDER — nothing from outside it;
 #   - each quantity is above zero and no more than what is still unpicked on
-#     that line: ordered, less what earlier Submitted lists for it hold.
+#     that line: ordered, less what earlier Submitted lists for it hold;
+#   - each line carries its weighed kilos (5 Nov 2026), above zero and no more
+#     than the line's kilos not yet on a list - SAP refuses a pick list line
+#     released for more than its order line has open. SAP's pick list, Hi-Tech's
+#     invoice and Manna Treads' goods receipt and delivery are made from them the
+#     moment the list reaches SAP. A line counted in kg takes them from its qty.
 #
 # Ordered is counted in the stock unit Hi-Tech's stock is shown in: whole rolls
 # for tread rubber, else the line's qty (kg, cans). Loose belts are not picked.
@@ -27,6 +32,7 @@
 # ignore_permissions after its own checks. safe_exec: see CLAUDE.md.
 
 APPROVED = "PO Approved - Ready for SAP"
+KG_TOLERANCE = 0  # SAP: "Released quantity exceeds open quantity"
 
 user = frappe.session.user
 so_name = (frappe.form_dict.get("sales_order") or "").strip()
@@ -69,13 +75,28 @@ def ordered_of(it):
     return frappe.utils.flt(it.qty)
 
 
+def kg_follows_qty(it):
+    if frappe.utils.cint(it.custom_rolls) > 0:
+        return False
+    return (it.stock_uom or it.uom or "").strip().lower() in ("kg", "kgs")
+
+
+def ordered_kg(it):
+    w = frappe.utils.flt(it.custom_total_weight)
+    if w > 0:
+        return w
+    return frappe.utils.flt(it.qty) if kg_follows_qty(it) else 0
+
+
 already = {}
+already_kg = {}
 for pl in frappe.get_all("Manna Pick List",
                          filters={"sales_order": so_name, "status": "Submitted"}, pluck="name"):
     for r in frappe.get_all("Manna Pick List Item",
                             filters={"parent": pl, "parenttype": "Manna Pick List"},
-                            fields=["sales_order_item", "picked_qty"]):
+                            fields=["sales_order_item", "picked_qty", "picked_kg"]):
         already[r.sales_order_item] = already.get(r.sales_order_item, 0) + frappe.utils.flt(r.picked_qty)
+        already_kg[r.sales_order_item] = already_kg.get(r.sales_order_item, 0) + frappe.utils.flt(r.picked_kg)
 
 by_name = {}
 for it in so.items:
@@ -97,6 +118,14 @@ for l in lines:
         frappe.throw("Enter how much of %s to pick." % it.item_name)
     if q > remaining + 0.0001:
         frappe.throw("%s: only %s left to pick on this order." % (it.item_name, remaining))
+    kg = q if kg_follows_qty(it) else frappe.utils.flt(l.get("picked_kg"))
+    if kg <= 0:
+        frappe.throw("Enter the weighed kilos of %s." % it.item_name)
+    left_kg = max(ordered_kg(it) - already_kg.get(key, 0), 0)
+    max_kg = frappe.utils.flt(left_kg * (1 + KG_TOLERANCE), 3)
+    if kg > max_kg + 0.0005:
+        frappe.throw("%s: %s kg is more than this order has left (%s kg). SAP cannot invoice more than the order holds."
+                     % (it.item_name, kg, max_kg))
     rows.append({
         "sales_order_item": key,
         "item_code": it.item_code,
@@ -106,6 +135,7 @@ for l in lines:
         "ordered_qty": ordered_of(it),
         "available_qty": frappe.utils.flt(l.get("available_qty")),
         "picked_qty": q,
+        "picked_kg": frappe.utils.flt(kg, 3),
     })
 
 if not rows:

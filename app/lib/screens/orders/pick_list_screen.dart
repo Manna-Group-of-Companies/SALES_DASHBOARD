@@ -34,10 +34,15 @@ class _PickRow {
   final double already;
   final double available;
   final double max;
+  final double alreadyKg;
   final TextEditingController qty;
+  // Weighed kilos (5 Nov 2026): SAP's documents are made from them. Empty for
+  // the rep to fill, except on a line counted in kg, where qty is the kilos.
+  final TextEditingController kg = TextEditingController();
   bool ticked = false;
 
-  _PickRow(this.order, this.line, this.already, this.available, this.max)
+  _PickRow(this.order, this.line, this.already, this.available, this.max,
+      this.alreadyKg)
       : qty = TextEditingController(text: max > 0 ? trimQty(max) : '');
 
   String get orderName => '${order['name']}';
@@ -46,6 +51,8 @@ class _PickRow {
   String get title => '${line['item_name'] ?? line['item_code'] ?? ''}';
   String get unit => pickUnit(line);
   double get ordered => orderedForPick(line);
+  bool get kgIsQty => kgFollowsQty(line);
+  double get maxKg => maxPickKg(line, alreadyKg: alreadyKg);
 }
 
 const String _kApproved = 'PO Approved - Ready for SAP';
@@ -86,6 +93,7 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
         .where((o) => '${o['custom_po_status'] ?? ''}' == _kApproved);
     final stock = results[1] as Map<String, MinStock>;
     final so = pickedSoFar(results[2] as List<PickList>);
+    final soKg = pickedKgSoFar(results[2] as List<PickList>);
     return [
       for (final o in orders)
         for (final l in ((o['items'] as List?) ?? const [])
@@ -97,7 +105,8 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
             final available =
                 (s != null && s.weightsKnown) ? s.availableQty : 0.0;
             return _PickRow(o, l, already, available,
-                maxPick(l, alreadyPicked: already, available: available));
+                maxPick(l, alreadyPicked: already, available: available),
+                soKg['${l['name']}'] ?? 0);
           }(),
     ];
   }
@@ -121,11 +130,20 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
       if (q > r.max + 1e-9) {
         return _snack('${r.title}: at most ${trimQty(r.max)} ${r.unit}.');
       }
+      final kg = r.kgIsQty ? q : double.tryParse(r.kg.text.trim());
+      if (kg == null || kg <= 0) {
+        return _snack('Enter the weighed kilos of ${r.title}.');
+      }
+      if (kg > r.maxKg + 5e-4) {
+        return _snack('${r.title}: at most ${trimQty(r.maxKg)} kg - '
+            'what the order has left.');
+      }
       perItem[r.itemCode] = (perItem[r.itemCode] ?? 0) + q;
       stockOf[r.itemCode] = r.available;
       (byOrder[r.orderName] ??= []).add({
         'sales_order_item': r.id,
         'picked_qty': q,
+        'picked_kg': kg,
         'available_qty': r.available,
       });
     }
@@ -207,6 +225,25 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
               ),
             ),
           ),
+        if (can && !r.kgIsQty) ...[
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 80,
+            child: TextField(
+              controller: r.kg,
+              enabled: r.ticked && !_busy,
+              textAlign: TextAlign.right,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                isDense: true,
+                labelText: 'kg',
+                helperText: 'weighed',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ),
+        ],
       ]),
     );
   }
@@ -252,7 +289,8 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
               padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: Text(
                   "Manager-approved products. Tick what goes from Hi-Tech's "
-                  'stock now; the rest stays on the order to pick later.',
+                  'stock now and enter the weighed kilos; the rest stays on '
+                  'the order to pick later.',
                   style: TextStyle(fontSize: 13, color: Colors.black87)),
             ),
             if (rows.isEmpty)
@@ -341,9 +379,25 @@ class PickListCard extends StatelessWidget {
               padding: const EdgeInsets.only(top: 2),
               child: Row(children: [
                 Expanded(child: Text(i.itemName, style: const TextStyle(fontSize: 13))),
-                Text('${trimQty(i.pickedQty)} of ${trimQty(i.orderedQty)} ${i.unit}',
+                Text('${trimQty(i.pickedQty)} of ${trimQty(i.orderedQty)} ${i.unit}'
+                    '${i.pickedKg > 0 && i.unit.toLowerCase() != 'kg' ? ' · ${trimQty(i.pickedKg)} kg' : ''}',
                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
               ]),
+            ),
+          if (l.sapError.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text('SAP: ${l.sapError}',
+                  style: const TextStyle(fontSize: 12, color: Colors.deepOrange)),
+            )
+          else if (l.sapPickList.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                  'SAP pick list ${l.sapPickList}'
+                  '${l.hitechInvoice.isNotEmpty ? ' · Hi-Tech invoice ${l.hitechInvoice}' : ''}'
+                  '${l.mtDelivery.isNotEmpty ? ' · delivery ${l.mtDelivery}' : ''}',
+                  style: const TextStyle(fontSize: 12, color: Colors.black54)),
             ),
         ]),
       ),

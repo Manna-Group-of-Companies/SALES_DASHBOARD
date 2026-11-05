@@ -31,6 +31,36 @@ void main() {
     }
   });
 
+  group('shared/fixtures/pick_list.json kilos', () {
+    for (final c in (fixture['kg_cases'] as List).cast<Map<String, dynamic>>()) {
+      test(c['why'] as String, () {
+        final line = c['line'] as Map;
+        final already = (c['already_kg'] as num).toDouble();
+        expect(orderedKg(line), (c['ordered_kg'] as num).toDouble());
+        expect(remainingKg(line, already), (c['remaining_kg'] as num).toDouble());
+        expect(maxPickKg(line, alreadyKg: already), (c['max_kg'] as num).toDouble());
+        expect(kgFollowsQty(line), c['kg_follows_qty']);
+      });
+    }
+  });
+
+  test('a pick list reads its kilos and what SAP made from it', () {
+    final l = PickList.fromJson({
+      'name': 'PICK-00012',
+      'status': 'Submitted',
+      'sap_pick_list': '7',
+      'hitech_invoice': '489',
+      'items': [
+        {'sales_order_item': 'a', 'picked_qty': 2, 'picked_kg': 48.6},
+      ],
+    });
+    expect(l.items.single.pickedKg, 48.6);
+    expect(l.sapPickList, '7');
+    expect(l.hitechInvoice, '489');
+    expect(l.mtDelivery, '');
+    expect(pickedKgSoFar([l]), {'a': 48.6});
+  });
+
   test('tread rubber is counted in rolls though its stock UOM is Kg', () {
     expect(pickUnit({'custom_rolls': 2, 'stock_uom': 'Kg', 'qty': 2}), 'rolls');
     expect(pickUnit({'custom_rolls': 0, 'stock_uom': 'Kg', 'qty': 50}), 'Kg');

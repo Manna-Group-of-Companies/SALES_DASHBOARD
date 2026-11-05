@@ -15,6 +15,8 @@ export interface PickListItem {
   orderedQty: number;
   availableQty: number;
   pickedQty: number;
+  /** Weighed kilos (5 Nov 2026): what SAP's documents for this list carry. */
+  pickedKg: number;
 }
 
 export interface PickList {
@@ -26,6 +28,12 @@ export interface PickList {
   status: string;
   pickedOn: string;
   items: PickListItem[];
+  /** SAP's side: the pick list the sync sent, and what B1if made from it. */
+  sapPickList: string;
+  hitechInvoice: string;
+  mtGoodsReceipt: string;
+  mtDelivery: string;
+  sapError: string;
 }
 
 const num = (v: unknown): number => {
@@ -52,7 +60,13 @@ export function toPickList(m: Record<string, unknown>): PickList {
       orderedQty: num(i.ordered_qty),
       availableQty: num(i.available_qty),
       pickedQty: num(i.picked_qty),
+      pickedKg: num(i.picked_kg),
     })),
+    sapPickList: str(m.sap_pick_list),
+    hitechInvoice: str(m.hitech_invoice),
+    mtGoodsReceipt: str(m.mt_goods_receipt),
+    mtDelivery: str(m.mt_delivery),
+    sapError: str(m.sap_sync_error),
   };
 }
 

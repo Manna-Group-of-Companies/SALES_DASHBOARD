@@ -190,7 +190,7 @@ param(
 
     [string] $ResultJsonPath,
 
-    # Which passes run: A, B, C, M, P, H (or "A,M"). Default all of them. For
+    # Which passes run: A, B, C, M, P, H, K (or "A,M"). Default all of them. For
     # trying one pass on its own against a test company.
     [string[]] $Pass
 )
@@ -240,6 +240,12 @@ $script:Result = [ordered]@{
     htAdopted         = 0
     htRefused         = 0
     htWaiting         = 0
+    pkInScope         = 0
+    pkSent            = 0
+    pkLinkDue         = 0
+    pkLinked          = 0
+    pkWaiting         = 0
+    pkRefused         = 0
     repUnmatched      = 0
     writeErrors       = 0
     failures          = 0
@@ -2365,7 +2371,19 @@ function Get-FlowSettings {
     $wait = Get-OptionalNullableInt $b 'b1if_wait_minutes' 30
     if ($null -eq $wait -or $wait -lt 1) { throw "config: order_flow.b1if_wait_minutes must be a whole number of minutes, 1 or more." }
 
+    # Stage 4 (5 Nov 2026): pick lists made on or after this day go to
+    # Hi-Tech's SAP as pick lists (PASS K). Absent, PASS K does nothing - the
+    # lists made before kilos were asked for must never be sent.
+    $pkSince = Get-OptionalString $b 'pick_lists_since' ''
+    if ($pkSince -ne '') {
+        $d2 = [datetime]::MinValue
+        if (-not [datetime]::TryParseExact($pkSince, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$d2)) {
+            throw "config: order_flow.pick_lists_since must be a date as yyyy-MM-dd (got '$pkSince')."
+        }
+    }
+
     $out = @{
+        PickListsSince = $pkSince
         B1ifWait      = [int]$wait
         Mode          = $mode
         Since         = $since
@@ -2545,6 +2563,196 @@ function New-MfSalesOrderBody {
     if ($null -ne $Settings.Series) { $body.Series = [int]$Settings.Series }
     $body.DocumentLines = $lines
     return $body
+}
+
+# ------------------------------------------------------------------------------
+# PASS K - pick lists to Hi-Tech's SAP, and what B1if makes from them (manna_first)
+# ------------------------------------------------------------------------------
+#
+# Stage 4 (5 Nov 2026). A rep's pick list in ERPNext (Manna Pick List) says
+# which products of an order go from Hi-Tech's stock now, with their weighed
+# kilos. A product left off is how an item is cancelled: nothing in SAP is
+# cancelled, its lines just stay open. This pass makes each new list an SAP
+# Pick List in Hi-Tech, on the lines of Hi-Tech's sales order for that order,
+# released for the kilos picked. B1if (sap-b1if/, step 3) takes it from there
+# the moment it is added: Hi-Tech's A/R invoice to Manna Treads, Manna Treads'
+# goods receipt from Hi-Tech and its delivery to the customer, all for the
+# picked kilos only and all carrying the list's name in NumAtCard. This pass
+# then finds those three by NumAtCard and writes them back to the list.
+#
+# The SAP pick list carries "ERPNext PICK-00012 - order SAL-ORD-..." at the
+# start of Remarks, which is how B1if knows it is one of these and how a rerun
+# finds one a crashed run made. Not a UDF: the Service Layer here did not learn
+# new UDFs without a restart (U_MannaMtPo still unknown to it on 5 Nov 2026).
+
+$PK_DOCTYPE_ENC = [uri]::EscapeDataString('Manna Pick List')
+
+function Get-ErpPickListRows {
+    param([string] $Filters, [string[]] $Fields)
+    $fieldsJson = '[' + (($Fields | ForEach-Object { '"' + $_ + '"' }) -join ',') + ']'
+    $query = 'fields=' + [uri]::EscapeDataString($fieldsJson) + '&filters=' + [uri]::EscapeDataString($Filters) + '&limit_page_length=0'
+    $resp = Invoke-ErpApi -Method 'GET' -Path "/api/resource/$PK_DOCTYPE_ENC" -Query $query
+    if ($null -eq $resp -or -not $resp.PSObject.Properties['data']) { throw "ERPNext returned no 'data' array for Manna Pick List filter $Filters" }
+    return @($resp.data)
+}
+
+function Get-ErpPickList {
+    param([string] $Name)
+    $resp = Invoke-ErpApi -Method 'GET' -Path ("/api/resource/$PK_DOCTYPE_ENC/" + [uri]::EscapeDataString($Name))
+    $doc = Get-JsonProp $resp 'data'
+    if ($null -eq $doc) { throw "ERPNext returned no 'data' for Manna Pick List '$Name'" }
+    return $doc
+}
+
+function Update-ErpPickList {
+    param([string] $Name, [hashtable] $Fields)
+    $null = Invoke-ErpApi -Method 'PUT' -Path ("/api/resource/$PK_DOCTYPE_ENC/" + [uri]::EscapeDataString($Name)) -Body $Fields
+}
+
+function Get-PkRemarks {
+    # What the SAP pick list's Remarks start with. B1if's step 3 reads the
+    # list's name back out of it (sap-b1if/step3-pick/sql-ht.xsl), so the
+    # shape is fixed: "ERPNext <name> - order <order>". Pure.
+    param([Parameter(Mandatory = $true)] [string] $PickName, [string] $OrderName = '')
+    $s = "ERPNext $PickName - order $OrderName"
+    if ($s.Length -gt 254) { $s = $s.Substring(0, 254) }
+    return $s
+}
+
+function Get-PkSkipReason {
+    # Whether PASS K sends this list now. @{ Kind; Why }: Kind '' sends it,
+    # 'skip' leaves it alone for good, 'wait' leaves it for a later run, and
+    # 'refuse' writes Why on the list, where it waits until somebody clears
+    # it. $Order is the list's Sales Order, read whole. Pure.
+    param([Parameter(Mandatory = $true)] $Pick, $Order, [Parameter(Mandatory = $true)] $Flow)
+    if ((ConvertTo-CleanText (Get-JsonProp $Pick 'status')) -ne 'Submitted') { return @{ Kind = 'skip'; Why = 'not Submitted' } }
+    $sent = ConvertTo-CleanText (Get-JsonProp $Pick 'sap_pick_list')
+    if ($sent -ne '') { return @{ Kind = 'skip'; Why = "already SAP pick list $sent" } }
+    if ((ConvertTo-CleanText (Get-JsonProp $Pick 'sap_sync_error')) -ne '') { return @{ Kind = 'skip'; Why = 'an error is recorded on it - clear sap_sync_error to try again' } }
+    if ($null -eq $Order) { return @{ Kind = 'refuse'; Why = 'its sales order was not found' } }
+    if ([int](ConvertTo-Number (Get-JsonProp $Order 'docstatus')) -eq 2) { return @{ Kind = 'refuse'; Why = 'its sales order is cancelled' } }
+    if (-not (Test-MfOwns -Row $Order -Flow $Flow)) { return @{ Kind = 'skip'; Why = 'its order is not on the Manna Treads first route - Hi-Tech picks it by hand as before' } }
+    if ((ConvertTo-CleanText (Get-JsonProp $Order $script:F_SO)) -eq '') { return @{ Kind = 'wait'; Why = "Hi-Tech's sales order for it is not linked yet" } }
+    $items = @(Get-JsonProp $Pick 'items' | Where-Object { $null -ne $_ })
+    if ($items.Count -eq 0) { return @{ Kind = 'refuse'; Why = 'the list has no products' } }
+    foreach ($i in $items) {
+        if ((ConvertTo-Number (Get-JsonProp $i 'picked_kg')) -le 0) {
+            $what = ConvertTo-CleanText (Get-JsonProp $i 'item_name')
+            if ($what -eq '') { $what = ConvertTo-CleanText (Get-JsonProp $i 'item_code') }
+            return @{ Kind = 'refuse'; Why = "$what has no weighed kilos - make the list again with its kilos" }
+        }
+    }
+    return @{ Kind = ''; Why = '' }
+}
+
+function Get-PkPlan {
+    # The SAP pick list's lines: each product on the list, on the line of
+    # Hi-Tech's sales order ($HtOrder, read with DocumentLines) for the same
+    # item, released for the list's kilos. Matched by item code, which PASS M
+    # keeps unique on an order and B1if copies line for line. Nothing is
+    # dropped: a product that cannot be placed refuses the whole list, since a
+    # short pick list would invoice short with nothing to say so. Pure.
+    #
+    # @{ Lines = <ArrayList of ordered hashtables>; Problems = <ArrayList> }
+    param([Parameter(Mandatory = $true)] $Pick, [Parameter(Mandatory = $true)] $Order, [Parameter(Mandatory = $true)] $HtOrder)
+    $lines = New-Object System.Collections.ArrayList
+    $problems = New-Object System.Collections.ArrayList
+    $entry = [int](ConvertTo-Number (Get-JsonProp $HtOrder 'DocEntry'))
+    $byItem = @{}
+    $dupe = @{}
+    foreach ($l in @(Get-JsonProp $HtOrder 'DocumentLines')) {
+        if ($null -eq $l) { continue }
+        $k = (ConvertTo-CleanText (Get-JsonProp $l 'ItemCode')).ToUpperInvariant()
+        if ($byItem.ContainsKey($k)) { $dupe[$k] = $true } else { $byItem[$k] = $l }
+    }
+    $soItems = @{}
+    foreach ($it in @(Get-JsonProp $Order 'items')) { if ($null -ne $it) { $soItems[(ConvertTo-CleanText (Get-JsonProp $it 'name'))] = $it } }
+    foreach ($p in @(Get-JsonProp $Pick 'items')) {
+        if ($null -eq $p) { continue }
+        $key = ConvertTo-CleanText (Get-JsonProp $p 'sales_order_item')
+        $code = ConvertTo-CleanText (Get-JsonProp $p 'item_code')
+        if ($soItems.ContainsKey($key)) { $code = ConvertTo-CleanText (Get-JsonProp $soItems[$key] 'item_code') }
+        elseif ($code -eq '') { [void]$problems.Add("a product on the list is not on order $(Get-JsonProp $Order 'name')"); continue }
+        $kg = Get-RoundedHalfUp (ConvertTo-Number (Get-JsonProp $p 'picked_kg')) 3
+        if ($kg -le 0) { [void]$problems.Add("$code has no weighed kilos"); continue }
+        $k = $code.ToUpperInvariant()
+        if ($dupe.ContainsKey($k)) { [void]$problems.Add("$code is on more than one line of Hi-Tech's order - pick it by hand"); continue }
+        if (-not $byItem.ContainsKey($k)) { [void]$problems.Add("$code is not on Hi-Tech's order $(Get-JsonProp $HtOrder 'DocNum')"); continue }
+        $hl = $byItem[$k]
+        if ((ConvertTo-CleanText (Get-JsonProp $hl 'LineStatus')) -eq 'bost_Close') { [void]$problems.Add("$code is already closed on Hi-Tech's order $(Get-JsonProp $HtOrder 'DocNum')"); continue }
+        [void]$lines.Add([ordered]@{
+            BaseObjectType   = $SAP_BASETYPE_SALESORDER
+            OrderEntry       = $entry
+            OrderRowID       = [int](ConvertTo-Number (Get-JsonProp $hl 'LineNum'))
+            ReleasedQuantity = [double]$kg
+        })
+    }
+    if ($lines.Count -eq 0 -and $problems.Count -eq 0) { [void]$problems.Add('the list has no products') }
+    return @{ Lines = $lines; Problems = $problems }
+}
+
+function New-PkBody {
+    # The POST /PickLists body. Pure.
+    param([Parameter(Mandatory = $true)] $Plan, [Parameter(Mandatory = $true)] [string] $PickName, [string] $OrderName = '', [Parameter(Mandatory = $true)] [string] $Today)
+    return [ordered]@{
+        PickDate       = $Today
+        Remarks        = (Get-PkRemarks -PickName $PickName -OrderName $OrderName)
+        PickListsLines = $Plan.Lines
+    }
+}
+
+function Select-PkAdoptable {
+    # Of Hi-Tech's pick lists, the one a previous run made for $PickName and
+    # crashed before writing back - found by its Remarks. Two are a duplicate,
+    # which would invoice twice, so that is refused. Pure.
+    param($Hits, [Parameter(Mandatory = $true)] [string] $PickName)
+    $want = "ERPNext $PickName - "
+    $mine = New-Object System.Collections.ArrayList
+    foreach ($h in @($Hits)) {
+        if ($null -eq $h) { continue }
+        if ("$(Get-JsonProp $h 'Remarks')".StartsWith($want, [StringComparison]::Ordinal)) { [void]$mine.Add($h) }
+    }
+    if ($mine.Count -eq 0) { return @{ Adopt = $null; Error = '' } }
+    if ($mine.Count -eq 1) { return @{ Adopt = $mine[0]; Error = '' } }
+    $nums = ($mine | ForEach-Object { "$(Get-JsonProp $_ 'Absoluteentry')".Trim() }) -join ', '
+    return @{ Adopt = $null; Error = ("Hi-Tech SAP already has {0} pick lists for {1} ({2}) - one is a duplicate. Close it in SAP and clear this error." -f $mine.Count, $PickName, $nums) }
+}
+
+function Get-PkLinkWrites {
+    # What PASS K's second half writes back to a list, from what Hi-Tech and
+    # Manna Treads hold carrying its name in NumAtCard. Each argument is the
+    # documents found, cancelled ones included. @{ Fields; Complete; Error }:
+    # Fields the ERPNext writes (DocNums, only for what is newly found);
+    # Complete when all three are there; Error when one has two live copies,
+    # which only somebody keying a document by hand can cause. Pure.
+    param($Pick, $Invoices, $Receipts, $Deliveries)
+    $fields = @{}
+    $complete = $true
+    foreach ($pair in @(@('hitech_invoice', $Invoices, "Hi-Tech's invoice"), @('mt_goods_receipt', $Receipts, "Manna Treads' goods receipt"), @('mt_delivery', $Deliveries, "Manna Treads' delivery"))) {
+        $field = $pair[0]; $label = $pair[2]
+        $live = @(@($pair[1]) | Where-Object { $null -ne $_ -and "$(Get-JsonProp $_ 'DocNum')".Trim() -ne '' -and "$(Get-JsonProp $_ 'Cancelled')".Trim() -ne 'tYES' })
+        if ($live.Count -gt 1) { return @{ Fields = @{}; Complete = $false; Error = ("{0} exists {1} times for this list (DocNum {2}) - one is a duplicate." -f $label, $live.Count, (($live | ForEach-Object { "$(Get-JsonProp $_ 'DocNum')".Trim() }) -join ', ')) } }
+        if ($live.Count -eq 0) { $complete = $false; continue }
+        $num = "$(Get-JsonProp $live[0] 'DocNum')".Trim()
+        if ((ConvertTo-CleanText (Get-JsonProp $Pick $field)) -ne $num) { $fields[$field] = $num }
+    }
+    return @{ Fields = $fields; Complete = $complete; Error = '' }
+}
+
+function Write-PkRefusal {
+    # Why a list was not sent, or why B1if's documents for it are missing, on
+    # the list in sap_sync_error. Not a run failure; the list waits until
+    # somebody clears it.
+    param([string] $Name, [string] $Message, [string] $When, [bool] $IsDryRun)
+    $msg = Limit-MtMessage $Message 250
+    $script:Result.pkRefused++
+    Write-Log WARN ("PASS K {0}: {1}" -f $Name, $msg)
+    if ($IsDryRun) { Write-Log INFO ("PASS K {0}: WOULD write sap_sync_error='{1}'" -f $Name, $msg); return }
+    try { Update-ErpPickList -Name $Name -Fields @{ sap_sync_error = $msg; sap_synced_on = $When } }
+    catch {
+        Write-Log ERROR ("PASS K {0}: could not record the reason on the list - {1}" -f $Name, "$_")
+        $script:Result.writeErrors++; $script:Result.failures++
+    }
 }
 
 # ------------------------------------------------------------------------------
@@ -2875,8 +3083,8 @@ try {
     Assert-SapErpPairing -ErpSite $script:ErpBaseUrl -CompanyDbs @($companyDb, $mtDbForPairing)
     $runPass = @{}
     foreach ($p in @($Pass)) { foreach ($q in ("$p" -split ',')) { $t = $q.Trim().ToUpperInvariant(); if ($t -ne '') { $runPass[$t] = $true } } }
-    foreach ($k in @($runPass.Keys)) { if ($k -notin @('A', 'B', 'C', 'M', 'P', 'H')) { throw "-Pass takes A, B, C, M, P and H (got '$k')." } }
-    if ($runPass.Count -eq 0) { foreach ($k in 'A', 'B', 'C', 'M', 'P', 'H') { $runPass[$k] = $true } }
+    foreach ($k in @($runPass.Keys)) { if ($k -notin @('A', 'B', 'C', 'M', 'P', 'H', 'K')) { throw "-Pass takes A, B, C, M, P, H and K (got '$k')." } }
+    if ($runPass.Count -eq 0) { foreach ($k in 'A', 'B', 'C', 'M', 'P', 'H', 'K') { $runPass[$k] = $true } }
 
     # ---- logging ----
     $scriptRoot = $PSScriptRoot
@@ -3072,7 +3280,9 @@ try {
 
         # (A PASS C read failure is not "nothing to do": it falls through to the
         # summary so the run exits non-zero. Nothing logs in with empty lists.)
-        if ($newList.Count -eq 0 -and $openList.Count -eq 0 -and $followList.Count -eq 0 -and $mtList.Count -eq 0 -and $mfList.Count -eq 0 -and $mpList.Count -eq 0 -and $htList.Count -eq 0 -and $script:Result.failures -eq 0) {
+        # PASS K reads its own lists, so a run with it on is never "nothing to do" here.
+        $pkOn = ($flow.Mode -eq 'manna_first' -and $runPass['K'] -and $flow.PickListsSince -ne '')
+        if (-not $pkOn -and $newList.Count -eq 0 -and $openList.Count -eq 0 -and $followList.Count -eq 0 -and $mtList.Count -eq 0 -and $mfList.Count -eq 0 -and $mpList.Count -eq 0 -and $htList.Count -eq 0 -and $script:Result.failures -eq 0) {
             Write-Log INFO "nothing to do."
             $script:Result.summary = "SUMMARY | company: $companyName | nothing to do (0 new, 0 open, 0 followed, 0 queued for Manna Treads, 0 new for manna_first)"
             $script:Result.exitCode = 0
@@ -4162,6 +4372,210 @@ try {
             }
         }
 
+        # ===== PASS K - pick lists to Hi-Tech's SAP, and what B1if makes from them (manna_first) =====
+        #
+        # Off until order_flow.pick_lists_since is set: only lists made on or
+        # after it, so the lists made before kilos were asked for (3-5 Nov 2026)
+        # are never sent. 1. each new list becomes an SAP Pick List in Hi-Tech;
+        # 2. what B1if made from it - Hi-Tech's invoice, Manna Treads' goods
+        # receipt and delivery - is found by NumAtCard and written back. Runs
+        # under PASS H's lock, because it writes to Hi-Tech.
+        if ($flow.Mode -eq 'manna_first' -and $runPass['K'] -and $flow.PickListsSince -ne '') {
+            $pkLock = $null
+            $pkGo = $false
+            if ($DryRun) { $pkGo = $true }
+            else {
+                try {
+                    $pkLock = Enter-MtPassLock -Name 'Global\MannaSapOrderSyncPassH'
+                    if ($null -eq $pkLock) { Write-Log WARN 'PASS K: another sync run holds the Hi-Tech lock - skipped this run.' }
+                    else { $pkGo = $true }
+                } catch {
+                    Write-Log ERROR ("PASS K: could not take the Hi-Tech lock - skipped this run: {0}" -f "$_")
+                    $script:Result.failures++
+                }
+            }
+            if ($pkGo) {
+              try {
+                $pkNow = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                $pkToday = Get-Date -Format 'yyyy-MM-dd'
+                $since = $flow.PickListsSince + ' 00:00:00'
+                $toSend = @(Get-ErpPickListRows -Filters ('[["status","=","Submitted"],["sap_pick_list","in",["",null]],["sap_sync_error","in",["",null]],["creation",">=","' + $since + '"]]') -Fields @('name', 'sales_order', 'creation') | Sort-Object { "$($_.name)" })
+                $toLink = @(Get-ErpPickListRows -Filters ('[["sap_pick_list","is","set"],["sap_sync_error","in",["",null]],["creation",">=","' + $since + '"]]') -Fields @('name', 'sales_order', 'sap_pick_list', 'hitech_invoice', 'mt_goods_receipt', 'mt_delivery', 'sap_synced_on') |
+                    Where-Object { "$($_.hitech_invoice)".Trim() -eq '' -or "$($_.mt_goods_receipt)".Trim() -eq '' -or "$($_.mt_delivery)".Trim() -eq '' } | Sort-Object { "$($_.name)" })
+                $script:Result.pkInScope = $toSend.Count
+                $script:Result.pkLinkDue = $toLink.Count
+                Write-Log INFO ("PASS K: {0} pick list(s) to send to Hi-Tech SAP, {1} waiting for B1if's documents (lists since {2})." -f $toSend.Count, $toLink.Count, $flow.PickListsSince)
+
+                # ---- 1. ERPNext: each list to send, with its order ----
+                $pkWork = New-Object System.Collections.ArrayList
+                $doneK = 0
+                foreach ($row in $toSend) {
+                    if ($Limit -gt 0 -and $doneK -ge $Limit) { Write-Log WARN ("PASS K -Limit {0} reached; {1} list(s) left for the next run." -f $Limit, ($toSend.Count - $doneK)); break }
+                    $doneK++
+                    $pn = "$($row.name)"
+                    try {
+                        $pick = Get-ErpPickList -Name $pn
+                        $order = $null
+                        $on = ConvertTo-CleanText (Get-JsonProp $pick 'sales_order')
+                        if ($on -ne '') { try { $order = Get-ErpSalesOrder -Name $on } catch { if ("$_" -notmatch '404') { throw } } }
+                        $why = Get-PkSkipReason -Pick $pick -Order $order -Flow $flow
+                        if ($why.Kind -eq 'skip') { Write-Log INFO ("PASS K {0}: {1} - not sent." -f $pn, $why.Why); continue }
+                        if ($why.Kind -eq 'wait') { Write-Log INFO ("PASS K {0}: {1} - waiting." -f $pn, $why.Why); $script:Result.pkWaiting++; continue }
+                        if ($why.Kind -eq 'refuse') { Write-PkRefusal -Name $pn -Message $why.Why -When $pkNow -IsDryRun ([bool]$DryRun); continue }
+                        [void]$pkWork.Add(@{ Name = $pn; Pick = $pick; Order = $order })
+                    } catch {
+                        Write-Log ERROR ("PASS K {0}: could not be read - left for the next run: {1}" -f $pn, "$_")
+                        $script:Result.failures++
+                    }
+                }
+
+                # ---- 2. Hi-Tech: send them, then look for B1if's invoice ----
+                if ($pkWork.Count -gt 0 -or $toLink.Count -gt 0) {
+                    $kSess = $null
+                    try {
+                        try { [System.Net.ServicePointManager]::FindServicePoint([System.Uri]$sapUrl).Expect100Continue = $false } catch { }
+                        $kSess = New-SapWebSession -BaseUrl $sapUrl -Username $sapUser -Password $sapPass -CompanyDb $companyDb -CompanyName $companyName -UseSkipCert $useSkip
+                        foreach ($w in $pkWork) {
+                            $pn = $w.Name
+                            $on = "$(Get-JsonProp $w.Order 'name')"
+                            try {
+                                $q = "NumAtCard eq '$($on -replace "'", "''")'"
+                                $hits = @(Invoke-SapGet -BaseUrl $sapUrl -Session $kSess -RelUrl ("Orders?`$filter=$([uri]::EscapeDataString($q))&`$select=DocEntry,DocNum,Cancelled,DocumentStatus,DocumentLines") -PageSize $pageSize -UseSkipCert $useSkip -Label 'Hi-Tech Orders by NumAtCard')
+                                $ht = Select-MtAdoptable -Hits $hits
+                                if ($ht.Error) { Write-PkRefusal -Name $pn -Message ($ht.Error -replace '^Manna Treads SAP', 'Hi-Tech SAP') -When $pkNow -IsDryRun ([bool]$DryRun); continue }
+                                if ($null -eq $ht.Adopt) { Write-PkRefusal -Name $pn -Message "Hi-Tech SAP has no sales order carrying $on" -When $pkNow -IsDryRun ([bool]$DryRun); continue }
+                                $plan = Get-PkPlan -Pick $w.Pick -Order $w.Order -HtOrder $ht.Adopt
+                                if ($plan.Problems.Count -gt 0) { Write-PkRefusal -Name $pn -Message ((@($plan.Problems) -join '; ')) -When $pkNow -IsDryRun ([bool]$DryRun); continue }
+
+                                # A run that posted and crashed before writing back: adopt its list.
+                                $created = ConvertTo-CleanText (Get-JsonProp $w.Pick 'creation')
+                                $from = $(if ($created.Length -ge 10) { $created.Substring(0, 10) } else { $pkToday })
+                                $prior = @(Invoke-SapGet -BaseUrl $sapUrl -Session $kSess -RelUrl ("PickLists?`$filter=$([uri]::EscapeDataString("PickDate ge '$from'"))&`$select=Absoluteentry,Remarks,Status") -PageSize $pageSize -UseSkipCert $useSkip -Label 'Hi-Tech PickLists since the list')
+                                $adopt = Select-PkAdoptable -Hits $prior -PickName $pn
+                                if ($adopt.Error) { Write-PkRefusal -Name $pn -Message $adopt.Error -When $pkNow -IsDryRun ([bool]$DryRun); continue }
+                                $entry = ''
+                                if ($adopt.Adopt) {
+                                    $entry = "$(Get-JsonProp $adopt.Adopt 'Absoluteentry')".Trim()
+                                    Write-Log INFO ("PASS K {0}: Hi-Tech pick list {1} found from an earlier run - adopting it." -f $pn, $entry)
+                                } else {
+                                    $body = New-PkBody -Plan $plan -PickName $pn -OrderName $on -Today $pkToday
+                                    if ($DryRun) {
+                                        Write-Log INFO ("PASS K {0}: WOULD POST /PickLists {1}" -f $pn, ($body | ConvertTo-Json -Depth 6 -Compress))
+                                        $script:Result.pkSent++
+                                        continue
+                                    }
+                                    $res = Invoke-MtSalesOrderPost -BaseUrl $sapUrl -Session $kSess -Payload $body -UseSkipCert $useSkip -Entity 'PickLists'
+                                    if ($null -eq $res.Created) {
+                                        # SAP refusing THIS list (400: no stock to release, a closed
+                                        # line) goes on the list; anything else is the run's problem.
+                                        if ($res.Status -eq 400) {
+                                            $sapMsg = "$($res.Body)"
+                                            try { $sapMsg = "$((($res.Body | ConvertFrom-Json).error.message.value))" } catch { }
+                                            Write-PkRefusal -Name $pn -Message ("Hi-Tech SAP refused the pick list: {0}" -f $sapMsg) -When $pkNow -IsDryRun $false
+                                        } else {
+                                            Write-Log ERROR ("PASS K {0}: FAILED - left for the next run: {1}" -f $pn, $res.Text)
+                                            $script:Result.failures++
+                                        }
+                                        continue
+                                    }
+                                    $entry = "$(Get-JsonProp $res.Created 'Absoluteentry')".Trim()
+                                    Write-Log INFO ("PASS K {0}: Hi-Tech pick list {1} made on order {2}, {3} line(s)." -f $pn, $entry, (Get-JsonProp $ht.Adopt 'DocNum'), $plan.Lines.Count)
+                                }
+                                try {
+                                    Update-ErpPickList -Name $pn -Fields @{ sap_pick_list = $entry; sap_synced_on = $pkNow; sap_sync_error = '' }
+                                } catch {
+                                    Write-Log ERROR ("PASS K {0}: could not record Hi-Tech pick list {1} - the next run adopts it: {2}" -f $pn, $entry, "$_")
+                                    $script:Result.writeErrors++; $script:Result.failures++
+                                    continue
+                                }
+                                $script:Result.pkSent++; $script:Result.changed++
+                            } catch {
+                                Write-Log ERROR ("PASS K {0}: FAILED - left for the next run: {1}" -f $pn, "$_")
+                                $script:Result.failures++
+                            }
+                        }
+
+                        # Hi-Tech's invoices for the lists waiting, by NumAtCard.
+                        $invByList = @{}
+                        foreach ($row in $toLink) {
+                            $pn = "$($row.name)"
+                            try {
+                                $q = "NumAtCard eq '$($pn -replace "'", "''")'"
+                                $invByList[$pn] = @(Invoke-SapGet -BaseUrl $sapUrl -Session $kSess -RelUrl ("Invoices?`$filter=$([uri]::EscapeDataString($q))&`$select=DocEntry,DocNum,Cancelled") -PageSize $pageSize -UseSkipCert $useSkip -Label 'Hi-Tech Invoices by NumAtCard')
+                            } catch {
+                                Write-Log ERROR ("PASS K {0}: could not read Hi-Tech's invoices - left for the next run: {1}" -f $pn, "$_")
+                                $script:Result.failures++
+                            }
+                        }
+                    } catch {
+                        Write-Log ERROR ("PASS K: Hi-Tech session failed - left for the next run: {0}" -f "$_")
+                        $script:Result.failures++
+                        $invByList = @{}
+                    } finally {
+                        Invoke-SapLogout -BaseUrl $sapUrl -Session $kSess -UseSkipCert $useSkip
+                    }
+
+                    # ---- 3. Manna Treads: the goods receipts and deliveries, then write back ----
+                    if ($toLink.Count -gt 0 -and $invByList.Count -gt 0) {
+                        $kMt = $null
+                        try {
+                            $km = Get-MtSettings -Config $config
+                            Assert-MtCompanyDb -CompanyDb $km.CompanyDb -HitechCompanyDb $companyDb
+                            $kmUser = $sapUser; $kmPass = $sapPass
+                            if ($km.Username) { $kmUser = $km.Username; $kmPass = $km.Password }
+                            $kMt = New-SapWebSession -BaseUrl $sapUrl -Username $kmUser -Password $kmPass -CompanyDb $km.CompanyDb -CompanyName 'Manna Treads' -UseSkipCert $useSkip
+                            foreach ($row in $toLink) {
+                                $pn = "$($row.name)"
+                                if (-not $invByList.ContainsKey($pn)) { continue }
+                                try {
+                                    $q = [uri]::EscapeDataString("NumAtCard eq '$($pn -replace "'", "''")'")
+                                    $grpo = @(Invoke-SapGet -BaseUrl $sapUrl -Session $kMt -RelUrl ("PurchaseDeliveryNotes?`$filter=$q&`$select=DocEntry,DocNum,Cancelled") -PageSize $pageSize -UseSkipCert $useSkip -Label 'Manna Treads goods receipts by NumAtCard')
+                                    $dn = @(Invoke-SapGet -BaseUrl $sapUrl -Session $kMt -RelUrl ("DeliveryNotes?`$filter=$q&`$select=DocEntry,DocNum,Cancelled") -PageSize $pageSize -UseSkipCert $useSkip -Label 'Manna Treads deliveries by NumAtCard')
+                                    $link = Get-PkLinkWrites -Pick $row -Invoices $invByList[$pn] -Receipts $grpo -Deliveries $dn
+                                    if ($link.Error) { Write-PkRefusal -Name $pn -Message $link.Error -When $pkNow -IsDryRun ([bool]$DryRun); continue }
+                                    if ($link.Fields.Count -gt 0) {
+                                        $f = $link.Fields; $f['sap_synced_on'] = $pkNow
+                                        Write-Log INFO ("PASS K {0}: B1if's documents found - {1}." -f $pn, (($link.Fields.Keys | Sort-Object | Where-Object { $_ -ne 'sap_synced_on' } | ForEach-Object { "$_ $($link.Fields[$_])" }) -join ', '))
+                                        if ($DryRun) { Write-Log INFO ("PASS K {0}: WOULD write them." -f $pn) }
+                                        else {
+                                            try { Update-ErpPickList -Name $pn -Fields $f }
+                                            catch {
+                                                Write-Log ERROR ("PASS K {0}: could not record B1if's documents - the next run finds them again: {1}" -f $pn, "$_")
+                                                $script:Result.writeErrors++; $script:Result.failures++
+                                                continue
+                                            }
+                                        }
+                                        $script:Result.changed++
+                                    }
+                                    if ($link.Complete) { $script:Result.pkLinked++ }
+                                    elseif (Test-B1ifLate -Since "$($row.sap_synced_on)" -Now (Get-Date) -Minutes $flow.B1ifWait) {
+                                        Write-PkRefusal -Name $pn -Message ("B1if has not made the invoice, goods receipt and delivery for Hi-Tech pick list {0} in {1} minutes - see B1if's message log, and @MANNA_IC in both companies." -f $row.sap_pick_list, $flow.B1ifWait) -When $pkNow -IsDryRun ([bool]$DryRun)
+                                    } else {
+                                        Write-Log INFO ("PASS K {0}: waiting for B1if's documents for Hi-Tech pick list {1}." -f $pn, $row.sap_pick_list)
+                                        $script:Result.pkWaiting++
+                                    }
+                                } catch {
+                                    Write-Log ERROR ("PASS K {0}: FAILED - left for the next run: {1}" -f $pn, "$_")
+                                    $script:Result.failures++
+                                }
+                            }
+                        } catch {
+                            Write-Log ERROR ("PASS K: Manna Treads session failed - left for the next run: {0}" -f "$_")
+                            $script:Result.failures++
+                        } finally {
+                            Invoke-SapLogout -BaseUrl $sapUrl -Session $kMt -UseSkipCert $useSkip
+                        }
+                    }
+                }
+              } catch {
+                Write-Log ERROR ("PASS K: could not start - left for the next run: {0}" -f "$_")
+                $script:Result.failures++
+              } finally {
+                Exit-MtPassLock $pkLock
+              }
+            }
+        }
+
         # =================== PASS C - Manna Treads sales orders ===================
         #
         # Stage two (26 Sep 2026). A finished Hi-Tech order the accountant has
@@ -4469,6 +4883,9 @@ try {
             $r.linesKgWritten, $r.mtRequested, $r.mtCreated, $r.mtAdopted, $r.mtRefused, $r.followPolled, $r.mtFailedWaiting)
         if ($flow.Mode -eq 'manna_first') {
             $summary += (" | manna_first new: {0} | mf created: {1} | mf adopted: {2} | mf refused: {3} | po due: {4} | po linked: {5} | po waiting for b1if: {6} | po refused: {7} | hitech due: {8} | hitech linked: {9} | hitech waiting for b1if: {10} | hitech refused: {11}" -f $r.mfInScope, $r.mfCreated, $r.mfAdopted, $r.mfRefused, $r.mpInScope, $r.mpAdopted, $r.mpWaiting, $r.mpRefused, $r.htInScope, $r.htAdopted, $r.htWaiting, $r.htRefused)
+            if ($flow.PickListsSince -ne '') {
+                $summary += (" | pick lists due: {0} | pick lists sent: {1} | b1if docs due: {2} | b1if docs linked: {3} | pick waiting: {4} | pick refused: {5}" -f $r.pkInScope, $r.pkSent, $r.pkLinkDue, $r.pkLinked, $r.pkWaiting, $r.pkRefused)
+            }
         }
         Write-Log INFO $summary
         $script:Result.summary = $summary
