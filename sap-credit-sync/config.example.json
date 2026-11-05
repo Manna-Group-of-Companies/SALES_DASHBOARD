@@ -1,0 +1,27 @@
+{
+  "erpnext": {
+    "site":       "https://mannarubber.m.frappe.cloud",
+    "api_key":    "PUT_ERPNEXT_API_KEY_HERE",
+    "api_secret": "PUT_ERPNEXT_API_SECRET_HERE"
+  },
+
+  "sap": {
+    "url":        "https://SAP-HOST:50000/b1s/v1",
+    "username":   "PUT_SAP_USERNAME_HERE",
+    "password":   "PUT_SAP_PASSWORD_HERE",
+    "verify_ssl": false,
+    "page_size":  200,
+
+    "companies": [
+      {
+        "name":       "Manna Treads",
+        "company_db": "PUT_TREADS_COMPANYDB_HERE"
+      }
+    ]
+  },
+
+  "write_mode":    "overwrite",
+  "skip_codes":    [],
+  "log_dir":       "./logs",
+  "log_keep_days": 30
+}
