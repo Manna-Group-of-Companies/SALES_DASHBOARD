@@ -19,11 +19,12 @@ $script:fail = 0
 $script:pass = 0
 
 function Invoke-Xsl {
-	param([string] $Xsl, [string] $Xml, [string] $Atom = 'atomX')
+	param([string] $Xsl, [string] $Xml, [string] $Atom = 'atomX', [hashtable] $Params = @{})
 	$t = New-Object System.Xml.Xsl.XslCompiledTransform
 	$t.Load((Join-Path $root $Xsl))
 	$args = New-Object System.Xml.Xsl.XsltArgumentList
 	$args.AddParam('atom', '', $Atom)
+	foreach ($k in $Params.Keys) { $args.AddParam($k, '', [string]$Params[$k]) }
 	$r = New-Object System.Xml.XmlDocument
 	$r.LoadXml($Xml)
 	$sw = New-Object System.IO.StringWriter
@@ -154,6 +155,19 @@ Check 'step1_bom_of_a_refusal_is_empty_so_nothing_is_written' (($o.SelectSingleN
 $o = Invoke-Xsl 'step2-ht-so\sql-mt.xsl' (Msg (Event '239' '22')) 'atom0'
 Check 'step2_sql_mt_reads_the_purchase_order_of_the_event' ((XS $o '//Sql/Statement') -match 'WHERE P\.DocEntry = 239\b')
 Check 'step2_sql_mt_reads_the_sales_orders_number' ((XS $o '//Sql/Statement') -match 'SO\.DocNum AS nvarchar\(20\)\), ''''\) AS MtSoNum')
+# In step 1's flow the event is the sales order's, and the purchase order is the one B1if just made for it.
+$o = Invoke-Xsl 'step2-ht-so\sql-mt.xsl' (Msg (Event '6914')) 'atom7' @{ keyOf = 'so' }
+$st = XS $o '//Sql/Statement'
+Check 'step2_sql_mt_in_step1_finds_the_purchase_order_made_for_the_sales_order' ($st -match "U_MannaMtSo = N'6914' AND Q\.CANCELED = 'N'") $st
+Check 'step2_sql_mt_in_step1_does_not_read_a_purchase_order_by_the_sales_orders_number' ($st -notmatch 'WHERE P\.DocEntry = 6914')
+$o = Invoke-Xsl 'step2-ht-so\sql-mt.xsl' (Msg (Event "1' OR 1=1 --")) 'atom7' @{ keyOf = 'so' }
+Check 'step2_sql_mt_in_step1_turns_a_key_that_is_not_a_number_into_a_query_for_nothing' ((XS $o '//Sql/Statement').Trim() -eq 'SELECT TOP 0 1 AS DocEntry')
+$o = Invoke-Xsl 'step2-ht-so\sql-mt.xsl' (Msg (Event '239' '22')) 'atom0'
+Check 'step2_sql_mt_on_its_own_still_reads_by_the_purchase_orders_DocEntry' ((XS $o '//Sql/Statement') -notmatch 'U_MannaMtSo = N')
+Check 'step2_sql_mt_on_its_own_reads_with_locks' ((XS $o '//Sql/Statement') -notmatch 'NOLOCK')
+$o = Invoke-Xsl 'step2-ht-so\sql-mt.xsl' (Msg (Event '6914')) 'atom7' @{ keyOf = 'so' }
+$st = XS $o '//Sql/Statement'
+Check 'step2_sql_mt_in_step1_does_not_wait_for_the_purchase_order_its_own_run_has_not_committed' (([regex]::Matches($st, 'WITH \(NOLOCK\)')).Count -eq 6) $st
 
 function PoRow { param([hashtable] $Over = @{})
 	$r = [ordered]@{
@@ -196,6 +210,9 @@ Check 'the_hitech_order_is_in_the_SO_WHS_warehouse' ((XS $o '//Document_Lines/ro
 Check 'the_hitech_order_carries_the_rep' ((XS $o '//Documents/row/SalesPersonCode') -eq '7')
 Check 'the_hitech_order_names_only_the_purchase_order' ((XS $o '//Documents/row/Comments') -eq 'Manna Treads PO 239 - made by B1if')
 Check 'the_hitech_bom_is_a_sales_order' ((XS $o '//BOM/BO/AdmInfo/Object') -eq '17')
+Check 'a_hitech_order_is_inserted_as_object_17' ((XS $o '//Decision/CallMethod') -eq 'Synchronous Insert' -and (XS $o '//Decision/CallObject') -eq '17')
+$b = Invoke-Xsl 'step2-ht-so\bom.xsl' $o.OuterXml 'atom6'
+Check 'step2_bom_hands_the_B1_Object_atom_only_the_hitech_order' ((XS $b '//*[@id="atom6"]/Documents/row/CardCode') -eq '10118' -and ($b.SelectSingleNode('//*[@id="atom6"]')).ChildNodes.Count -eq 2 -and $null -eq (X $b '//*[@id="atom6"]//AdmInfo'))
 $o = Step2 @(PoRow @{ NumAtCard = '' }) @(HtRow)
 Check 'with_no_ERPNext_name_the_reference_is_the_purchase_order' ((XS $o '//Documents/row/NumAtCard') -eq 'MT PO 239')
 $o = Step2 @(PoRow) @(HtRow @{ SlpCode = '' })
@@ -216,6 +233,12 @@ Check 'a_customer_with_no_state_is_refused' (Refused (Step2 @(PoRow) @(HtRow @{ 
 Check 'an_item_hitech_does_not_have_is_refused' (Refused (Step2 @(PoRow) @(HtRow @{ SellItem = ''; InvntItem = '' })) 'PMB00101002 is not*')
 Check 'an_item_hitech_cannot_sell_is_refused' (Refused (Step2 @(PoRow) @(HtRow @{ SellItem = 'N' })) 'PMB00101002 is not*')
 Check 'a_purchase_order_line_with_no_price_is_refused' (Refused (Step2 @(PoRow @{ Price = '0' }) @(HtRow)) '*no quantity or price')
+function OnlyReadsCustomer { param($Doc) return ((XS $Doc '//Decision/CallMethod') -eq 'Synchronous Retrieval' -and (XS $Doc '//Decision/CallObject') -eq '2' -and (XS $Doc '//Decision/CallKeyName') -eq 'CardCode' -and (XS $Doc '//Decision/CallKey') -eq '10118') }
+Check 'a_step2_refusal_only_reads_the_hitech_customer_back' (OnlyReadsCustomer (Step2 @(PoRow @{ HeaderDisc = '5' }) @(HtRow)))
+Check 'a_hand_keyed_purchase_order_only_reads_the_hitech_customer_back' (OnlyReadsCustomer (Step2 @(PoRow @{ MtSo = '' }) @(HtRow)))
+$o = Step2 @(PoRow @{ MtSo = '' }) @(HtRow)
+$b = Invoke-Xsl 'step2-ht-so\bom.xsl' $o.OuterXml 'atom6'
+Check 'step2_bom_of_a_refusal_is_empty_so_nothing_is_written' (($b.SelectSingleNode('//*[@id="atom6"]')).ChildNodes.Count -eq 0)
 
 Write-Host ("{0} passed, {1} failed" -f $script:pass, $script:fail)
 if ($script:fail -gt 0) { exit 1 }

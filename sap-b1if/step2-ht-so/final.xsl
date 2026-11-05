@@ -3,8 +3,10 @@
   Step 2, atom "final": Hi-Tech's sales order to Manna Treads for one of
   Manna Treads' purchase orders, or the reason there is none.
 
-  Output as step 1: <Decision><Make>Y|N</Make><Reason/><BOM/></Decision>;
-  the condition atom calls the B1 Object atom (Hi-Tech's SysId) only on Y.
+  Output as step 1: <Decision><CallMethod/><CallObject/><CallKeyName/>
+  <CallKey/><Make>Y|N</Make><Reason/><BOM/></Decision>. The B1 Object atom
+  (Hi-Tech's SysId) always runs and takes its call from the Call fields: on Y
+  it inserts the sales order in BOM, on N it only reads a record back.
 
   Made from the purchase order as SAP holds it - items, kilos, net price -
   so the two companies cannot disagree about what was bought; the sync's
@@ -85,6 +87,25 @@
 
 		<Decision xmlns="">
 			<PurchaseOrder><xsl:value-of select="normalize-space($h/*[local-name()='DocNum'])"/></PurchaseOrder>
+			<!-- What the B1 Object atom (Hi-Tech's SysId) does, read by its Method,
+			     Object, Key Name and Key Value fields as XPaths - no branch, which
+			     this B1if never runs (see step 1's final.xsl). On N it only reads
+			     Hi-Tech's customer record for Manna Treads (CUSTOMER, object 2),
+			     there whenever Hi-Tech's settings are; nothing is written. -->
+			<xsl:choose>
+				<xsl:when test="string($why) != ''">
+					<CallMethod>Synchronous Retrieval</CallMethod>
+					<CallObject>2</CallObject>
+					<CallKeyName>CardCode</CallKeyName>
+					<CallKey><xsl:value-of select="normalize-space($s/*[local-name()='Customer'])"/></CallKey>
+				</xsl:when>
+				<xsl:otherwise>
+					<CallMethod>Synchronous Insert</CallMethod>
+					<CallObject>17</CallObject>
+					<CallKeyName>DocEntry</CallKeyName>
+					<CallKey/>
+				</xsl:otherwise>
+			</xsl:choose>
 			<xsl:choose>
 				<xsl:when test="string($why) != ''">
 					<Make>N</Make>
