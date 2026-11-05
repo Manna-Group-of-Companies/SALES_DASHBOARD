@@ -1,0 +1,42 @@
+{
+  "about": "SAP Invoice (5 Nov 2026): Manna Treads' A/R invoices, as SAP holds them, for the credit history under Team Targets (client/src/api/salesTargets.ts reads exactly these field names). Written only by sap-credit-sync/Sync-SapCreditLimits.ps1, in the same SAP login as the credit figures: every uncancelled invoice dated on or after config invoices_since, plus every invoice still open whatever its date, for customers ERPNext holds by custom_bp_code. A row is a mirror, never edited by hand: the next sync puts SAP's values back, and deletes a row whose invoice SAP cancelled. Named by sap_key = '<company>-<DocEntry>', because DocNum restarts every financial year. Reading follows Customer: a User Permission on Customer limits these rows too, through the customer link.",
+  "doctypes": [
+    {
+      "doctype": "DocType",
+      "name": "SAP Invoice",
+      "module": "Selling",
+      "custom": 1,
+      "autoname": "field:sap_key",
+      "naming_rule": "By fieldname",
+      "sort_field": "posting_date",
+      "sort_order": "DESC",
+      "title_field": "invoice_no",
+      "search_fields": "customer,invoice_no",
+      "permissions": [
+        { "role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1 },
+        { "role": "SAP Sync Bot", "read": 1, "write": 1, "create": 1, "delete": 1 },
+        { "role": "Sales Manager", "read": 1, "report": 1, "export": 1 },
+        { "role": "Sales User", "read": 1, "report": 1 },
+        { "role": "Accounts Manager", "read": 1, "report": 1, "export": 1 },
+        { "role": "Accounts User", "read": 1, "report": 1 }
+      ],
+      "fields": [
+        { "fieldname": "sap_key", "label": "SAP Key", "fieldtype": "Data", "reqd": 1, "unique": 1, "read_only": 1, "description": "<company>-<SAP DocEntry>" },
+        { "fieldname": "customer", "label": "Customer", "fieldtype": "Link", "options": "Customer", "reqd": 1, "in_list_view": 1, "in_standard_filter": 1, "read_only": 1 },
+        { "fieldname": "company", "label": "Company", "fieldtype": "Data", "in_standard_filter": 1, "read_only": 1 },
+        { "fieldname": "invoice_no", "label": "Invoice No", "fieldtype": "Data", "in_list_view": 1, "read_only": 1, "description": "SAP DocNum" },
+        { "fieldname": "sap_doc_entry", "label": "SAP DocEntry", "fieldtype": "Int", "read_only": 1 },
+        { "fieldname": "sap_card_code", "label": "SAP Customer Code", "fieldtype": "Data", "read_only": 1 },
+        { "fieldname": "column_break_dates", "fieldtype": "Column Break" },
+        { "fieldname": "posting_date", "label": "Posting Date", "fieldtype": "Date", "in_list_view": 1, "read_only": 1 },
+        { "fieldname": "due_date", "label": "Due Date", "fieldtype": "Date", "read_only": 1 },
+        { "fieldname": "status", "label": "Status", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "read_only": 1, "description": "SAP DocumentStatus: Open or Closed" },
+        { "fieldname": "section_money", "label": "Amounts", "fieldtype": "Section Break" },
+        { "fieldname": "total", "label": "Total", "fieldtype": "Currency", "read_only": 1 },
+        { "fieldname": "paid", "label": "Paid", "fieldtype": "Currency", "read_only": 1, "description": "SAP PaidToDate" },
+        { "fieldname": "balance", "label": "Balance", "fieldtype": "Currency", "in_list_view": 1, "read_only": 1, "description": "Total - Paid" },
+        { "fieldname": "sap_last_synced", "label": "Last Synced", "fieldtype": "Datetime", "read_only": 1 }
+      ]
+    }
+  ]
+}

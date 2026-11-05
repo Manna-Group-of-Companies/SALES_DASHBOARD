@@ -74,6 +74,24 @@
   run; config create_customers=false switches it off. Runs whenever this sync
   does, i.e. on a Sync press.
 
+  SAP INVOICES (added 5 Nov 2026, for the credit history under Team Targets).
+  The same SAP session also reads the company's A/R invoices and mirrors them
+  into the ERPNext doctype `SAP Invoice` (app/server/sap_invoice_doctypes.json),
+  one row per invoice: number, dates, total, paid (SAP PaidToDate), balance and
+  Open/Closed. The mirror holds every uncancelled invoice dated on or after
+  config invoices_since (default: 1 April of the current financial year) plus
+  every invoice still open, whatever its date, for customers ERPNext holds by
+  custom_bp_code. A row whose invoice is no longer in that set (SAP cancelled
+  it, or it closed and is older than invoices_since) is deleted. Only changed
+  rows are written. Skipped, with a WARN, until the doctype exists on the site;
+  config sync_invoices=false switches it off. If the invoice read fails nothing
+  in the mirror is touched, and a read that would delete more than half of a
+  mirror of 20+ rows deletes nothing (an empty read looks like that).
+
+  A TEST_ company is refused with an ERPNext that is not on this PC, and a live
+  company with one that is (Assert-SapErpPairing, as in the order sync), so the
+  local copy's test runs can never write test figures onto the live site.
+
 .PARAMETER ConfigPath
   Path to the JSON config file. Required. Credentials never live in this script.
 
@@ -128,6 +146,9 @@ $script:Result           = [ordered]@{
     customersChanged = 0
     customersCreated = 0
     newPlanned       = 0
+    invoicesCreated  = 0
+    invoicesUpdated  = 0
+    invoicesDeleted  = 0
     failures         = 0
     summary          = $null
     error            = $null
@@ -152,6 +173,11 @@ $script:TermsFieldsReady = $false                # set at run start: do the thre
 $script:MONEY_EPS = 0.005   # treat differences below this as "equal"
 $script:F_REP     = 'custom_assigned_reps'       # Link to Sales Person: who owns the customer
 $script:NO_SLP    = -1                           # SAP '-No Sales Employee-'
+$script:INV_DOCTYPE = 'SAP Invoice'              # 5 Nov 2026: the invoice mirror
+# The mirror's compared fields. sap_key, company and sap_doc_entry make the
+# row's identity and are written once, on create.
+$script:INV_FIELDS = @('customer', 'invoice_no', 'sap_card_code', 'posting_date', 'due_date', 'total', 'paid', 'balance', 'status')
+$script:INV_MONEY  = @('total', 'paid', 'balance')
 
 # --------------------------------------------------------------------------------
 # Helpers
@@ -495,28 +521,42 @@ function Enable-SapCertBypass {
     # ("The underlying connection was closed: an unexpected error occurred on a
     # send"), which would also take out the ERPNext HTTPS calls. This delegate
     # accepts a bad cert ONLY for the SAP host; ERPNext keeps real validation.
-    param([string] $SapHost)
-    if (-not ([System.Management.Automation.PSTypeName]'SapCertBypass').Type) {
+    #
+    # With $PinSha256 (sap.pinned_cert_sha256, 5 Nov 2026) the SAP host is
+    # accepted only when its certificate's SHA-256 is the pinned one, so the
+    # SAP password goes to nothing else answering on that address - the same
+    # pin Sync-SapOrders.ps1 and MannaHRM/localdev/sap/sapguard.mjs use. Its own
+    # type name, so it never meets the order sync's class in one session.
+    param([string] $SapHost, [string] $PinSha256 = '')
+    if (-not ([System.Management.Automation.PSTypeName]'SapCreditCertPin').Type) {
         Add-Type @'
 using System;
 using System.Net;
 using System.Net.Security;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-public static class SapCertBypass {
+public static class SapCreditCertPin {
     public static string AllowedHost;
-    public static void Enable(string host) {
+    public static string Pin;
+    public static void Enable(string host, string pin) {
         AllowedHost = host;
+        Pin = (pin ?? "").Replace(":", "").Replace(" ", "").ToUpperInvariant();
         ServicePointManager.ServerCertificateValidationCallback =
             delegate(object sender, X509Certificate cert, X509Chain chain, SslPolicyErrors errors) {
-                if (errors == SslPolicyErrors.None) return true;
                 HttpWebRequest req = sender as HttpWebRequest;
-                return (req != null && string.Equals(req.RequestUri.Host, AllowedHost, StringComparison.OrdinalIgnoreCase));
+                bool sap = (req != null && string.Equals(req.RequestUri.Host, AllowedHost, StringComparison.OrdinalIgnoreCase));
+                if (!sap) return errors == SslPolicyErrors.None;
+                if (Pin.Length == 0) return true;
+                if (cert == null) return false;
+                using (SHA256 h = SHA256.Create()) {
+                    return BitConverter.ToString(h.ComputeHash(cert.GetRawCertData())).Replace("-", "") == Pin;
+                }
             };
     }
 }
 '@
     }
-    [SapCertBypass]::Enable($SapHost)
+    [SapCreditCertPin]::Enable($SapHost, $PinSha256)
 }
 
 function New-SapWebSession {
@@ -693,13 +733,16 @@ function Get-SapCustomerData {
         [string] $CompanyName,
         [int]    $PageSize,
         [string] $AgeingBasis,   # 'posting_date' | 'due_date'
-        [bool]   $SyncOutstanding
+        [bool]   $SyncOutstanding,
+        [string] $InvoicesSince = ''   # yyyy-MM-dd: read the invoice mirror's rows too. '' = don't (5 Nov 2026)
     )
 
     $useSkip     = ($script:SapSkipCert -and $PSVersionTable.PSVersion.Major -ge 6)
     $sess        = $null
     $bpRows      = $null
     $arAvailable = $false
+    $invRowsAll  = $null   # the invoice mirror's rows (5 Nov 2026); $null = not read
+    $invRead     = $false
     $ar          = @{}   # code -> @{ B1;B2;B3;B4; n }
     $pastDue     = @{}   # code -> @{ Amt; Late }  open invoices past their SAP due date (11 Oct 2026)
     $termNames   = @{}   # PayTermsGrpCode -> PaymentTermsGroupName
@@ -812,6 +855,24 @@ function Get-SapCustomerData {
                 $arAvailable = $false
             }
         }
+
+        # ---- the invoice mirror's rows (5 Nov 2026) ----
+        # Its own read rather than the open-invoice one above: it also needs the
+        # closed invoices since invoices_since. A failure leaves the mirror as it is.
+        if ($InvoicesSince) {
+            try {
+                $mSel = [uri]::EscapeDataString('DocEntry,DocNum,CardCode,DocDate,DocDueDate,DocTotal,PaidToDate,DocumentStatus,Cancelled')
+                $mFlt = [uri]::EscapeDataString(("Cancelled eq 'tNO' and (DocDate ge '{0}' or DocumentStatus eq 'bost_Open')" -f $InvoicesSince))
+                $invRowsAll = Get-SapPagedValue -BaseUrl $BaseUrl -Session $sess -PageSize $PageSize -UseSkipCert $useSkip `
+                    -Label "Invoices since $InvoicesSince or open [$CompanyName]" `
+                    -StartUrl "$BaseUrl/Invoices?`$select=$mSel&`$filter=$mFlt&`$orderby=DocEntry"
+                $invRead = $true
+            } catch {
+                Write-Log WARN ("SAP invoice read for the SAP Invoice mirror failed - the mirror is left as it is this run. Reason: {0}" -f $_.Exception.Message)
+                $invRowsAll = $null
+                $invRead = $false
+            }
+        }
     }
     finally {
         # ALWAYS log out - this install has very few SL licence seats and a leaked
@@ -891,7 +952,166 @@ function Get-SapCustomerData {
             OverdueDays    = $odDays
         }
     }
-    return @{ ByCode = $byCode; ArAvailable = $arAvailable; SalesEmployeesRead = $slpOk }
+    return @{ ByCode = $byCode; ArAvailable = $arAvailable; SalesEmployeesRead = $slpOk; InvoiceRows = $invRowsAll; InvoicesRead = $invRead }
+}
+
+# --------------------------------------------------------------------------------
+# SAP Invoice mirror (5 Nov 2026)
+# --------------------------------------------------------------------------------
+
+function Test-ErpSiteIsLocal {
+    # The local copy of the live site (MannaHRM/localdev) answers on this PC.
+    param([string] $Site)
+    $h = ''
+    try { $h = ([System.Uri]"$Site".Trim()).Host.ToLowerInvariant() } catch { return $false }
+    return ($h -in @('127.0.0.1', 'localhost', '::1', '[::1]') -or $h.EndsWith('.localhost'))
+}
+
+function Assert-SapErpPairing {
+    # A TEST_ company only with an ERPNext on this PC, and a live company never
+    # with one: test invoices on the live site would read as real debts, and
+    # live figures on the local copy leave a copy nobody secures. Throws
+    # before any login. Pure. The same rule as Sync-SapOrders.ps1.
+    param([string] $ErpSite, [string[]] $CompanyDbs)
+    $local = Test-ErpSiteIsLocal $ErpSite
+    foreach ($d in @($CompanyDbs)) {
+        $db = "$d".Trim().ToUpperInvariant()
+        if ($db -eq '') { continue }
+        $isTest = $db.StartsWith('TEST_') -and -not $db.EndsWith('_LIVE')
+        if ($isTest -and -not $local) { throw "SAP company $db is a test copy but erpnext.site ('$ErpSite') is not on this PC - refusing to write test figures onto the live site." }
+        if (-not $isTest -and $local) { throw "erpnext.site ('$ErpSite') is the local copy but SAP company $db is not a TEST_ one - refusing to copy live figures to it." }
+    }
+}
+
+function Get-FyStart {
+    # 1 April of the Indian financial year $Today falls in. Pure.
+    param([datetime] $Today)
+    $y = if ($Today.Month -ge 4) { $Today.Year } else { $Today.Year - 1 }
+    return (Get-Date -Year $y -Month 4 -Day 1).ToString('yyyy-MM-dd')
+}
+
+function ConvertTo-IsoDate {
+    # SAP's '2026-10-31T00:00:00Z' -> '2026-10-31', by its text: parsing it as a
+    # time would move it into IST and could not move the day, but a DateTime
+    # (PowerShell 7 converts JSON dates) is taken as the date it carries.
+    # '' for nothing.
+    param($Value)
+    if ($null -eq $Value) { return '' }
+    if ($Value -is [datetime]) { return $Value.ToString('yyyy-MM-dd') }
+    $s = "$Value".Trim()
+    if ($s -match '^(\d{4}-\d{2}-\d{2})') { return $Matches[1] }
+    return ''
+}
+
+function ConvertTo-SapInvoiceRecord {
+    # One SAP invoice as the mirror row it should be, or $null when ERPNext
+    # holds no customer with its code. Pure.
+    param($Doc, [string] $Company, [hashtable] $CustomerByCode)
+    $code = "$(Get-JsonProp $Doc 'CardCode')".Trim()
+    if ($code -eq '' -or -not $CustomerByCode.ContainsKey($code)) { return $null }
+    $entry = [int](ConvertTo-Number (Get-JsonProp $Doc 'DocEntry'))
+    if ($entry -le 0) { return $null }
+    $total = [math]::Round([double](ConvertTo-Number (Get-JsonProp $Doc 'DocTotal')), 2)
+    $paid  = [math]::Round([double](ConvertTo-Number (Get-JsonProp $Doc 'PaidToDate')), 2)
+    $st    = "$(Get-JsonProp $Doc 'DocumentStatus')"
+    return [ordered]@{
+        sap_key       = ('{0}-{1}' -f $Company, $entry)
+        company       = $Company
+        sap_doc_entry = $entry
+        customer      = "$($CustomerByCode[$code])"
+        invoice_no    = "$(Get-JsonProp $Doc 'DocNum')".Trim()
+        sap_card_code = $code
+        posting_date  = (ConvertTo-IsoDate (Get-JsonProp $Doc 'DocDate'))
+        due_date      = (ConvertTo-IsoDate (Get-JsonProp $Doc 'DocDueDate'))
+        total         = $total
+        paid          = $paid
+        balance       = [math]::Round($total - $paid, 2)
+        status        = $(if ($st -eq 'bost_Open') { 'Open' } elseif ($st -eq 'bost_Close') { 'Closed' } else { $st -replace '^bost_', '' })
+    }
+}
+
+function Test-InvoiceFieldSame {
+    # Is the mirror's stored value the one SAP gives? Money to the paisa, dates
+    # by their first ten characters (Frappe may add nothing, but a Datetime
+    # would), everything else as text. Pure.
+    param([string] $Field, $Stored, $Wanted)
+    if ($script:INV_MONEY -contains $Field) {
+        return ([math]::Abs([double](ConvertTo-Number $Stored) - [double](ConvertTo-Number $Wanted)) -lt $script:MONEY_EPS)
+    }
+    $a = "$Stored".Trim(); $b = "$Wanted".Trim()
+    if ($Field -like '*_date') { if ($a.Length -gt 10) { $a = $a.Substring(0, 10) }; if ($b.Length -gt 10) { $b = $b.Substring(0, 10) } }
+    return ($a -ceq $b)
+}
+
+function Get-InvoiceMirrorPlan {
+    # What to create, change and delete so the company's mirror is SAP's set.
+    # $Wanted: records from ConvertTo-SapInvoiceRecord. $Existing: the mirror's
+    # rows for this company as ERPNext returned them (name + INV_FIELDS). A
+    # deletion that would remove more than half of a mirror of 20 or more rows
+    # is held back (DeletesHeld): an empty or cut-short SAP read looks exactly
+    # like that, and the mirror is the credit history people are shown. Pure.
+    param([object[]] $Wanted, [object[]] $Existing)
+    $byName = @{}
+    foreach ($e in @($Existing)) { if ($e) { $byName["$(Get-JsonProp $e 'name')"] = $e } }
+    $create = New-Object System.Collections.Generic.List[object]
+    $update = New-Object System.Collections.Generic.List[object]
+    $keep   = @{}
+    foreach ($w in @($Wanted)) {
+        if (-not $w) { continue }
+        $k = "$($w.sap_key)"
+        if ($keep.ContainsKey($k)) { continue }
+        $keep[$k] = $true
+        if (-not $byName.ContainsKey($k)) { $create.Add($w); continue }
+        $cur = $byName[$k]
+        $diff = [ordered]@{}
+        foreach ($f in $script:INV_FIELDS) {
+            if (-not (Test-InvoiceFieldSame $f (Get-JsonProp $cur $f) $w[$f])) { $diff[$f] = $w[$f] }
+        }
+        if ($diff.Count) { $update.Add([pscustomobject]@{ Name = $k; Fields = $diff; Customer = $w.customer; InvoiceNo = $w.invoice_no }) }
+    }
+    $delete = New-Object System.Collections.Generic.List[object]
+    foreach ($n in $byName.Keys) { if (-not $keep.ContainsKey($n)) { $delete.Add($byName[$n]) } }
+    $held = ($byName.Count -ge 20 -and $delete.Count * 2 -gt $byName.Count)
+    $heldCount = 0
+    if ($held) { $heldCount = $delete.Count; $delete = New-Object System.Collections.Generic.List[object] }
+    # Assigned straight from the variables: a $( ) around a list unrolls it,
+    # and a one-row list then comes back as the row itself.
+    return [pscustomobject]@{
+        Create      = $create
+        Update      = $update
+        Delete      = $delete
+        DeletesHeld = $heldCount
+    }
+}
+
+function Test-ErpInvoiceDoctype {
+    # Is the SAP Invoice doctype on the site yet? Until it is, the mirror is skipped.
+    try {
+        $null = Invoke-ErpApi -Method 'GET' -Path ('/api/resource/' + [uri]::EscapeDataString($script:INV_DOCTYPE)) -Query 'limit_page_length=1'
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Get-ErpSapInvoices {
+    # The mirror's rows for one company, in one request.
+    param([string] $Company)
+    $fields  = '["name","' + (($script:INV_FIELDS) -join '","') + '"]'
+    $filters = '[["company","=",' + (ConvertTo-Json $Company -Compress) + ']]'
+    $query   = 'fields=' + [uri]::EscapeDataString($fields) + '&filters=' + [uri]::EscapeDataString($filters) + '&limit_page_length=0'
+    $resp = Invoke-ErpApi -Method 'GET' -Path ('/api/resource/' + [uri]::EscapeDataString($script:INV_DOCTYPE)) -Query $query
+    # Asked of the property, not its value: an empty mirror is "data": [],
+    # which a function return unrolls to nothing.
+    if ($null -eq $resp -or -not $resp.PSObject.Properties['data']) { throw "ERPNext returned no 'data' array when listing $($script:INV_DOCTYPE)." }
+    return @($resp.data)
+}
+
+function Get-ErpDocPath {
+    # /api/resource/<doctype>/<name>, with a trailing '.' kept (see the Customer
+    # write below: .NET drops it from a path segment, %2E survives).
+    param([string] $Doctype, [string] $Name)
+    return ('/api/resource/' + [uri]::EscapeDataString($Doctype) + '/' + ([uri]::EscapeDataString($Name) -replace '\.', '%2E'))
 }
 
 # --------------------------------------------------------------------------------
@@ -922,6 +1142,10 @@ try {
     $vp = $sap.PSObject.Properties['verify_ssl']
     if ($vp) { $verifySsl = [bool]$vp.Value }
     $script:SapSkipCert = (-not $verifySsl)
+    $sapPin = ''
+    $pin = $sap.PSObject.Properties['pinned_cert_sha256']
+    if ($pin -and $pin.Value) { $sapPin = "$($pin.Value)" -replace '[^0-9A-Fa-f]', '' }
+    if ($sapPin -ne '' -and $sapPin.Length -ne 64) { throw "config: sap.pinned_cert_sha256 must be a SHA-256 fingerprint (64 hex digits)." }
 
     $pageSize = 200
     $pp = $sap.PSObject.Properties['page_size']
@@ -935,7 +1159,8 @@ try {
     $companyName = Get-RequiredString $company 'name'       'sap.companies[0]'
     $companyDb   = Get-RequiredString $company 'company_db' 'sap.companies[0]'
     Write-UnknownKeyWarnings $company @('name', 'company_db') 'sap.companies[0]'
-    Write-UnknownKeyWarnings $sap @('url', 'username', 'password', 'verify_ssl', 'page_size', 'companies') 'sap'
+    Write-UnknownKeyWarnings $sap @('url', 'username', 'password', 'verify_ssl', 'pinned_cert_sha256', 'page_size', 'companies') 'sap'
+    Assert-SapErpPairing -ErpSite $script:ErpBaseUrl -CompanyDbs @($companyDb)
 
     # ---- Sync policy ----
     $writeMode = (Get-RequiredString $config 'write_mode' '(root)').ToLower()
@@ -965,6 +1190,18 @@ try {
     $rmf = $config.PSObject.Properties['rep_map_file']
     if ($rmf -and "$($rmf.Value)".Trim()) { $repMapFile = "$($rmf.Value)".Trim() }
 
+    # The SAP Invoice mirror (5 Nov 2026). Both optional.
+    $syncInvoices  = Get-OptionalBool $config 'sync_invoices' $true
+    $invoicesSince = Get-FyStart (Get-Date)
+    $isp = $config.PSObject.Properties['invoices_since']
+    if ($isp -and "$($isp.Value)".Trim()) {
+        $invoicesSince = "$($isp.Value)".Trim()
+        $chk = [datetime]::MinValue
+        if ($invoicesSince -notmatch '^\d{4}-\d{2}-\d{2}$' -or -not [datetime]::TryParseExact($invoicesSince, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$chk)) {
+            throw "config: 'invoices_since' must be a date as yyyy-MM-dd (got '$invoicesSince')."
+        }
+    }
+
     # ---- Logging ----
     $scriptRoot = $PSScriptRoot
     if (-not $scriptRoot) { $scriptRoot = (Get-Location).Path }
@@ -984,7 +1221,8 @@ try {
     Write-UnknownKeyWarnings $config @('erpnext', 'sap', 'write_mode',
         'sync_credit_limit', 'sync_outstanding', 'ageing_basis', 'outstanding_total',
         'skip_codes', 'log_dir', 'log_keep_days',
-        'create_customers', 'new_customer_max', 'rep_map_file') '(root)'
+        'create_customers', 'new_customer_max', 'rep_map_file',
+        'sync_invoices', 'invoices_since') '(root)'
     if (-not [System.IO.Path]::IsPathRooted($repMapFile)) { $repMapFile = Join-Path $scriptRoot $repMapFile }
 
     Write-Log INFO ("==== run start ==== company='{0}' db='{1}' DryRun={2} Limit={3} writeMode={4} syncLimit={5} syncOutstanding={6} ageing={7} total={8} PS={9}" -f `
@@ -1006,8 +1244,11 @@ try {
     }
     if ($script:SapSkipCert) {
         if ($PSVersionTable.PSVersion.Major -lt 6) {
-            Enable-SapCertBypass -SapHost ([System.Uri]$sapUrl).Host
-            Write-Log WARN ("TLS cert validation bypassed for SAP host '{0}' only (verify_ssl=false)." -f ([System.Uri]$sapUrl).Host)
+            Enable-SapCertBypass -SapHost ([System.Uri]$sapUrl).Host -PinSha256 $sapPin
+            if ($sapPin) { Write-Log INFO ("SAP host '{0}' accepted only with its pinned certificate (sap.pinned_cert_sha256)." -f ([System.Uri]$sapUrl).Host) }
+            else { Write-Log WARN ("TLS cert validation bypassed for SAP host '{0}' only (verify_ssl=false)." -f ([System.Uri]$sapUrl).Host) }
+        } elseif ($sapPin) {
+            throw "config: sap.pinned_cert_sha256 needs Windows PowerShell 5.1 - PowerShell $($PSVersionTable.PSVersion.Major) can only skip the check, which would ignore the pin."
         } else {
             Write-Log WARN "TLS cert validation bypassed for SAP calls via -SkipCertificateCheck (verify_ssl=false, PowerShell 7 path)."
         }
@@ -1027,12 +1268,21 @@ try {
         $erpIndex = Get-ErpCodedCustomers
         Write-Log INFO ("ERPNext: {0} coded customer(s) indexed." -f $erpIndex.Count)
 
+        # The SAP Invoice mirror (5 Nov 2026) runs only once its doctype is on the site.
+        $mirrorOn = $false
+        if ($syncInvoices) {
+            $mirrorOn = Test-ErpInvoiceDoctype
+            if ($mirrorOn) { Write-Log INFO ("SAP Invoice mirror: on - invoices dated {0} or later, and every open one." -f $invoicesSince) }
+            else { Write-Log WARN ("SAP Invoice mirror: the '{0}' doctype is not on ERPNext yet (app/server/sap_invoice_doctypes.json) - skipped this run." -f $script:INV_DOCTYPE) }
+        }
+
         # ---- 2. SAP read (one session: customers + open AR) ----
         # If this throws we go straight to the fatal handler: non-zero exit and
         # NOTHING written, because the write phase is below this point.
         $sapData     = Get-SapCustomerData -BaseUrl $sapUrl -Username $sapUser -Password $sapPass `
             -CompanyDb $companyDb -CompanyName $companyName -PageSize $pageSize `
-            -AgeingBasis $ageingBasis -SyncOutstanding $syncOutstanding
+            -AgeingBasis $ageingBasis -SyncOutstanding $syncOutstanding `
+            -InvoicesSince $(if ($mirrorOn) { $invoicesSince } else { '' })
         $sapByCode   = $sapData.ByCode
         $arAvailable = $sapData.ArAvailable
         $writeBuckets = ($syncOutstanding -and $arAvailable)
@@ -1228,6 +1478,33 @@ try {
             foreach ($x in $newSkipped) { Write-Log WARN ("new customer not created: {0}" -f $x) }
         }
 
+        # ---- 4b. The SAP Invoice mirror's plan (5 Nov 2026) ----
+        # Only ERPNext customers held by code; skip_codes are left out like
+        # everywhere else. A customer created in 5b gets its invoices next run.
+        $invPlan = $null
+        $invNoCustomer = 0
+        if ($mirrorOn -and -not $sapData.InvoicesRead) {
+            Write-Log WARN "SAP Invoice mirror: the SAP invoice read failed - nothing in the mirror is changed this run."
+        } elseif ($mirrorOn) {
+            $custByCode = @{}
+            foreach ($k in $erpIndex.Keys) { if ($skipCodes -notcontains $k) { $custByCode[$k] = $erpIndex[$k].Name } }
+            $wanted = New-Object System.Collections.Generic.List[object]
+            foreach ($d in @($sapData.InvoiceRows)) {
+                $rec = ConvertTo-SapInvoiceRecord -Doc $d -Company $companyName -CustomerByCode $custByCode
+                if ($rec) { $wanted.Add($rec) } else { $invNoCustomer++ }
+            }
+            $existing = @(Get-ErpSapInvoices -Company $companyName)
+            $invPlan = Get-InvoiceMirrorPlan -Wanted $wanted -Existing $existing
+            Write-Log INFO ("SAP Invoice mirror: SAP {0} invoice(s), {1} for ERPNext customers ({2} for customers ERPNext does not hold by code); mirror holds {3}. To create {4}, change {5}, delete {6}." -f `
+                @($sapData.InvoiceRows).Count, $wanted.Count, $invNoCustomer, $existing.Count, $invPlan.Create.Count, $invPlan.Update.Count, $invPlan.Delete.Count)
+            foreach ($u in ($invPlan.Update | Select-Object -First 50)) {
+                Write-Log INFO ("  ~ invoice {0,-8} {1,-34} {2}" -f $u.InvoiceNo, $u.Customer, (($u.Fields.Keys | ForEach-Object { "$_=$($u.Fields[$_])" }) -join ', '))
+            }
+            if ($invPlan.DeletesHeld) {
+                Write-Log WARN ("SAP Invoice mirror: {0} of {1} row(s) would be deleted - more than half, so none are; check the SAP read before trusting it." -f $invPlan.DeletesHeld, $existing.Count)
+            }
+        }
+
         # ---- 5. Apply ----
         $changed       = 0
         $writeFailures = 0
@@ -1312,6 +1589,64 @@ try {
         }
         $script:Result.customersCreated = $created
 
+        # ---- 5c. Apply the SAP Invoice mirror (5 Nov 2026) ----
+        # -Limit caps these writes too, so a careful first run stays careful.
+        $invCreated = 0; $invUpdated = 0; $invDeleted = 0
+        if ($invPlan -and $DryRun) {
+            Write-Log INFO ("DRY RUN - SAP Invoice mirror unchanged ({0} create, {1} change, {2} delete would have been made)." -f $invPlan.Create.Count, $invPlan.Update.Count, $invPlan.Delete.Count)
+        } elseif ($invPlan) {
+            $invBudget = if ($Limit -gt 0) { $Limit } else { [int]::MaxValue }
+            $invStamp  = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+            $invDone   = 0
+            foreach ($c in $invPlan.Create) {
+                if ($invDone -ge $invBudget) { break }
+                $invDone++
+                $body = [ordered]@{}
+                foreach ($k in $c.Keys) { $body[$k] = $c[$k] }
+                $body['sap_last_synced'] = $invStamp
+                try {
+                    $null = Invoke-ErpApi -Method 'POST' -Path ('/api/resource/' + [uri]::EscapeDataString($script:INV_DOCTYPE)) -Body $body
+                    $invCreated++
+                } catch {
+                    $writeFailures++
+                    Write-Log ERROR ("SAP Invoice create FAILED {0} (invoice {1}, {2}): {3}" -f $c.sap_key, $c.invoice_no, $c.customer, $_)
+                }
+            }
+            foreach ($u in $invPlan.Update) {
+                if ($invDone -ge $invBudget) { break }
+                $invDone++
+                $body = [ordered]@{}
+                foreach ($k in $u.Fields.Keys) { $body[$k] = $u.Fields[$k] }
+                $body['sap_last_synced'] = $invStamp
+                try {
+                    $null = Invoke-ErpApi -Method 'PUT' -Path (Get-ErpDocPath $script:INV_DOCTYPE $u.Name) -Body $body
+                    $invUpdated++
+                } catch {
+                    $writeFailures++
+                    Write-Log ERROR ("SAP Invoice change FAILED {0}: {1}" -f $u.Name, $_)
+                }
+            }
+            foreach ($d in $invPlan.Delete) {
+                if ($invDone -ge $invBudget) { break }
+                $invDone++
+                $nm = "$(Get-JsonProp $d 'name')"
+                try {
+                    $null = Invoke-ErpApi -Method 'DELETE' -Path (Get-ErpDocPath $script:INV_DOCTYPE $nm)
+                    $invDeleted++
+                    Write-Log INFO ("SAP Invoice deleted {0} (invoice {1}, {2}) - no longer in SAP's set (cancelled, or closed before invoices_since)." -f $nm, (Get-JsonProp $d 'invoice_no'), (Get-JsonProp $d 'customer'))
+                } catch {
+                    $writeFailures++
+                    Write-Log ERROR ("SAP Invoice delete FAILED {0}: {1}" -f $nm, $_)
+                }
+            }
+            $left = ($invPlan.Create.Count + $invPlan.Update.Count + $invPlan.Delete.Count) - $invDone
+            if ($left -gt 0) { Write-Log WARN ("-Limit {0}: {1} SAP Invoice write(s) left for the next run." -f $Limit, $left) }
+            Write-Log INFO ("SAP Invoice mirror: created {0}, changed {1}, deleted {2}." -f $invCreated, $invUpdated, $invDeleted)
+        }
+        $script:Result.invoicesCreated = $invCreated
+        $script:Result.invoicesUpdated = $invUpdated
+        $script:Result.invoicesDeleted = $invDeleted
+
         # ---- 6. One-line summary ----
         $matched = @($erpIndex.Values | Where-Object { $_.Matched }).Count
         if ($DryRun) { $changeWord = 'would-change'; $changeCount = $plannedWrites.Count; $modeWord = 'DRY-RUN' }
@@ -1325,6 +1660,12 @@ try {
             $summaryLine += (" | new customers {0}: {1} (unassigned in SAP: {2}, no ERPNext rep: {3})" -f `
                 $(if ($DryRun) { 'would-create' } else { 'created' }), $(if ($DryRun) { [math]::Min($planNew.Count, $newCustomerMax) } else { $created }), `
                 $newUnassigned, (($newNoRep.Values | Measure-Object -Sum).Sum -as [int]))
+        }
+        if ($invPlan) {
+            if ($DryRun) { $summaryLine += (" | SAP invoices would-create/change/delete: {0}/{1}/{2}" -f $invPlan.Create.Count, $invPlan.Update.Count, $invPlan.Delete.Count) }
+            else         { $summaryLine += (" | SAP invoices created/changed/deleted: {0}/{1}/{2}" -f $invCreated, $invUpdated, $invDeleted) }
+        } elseif ($syncInvoices) {
+            $summaryLine += ' | SAP invoices: skipped'
         }
         Write-Log INFO $summaryLine
 

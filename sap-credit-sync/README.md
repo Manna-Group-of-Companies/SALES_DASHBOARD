@@ -45,6 +45,7 @@ site gets written to). Unrecognised keys are logged as a `WARN` and ignored.
     "username":   "...",                                  // required
     "password":   "...",                                  // required
     "verify_ssl": false,                                  // optional, default true. false => skip TLS validation (self-signed cert on :50000)
+    "pinned_cert_sha256": "AB12...",                      // optional (5 Nov 2026). With verify_ssl false: accept the SAP host ONLY with this certificate SHA-256
     "page_size":  200,                                    // optional, default 200. Prefer: odata.maxpagesize; nextLink is followed regardless
     "companies": [                                        // required, EXACTLY ONE entry (array kept so a 2nd book can be added later; the merge logic was removed)
       { "name": "Manna Treads", "company_db": "MANNA_TREADS_LIVE" }   // both required
@@ -53,6 +54,8 @@ site gets written to). Unrecognised keys are logged as a `WARN` and ignored.
   "write_mode":    "overwrite",   // required. "overwrite" = SAP is authoritative | "fill_blanks" = only set currently-empty limits
   "skip_codes":    [],            // optional. SAP CardCodes to never write
   "log_dir":       "./logs",      // optional. Relative paths resolve against the script folder
+  "sync_invoices":  true,         // optional, default true (5 Nov 2026). Mirror SAP A/R invoices into the SAP Invoice doctype
+  "invoices_since": "2026-04-01", // optional, default 1 April of the current financial year. Open invoices are mirrored whatever their date
   "log_keep_days": 30             // optional, default 30. Older dated logs deleted at start of each run
 }
 ```
@@ -84,6 +87,30 @@ only mode, and stamping written customers is unconditional — so the script log
   order-blocking credit control).
 - Timestamp uses the **machine's** local time. Run the schedule on a host whose
   timezone matches the Frappe site (IST) so the value reads correctly.
+
+## SAP Invoice mirror (5 Nov 2026)
+
+The credit history under Team Targets (each customer's invoices, with paid and
+balance) reads the ERPNext doctype **`SAP Invoice`**, which this sync fills in
+the same SAP login. Its definition is `app/server/sap_invoice_doctypes.json`;
+until it exists on the site the run logs a WARN and skips the mirror, so
+deploying the script first changes nothing.
+
+- One row per SAP invoice, named `<company>-<DocEntry>` (DocNum restarts each
+  financial year). Fields: customer, invoice_no (DocNum), posting_date,
+  due_date, total, paid (PaidToDate), balance, status (Open / Closed).
+- Holds every uncancelled invoice dated on or after `invoices_since`, plus every
+  invoice still open, for customers ERPNext holds by `custom_bp_code`.
+- Only changed rows are written. A row no longer in that set (cancelled in SAP,
+  or closed and older than `invoices_since`) is deleted, except that a run which
+  would delete more than half of a mirror of 20+ rows deletes nothing.
+- A failed invoice read leaves the mirror untouched. `-Limit` caps these writes too.
+- The login the sync uses needs read/write/create/delete on `SAP Invoice`; the
+  doctype gives that to System Manager and SAP Sync Bot.
+
+Test it on this PC with `MannaHRM/localdev/sap/run-credit-sync.mjs`: local
+ERPNext and TEST_MANNA_TREADS only. The script refuses a TEST_ company with a
+site that is not on this PC, and a live company with one that is.
 
 ## First run
 
