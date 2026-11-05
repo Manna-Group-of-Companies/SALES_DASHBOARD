@@ -50,6 +50,17 @@
     "approvers":              ["jineesh@mannarubber.com"]
   },
 
+  "order_flow": {
+    "_note":         "Optional. Absent, or mode hitech_direct, is the flow above (PASS A to Hi-Tech on approval, PASS C bills Manna Treads). manna_first (3 Nov 2026): PASS M makes every new order of 'units' created on or after 'since' a Manna Treads Sales Order to the end customer as soon as it is in ERPNext, on the shared finished-goods codes, at the order's rate net of GST, with the tax code from the customer's bill-to state; PASS A leaves those orders alone. Older orders keep the old route. since is required for manna_first. item_allowlist is optional (absent = any item that is the same code and name in Manna Treads SAP). company_db and the login are manna_treads' above. sap.pinned_cert_sha256 (optional, Windows PowerShell 5.1) accepts the Service Layer only with that certificate.",
+    "mode":          "hitech_direct",
+    "since":         null,
+    "units":         ["Manna Treads"],
+    "skip_statuses": ["Rejected"],
+    "tax_by_state":  { "KL": "CG+SG@18", "*": "IGST@18" },
+    "b1if_wait_minutes": 30,
+    "_note_b1if":    "B1if (sap-b1if/, 4 Nov 2026) makes Manna Treads' purchase order to Hi-Tech and Hi-Tech's sales order from it, for the sales orders PASS M made; this script never does. PASS P and PASS H only find them by NumAtCard = the ERPNext name and write them back (custom_mt_purchase_order / _entry, custom_sap_sales_order - so PASS B follows it), and refuse an order still without one after b1if_wait_minutes. intercompany may be left out; \"script\" is refused. Needs custom_mt_purchase_order and custom_mt_purchase_order_entry on Sales Order - see erpnext-setup.md."
+  },
+
   "log_dir":       "./logs",
   "log_keep_days": 30
 }

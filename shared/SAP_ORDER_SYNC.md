@@ -521,6 +521,71 @@ order — they are that order's.
 
 ---
 
+## Manna Treads first — added 3 November 2026
+
+**Being built, on the test companies only.** Off unless `config.json` has
+`order_flow.mode = "manna_first"` and a `since` date; until then everything
+above is unchanged.
+
+Manna Treads sells, Hi-Tech makes and holds the stock. So an order goes:
+
+1. **PASS M** — as soon as the ERPNext order exists (not on approval), a
+   Manna Treads Sales Order to the end customer (`Customer.custom_bp_code`),
+   at the order's rate net of GST, tax code from the customer's bill-to
+   state (KL `CG+SG@18`, any other `IGST@18`).
+2. **B1if, step 1** (4 Nov 2026; `sap-b1if/`) — the moment that sales order
+   is added in Manna Treads, Manna Treads' Purchase Order to Hi-Tech
+   (supplier `S-1010`, series 199) for the same items and kilos, at the
+   order's rate **less the inter-company margin** — rupees per kg,
+   GST-inclusive, from `MARGIN` in Manna Treads' `@MANNA_IC`. The hand-made
+   POs it replaces sit about ₹20 under the customer's rate (PO 233: 232.46
+   against SO 554's 253). Only sales orders PASS M made from ERPNext; one
+   keyed in SAP is left alone.
+3. **B1if, step 2** — the moment that purchase order is added, Hi-Tech's
+   Sales Order to `10118`, made from it **as SAP holds it** (items, kilos,
+   the net price Manna Treads pays; tax from 10118's state), `NumAtCard` the
+   ERPNext name, `U_MannaMtSoNo` the Manna Treads SO number, comment
+   *"Manna Treads PO 235"* and nothing about the end customer. No production
+   order and no invoice: those stay manual.
+4. **PASS P and PASS H** — the script no longer makes either document. They
+   find B1if's by `NumAtCard` and write the PO into
+   `custom_mt_purchase_order` and Hi-Tech's order into
+   `custom_sap_sales_order`, so **PASS B follows it exactly as it follows
+   PASS A's** — status, line reconcile, invoices, Hi-Tech's kilos. An order
+   B1if has not followed within `order_flow.b1if_wait_minutes` (30) is
+   refused: PASS P's in `custom_mt_sync_error`, PASS H's in
+   `custom_sap_sync_error`, naming B1if's message log.
+5. *Not built yet:* the pick list, Hi-Tech's invoice for what was picked,
+   Manna Treads' goods receipt and delivery note.
+
+Manna Treads rounds a document to the rupee and Hi-Tech keeps paise, so PO
+235 is ₹31,269 and Hi-Tech's SO 551 for it ₹31,269.19 — same lines, same
+VAT. Stage 4's invoice and goods receipt will meet the same paise.
+
+Only orders of `order_flow.units` (Manna Treads) created on or after `since`
+take this route; PASS A leaves them alone. Older orders keep the old one.
+Items must be the shared finished-goods codes — the **same code and name** in
+both companies — or the order is refused; an old Hi-Tech code is never mapped.
+
+On `Sales Order`, besides the `custom_mt_*` fields above (now also written by
+PASS M):
+
+| field | type | written by | means |
+|---|---|---|---|
+| `custom_mt_purchase_order` | Data | sync, PASS P (made by B1if) | Manna Treads' PO to Hi-Tech, DocNum |
+| `custom_mt_purchase_order_entry` | Data | sync, PASS P (made by B1if) | its DocEntry |
+
+Both `read_only`, `allow_on_submit`, `no_copy`, after
+`custom_mt_sales_order_entry`. A refusal by either pass goes in
+`custom_mt_sync_error` — PASS P's start *"Purchase order to Hi-Tech:"* — and
+the order is not tried again until somebody clears it. The dashboard does not
+show these yet.
+
+**Not handled yet:** an order edited, rejected or cancelled in ERPNext after
+its Manna Treads orders were made. They are not changed or cancelled in SAP.
+
+---
+
 ## A production order linked by hand — fixed 18 September 2026
 
 > **Superseded 24 September 2026.** The sync no longer reads production orders
