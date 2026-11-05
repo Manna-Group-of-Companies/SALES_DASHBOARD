@@ -1,0 +1,11 @@
+# real config holds SAP + ERPNext credentials - never commit
+config.json
+poller.config.json
+login.json
+*.local.json
+config.*.json
+!config.example.json
+
+# run logs
+logs/
+*.log

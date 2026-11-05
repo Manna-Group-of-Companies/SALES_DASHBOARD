@@ -1,0 +1,13 @@
+{
+  "_about": "SAP (MANNA_TREADS_LIVE) sales employee -> ERPNext Sales Person, for the credit sync's new-customer step (11 Oct 2026). A SAP customer that ERPNext lacks is created under the rep its SAP sales employee maps to here, or failing that the enabled ERPNext rep spelled exactly the same. Sales employees not listed and not spelled like a rep (SHOP SALE, Corporate, Sales Local, Branch-GJ, SIJO, ...) keep their customers in SAP. The pairs below were read off the 241 customers already in both systems on 11 Oct 2026, where every one agreed; Siraj-TVM had no customers yet and is mapped by its name. Edit this file to add or change a pair; it is read on every run.",
+  "map": {
+    "PRASHANTH": "Prashanth",
+    "Siraj-EKM": "Sirajudheen Kasim",
+    "Siraj-Palakkad": "Sirajudheen Kasim",
+    "Siraj-KTM": "Sirajudheen Kasim",
+    "Siraj-Kottayam": "Sirajudheen Kasim",
+    "Siraj-TVM": "Sirajudheen Kasim",
+    "Amjad KZKD": "Amjad Pr",
+    "Jaimon": "Jaimon D"
+  }
+}
