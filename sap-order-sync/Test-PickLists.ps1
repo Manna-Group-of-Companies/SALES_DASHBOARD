@@ -59,7 +59,7 @@ Check 'a pick_lists_since that is not yyyy-MM-dd is refused' (Throws { Get-FlowS
 Write-Host "`nwhich lists are sent" -ForegroundColor Cyan
 $order = J '{"name":"SAL-ORD-2026-00167","creation":"2026-11-05 12:19:00","custom_company":"Manna Treads","docstatus":0,"custom_sap_sales_order":"555",
   "items":[{"name":"r0","item_code":"PMB00101002"},{"name":"r1","item_code":"PMB00101502"}]}'
-$pick = J '{"name":"PICK-00012","status":"Submitted","sales_order":"SAL-ORD-2026-00167","sap_pick_list":"","sap_sync_error":"",
+$pick = J '{"name":"PICK-00012","status":"Submitted","approval_status":"Approved","sales_order":"SAL-ORD-2026-00167","sap_pick_list":"","sap_sync_error":"",
   "items":[{"sales_order_item":"r1","item_code":"PMB00101502","item_name":"PCTR 197","picked_qty":1,"picked_kg":31.4}]}'
 function Pk { param([hashtable] $Set = @{}) $o = $pick | ConvertTo-Json -Depth 5 | ConvertFrom-Json; foreach ($k in $Set.Keys) { $o.$k = $Set[$k] }; return $o }
 function Od { param([hashtable] $Set = @{}) $o = $order | ConvertTo-Json -Depth 5 | ConvertFrom-Json; foreach ($k in $Set.Keys) { $o.$k = $Set[$k] }; return $o }
@@ -73,7 +73,13 @@ Check 'a list on an order of the old route is left to Hi-Tech by hand' ((Get-PkS
 Check 'a list whose order has no Hi-Tech order yet waits' ((Get-PkSkipReason -Pick $pick -Order (Od @{ custom_sap_sales_order = '' }) -Flow $flow).Kind -eq 'wait')
 Check 'a list on a cancelled order is refused' ((Get-PkSkipReason -Pick $pick -Order (Od @{ docstatus = 2 }) -Flow $flow).Kind -eq 'refuse')
 Check 'a list whose order is gone is refused' ((Get-PkSkipReason -Pick $pick -Order $null -Flow $flow).Kind -eq 'refuse')
-$noKg = J '{"name":"PICK-00009","status":"Submitted","sap_pick_list":"","sap_sync_error":"","items":[{"sales_order_item":"r1","item_name":"PCTR 197","picked_qty":1}]}'
+$r = Get-PkSkipReason -Pick (Pk @{ approval_status = 'Pending' }) -Order $order -Flow $flow
+Check 'a list production has not approved waits, and says so' ($r.Kind -eq 'wait' -and $r.Why -match 'approve') "$($r.Kind) $($r.Why)"
+Check 'a list made before approval existed (blank) waits for approval too' ((Get-PkSkipReason -Pick (Pk @{ approval_status = '' }) -Order $order -Flow $flow).Kind -eq 'wait')
+$bare = $pick | ConvertTo-Json -Depth 5 | ConvertFrom-Json; $bare.PSObject.Properties.Remove('approval_status')
+Check 'a site without the approval field sends nothing - no field is not approval' ((Get-PkSkipReason -Pick $bare -Order $order -Flow $flow).Kind -eq 'wait')
+Check 'an unapproved list waits even on a cancelled order - nothing is written on it before approval' ((Get-PkSkipReason -Pick (Pk @{ approval_status = 'Pending' }) -Order (Od @{ docstatus = 2 }) -Flow $flow).Kind -eq 'wait')
+$noKg = J '{"name":"PICK-00009","status":"Submitted","approval_status":"Approved","sap_pick_list":"","sap_sync_error":"","items":[{"sales_order_item":"r1","item_name":"PCTR 197","picked_qty":1}]}'
 $r = Get-PkSkipReason -Pick $noKg -Order $order -Flow $flow
 Check 'a list made before kilos were asked for is refused, naming the product' ($r.Kind -eq 'refuse' -and $r.Why -match 'PCTR 197') $r.Why
 

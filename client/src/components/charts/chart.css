@@ -1,0 +1,24 @@
+/* Charts (components/charts/chart.tsx): tokens only, so dark mode follows. */
+
+.chart { width: 100%; font-size: 12px; }
+.chart .recharts-cartesian-axis-tick-value { font-variant-numeric: tabular-nums; }
+.chart .recharts-surface:focus,
+.chart .recharts-wrapper:focus { outline: none; }
+.chart .recharts-rectangle.recharts-tooltip-cursor { fill: var(--surface-3); opacity: 0.6; }
+
+.chart-tip {
+  min-width: 150px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  font-size: 12px;
+  color: var(--text);
+}
+.chart-tip__title { font-weight: 600; margin-bottom: 4px; }
+.chart-tip__row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.chart-tip__row i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.chart-tip__label { color: var(--text-2); }
+.chart-tip__value { margin-left: auto; padding-left: 12px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chart-tip__foot { margin-top: 4px; color: var(--text-3); }

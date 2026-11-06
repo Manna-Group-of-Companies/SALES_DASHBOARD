@@ -1,5 +1,5 @@
 {
-  "about": "The two doctypes behind pick lists (3 Nov 2026). Created as custom doctypes, so their fields carry no custom_ prefix. Only System Manager has permissions: every read and write goes through the manna_pick_list_submit and manna_pick_lists Server Scripts, which check the order, the products and the person. ERPNext's own Pick List was not used: Sales User has no permission on it, and it re-plans locations from warehouse kilos, which this site cannot express in rolls.",
+  "about": "The two doctypes behind pick lists (3 Nov 2026). Created as custom doctypes, so their fields carry no custom_ prefix. Only System Manager has permissions: every read and write goes through the manna_pick_list_submit and manna_pick_lists Server Scripts, which check the order, the products and the person. ERPNext's own Pick List was not used: Sales User has no permission on it, and it re-plans locations from warehouse kilos, which this site cannot express in rolls. approval_status, approved_by and approved_on were added on 5 Nov 2026: a production manager approves each list through the manna_pick_list_approve Server Script.",
   "doctypes": [
     {
       "doctype": "DocType",
@@ -37,6 +37,9 @@
         { "fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "Submitted\nCancelled", "default": "Submitted", "in_list_view": 1 },
         { "fieldname": "picked_on", "label": "Picked On", "fieldtype": "Datetime" },
         { "fieldname": "picked_by", "label": "Picked By", "fieldtype": "Link", "options": "User" },
+        { "fieldname": "approval_status", "label": "Approval", "fieldtype": "Select", "options": "Pending\nApproved", "default": "Pending", "in_list_view": 1, "in_standard_filter": 1, "read_only": 1 },
+        { "fieldname": "approved_by", "label": "Approved By", "fieldtype": "Link", "options": "User", "read_only": 1 },
+        { "fieldname": "approved_on", "label": "Approved On", "fieldtype": "Datetime", "read_only": 1 },
         { "fieldname": "items", "label": "Items", "fieldtype": "Table", "options": "Manna Pick List Item", "reqd": 1 },
         { "fieldname": "sap_section", "label": "SAP", "fieldtype": "Section Break", "collapsible": 1 },
         { "fieldname": "sap_pick_list", "label": "Hi-Tech SAP Pick List", "fieldtype": "Data", "read_only": 1, "description": "Written by the order sync (PASS K) when it sends this list to Hi-Tech's SAP." },

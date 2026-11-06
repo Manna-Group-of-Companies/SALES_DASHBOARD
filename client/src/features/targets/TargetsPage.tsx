@@ -8,12 +8,32 @@
  * percentage always show, 0 until something is invoiced; the list of invoices
  * opens only once there are some.
  *
+ * Clicking a rep opens their customers (RepCustomersView, 5 Nov 2026): what
+ * each ordered and SAP invoiced in the month, and what each owes today. The
+ * rep is kept in the URL (`?rep=`) so Back and a reload land on the same rep.
+ *
+ * The GM sees every team here, read-only (5 Nov 2026): `manna_sales_targets`
+ * gives the GM all teams and an empty `can_edit`, so no Set target / Edit
+ * button shows and the guard would refuse one anyway. A team filter narrows it.
+ *
+ * Each rep's row also shows the month's orders and their value, what the rep's
+ * customers have paid against their SAP invoices (once the SAP invoice sync
+ * writes `SAP Invoice`; "—" until then), and a payment status.
+ *
  * The phone's twin is app/lib/screens/manager/manager_targets_screen.dart.
  * The same targets show on both, and on the rep's own home screen.
  */
 
-import { useEffect, useState } from 'react';
-import { getTargetMonth, upsertTarget } from '@/api/salesTargets';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import {
+  getMonthOrdersByRep,
+  getSapInvoices,
+  getTargetMonth,
+  upsertTarget,
+  type RepMonthTotals,
+} from '@/api/salesTargets';
+import { Api } from '@/api/client';
 import {
   TARGET_MONTHS,
   achieved,
@@ -26,11 +46,36 @@ import {
   type TargetRow,
   type TargetUnit,
 } from '@/domain/salesTarget';
-import { Alert, Badge, Button, Card, Empty, Field, Input, Meter, Modal, Segmented } from '@/components/ui';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Empty,
+  Field,
+  Icon,
+  Input,
+  Meter,
+  Modal,
+  Segmented,
+  Select,
+  type BadgeTone,
+} from '@/components/ui';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import '@/components/layout/layout.css';
+import { RepCustomersView } from './RepCustomersView';
+import './targets.css';
 
 const errText = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback);
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/** A rep's payment status, from what their customers owe (SAP). */
+function payStatus(r: TargetRow): { text: string; tone: BadgeTone } {
+  // A rupee left on an invoice is rounding (credit.ts OVERDUE_TOLERANCE).
+  if (r.overdue > 1) return { text: 'Overdue', tone: 'danger' };
+  if (r.outstanding > 1) return { text: 'Not due', tone: 'warn' };
+  return { text: 'Fully paid', tone: 'ok' };
+}
 
 export function TargetsPage() {
   const now = new Date();
@@ -48,6 +93,8 @@ export function TargetsPage() {
   const [editing, setEditing] = useState<TargetRow | null>(null);
   const [open, setOpen] = useState<TargetRow | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [params, setParams] = useSearchParams();
+  const repName = params.get('rep');
 
   useEffect(() => {
     let live = true;
@@ -70,29 +117,151 @@ export function TargetsPage() {
     };
   }, [month, year, tick]);
 
-  const rows = data?.rows ?? [];
+  const [totals, setTotals] = useState<Map<string, RepMonthTotals>>(new Map());
+  /** Paid per rep, from SAP invoices; null while SAP Invoice is not there. */
+  const [paid, setPaid] = useState<Map<string, number> | null>(null);
+  const [team, setTeam] = useState('');
+
+  const monthIndex = ym % 12;
+  useEffect(() => {
+    if (!data?.rows.length) return;
+    let live = true;
+    const from = `${year}-${pad(monthIndex + 1)}-01`;
+    const to = `${year}-${pad(monthIndex + 1)}-${pad(new Date(year, monthIndex + 1, 0).getDate())}`;
+    const reps = data.rows.map((r) => r.salesPerson);
+    getMonthOrdersByRep(from, to)
+      .then((t) => live && setTotals(t))
+      .catch(() => live && setTotals(new Map()));
+    // Paid: each rep's assigned customers' SAP invoices. Best-effort.
+    Api.sales
+      .listCustomers(reps)
+      .then(async (cs) => {
+        const inv = await getSapInvoices(cs.map((c) => c.id));
+        if (!live) return;
+        if (!inv.length) {
+          setPaid(null);
+          return;
+        }
+        const repOf = new Map(cs.map((c) => [c.id, c.assignedRep ?? '']));
+        const by = new Map<string, number>();
+        for (const i of inv) {
+          const rep = repOf.get(i.customer);
+          if (rep) by.set(rep, (by.get(rep) ?? 0) + i.paid);
+        }
+        setPaid(by);
+      })
+      .catch(() => live && setPaid(null));
+    return () => {
+      live = false;
+    };
+  }, [data, year, monthIndex]);
+
+  const allRows = data?.rows ?? [];
+  const teams = useMemo(() => [...new Set(allRows.map((r) => r.team).filter(Boolean))].sort(), [allRows]);
+  const rows = team ? allRows.filter((r) => r.team === team) : allRows;
   const canEdit = new Set(data?.canEdit ?? []);
+  const readOnly = Boolean(data?.isGM) && canEdit.size === 0;
+  const selected = repName ? allRows.find((r) => r.salesPerson === repName) : undefined;
+
+
+  const openRep = (r: TargetRow) => {
+    setDone(null);
+    setParams((p) => {
+      const n = new URLSearchParams(p);
+      n.set('rep', r.salesPerson);
+      return n;
+    });
+    window.scrollTo(0, 0);
+  };
+  const closeRep = () =>
+    setParams((p) => {
+      const n = new URLSearchParams(p);
+      n.delete('rep');
+      return n;
+    });
+
+  const modals = (
+    <>
+      {editing && (
+        <TargetModal
+          row={editing}
+          month={month}
+          year={year}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setDone(`Target set for ${editing.salesPerson}, ${month} ${year}`);
+            setEditing(null);
+            setTick((t) => t + 1);
+          }}
+        />
+      )}
+      {open && <InvoicesModal row={open} title={`${open.salesPerson} · ${month} ${year}`} onClose={() => setOpen(null)} />}
+    </>
+  );
+
+  if (selected) {
+    return (
+      <div>
+        {done && (
+          <div style={{ marginBottom: 14 }}>
+            <Alert tone="ok" title={done} />
+          </div>
+        )}
+        <RepCustomersView
+          row={selected}
+          month={month}
+          monthIndex={monthIndex}
+          year={year}
+          canEdit={canEdit.has(selected.salesPerson)}
+          onBack={closeRep}
+          onEdit={() => {
+            setDone(null);
+            setEditing(selected);
+          }}
+          onShowInvoices={() => setOpen(selected)}
+        />
+        {modals}
+      </div>
+    );
+  }
 
   return (
     <div>
       <div className="page-head">
         <div className="grow">
-          <div className="page-head__title">Team Targets</div>
+          <div className="page-head__title">
+            {data?.isGM ? 'Targets — all teams' : 'Team Targets'}{' '}
+            {readOnly && <Badge tone="neutral">Read only</Badge>}
+          </div>
           <div className="tiny dim">
             Achieved = SAP invoices dated in the month, before GST. Approved orders not yet invoiced do not count.
             <br />
             Outstanding = what the rep's customers owe today, from SAP.
           </div>
         </div>
-        <Button size="sm" onClick={() => setYm(ym - 1)} aria-label="Previous month">
-          ‹
-        </Button>
-        <strong style={{ minWidth: 80, textAlign: 'center' }}>
-          {month} {year}
-        </strong>
-        <Button size="sm" onClick={() => setYm(ym + 1)} disabled={ym >= maxYm} aria-label="Next month">
-          ›
-        </Button>
+        <div className="tg-month">
+          <Button size="sm" onClick={() => setYm(ym - 1)} aria-label="Previous month">
+            <Icon name="chevronLeft" size={14} />
+          </Button>
+          <strong>
+            {month} {year}
+          </strong>
+          <Button size="sm" onClick={() => setYm(ym + 1)} disabled={ym >= maxYm} aria-label="Next month">
+            <Icon name="chevronRight" size={14} />
+          </Button>
+        </div>
+        {data?.isGM && teams.length > 1 && (
+          <div style={{ width: 180 }}>
+            <Select value={team} onChange={(e) => setTeam(e.target.value)} aria-label="Team">
+              <option value="">All teams</option>
+              {teams.map((t) => (
+                <option key={t} value={t}>
+                  {t} team
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
         <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
       </div>
 
@@ -108,6 +277,11 @@ export function TargetsPage() {
       )}
 
       {!loading && !error && rows.length === 0 && <Empty icon="—" title="No reps in your team were found" />}
+      {!loading && !error && repName && rows.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <Alert tone="warn" title={`${repName} is not in this list`} />
+        </div>
+      )}
 
       {rows.length > 0 && (
         <Card flush>
@@ -117,9 +291,13 @@ export function TargetsPage() {
                 <tr>
                   <th>Rep</th>
                   <th className="right">Target</th>
+                  <th className="right">Orders</th>
+                  <th className="right">Ordered</th>
                   <th className="right">Achieved (invoiced)</th>
-                  <th style={{ minWidth: 180 }}>Progress</th>
+                  <th style={{ minWidth: 150 }}>Progress</th>
+                  <th className="right">Paid</th>
                   <th className="right">Outstanding</th>
+                  <th>Status</th>
                   <th />
                 </tr>
               </thead>
@@ -127,19 +305,41 @@ export function TargetsPage() {
                 {rows.map((r) => {
                   const f = fraction(r);
                   return (
-                    <tr key={r.salesPerson}>
+                    <tr
+                      key={r.salesPerson}
+                      className="tg-rep-row"
+                      tabIndex={0}
+                      onClick={() => openRep(r)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') openRep(r);
+                      }}
+                      title={`See ${r.salesPerson}'s customers`}
+                    >
                       <td>
-                        <div>{r.salesPerson}</div>
-                        {data?.isGM && <div className="tiny dim">{r.team} team</div>}
+                        <div className="tg-rep-name">{r.salesPerson}</div>
+                        <div className="tiny dim">
+                          {data?.isGM ? `${r.team} team · ` : ''}View customers
+                        </div>
                       </td>
                       <td className="right">
                         {hasTarget(r) ? formatTarget(r, r.targetAmount) : <span className="dim">Not set</span>}
                       </td>
                       <td className="right">
+                        {totals.get(r.salesPerson)?.orders ?? <span className="dim">0</span>}
+                      </td>
+                      <td className="right" style={{ whiteSpace: 'nowrap' }}>
+                        {totals.get(r.salesPerson)?.ordered ? (
+                          formatMoney(r, totals.get(r.salesPerson)!.ordered)
+                        ) : (
+                          <span className="dim">—</span>
+                        )}
+                      </td>
+                      <td className="right">
                         {hasInvoices(r) ? (
-                          <Button variant="ghost" size="sm" onClick={() => setOpen(r)} title="See the invoices">
-                            {formatTarget(r, achieved(r))} ›
-                          </Button>
+                          <>
+                            <div>{formatTarget(r, achieved(r))}</div>
+                            <div className="tiny dim">{invoiceCount(r)}</div>
+                          </>
                         ) : (
                           <>
                             <div>{formatTarget(r, 0)}</div>
@@ -163,6 +363,13 @@ export function TargetsPage() {
                           <span className="tiny dim">—</span>
                         )}
                       </td>
+                      <td className="right tg-ok" style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        {paid && paid.has(r.salesPerson) ? (
+                          formatMoney(r, paid.get(r.salesPerson)!)
+                        ) : (
+                          <span className="dim">—</span>
+                        )}
+                      </td>
                       <td className="right">
                         <div>{formatMoney(r, r.outstanding)}</div>
                         {r.overdue > 0 && (
@@ -171,18 +378,25 @@ export function TargetsPage() {
                           </div>
                         )}
                       </td>
-                      <td className="right">
+                      <td>
+                        <Badge tone={payStatus(r).tone}>{payStatus(r).text}</Badge>
+                      </td>
+                      <td className="right" style={{ whiteSpace: 'nowrap' }}>
                         {canEdit.has(r.salesPerson) && (
                           <Button
                             size="sm"
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setDone(null);
                               setEditing(r);
                             }}
                           >
                             {hasTarget(r) ? 'Edit' : 'Set target'}
                           </Button>
-                        )}
+                        )}{' '}
+                        <span className="tg-chev">
+                          <Icon name="chevronRight" size={18} />
+                        </span>
                       </td>
                     </tr>
                   );
@@ -192,24 +406,21 @@ export function TargetsPage() {
           </div>
         </Card>
       )}
-
-      {editing && (
-        <TargetModal
-          row={editing}
-          month={month}
-          year={year}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setDone(`Target set for ${editing.salesPerson}, ${month} ${year}`);
-            setEditing(null);
-            setTick((t) => t + 1);
-          }}
-        />
+      {rows.length > 0 && (
+        <div className="tg-hint">
+          <Icon name="info" size={14} />
+          Click a rep to see their customers: what each ordered and was invoiced this month, and what each owes.
+        </div>
       )}
 
-      {open && <InvoicesModal row={open} title={`${open.salesPerson} · ${month} ${year}`} onClose={() => setOpen(null)} />}
+      {modals}
     </div>
   );
+}
+
+function invoiceCount(r: TargetRow): string {
+  const n = new Set(r.lines.map((l) => l.invoice)).size;
+  return `${n} invoice${n === 1 ? '' : 's'}`;
 }
 
 function TargetModal({

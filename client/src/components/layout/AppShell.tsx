@@ -161,6 +161,10 @@ export function AppShell() {
     // decision, and what their decisions set in motion (25 Sep 2026).
     { to: '/gm', label: 'Escalated to You', icon: 'inbox', roles: ['general_manager'], group: 'Overview' },
     { to: '/follow-up', label: 'Follow-up', icon: 'listChecks', roles: ['general_manager'], count: repAnswers, urgent: repAnswers > 0, group: 'Overview' },
+    // Every team's targets, read-only (5 Nov 2026).
+    { to: '/targets', label: 'Team Targets', icon: 'chart', roles: ['general_manager'], group: 'Overview' },
+    // Which products sell most (5 Nov 2026).
+    { to: '/product-sales', label: 'Product Sales', icon: 'package', roles: ['general_manager'], group: 'Overview' },
     // The MD's one screen (25 Sep 2026): quality-wise rates for Hi-Tech Pretreads.
     { to: '/rates', label: 'Rates & Dealer Prices', icon: 'rupee', roles: ['managing_director'], group: 'Overview' },
     // The accountant's one screen: every order at Hi-Tech with its real customer (8 Oct 2026).
@@ -181,6 +185,8 @@ export function AppShell() {
     // week rollup is gone.
 
     { to: '/production', label: 'Production Queue', icon: 'factory', roles: ['production_manager'], group: 'Production' },
+    // Approving the reps' pick lists (5 Nov 2026).
+    { to: '/production/pick-lists', label: 'Pick Lists', icon: 'listChecks', roles: ['production_manager'], group: 'Production' },
     // Dispatch Planning was here. Parked on 24 September 2026 on instruction —
     // SAP's invoice is dispatch for now. The page is kept; see routes.tsx.
 
@@ -237,11 +243,15 @@ export function AppShell() {
   // Matched against the visible items, not all of them: "/" is the Dashboard
   // for most roles and the HR Dashboard for HR. A page under a nav item — the
   // GM's review of one order — takes its parent's name rather than "Sales".
-  const title =
-    (
-      visible.find((i) => i.to === location.pathname) ??
-      visible.find((i) => i.to !== '/' && location.pathname.startsWith(`${i.to}/`))
-    )?.label ?? 'Sales';
+  //
+  // The longest matching prefix wins, so `/production/pick-lists` is Pick
+  // Lists and `/production/SO-123` is still the Production Queue.
+  const current =
+    visible.find((i) => i.to === location.pathname) ??
+    visible
+      .filter((i) => i.to !== '/' && location.pathname.startsWith(`${i.to}/`))
+      .sort((a, b) => b.to.length - a.to.length)[0];
+  const title = current?.label ?? 'Sales';
 
   return (
     <div className="shell">
@@ -262,7 +272,9 @@ export function AppShell() {
                     key={`${item.to}-${item.label}`}
                     to={item.to}
                     end={item.to === '/'}
-                    className={({ isActive }) => `navlink ${isActive ? 'is-active' : ''}`}
+                    // One item lit, the one `current` picked — not every
+                    // prefix (`/production` under `/production/pick-lists`).
+                    className={() => `navlink ${current?.to === item.to ? 'is-active' : ''}`}
                   >
                     <Icon name={item.icon} className="navlink__icon" />
                     <span className="navlink__label grow">{item.label}</span>

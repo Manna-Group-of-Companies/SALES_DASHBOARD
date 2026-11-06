@@ -2629,6 +2629,11 @@ function Get-PkSkipReason {
     $sent = ConvertTo-CleanText (Get-JsonProp $Pick 'sap_pick_list')
     if ($sent -ne '') { return @{ Kind = 'skip'; Why = "already SAP pick list $sent" } }
     if ((ConvertTo-CleanText (Get-JsonProp $Pick 'sap_sync_error')) -ne '') { return @{ Kind = 'skip'; Why = 'an error is recorded on it - clear sap_sync_error to try again' } }
+    # Production approves a list before Hi-Tech picks it (manna_pick_list_approve,
+    # 6 Nov 2026): once in SAP, B1if invoices it within a minute, so an
+    # unapproved list must never get there. A site without the field has no
+    # approved list either, so it waits too - never "no field, so send".
+    if ((ConvertTo-CleanText (Get-JsonProp $Pick 'approval_status')) -ne 'Approved') { return @{ Kind = 'wait'; Why = 'waiting for a production manager to approve it' } }
     if ($null -eq $Order) { return @{ Kind = 'refuse'; Why = 'its sales order was not found' } }
     if ([int](ConvertTo-Number (Get-JsonProp $Order 'docstatus')) -eq 2) { return @{ Kind = 'refuse'; Why = 'its sales order is cancelled' } }
     if (-not (Test-MfOwns -Row $Order -Flow $Flow)) { return @{ Kind = 'skip'; Why = 'its order is not on the Manna Treads first route - Hi-Tech picks it by hand as before' } }

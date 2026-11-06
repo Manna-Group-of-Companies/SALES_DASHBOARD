@@ -356,12 +356,20 @@ class PickListCard extends StatelessWidget {
                     showOrder ? '${l.customerName} · ${l.salesOrder}' : l.name,
                     style: const TextStyle(fontWeight: FontWeight.bold))),
             if (!l.isSubmitted)
-              const Text('Cancelled', style: TextStyle(color: Colors.red)),
+              const Text('Cancelled', style: TextStyle(color: Colors.red))
+            else
+              _ApprovalChip(approved: l.isApproved),
           ]),
           Text(
               '${showOrder ? '${l.name} · ' : ''}${l.salesPerson} · '
               '${l.pickedOn.length >= 16 ? l.pickedOn.substring(0, 16) : l.pickedOn}',
               style: const TextStyle(fontSize: 12, color: Colors.black54)),
+          if (l.isApproved)
+            Text(
+                'Approved by production'
+                '${l.approvedByName.isNotEmpty ? ' (${l.approvedByName})' : ''}'
+                '${l.approvedOn.length >= 16 ? ' · ${l.approvedOn.substring(0, 16)}' : ''}',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF2E7D32))),
           const SizedBox(height: 6),
           for (final i in l.items)
             Padding(
@@ -390,6 +398,32 @@ class PickListCard extends StatelessWidget {
             ),
         ]),
       ),
+    );
+  }
+}
+
+/// Whether production has approved a pick list (5 Nov 2026).
+class _ApprovalChip extends StatelessWidget {
+  final bool approved;
+  const _ApprovalChip({required this.approved});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = approved ? const Color(0xFF2E7D32) : const Color(0xFFB26A00);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(approved ? Icons.verified : Icons.hourglass_top,
+            size: 14, color: color),
+        const SizedBox(width: 4),
+        Text(approved ? 'Approved' : 'Awaiting approval',
+            style: TextStyle(
+                fontSize: 12, color: color, fontWeight: FontWeight.w600)),
+      ]),
     );
   }
 }

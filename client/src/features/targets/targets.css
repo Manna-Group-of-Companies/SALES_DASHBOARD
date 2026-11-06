@@ -1,0 +1,210 @@
+/* Team Targets: the rep list and one rep's customers (5 Nov 2026). */
+
+/* --- rep list --- */
+.tg-rep-row { cursor: pointer; }
+.tg-rep-row:hover td { background: var(--accent-soft); }
+.tg-rep-row:hover .tg-rep-name { color: var(--accent-text); }
+.tg-rep-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tg-rep-name { font-weight: 550; }
+.tg-chev { color: var(--text-3); display: inline-flex; vertical-align: middle; }
+
+.tg-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.tg-month { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; }
+.tg-month strong { min-width: 80px; text-align: center; }
+
+/* --- drill-down --- */
+.tg-crumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+.tg-crumb button {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent-text);
+  cursor: pointer;
+}
+.tg-crumb button:hover { text-decoration: underline; }
+
+.tg-head { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; }
+.tg-head h2 { font-size: 22px; font-weight: 700; margin: 0; }
+.tg-head__sub { font-size: 13px; color: var(--text-3); margin-top: 2px; }
+.tg-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.tg-kpis {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.tg-kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 16px;
+  min-width: 0;
+}
+.tg-kpi--danger { border-color: var(--danger-border); }
+.tg-kpi__l {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+.tg-kpi__v {
+  margin-top: 6px;
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tg-kpi__s { margin-top: 4px; font-size: 11.5px; color: var(--text-3); }
+.tg-kpi__link {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tg-ok { color: var(--ok); }
+.tg-red { color: var(--danger); }
+
+/* Outstanding split: within terms vs overdue past them. */
+.tg-coll {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+.tg-coll__title { font-weight: 600; white-space: nowrap; }
+.tg-bar {
+  flex: 1;
+  display: flex;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-3);
+}
+.tg-bar i { display: block; height: 100%; }
+.tg-legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--text-2); }
+.tg-legend span { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.tg-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.tg-c-terms { background: #fbbf24; }
+.tg-c-overdue { background: var(--danger); }
+
+/* Customer table toolbar. */
+.tg-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.tg-tabs { display: flex; gap: 4px; padding: 3px; border-radius: 8px; background: var(--surface-3); }
+.tg-tab {
+  border: 0;
+  background: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tg-tab.is-on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow-1); }
+.tg-tab b { margin-left: 4px; font-size: 12px; font-weight: 600; color: var(--text-3); }
+.tg-search {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 260px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  color: var(--text-3);
+}
+.tg-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.tg-cust { cursor: pointer; }
+.tg-cust:hover td { background: var(--surface-2); }
+.tg-cust .tg-chev { transition: transform 0.2s; }
+.tg-cust.is-open .tg-chev { transform: rotate(90deg); }
+.tg-cname { font-weight: 600; }
+
+.table tr.tg-docs > td { padding: 0; background: var(--surface-2); }
+.tg-docs__wrap { padding: 4px 16px 14px 52px; }
+.tg-docs table th { background: transparent; position: static; font-size: 10px; padding: 10px 12px; }
+.tg-docs table td { padding: 9px 12px; font-size: 13px; background: transparent; }
+.tg-docs .aging { margin-top: 8px; }
+
+.table tfoot td {
+  background: var(--surface-2);
+  font-weight: 700;
+  border-top: 1px solid var(--border);
+  padding: 11px 12px;
+}
+.table tfoot td:first-child { padding-left: 16px; }
+.table tfoot td:last-child { padding-right: 16px; }
+
+.tg-empty { padding: 40px; text-align: center; color: var(--text-3); }
+
+@media (max-width: 1100px) {
+  .tg-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .tg-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tg-tools { flex-wrap: wrap; }
+  .tg-search { width: 100%; }
+  .tg-coll { flex-direction: column; align-items: stretch; }
+  .tg-docs__wrap { padding-left: 16px; }
+}

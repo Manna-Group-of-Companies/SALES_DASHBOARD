@@ -75,6 +75,11 @@ And on `Sales Order Item`, per line:
 Stage two added three more line fields and seven order fields on 26 September
 2026 — listed under *Stage two — Manna Treads sales orders* below.
 
+**`custom_hitech_delivery_refs` is read by the WhatsApp messages (5 Nov 2026).**
+A DN number that newly appears there is what sends the customer the "dispatched"
+message (`whatsapp/server-scripts/manna_whatsapp_queue.py`). Keep its format —
+`DN <DocNum> (<dd-mm-yyyy>)`, comma-separated — or change the parser there too.
+
 **No longer written or read (24 Sep 2026):** `custom_sap_production_order`,
 `custom_sap_production_stage`, `custom_sap_delivery_order` and
 `custom_sap_delivery_date`, on both the order and the line. They stay in

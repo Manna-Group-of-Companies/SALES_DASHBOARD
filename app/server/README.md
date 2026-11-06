@@ -160,3 +160,15 @@ cancelled, a caller who is not its rep or their manager, any product not on
 the order, and any quantity above what is still unpicked on its line
 (shared/fixtures/pick_list.json). That Hi-Tech has the stock is checked on the
 phone against the synced SAP figure and recorded on each row.
+
+**Approval by production (5 Nov 2026).** `approval_status` (Pending /
+Approved), `approved_by` and `approved_on` were added to `Manna Pick List`,
+and `pick_list_approve.py` is the `manna_pick_list_approve` API Server
+Script. Only a production manager (`User.custom_is_production_manager`) or
+System Manager may approve; a cancelled or already-approved list is refused.
+The production manager approves on the dashboard (Production → Pick Lists),
+and the rep's phone shows each list as Approved or Awaiting approval.
+`manna_pick_lists` now lets a production manager read every list but returns
+the customer blank for them — production sees the order, its SAP number and
+the rep, never the customer — unless the list is their own team's. A list
+with a blank `approval_status` (made before the field existed) is Pending.
