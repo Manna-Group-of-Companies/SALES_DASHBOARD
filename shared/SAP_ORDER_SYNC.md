@@ -567,6 +567,34 @@ Manna Treads rounds a document to the rupee and Hi-Tech keeps paise, so PO
 235 is ₹31,269 and Hi-Tech's SO 551 for it ₹31,269.19 — same lines, same
 VAT. Stage 4's invoice and goods receipt will meet the same paise.
 
+**Rolls to kilos — added 6 November 2026.** A tread line (PCTR or CTR) is
+ordered in rolls, and SAP holds the item in kilos. PASS M reads Hi-Tech's
+`U_WeightPerRoll` for each tread item when it sends the order, so whatever
+SAP holds is what the order uses. Changing the weight in SAP changes the
+next order with no code or app change.
+
+| Hi-Tech's `U_WeightPerRoll` | SAP quantity | SAP price |
+|---|---|---|
+| filled in | rolls × weight, in kg | the rep's rate per kg (`custom_rate_per_kg`) |
+| blank or 0 | the rolls, 1:1 | the app's per-roll price (`amount ÷ qty`), so SAP's total is the order's |
+
+The phone's own roll weight (`Item.custom_weight_per_roll`) plays no part.
+Every other line (bonding gum, solution) is sent as before, at
+`custom_total_weight`. A failed read of Hi-Tech's weights sends nothing;
+the order waits for the next run, rather than being guessed at 1:1.
+
+Once SAP has the order, PASS M writes the quantity it sent back into each
+tread line's `custom_total_weight`. A weighed line's `custom_packing_note` is
+rebuilt; `rate` and `amount` are never touched. This keeps two things in the
+same unit as SAP:
+- PASS B's line reconcile. It compares SAP's quantity with
+  `custom_total_weight`, and would otherwise read the difference as the
+  factory cutting the line and rewrite the rep's rolls.
+- The pick list's kilos, which the app works out from `custom_total_weight`.
+
+On a weighed line, ERPNext's amount stays the rep's, and SAP bills at SAP's
+weight.
+
 Only orders of `order_flow.units` (Manna Treads) created on or after `since`
 take this route; PASS A leaves them alone. Older orders keep the old one.
 Items must be the shared finished-goods codes — the **same code and name** in

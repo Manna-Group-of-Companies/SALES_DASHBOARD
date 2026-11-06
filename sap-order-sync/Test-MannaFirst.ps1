@@ -123,6 +123,71 @@ $p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @() })
 Check 'an order with no lines is refused' ($p.Problems.Count -eq 1 -and $p.Problems[0] -match 'no lines') ($p.Problems -join '; ')
 
 # ------------------------------------------------------------------------------
+Write-Host "`nRolls to kilos, from Hi-Tech SAP's weight per roll" -ForegroundColor Cyan
+
+# SAL-ORD-2026-00170 as the app wrote it: 25 rolls of a hot tread at 300/kg,
+# with a roll weight of 1 typed on the phone, so 25 kg and 7,500.
+$roll = { param($code, $rolls, $amount, $perKg, $cat = 'CTR', $kg = $rolls, $row = 'row1', $belts = 0)
+    [pscustomobject]@{ name = $row; item_code = $code; item_name = 'HOT MANNA DOUBLE BLUE 50 16'; custom_product_category = $cat
+        qty = $rolls; rate = $(if ($rolls) { $amount / $rolls } else { 0 }); amount = $amount; custom_rate_per_kg = $perKg
+        custom_total_weight = $kg; custom_rolls = [math]::Floor($rolls); custom_loose_belts = $belts } }
+
+$p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @(& $roll 'HMD001240' 25 7500 300) }) -WeightPerRoll @{ 'HMD001240' = 20.0 }
+Check 'a weight in SAP: 25 rolls x 20 kg = 500 kg' (Near $p.Lines[0].Kg 500) "$($p.Lines[0].Kg)"
+Check 'a weight in SAP: priced at the rep''s rate per kg, 300' (Near $p.Lines[0].Rate 300) "$($p.Lines[0].Rate)"
+Check 'a weight in SAP: line total 500 x 300 = 150,000' (Near $p.Lines[0].Amount 150000) "$($p.Lines[0].Amount)"
+Check 'a weight in SAP: the app''s own roll weight plays no part' (Near $p.Lines[0].PerUnit 20) "$($p.Lines[0].PerUnit)"
+
+$p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @(& $roll 'HMD001240' 25 7500 300 'CTR' 500) }) -WeightPerRoll @{}
+Check 'no weight in SAP: 25 rolls go as 25, whatever the app weighed them at' ((Near $p.Lines[0].Kg 25) -and $p.Problems.Count -eq 0) "$($p.Lines[0].Kg) / $($p.Problems -join '; ')"
+Check 'no weight in SAP: the app''s per-roll price, 7500 / 25 = 300' (Near $p.Lines[0].Rate 300) "$($p.Lines[0].Rate)"
+Check 'no weight in SAP: SAP''s total is the order''s own 7,500' ((Near $p.Lines[0].Amount 7500) -and (Near $p.Total 7500)) "$($p.Lines[0].Amount)"
+Check 'no weight in SAP: PerUnit 1, a 1:1 line' (Near $p.Lines[0].PerUnit 1) "$($p.Lines[0].PerUnit)"
+
+$p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @(& $roll 'HMD001240' 4 30360 253 'CTR' 120) }) -WeightPerRoll @{ 'HMD001240' = 0.0 }
+Check 'a weight of 0 in SAP is no weight: 4 rolls at 30360 / 4' ((Near $p.Lines[0].Kg 4) -and (Near $p.Lines[0].Rate 7590)) ("{0} @ {1}" -f $p.Lines[0].Kg, $p.Lines[0].Rate)
+
+$p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @(& $roll 'hmd001240' 2 600 300) }) -WeightPerRoll (Get-MfWeightPerRoll -Rows @([pscustomobject]@{ ItemCode = 'HMD001240'; U_WeightPerRoll = 22.5 }))
+Check 'the weight is matched whatever the code''s case' (Near $p.Lines[0].Kg 45) "$($p.Lines[0].Kg)"
+
+$p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @(& $roll 'PMB00101002' 2.5 0 255 'PCTR' 60.5 'row1' 2) }) -WeightPerRoll @{ 'PMB00101002' = 24.2 }
+Check 'PCTR with loose belts: qty (rolls + belts as a fraction) x weight, 2.5 x 24.2 = 60.5' (Near $p.Lines[0].Kg 60.5) "$($p.Lines[0].Kg)"
+
+$p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @(& $roll 'BG0001' 3 0 200 'Bonding Gum' 30) }) -WeightPerRoll @{ 'BG0001' = 99.0 }
+Check 'a line that is not PCTR or CTR is as before - its own kilos' ((Near $p.Lines[0].Kg 30) -and (Near $p.Lines[0].PerUnit 0)) "$($p.Lines[0].Kg)"
+
+$p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @(& $roll 'HMD001240' 25 7500 300 'CTR' 500) })
+Check 'no weights given at all: as before, custom_total_weight' (Near $p.Lines[0].Kg 500) "$($p.Lines[0].Kg)"
+
+$p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @(& $roll 'HMD001240' 0 0 300) }) -WeightPerRoll @{}
+Check 'a roll line with no rolls refuses the order' ($p.Problems.Count -eq 1 -and $p.Problems[0] -match 'no rolls') ($p.Problems -join '; ')
+
+$wp = Get-MfWeightPerRoll -Rows @([pscustomobject]@{ ItemCode = 'a1'; U_WeightPerRoll = 10 }, [pscustomobject]@{ ItemCode = 'B2'; U_WeightPerRoll = 0 }, [pscustomobject]@{ ItemCode = 'C3'; U_WeightPerRoll = $null })
+Check 'SAP weights: upper-cased, and blank or 0 left out (so 1:1)' ($wp.Count -eq 1 -and (Near $wp['A1'] 10)) ("{0} key(s)" -f $wp.Count)
+
+# What PASS M writes back so PASS B and the pick list count in SAP's unit.
+$doc = [pscustomobject]@{ items = @((& $roll 'HMD001240' 25 7500 300 'CTR' 500 'r1'), (& $roll 'HV0001020' 10 3000 300 'CTR' 200 'r2'), (& $roll 'HMD001300' 5 1500 300 'CTR' 5 'r3'), (& $roll 'BG0001' 3 0 200 'Bonding Gum' 30 'r4')) }
+$p = Get-MfOrderPlan -Doc $doc -WeightPerRoll @{ 'HV0001020' = 18.0 }
+$lw = @(Get-MfLineWeightWrites -Plan $p -Doc $doc)
+$byRow = @{}; foreach ($x in $lw) { $byRow[$x.RowName] = $x }
+$lwSaid = ($lw | ForEach-Object { "$($_.RowName) $($_.Note)" }) -join '; '
+Check 'write-back: a 1:1 line gets custom_total_weight = its rolls, 25' ($byRow.ContainsKey('r1') -and (Near $byRow['r1'].Fields.custom_total_weight 25)) $lwSaid
+Check 'write-back: a 1:1 line''s packing note is left as the rep saw it' ($byRow.ContainsKey('r1') -and -not $byRow['r1'].Fields.ContainsKey('custom_packing_note'))
+Check 'write-back: a weighed line gets SAP''s kilos, 180, and its note rebuilt' ($byRow.ContainsKey('r2') -and (Near $byRow['r2'].Fields.custom_total_weight 180) -and ("$($byRow['r2'].Fields.custom_packing_note)" -match '^10 rolls .* 180\.00 kg$')) "$($byRow['r2'].Fields.custom_packing_note)"
+Check 'write-back: a line that already agrees is not written' (-not $byRow.ContainsKey('r3'))
+Check 'write-back: never rate or amount' (@($lw | Where-Object { $_.Fields.ContainsKey('rate') -or $_.Fields.ContainsKey('amount') }).Count -eq 0)
+Check 'write-back: a line that is not PCTR or CTR is not written' (-not $byRow.ContainsKey('r4'))
+
+$ap = Get-MfAdoptedPlan -Plan $p -SapLines @([pscustomobject]@{ ItemCode = 'HMD001240'; Quantity = 25 }, [pscustomobject]@{ ItemCode = 'hv0001020'; Quantity = 200 })
+$alw = @(Get-MfLineWeightWrites -Plan $ap -Doc $doc)
+Check 'adopted: the quantity SAP holds is written, not today''s weight (200 already, so r2 untouched)' (@($alw | Where-Object { $_.RowName -eq 'r2' }).Count -eq 0 -and @($alw | Where-Object { $_.RowName -eq 'r1' }).Count -eq 1) (($alw | ForEach-Object { "$($_.RowName) $($_.Note)" }) -join '; ')
+$ap2 = Get-MfAdoptedPlan -Plan $p -SapLines @([pscustomobject]@{ ItemCode = 'HMD001240'; Quantity = 25 })
+Check 'adopted: a line SAP lacks is not written' (@(Get-MfLineWeightWrites -Plan $ap2 -Doc $doc | Where-Object { $_.RowName -eq 'r2' }).Count -eq 0)
+
+$b2 = New-MfSalesOrderBody -Plan (Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @(& $roll 'HMD001240' 25 7500 300) }) -WeightPerRoll @{}) -CardCode 'C-1709' -OrderName 'SAL-ORD-2026-00170' -TaxCode 'CG+SG@18' -DocDate '2026-11-06' -DueDate '2026-11-06' -Settings (Get-MtSettings -Config (Cfg '{"manna_treads":{"company_db":"TEST_MANNA_TREADS"}}'))
+Check 'the POST carries the 1:1 quantity, 25, at 300 net of GST' ((Near $b2.DocumentLines[0].Quantity 25) -and (Near $b2.DocumentLines[0].UnitPrice (300 / 1.18) 1e-5)) ("{0} @ {1}" -f $b2.DocumentLines[0].Quantity, $b2.DocumentLines[0].UnitPrice)
+
+# ------------------------------------------------------------------------------
 Write-Host "`nThe due date" -ForegroundColor Cyan
 
 Check 'the delivery date when it is ahead' ((Get-MfDueDate -DeliveryDate '2026-11-10' -Today '2026-11-03') -eq '2026-11-10')

@@ -2463,12 +2463,34 @@ function Get-MfTaxCode {
   Problems lists what makes the whole order unsendable. Nothing is dropped:
   an order that would post short is refused, as PASS A refuses one.
 
+  ROLLS TO KILOS (6 Nov 2026, the user's rule). A tread line (category PCTR
+  or CTR) is ordered in rolls - qty, with any loose belts as a fraction - and
+  SAP holds the item in kilos. -WeightPerRoll is Hi-Tech SAP's U_WeightPerRoll
+  per item code, read when the order is sent, so a weight filled in SAP is
+  used by the next order with no code or app change:
+    * a weight: Quantity = rolls x weight, priced at custom_rate_per_kg
+      (what the rep quoted); the app's own roll weight plays no part.
+    * none (blank, 0, or the item missing in Hi-Tech): Quantity = rolls and
+      the price is the app's per-roll rate (amount / qty) - the order's own
+      units and total, converted to nothing.
+  Every other line, and every line when -WeightPerRoll is not given, is as
+  before: custom_total_weight at amount / kilos. PerUnit on each line is the
+  kilos per roll used (1 when 1:1, 0 when not a roll line); Kg is always
+  what SAP's Quantity will be, and PASS M writes it back to the ERPNext line
+  so the line reconcile and the pick list count in the same unit as SAP.
+
 .OUTPUTS
-  @{ Lines = <ArrayList of @{ Item; Name; Kg; Rate; Amount; UnitPriceNet }>;
+  @{ Lines = <ArrayList of @{ Item; Name; Kg; Rate; Amount; UnitPriceNet; PerUnit; RowName }>;
      Total; Problems = <ArrayList of string> }
 #>
+function Test-MfRollLine {
+    # A tread line, ordered in rolls: the app's PCTR and CTR. Pure.
+    param($Item)
+    return ((ConvertTo-CleanText (Get-JsonProp $Item 'custom_product_category')).ToUpperInvariant() -in @('PCTR', 'CTR'))
+}
+
 function Get-MfOrderPlan {
-    param([Parameter(Mandatory = $true)] $Doc)
+    param([Parameter(Mandatory = $true)] $Doc, [hashtable] $WeightPerRoll = $null)
     $divisor = 1 + ((Get-MtGstPercent) / 100)
     $lines = New-Object System.Collections.ArrayList
     $problems = New-Object System.Collections.ArrayList
@@ -2486,11 +2508,33 @@ function Get-MfOrderPlan {
         if ($seen.ContainsKey($key)) { [void]$problems.Add("$code is on more than one line - put it on one"); continue }
         $seen[$key] = $true
 
-        $kg = Get-RoundedHalfUp (ConvertTo-Number (Get-JsonProp $it 'custom_total_weight')) 3
-        if ($kg -le 0) { [void]$problems.Add("$label has no weight (custom_total_weight)"); continue }
         $amount = ConvertTo-Number (Get-JsonProp $it 'amount')
-        if ($amount -gt 0) { $rate = Get-RoundedHalfUp ($amount / $kg) 2 }
-        else               { $rate = Get-RoundedHalfUp (ConvertTo-Number (Get-JsonProp $it 'custom_rate_per_kg')) 2 }
+        $perUnit = 0.0
+        if ($null -ne $WeightPerRoll -and (Test-MfRollLine -Item $it)) {
+            $rolls = ConvertTo-Number (Get-JsonProp $it 'qty')
+            if ($rolls -le 0) { [void]$problems.Add("$label has no rolls (qty)"); continue }
+            $w = 0.0
+            if ($WeightPerRoll.ContainsKey($key)) { $w = [double]$WeightPerRoll[$key] }
+            if ($w -gt 0) {
+                $perUnit = $w
+                $kg = Get-RoundedHalfUp ($rolls * $w) 3
+                $rate = Get-RoundedHalfUp (ConvertTo-Number (Get-JsonProp $it 'custom_rate_per_kg')) 2
+                # An order from before custom_rate_per_kg: its amount over the SAP kilos.
+                if ($rate -le 0 -and $amount -gt 0) { $rate = Get-RoundedHalfUp ($amount / $kg) 2 }
+            } else {
+                # 1:1 - the rolls are SAP's quantity at the app's per-roll
+                # price, so SAP's total is the order's own.
+                $perUnit = 1.0
+                $kg = Get-RoundedHalfUp $rolls 3
+                if ($amount -gt 0) { $rate = Get-RoundedHalfUp ($amount / $rolls) 2 }
+                else               { $rate = Get-RoundedHalfUp (ConvertTo-Number (Get-JsonProp $it 'rate')) 2 }
+            }
+        } else {
+            $kg = Get-RoundedHalfUp (ConvertTo-Number (Get-JsonProp $it 'custom_total_weight')) 3
+            if ($kg -le 0) { [void]$problems.Add("$label has no weight (custom_total_weight)"); continue }
+            if ($amount -gt 0) { $rate = Get-RoundedHalfUp ($amount / $kg) 2 }
+            else               { $rate = Get-RoundedHalfUp (ConvertTo-Number (Get-JsonProp $it 'custom_rate_per_kg')) 2 }
+        }
         # Never let Manna Treads SAP price it from its own list.
         if ($rate -le 0) { [void]$problems.Add("$label has no price"); continue }
 
@@ -2503,10 +2547,89 @@ function Get-MfOrderPlan {
             Rate         = [double]$rate
             Amount       = [double]$lineAmount
             UnitPriceNet = (Get-RoundedHalfUp ($rate / $divisor) 6)
+            PerUnit      = [double]$perUnit
+            RowName      = (ConvertTo-CleanText (Get-JsonProp $it 'name'))
         })
     }
     if ($n -eq 0) { [void]$problems.Add('the order has no lines') }
     return @{ Lines = $lines; Total = (Get-RoundedHalfUp $total 2); Problems = $problems }
+}
+
+function Get-MfWeightPerRoll {
+    # Hi-Tech's Items rows (ItemCode, U_WeightPerRoll) as code -> kilos per
+    # roll, upper-cased. Blank, zero or negative is left out, which
+    # Get-MfOrderPlan reads as 1:1. Pure.
+    param($Rows)
+    $map = @{}
+    foreach ($r in @($Rows)) {
+        if ($null -eq $r) { continue }
+        $code = (ConvertTo-CleanText (Get-JsonProp $r 'ItemCode')).ToUpperInvariant()
+        $w = ConvertTo-Number (Get-JsonProp $r 'U_WeightPerRoll')
+        if ($code -ne '' -and $w -gt 0) { $map[$code] = [double]$w }
+    }
+    return $map
+}
+
+function Get-MfLineWeightWrites {
+    # What PASS M writes back to the order's roll lines once SAP has them:
+    # custom_total_weight = the quantity SAP got, where the two differ. PASS
+    # B's line reconcile compares SAP's quantity with custom_total_weight and
+    # the pick list's kilos come from it, so a line left at the app's figure
+    # would read as the factory changing it and have its rolls rewritten. A
+    # weighed line's packing note is rebuilt with SAP's kilos; a 1:1 line's
+    # is left as the rep saw it. Rate and amount are never touched. Pure.
+    #
+    # ArrayList of @{ RowName; ItemCode; Fields; Note }
+    param([Parameter(Mandatory = $true)] $Plan, [Parameter(Mandatory = $true)] $Doc)
+    $out = New-Object System.Collections.ArrayList
+    $rows = @{}
+    foreach ($it in @(Get-JsonProp $Doc 'items')) { if ($null -ne $it) { $rows[(ConvertTo-CleanText (Get-JsonProp $it 'name'))] = $it } }
+    foreach ($l in @($Plan.Lines)) {
+        if ([double]$l.PerUnit -le 0 -or "$($l.RowName)" -eq '' -or -not $rows.ContainsKey("$($l.RowName)")) { continue }
+        $it = $rows["$($l.RowName)"]
+        $was = Get-RoundedHalfUp (ConvertTo-Number (Get-JsonProp $it 'custom_total_weight')) 3
+        if ([math]::Abs($was - [double]$l.Kg) -le 0.0005) { continue }
+        $f = @{ custom_total_weight = [double]$l.Kg }
+        if ([double]$l.PerUnit -ne 1.0) {
+            $note = New-ErpPackingNote -Category (ConvertTo-CleanText (Get-JsonProp $it 'custom_product_category')) `
+                -Rolls (ConvertTo-Number (Get-JsonProp $it 'custom_rolls')) -Belts ([int](ConvertTo-Number (Get-JsonProp $it 'custom_loose_belts'))) -WeightKg ([double]$l.Kg)
+            if ($null -ne $note) { $f['custom_packing_note'] = $note }
+        }
+        $how = $(if ([double]$l.PerUnit -eq 1.0) { 'no weight per roll in Hi-Tech SAP, so 1:1' } else { "$($l.PerUnit) kg per roll from Hi-Tech SAP" })
+        [void]$out.Add(@{ RowName = "$($l.RowName)"; ItemCode = "$($l.Item)"; Fields = $f; Note = ("{0} -> {1} ({2})" -f $was, $l.Kg, $how) })
+    }
+    return $out
+}
+
+function Get-MfAdoptedPlan {
+    # $Plan with each line's Kg replaced by the quantity SAP's adopted order
+    # actually holds for that item - what was sent, which today's weights may
+    # no longer give. A line SAP lacks keeps no write (PerUnit 0). Pure.
+    param([Parameter(Mandatory = $true)] $Plan, $SapLines)
+    $qty = @{}
+    foreach ($l in @($SapLines)) {
+        if ($null -eq $l) { continue }
+        $qty[(ConvertTo-CleanText (Get-JsonProp $l 'ItemCode')).ToUpperInvariant()] = ConvertTo-Number (Get-JsonProp $l 'Quantity')
+    }
+    $lines = New-Object System.Collections.ArrayList
+    foreach ($l in @($Plan.Lines)) {
+        $c = $l.Clone()
+        $k = "$($l.Item)".ToUpperInvariant()
+        if ($qty.ContainsKey($k)) { $c.Kg = [double](Get-RoundedHalfUp $qty[$k] 3) } else { $c.PerUnit = 0.0 }
+        [void]$lines.Add($c)
+    }
+    return @{ Lines = $lines; Total = $Plan.Total; Problems = $Plan.Problems }
+}
+
+function Write-MfLineWeights {
+    # Get-MfLineWeightWrites, written row by row. Throws on the first failure,
+    # so the caller leaves the order's link unwritten and the next run adopts
+    # it and writes the lines again.
+    param([Parameter(Mandatory = $true)] [string] $Name, [Parameter(Mandatory = $true)] $Plan, [Parameter(Mandatory = $true)] $Doc)
+    foreach ($lw in (Get-MfLineWeightWrites -Plan $Plan -Doc $Doc)) {
+        Update-ErpOrderLine -RowName $lw.RowName -Fields $lw.Fields
+        Write-Log INFO ("PASS M {0}: line {1} custom_total_weight {2}" -f $Name, $lw.ItemCode, $lw.Note)
+    }
 }
 
 function Get-MfDueDate {
@@ -3998,7 +4121,7 @@ try {
                         $custName = $mfCust[$cust].Name
                         if ($custName -eq '') { $custName = ConvertTo-CleanText (Get-JsonProp $doc 'customer_name') }
                         [void]$mfWork.Add(@{
-                            Name = $name; Doc = $doc; Plan = (Get-MfOrderPlan -Doc $doc)
+                            Name = $name; Doc = $doc; Plan = $null
                             BpCode = $mfCust[$cust].Code; CustomerName = $custName
                         })
                     } catch {
@@ -4006,6 +4129,46 @@ try {
                         $script:Result.failures++
                     }
                 }
+
+                # ---- 1b. Hi-Tech's weight per roll, then the plans ----
+                # Read when the order is sent, so a weight filled in SAP is used
+                # by the next order. Its own short Hi-Tech session (one seat at a
+                # time). A failed read sends nothing: guessing 1:1 because SAP
+                # did not answer would put rolls where kilos belong.
+                $rollCodes = @{}
+                foreach ($w in $mfWork) {
+                    foreach ($it in @(Get-JsonProp $w.Doc 'items')) {
+                        if ($null -ne $it -and (Test-MfRollLine -Item $it)) {
+                            $c = ConvertTo-CleanText (Get-JsonProp $it 'item_code')
+                            if ($c -ne '') { $rollCodes[$c.ToUpperInvariant()] = $c }
+                        }
+                    }
+                }
+                $mfWeights = @{}
+                if ($rollCodes.Count -gt 0) {
+                    $wSess = $null
+                    try {
+                        $wSess = New-SapWebSession -BaseUrl $sapUrl -Username $sapUser -Password $sapPass `
+                            -CompanyDb $companyDb -CompanyName $companyName -UseSkipCert $useSkip
+                        $all = @($rollCodes.Values)
+                        $wRows = New-Object System.Collections.ArrayList
+                        for ($i = 0; $i -lt $all.Count; $i += 20) {
+                            $chunk = $all[$i..([Math]::Min($i + 19, $all.Count - 1))]
+                            $wq = ($chunk | ForEach-Object { "ItemCode eq '$($_ -replace "'", "''")'" }) -join ' or '
+                            $wrel = "Items?`$filter=$([uri]::EscapeDataString($wq))&`$select=ItemCode,U_WeightPerRoll"
+                            foreach ($r in @(Invoke-SapGet -BaseUrl $sapUrl -Session $wSess -RelUrl $wrel -PageSize $pageSize -UseSkipCert $useSkip -Label 'Hi-Tech weight per roll')) { [void]$wRows.Add($r) }
+                        }
+                        $mfWeights = Get-MfWeightPerRoll -Rows $wRows
+                        Write-Log INFO ("PASS M: weight per roll from Hi-Tech SAP for {0} of {1} roll item(s); the rest go 1:1 (rolls, at the order's own price)." -f $mfWeights.Count, $rollCodes.Count)
+                    } catch {
+                        Write-Log ERROR ("PASS M: could not read Hi-Tech's weight per roll - {0} order(s) left for the next run: {1}" -f $mfWork.Count, "$_")
+                        $script:Result.failures++
+                        $mfWork.Clear()
+                    } finally {
+                        Invoke-SapLogout -BaseUrl $sapUrl -Session $wSess -UseSkipCert $useSkip
+                    }
+                }
+                foreach ($w in $mfWork) { $w.Plan = Get-MfOrderPlan -Doc $w.Doc -WeightPerRoll $mfWeights }
 
                 if ($mfWork.Count -gt 0) {
                     # ---- 2. one Manna Treads session ----
@@ -4032,10 +4195,17 @@ try {
                                     $aNum = "$(Get-JsonProp $adopt.Adopt 'DocNum')".Trim()
                                     $aEntry = "$(Get-JsonProp $adopt.Adopt 'DocEntry')".Trim()
                                     Write-Log WARN ("PASS M {0}: Manna Treads SAP already has an Order with NumAtCard = '{0}' (DocNum {1}, DocEntry {2}) - ADOPTING it, not creating another." -f $name, $aNum, $aEntry)
+                                    # The lines as SAP has them: the run that posted it may
+                                    # have crashed before writing them back.
+                                    $aDoc = @(Invoke-SapGet -BaseUrl $sapUrl -Session $mfSess -RelUrl ("Orders($aEntry)?`$select=DocumentLines") -PageSize $pageSize -UseSkipCert $useSkip -Label 'adopted Manna Treads Order lines')[0]
+                                    $sapLines = @(Get-JsonProp $aDoc 'DocumentLines')
+                                    $adoptPlan = Get-MfAdoptedPlan -Plan $plan -SapLines $sapLines
                                     if ($DryRun) {
+                                        foreach ($lw in (Get-MfLineWeightWrites -Plan $adoptPlan -Doc $w.Doc)) { Write-Log INFO ("PASS M {0}: WOULD set line {1} {2}" -f $name, $lw.ItemCode, $lw.Note) }
                                         Write-Log INFO ("PASS M {0}: WOULD write {1}={2}, {3}={4}, {5}." -f $name, $script:F_MT_SO, $aNum, $script:F_MT_ENTRY, $aEntry, $script:F_MT_SYNCED)
                                     } else {
                                         try {
+                                            Write-MfLineWeights -Name $name -Plan $adoptPlan -Doc $w.Doc
                                             Update-ErpSalesOrder -Name $name -Fields @{ $script:F_MT_SO = $aNum; $script:F_MT_ENTRY = $aEntry; $script:F_MT_SYNCED = $mfNow; $script:F_MT_ERR = '' }
                                         } catch {
                                             Write-Log ERROR ("PASS M {0}: could not record the adopted Manna Treads Order DocNum {1} - the next run adopts it again: {2}" -f $name, $aNum, "$_")
@@ -4084,6 +4254,7 @@ try {
                                 if ($DryRun) {
                                     Write-Log INFO ("PASS M {0}: WOULD POST /Orders to {1} ({2} line(s), {3} incl. GST, {4}):`n{5}" -f `
                                         $name, $mf.CompanyDb, $plan.Lines.Count, $plan.Total, $taxCode, ($body | ConvertTo-Json -Depth 8))
+                                    foreach ($lw in (Get-MfLineWeightWrites -Plan $plan -Doc $w.Doc)) { Write-Log INFO ("PASS M {0}: WOULD then set line {1} {2}" -f $name, $lw.ItemCode, $lw.Note) }
                                     Write-Log INFO ("PASS M {0}: WOULD then write {1}=<DocNum>, {2}=<DocEntry>, {3}." -f $name, $script:F_MT_SO, $script:F_MT_ENTRY, $script:F_MT_SYNCED)
                                     continue
                                 }
@@ -4103,6 +4274,10 @@ try {
                                 Write-Log INFO ("PASS M {0}: Manna Treads Order created - DocNum {1} (DocEntry {2}), {3} line(s), {4} incl. GST, {5}." -f `
                                     $name, $mfNum, $mfEntry, $plan.Lines.Count, $plan.Total, $taxCode)
                                 try {
+                                    # The lines first: an order whose link is written has
+                                    # left PASS M for good, and a line still at the app's
+                                    # kilos would then be "corrected" by PASS B.
+                                    Write-MfLineWeights -Name $name -Plan $plan -Doc $w.Doc
                                     Update-ErpSalesOrder -Name $name -Fields @{ $script:F_MT_SO = $mfNum; $script:F_MT_ENTRY = $mfEntry; $script:F_MT_SYNCED = $mfNow; $script:F_MT_ERR = '' }
                                     $script:Result.mfCreated++; $script:Result.changed++
                                 } catch {
