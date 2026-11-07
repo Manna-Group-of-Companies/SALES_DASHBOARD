@@ -1,7 +1,12 @@
 // Pick lists on the phone (3 Nov 2026): a rep makes them from approved
-// orders in My Orders, ticking only what Hi-Tech has in stock; the sales
-// manager sees every list for the team. The quantity rule is in
-// core/pick_list.dart; the server checks it again (app/server/).
+// orders, ticking only what Hi-Tech has in stock; the sales manager sees
+// every list for the team. The quantity rule is in core/pick_list.dart; the
+// server checks it again (app/server/).
+//
+// Since 7 Nov 2026 the rep's way in is its own page, "Pick List" on the home
+// screen: one day at a time, every product ordered that day, picked from
+// there, with what is already picked and what production has approved shown
+// on the same row.
 
 import 'package:flutter/material.dart';
 
@@ -10,22 +15,30 @@ import 'package:manna_field_sales/core/pick_list.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/services/api.dart';
 
-/// Tick what goes from Hi-Tech's stock now, across the rep's approved orders.
+/// The rep's Pick List page (7 Nov 2026), the home screen's "Pick List" and
+/// the only place a pick list is made (My Orders and the order's own page
+/// only show them).
 ///
-/// One screen for every manager-approved order (4 Nov 2026: one button, not
-/// one per order), or for just [orders] when given — the order's own page
-/// passes its one order. Only those orders' own lines are listed, grouped by
-/// order, so nothing from outside them can be picked. A product Hi-Tech has
-/// none of, or that earlier lists already took in full, is greyed with the
-/// reason. Submitting makes one pick list per order that has a tick, since a
-/// list belongs to one order. Pops `true` once anything was submitted.
+/// A date bar, every Sales Order the rep placed that day with all its
+/// products, and on each product what it is waiting for - the manager's
+/// approval, Hi-Tech's stock, production's approval of its pick list. Only
+/// products of manager-approved orders can be ticked; the server refuses the
+/// rest anyway.
+///
+/// Submitting makes one pick list per order that has a tick, since a list
+/// belongs to one order, and the page stays open showing the new lists.
 class GeneratePickListScreen extends StatefulWidget {
-  /// Full Sales Order documents, with `items`. Null: the rep's approved ones.
-  final List<Map<String, dynamic>>? orders;
-  const GeneratePickListScreen({super.key, this.orders});
+  const GeneratePickListScreen({super.key});
 
   @override
   State<GeneratePickListScreen> createState() => _GeneratePickListScreenState();
+}
+
+/// One product of a pick list already made against an order line.
+class _Picked {
+  final PickList list;
+  final PickListItem item;
+  const _Picked(this.list, this.item);
 }
 
 class _PickRow {
@@ -35,11 +48,17 @@ class _PickRow {
   final double available;
   final double max;
   final double alreadyKg;
+
+  /// The order is manager-approved, so this line may be picked.
+  final bool orderApproved;
+
+  /// The pick lists already made for this line, oldest first.
+  final List<_Picked> picks;
   final TextEditingController qty;
   bool ticked = false;
 
   _PickRow(this.order, this.line, this.already, this.available, this.max,
-      this.alreadyKg)
+      this.alreadyKg, this.orderApproved, this.picks)
       : qty = TextEditingController(text: max > 0 ? trimQty(max) : '');
 
   String get orderName => '${order['name']}';
@@ -49,6 +68,13 @@ class _PickRow {
   String get unit => pickUnit(line);
   double get ordered => orderedForPick(line);
   bool get kgIsQty => kgFollowsQty(line);
+
+  /// Can be ticked now.
+  bool get canPick => orderApproved && max > 0;
+
+  /// Every pick list made for this line has been approved by production.
+  bool get allPicksApproved =>
+      picks.isNotEmpty && picks.every((p) => p.list.isApproved);
 
   /// The kilos the list will carry for what is typed, as the server works
   /// them out (5 Nov 2026: rolls x the order's weight per roll). Shown, never
@@ -64,10 +90,25 @@ class _PickRow {
 int _int(Object? v) => v is num ? v.toInt() : int.tryParse('$v') ?? 0;
 
 const String _kApproved = 'PO Approved - Ready for SAP';
+const Color _kOrange = Color(0xFFF46A21);
+const Color _kGreen = Color(0xFF2E7D32);
+const Color _kAmber = Color(0xFFB26A00);
+
+const _kMonths = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+];
+const _kDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+String _ymd(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
 class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
   late Future<List<_PickRow>> _future;
   bool _busy = false;
+  DateTime _day = _dateOnly(DateTime.now());
 
   @override
   void initState() {
@@ -75,33 +116,35 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
     _future = _load();
   }
 
-  /// The rep's approved Sales Orders that are not cancelled and not yet
-  /// invoiced in full, read whole because the list rows carry no lines.
-  Future<List<Map<String, dynamic>>> _approvedOrders() async {
-    final rows = await Api.getMyOrders();
-    final names = [
-      for (final r in rows)
-        if (r['is_combined'] != true &&
-            r['is_lead'] != true &&
-            '${r['custom_po_status'] ?? ''}' == _kApproved &&
-            '${r['docstatus'] ?? 0}' != '2' &&
-            '${r['custom_sap_invoice'] ?? ''}'.trim().isEmpty)
-          '${r['name']}',
-    ];
-    return Future.wait(names.map(Api.getOrder));
+  void _reload() => setState(() => _future = _load());
+
+  void _setDay(DateTime d) {
+    _day = _dateOnly(d);
+    _reload();
   }
 
   Future<List<_PickRow>> _load() async {
     final results = await Future.wait([
-      widget.orders != null ? Future.value(widget.orders!) : _approvedOrders(),
+      Api.getMyOrdersOn(_ymd(_day)),
       Api.getMinimumStock(),
       Api.getPickLists(),
     ]);
     final orders = (results[0] as List<Map<String, dynamic>>)
-        .where((o) => '${o['custom_po_status'] ?? ''}' == _kApproved);
+        .where((o) => '${o['docstatus'] ?? 0}' != '2');
     final stock = results[1] as Map<String, MinStock>;
-    final so = pickedSoFar(results[2] as List<PickList>);
-    final soKg = pickedKgSoFar(results[2] as List<PickList>);
+    final lists = results[2] as List<PickList>;
+    final so = pickedSoFar(lists);
+    final soKg = pickedKgSoFar(lists);
+
+    // The lists already made, per order line, oldest first.
+    final picksOf = <String, List<_Picked>>{};
+    for (final l in lists.reversed) {
+      if (!l.isSubmitted) continue;
+      for (final i in l.items) {
+        (picksOf[i.salesOrderItem] ??= []).add(_Picked(l, i));
+      }
+    }
+
     return [
       for (final o in orders)
         for (final l in ((o['items'] as List?) ?? const [])
@@ -112,16 +155,27 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
             final s = stock['${l['item_code']}'];
             final available =
                 (s != null && s.weightsKnown) ? s.availableQty : 0.0;
-            return _PickRow(o, l, already, available,
+            return _PickRow(
+                o,
+                l,
+                already,
+                available,
                 maxPick(l, alreadyPicked: already, available: available),
-                soKg['${l['name']}'] ?? 0);
+                soKg['${l['name']}'] ?? 0,
+                '${o['custom_po_status'] ?? ''}' == _kApproved,
+                picksOf['${l['name']}'] ?? const []);
           }(),
     ];
   }
 
-  String _why(_PickRow r) {
+  /// Why a row cannot be ticked, in the rep's words. Null when it can be.
+  String? _why(_PickRow r) {
+    if (r.canPick) return null;
+    if (!r.orderApproved) return 'Waiting for manager approval';
     if (r.ordered <= 0) return 'Loose belts only — not picked';
-    if (remainingToPick(r.line, r.already) <= 0) return 'Already on a pick list';
+    if (remainingToPick(r.line, r.already) <= 0) {
+      return r.picks.isEmpty ? 'Nothing left to pick' : null;
+    }
     return 'Not in Hi-Tech stock';
   }
 
@@ -130,7 +184,7 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
     // Hi-Tech's stock is one pool: two orders cannot both take the last rolls.
     final perItem = <String, double>{};
     final stockOf = <String, double>{};
-    for (final r in rows.where((r) => r.ticked)) {
+    for (final r in rows.where((r) => r.ticked && r.canPick)) {
       final q = double.tryParse(r.qty.text.trim());
       if (q == null || q <= 0) {
         return _snack('Enter how much of ${r.title} to pick.');
@@ -163,13 +217,14 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
       if (!mounted) return;
       _snack(
           'Pick list${made.length == 1 ? '' : 's'} ${made.join(', ')} submitted');
-      Navigator.pop(context, true);
+      // The page stays and shows the new lists on their rows.
+      _reload();
     } catch (e) {
       // Lists already made stay made; say so, so nothing is ticked twice.
       _snack(made.isEmpty
           ? humanError(e)
           : '${made.join(', ')} submitted; the rest failed: ${humanError(e)}');
-      if (made.isNotEmpty && mounted) Navigator.pop(context, true);
+      if (made.isNotEmpty && mounted) _reload();
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -180,11 +235,138 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
   }
 
+  // ------------------------------------------------------------ day bar ---
+
+  Widget _dayBar() {
+    final today = _dateOnly(DateTime.now());
+    final isToday = _day == today;
+    final label = isToday
+        ? 'Today, ${_day.day} ${_kMonths[_day.month - 1]}'
+        : '${_kDays[_day.weekday - 1]}, ${_day.day} ${_kMonths[_day.month - 1]} ${_day.year}';
+    return Material(
+      color: const Color(0xFFFFF3EC),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(children: [
+          IconButton(
+            tooltip: 'Day before',
+            icon: const Icon(Icons.chevron_left),
+            onPressed: _busy
+                ? null
+                : () => _setDay(_day.subtract(const Duration(days: 1))),
+          ),
+          Expanded(
+            child: TextButton.icon(
+              onPressed: _busy
+                  ? null
+                  : () async {
+                      final d = await showDatePicker(
+                        context: context,
+                        initialDate: _day,
+                        firstDate: today.subtract(const Duration(days: 365)),
+                        lastDate: today,
+                      );
+                      if (d != null) _setDay(d);
+                    },
+              icon: const Icon(Icons.calendar_month, size: 18, color: _kOrange),
+              label: Text(label,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                      color: Colors.black87)),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Next day',
+            icon: const Icon(Icons.chevron_right),
+            onPressed: _busy || isToday
+                ? null
+                : () => _setDay(_day.add(const Duration(days: 1))),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _summary(List<_PickRow> rows) {
+    final picked = rows.where((r) => r.picks.isNotEmpty).length;
+    final approved = rows.where((r) => r.allPicksApproved).length;
+    final toPick = rows.where((r) => r.canPick).length;
+    Widget stat(String n, String l, Color c) => Expanded(
+          child: Column(children: [
+            Text(n,
+                style: TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.bold, color: c)),
+            Text(l, style: const TextStyle(fontSize: 11, color: Colors.black54)),
+          ]),
+        );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 10, 8, 4),
+      child: Row(children: [
+        stat('${rows.length}', 'Ordered', Colors.black87),
+        stat('$toPick', 'To pick', _kOrange),
+        stat('$picked', 'Picked', _kAmber),
+        stat('$approved', 'Approved', _kGreen),
+      ]),
+    );
+  }
+
+  // --------------------------------------------------------------- rows ---
+
+  Widget _orderHeader(_PickRow r) {
+    final approved = r.orderApproved;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 16, 8, 2),
+      child: Row(children: [
+        Expanded(
+          child: Text(
+              '${r.order['customer_name'] ?? r.order['customer'] ?? ''}'
+              '  ·  ${r.orderName}',
+              style: const TextStyle(
+                  fontWeight: FontWeight.bold, color: _kOrange)),
+        ),
+        _Chip(
+              text: approved ? 'Manager approved' : 'Awaiting manager',
+              icon: approved ? Icons.check_circle : Icons.hourglass_top,
+              color: approved ? _kGreen : Colors.black45),
+      ]),
+    );
+  }
+
+  Widget _pickedLine(_Picked p) {
+    final ok = p.list.isApproved;
+    final when = p.list.pickedOn.length >= 16
+        ? p.list.pickedOn.substring(11, 16)
+        : '';
+    final kg = p.item.pickedKg > 0 && p.item.unit.toLowerCase() != 'kg'
+        ? ' · ${trimQty(p.item.pickedKg)} kg'
+        : '';
+    return Padding(
+      padding: const EdgeInsets.only(top: 3),
+      child: Row(children: [
+        Icon(ok ? Icons.verified : Icons.hourglass_top,
+            size: 14, color: ok ? _kGreen : _kAmber),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+              '${p.list.name}${when.isEmpty ? '' : ' ($when)'}: picked '
+              '${trimQty(p.item.pickedQty)} ${p.item.unit}$kg · '
+              '${ok ? 'Approved by production' : 'Awaiting production approval'}',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: ok ? _kGreen : _kAmber,
+                  fontWeight: FontWeight.w600)),
+        ),
+      ]),
+    );
+  }
+
   Widget _row(_PickRow r) {
-    final can = r.max > 0;
+    final can = r.canPick;
+    final why = _why(r);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(children: [
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Checkbox(
           value: r.ticked,
           onChanged: can && !_busy
@@ -192,21 +374,32 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
               : null,
         ),
         Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(r.title,
-                style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: can ? null : Colors.black45)),
-            Text(
-                'Ordered ${trimQty(r.ordered)} ${r.unit}'
-                '${r.already > 0 ? ' · picked ${trimQty(r.already)}' : ''}'
-                ' · Hi-Tech stock ${trimQty(r.available)}',
-                style: const TextStyle(fontSize: 12, color: Colors.black54)),
-            if (!can)
-              Text(_why(r),
-                  style:
-                      const TextStyle(fontSize: 12, color: Colors.deepOrange)),
-          ]),
+          child: Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(r.title,
+                  style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: can || r.picks.isNotEmpty ? null : Colors.black45)),
+              Text(
+                  'Ordered ${trimQty(r.ordered)} ${r.unit}'
+                  '${r.already > 0 ? ' · picked ${trimQty(r.already)}' : ''}'
+                  ' · Hi-Tech stock ${trimQty(r.available)}',
+                  style: const TextStyle(fontSize: 12, color: Colors.black54)),
+              for (final p in r.picks) _pickedLine(p),
+              if (why != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(why,
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: r.orderApproved
+                              ? Colors.deepOrange
+                              : Colors.black45)),
+                ),
+            ]),
+          ),
         ),
         if (can)
           SizedBox(
@@ -228,10 +421,13 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
         if (can && !r.kgIsQty)
           SizedBox(
             width: 64,
-            child: Text(
-                r.kg == null ? 'by roll wt' : '${trimQty(r.kg!)} kg',
-                textAlign: TextAlign.right,
-                style: const TextStyle(fontSize: 12, color: Colors.black54)),
+            child: Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(
+                  r.kg == null ? 'by roll wt' : '${trimQty(r.kg!)} kg',
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(fontSize: 12, color: Colors.black54)),
+            ),
           ),
       ]),
     );
@@ -240,97 +436,121 @@ class _GeneratePickListScreenState extends State<GeneratePickListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Generate pick list')),
-      body: FutureBuilder<List<_PickRow>>(
-        future: _future,
-        builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snap.hasError) {
-            return Center(
-                child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Text(humanError(snap.error),
-                        textAlign: TextAlign.center)));
-          }
-          final rows = snap.data!;
-          final pickable = rows.where((r) => r.max > 0).length;
-          // Grouped under each order, in the order they came.
-          final children = <Widget>[];
-          String? current;
-          for (final r in rows) {
-            if (r.orderName != current) {
-              current = r.orderName;
-              children.add(Padding(
-                padding: const EdgeInsets.fromLTRB(8, 14, 8, 2),
-                child: Text(
-                    '${r.order['customer_name'] ?? r.order['customer'] ?? ''}'
-                    '  ·  ${r.orderName}',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, color: Color(0xFFF46A21))),
-              ));
-            }
-            children.add(_row(r));
-          }
-          return Column(children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: Text(
-                  "Manager-approved products. Tick what goes from Hi-Tech's "
-                  'stock now; the kilos follow from the rolls. The rest stays '
-                  'on the order to pick later.',
-                  style: TextStyle(fontSize: 13, color: Colors.black87)),
-            ),
-            if (rows.isEmpty)
-              const Expanded(
-                  child: Center(
-                      child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text('No manager-approved orders to pick from.',
-                    textAlign: TextAlign.center),
-              )))
-            else ...[
-              if (pickable == 0)
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text('Nothing can be picked now.',
-                      style: TextStyle(color: Colors.deepOrange)),
-                ),
-              Expanded(
-                child: ListView(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    children: children),
-              ),
-            ],
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed:
-                          _busy ? null : () => Navigator.pop(context, false),
-                      child: const Padding(
-                          padding: EdgeInsets.all(10), child: Text('Cancel')),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed:
-                          _busy || pickable == 0 ? null : () => _submit(rows),
-                      child: Padding(
-                          padding: const EdgeInsets.all(10),
-                          child: Text(_busy ? 'Submitting…' : 'Submit')),
-                    ),
-                  ),
-                ]),
-              ),
-            ),
-          ]);
-        },
+      appBar: AppBar(
+        title: const Text('Pick List'),
+        actions: [
+          IconButton(
+              tooltip: 'Refresh',
+              icon: const Icon(Icons.refresh),
+              onPressed: _busy ? null : _reload),
+        ],
       ),
+      body: Column(children: [
+        _dayBar(),
+        Expanded(
+          child: FutureBuilder<List<_PickRow>>(
+            future: _future,
+            builder: (context, snap) {
+              if (snap.connectionState != ConnectionState.done) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snap.hasError) {
+                return Center(
+                    child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Text(humanError(snap.error),
+                            textAlign: TextAlign.center)));
+              }
+              final rows = snap.data!;
+              final pickable = rows.where((r) => r.canPick).length;
+              final ticked = rows.where((r) => r.ticked).length;
+              // Grouped under each order, in the order they came.
+              final children = <Widget>[];
+              String? current;
+              for (final r in rows) {
+                if (r.orderName != current) {
+                  current = r.orderName;
+                  children.add(_orderHeader(r));
+                }
+                children.add(_row(r));
+              }
+              return Column(children: [
+                if (rows.isNotEmpty) _summary(rows),
+                if (rows.isEmpty)
+                  const Expanded(
+                      child: Center(
+                          child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text('No orders on this day.',
+                        textAlign: TextAlign.center),
+                  )))
+                else ...[
+                  if (pickable == 0)
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+                      child: Text('Nothing can be picked now.',
+                          style: TextStyle(color: Colors.deepOrange)),
+                    ),
+                  Expanded(
+                    child: RefreshIndicator(
+                      onRefresh: () async => _reload(),
+                      child: ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          children: children),
+                    ),
+                  ),
+                ],
+                SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed:
+                            _busy || pickable == 0 ? null : () => _submit(rows),
+                        child: Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: Text(_busy
+                                ? 'Submitting…'
+                                : ticked == 0
+                                    ? 'Pick'
+                                    : 'Pick $ticked product${ticked == 1 ? '' : 's'}')),
+                      ),
+                    ),
+                  ),
+                ),
+              ]);
+            },
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+/// A small coloured status label.
+class _Chip extends StatelessWidget {
+  final String text;
+  final IconData icon;
+  final Color color;
+  const _Chip({required this.text, required this.icon, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 4),
+        Text(text,
+            style: TextStyle(
+                fontSize: 11.5, color: color, fontWeight: FontWeight.w600)),
+      ]),
     );
   }
 }
@@ -349,7 +569,7 @@ class PickListCard extends StatelessWidget {
         padding: const EdgeInsets.all(12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const Icon(Icons.playlist_add_check, color: Color(0xFFF46A21)),
+            const Icon(Icons.playlist_add_check, color: _kOrange),
             const SizedBox(width: 8),
             Expanded(
                 child: Text(
@@ -369,7 +589,7 @@ class PickListCard extends StatelessWidget {
                 'Approved by production'
                 '${l.approvedByName.isNotEmpty ? ' (${l.approvedByName})' : ''}'
                 '${l.approvedOn.length >= 16 ? ' · ${l.approvedOn.substring(0, 16)}' : ''}',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF2E7D32))),
+                style: const TextStyle(fontSize: 12, color: _kGreen)),
           const SizedBox(height: 6),
           for (final i in l.items)
             Padding(
@@ -408,24 +628,10 @@ class _ApprovalChip extends StatelessWidget {
   const _ApprovalChip({required this.approved});
 
   @override
-  Widget build(BuildContext context) {
-    final color = approved ? const Color(0xFF2E7D32) : const Color(0xFFB26A00);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(approved ? Icons.verified : Icons.hourglass_top,
-            size: 14, color: color),
-        const SizedBox(width: 4),
-        Text(approved ? 'Approved' : 'Awaiting approval',
-            style: TextStyle(
-                fontSize: 12, color: color, fontWeight: FontWeight.w600)),
-      ]),
-    );
-  }
+  Widget build(BuildContext context) => _Chip(
+      text: approved ? 'Approved' : 'Awaiting approval',
+      icon: approved ? Icons.verified : Icons.hourglass_top,
+      color: approved ? _kGreen : _kAmber);
 }
 
 /// Every pick list this login may see — a manager's whole team.

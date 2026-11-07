@@ -74,3 +74,63 @@
 /* Choose dates… — the two date boxes beside the range. */
 .pl-dates { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .pl-dates .input { width: 150px; }
+
+/* Rows and columns (6 Nov 2026): a line per product, each pick list a block. */
+.pl-grid td { vertical-align: top; }
+.pl-grid tr.pl-first td { border-top: 1px solid var(--border); }
+.pl-grid tbody tr:first-child td { border-top: 0; }
+
+/* Employees as tabs, each opening their own screen (6 Nov 2026). */
+.pl-emps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+.pl-emp {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.pl-emp:hover { background: var(--surface-2); border-color: var(--accent); }
+.pl-emp:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pl-emp__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.pl-emp__name { font-weight: 600; }
+.pl-emp__status { display: flex; align-items: center; gap: 6px; color: var(--text-3); }
+.pl-avatar {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 13px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.pl-avatar--lg { width: 48px; height: 48px; font-size: 16px; background: var(--accent); color: #fff; }
+.pl-crumb { margin-bottom: 12px; }
+.pl-crumb button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-text);
+  cursor: pointer;
+}
+.pl-crumb button:hover { text-decoration: underline; }

@@ -502,14 +502,12 @@ function InvoiceTable({
               const late = !paid && i.dueDate && i.dueDate < today ? daysLate(i.dueDate) : 0;
               return (
                 <tr key={`${i.company}-${i.invoiceNo}`}>
-                  <td style={{ fontWeight: 600 }}>{i.invoiceNo}</td>
+                  <td>{i.invoiceNo}</td>
                   <td>{shortDate(i.postingDate)}</td>
                   <td>{i.dueDate ? shortDate(i.dueDate) : '—'}</td>
                   <td className="right">{m(i.total)}</td>
                   <td className="right tg-ok">{m(i.paid)}</td>
-                  <td className="right" style={{ fontWeight: 600 }}>
-                    {m(Math.max(0, i.balance))}
-                  </td>
+                  <td className="right">{m(Math.max(0, i.balance))}</td>
                   <td>
                     {paid ? (
                       <Badge tone="ok">Paid</Badge>
@@ -524,7 +522,7 @@ function InvoiceTable({
             })
           : lines.map((i) => (
               <tr key={`inv-${i.invoice}`}>
-                <td style={{ fontWeight: 600 }}>{i.invoice}</td>
+                <td>{i.invoice}</td>
                 <td>{shortDate(i.date)}</td>
                 <td>—</td>
                 <td className="right">{m(i.amount)}</td>
@@ -539,7 +537,7 @@ function InvoiceTable({
             ))}
         {pending.map((o) => (
           <tr key={`so-${o.id}`}>
-            <td style={{ fontWeight: 600 }}>{o.id}</td>
+            <td>{o.id}</td>
             <td>{shortDate(o.placedOn)}</td>
             <td>—</td>
             <td className="right">{m(o.netTotal)}</td>

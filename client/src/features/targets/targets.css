@@ -181,11 +181,12 @@
 .tg-cust.is-open .tg-chev { transform: rotate(90deg); }
 .tg-cname { font-weight: 600; }
 
+/* The opened customer: its documents as plain rows, same type size as the
+   customer rows, no panel or heading (asked 6 Nov 2026). */
 .table tr.tg-docs > td { padding: 0; background: var(--surface-2); }
-.tg-docs__wrap { padding: 4px 16px 14px 52px; }
-.tg-docs table th { background: transparent; position: static; font-size: 10px; padding: 10px 12px; }
-.tg-docs table td { padding: 9px 12px; font-size: 13px; background: transparent; }
-.tg-docs .aging { margin-top: 8px; }
+.tg-docs table th { background: transparent; position: static; }
+.tg-docs table td { background: transparent; }
+.tg-docs .aging { margin: 8px 16px; }
 
 .table tfoot td {
   background: var(--surface-2);
@@ -206,5 +207,4 @@
   .tg-tools { flex-wrap: wrap; }
   .tg-search { width: 100%; }
   .tg-coll { flex-direction: column; align-items: stretch; }
-  .tg-docs__wrap { padding-left: 16px; }
 }

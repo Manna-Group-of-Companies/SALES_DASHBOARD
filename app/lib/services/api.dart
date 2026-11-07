@@ -1496,6 +1496,25 @@ class Api {
     return m.whereType<Map>().map(PickList.fromJson).toList();
   }
 
+  /// The rep's own Sales Orders placed on [day] (yyyy-mm-dd), whole - with
+  /// their `items` - for the Pick List page (7 Nov 2026). Cancelled orders
+  /// are left out; every other status comes back, approved or not, because
+  /// the page shows all that was ordered that day and picks from the
+  /// approved ones only.
+  static Future<List<Map<String, dynamic>>> getMyOrdersOn(String day) async {
+    final rep = Session.I.salesPerson;
+    final v = (rep == null || rep.isEmpty) ? '__none__' : rep;
+    final rows = await _list('Sales Order',
+        fields: '["name"]',
+        filters: jsonEncode([
+          ['custom_sales_person', '=', v],
+          ['transaction_date', '=', day],
+          ['docstatus', '<', 2],
+        ]),
+        orderBy: 'creation asc');
+    return Future.wait(rows.map((r) => getOrder('${r['name']}')));
+  }
+
   /// Submits a pick list for [salesOrder]; returns its name (`PICK-00001`).
   /// Each line is `{sales_order_item, picked_qty, available_qty}`.
   static Future<String> submitPickList(

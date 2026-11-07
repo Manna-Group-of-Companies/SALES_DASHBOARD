@@ -108,45 +108,22 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       '${_order['custom_po_status'] ?? ''}' == 'PO Approved - Ready for SAP' &&
       '${_order['docstatus'] ?? 0}' != '2';
 
-  /// Pick lists (3 Nov 2026): which products go from Hi-Tech's stock now.
-  /// Approved orders only; made by the order's rep or their manager.
+  /// Pick lists (3 Nov 2026): which products went from Hi-Tech's stock, and
+  /// whether production approved each list. Shown only: since 7 Nov 2026 a
+  /// pick list is made on the Pick List page alone, not from the order.
   Widget _pickListSection() {
-    final canMake = _isOwner || Session.I.isManager;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Divider(height: 28),
       const Text('Pick list', style: TextStyle(fontWeight: FontWeight.bold)),
       const SizedBox(height: 2),
-      const Text(
-          'Tick the products Hi-Tech has in stock to send now; the rest can '
-          'be picked later. Production approves each list; it shows '
-          'Approved here once they have.',
-          style: TextStyle(fontSize: 12, color: Colors.black54)),
+      Text(
+          _pickLists.isEmpty
+              ? 'No pick list yet. Pick lists are made on the Pick List page.'
+              : 'Production approves each list; it shows Approved here once '
+                  'they have. More is picked on the Pick List page.',
+          style: const TextStyle(fontSize: 12, color: Colors.black54)),
       const SizedBox(height: 8),
       for (final l in _pickLists) PickListCard(list: l, showOrder: false),
-      if (canMake)
-        FilledButton.icon(
-          style: FilledButton.styleFrom(backgroundColor: Colors.teal),
-          onPressed: _busy
-              ? null
-              : () async {
-                  final done = await Navigator.push<bool>(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => GeneratePickListScreen(orders: [
-                                {
-                                  ..._order,
-                                  'customer_name': _customer['customer_name'] ??
-                                      _order['customer'],
-                                }
-                              ])));
-                  if (done == true && mounted) {
-                    setState(() => _init = _load());
-                  }
-                },
-          icon: const Icon(Icons.playlist_add_check),
-          label: const Padding(
-              padding: EdgeInsets.all(10), child: Text('Generate pick list')),
-        ),
     ]);
   }
 

@@ -4650,7 +4650,18 @@ try {
                                         # line) goes on the list; anything else is the run's problem.
                                         if ($res.Status -eq 400) {
                                             $sapMsg = "$($res.Body)"
-                                            try { $sapMsg = "$((($res.Body | ConvertFrom-Json).error.message.value))" } catch { }
+                                            # error.message is {lang,value} on some Service Layer versions and a plain
+                                            # string on others; reading .value off a string gave '' and blanked the reason
+                                            # (6 Nov 2026). Keep the raw body unless a real message is found.
+                                            try {
+                                                $slErr = ($res.Body | ConvertFrom-Json).error
+                                                $slMsg = $(if ($slErr.message -is [string]) { $slErr.message } else { "$($slErr.message.value)" })
+                                                if ("$slMsg".Trim()) { $sapMsg = "$slMsg".Trim() }
+                                                if ("$($slErr.code)".Trim()) { $sapMsg = "{0} (SAP {1})" -f $sapMsg, "$($slErr.code)".Trim() }
+                                            } catch { }
+                                            # Windows PowerShell often leaves ErrorDetails (and so Body) empty; the
+                                            # readable reason is then only in Text (Format-HttpError).
+                                            if (-not "$sapMsg".Trim()) { $sapMsg = "$($res.Text)" }
                                             Write-PkRefusal -Name $pn -Message ("Hi-Tech SAP refused the pick list: {0}" -f $sapMsg) -When $pkNow -IsDryRun $false
                                         } else {
                                             Write-Log ERROR ("PASS K {0}: FAILED - left for the next run: {1}" -f $pn, $res.Text)

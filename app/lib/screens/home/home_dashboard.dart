@@ -29,6 +29,7 @@ import 'package:manna_field_sales/screens/manager/manager_targets_screen.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/screens/map/map_screen.dart';
 import 'package:manna_field_sales/screens/orders/min_stock_screen.dart';
+import 'package:manna_field_sales/screens/orders/pick_list_screen.dart';
 import 'package:manna_field_sales/screens/production/production_dashboard_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_orders_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_proforma_list_screen.dart';
@@ -636,6 +637,11 @@ class _HomeDashboardState extends State<HomeDashboard>
                 () => _go(Session.I.company == kUnitRetreads
                 ? const RetreadOrdersScreen()
                 : const MyOrdersScreen())),
+        // Its own page (7 Nov 2026): a day's orders, every product on them,
+        // picked from there, with production's approval on each row.
+        if (Session.I.isTreadsUnit)
+          _Tile('Pick List', Icons.playlist_add_check,
+              () => _go(const GeneratePickListScreen())),
         // Beside Collections on purpose: both are money the rep owes somebody
         // an answer about, and a condition is usually discharged by collecting.
         _Tile('My Conditions', Icons.rule,
