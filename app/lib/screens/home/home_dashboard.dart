@@ -29,6 +29,7 @@ import 'package:manna_field_sales/screens/manager/manager_targets_screen.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/screens/map/map_screen.dart';
 import 'package:manna_field_sales/screens/orders/min_stock_screen.dart';
+import 'package:manna_field_sales/screens/orders/pick_list_page.dart';
 import 'package:manna_field_sales/screens/production/production_dashboard_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_orders_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_proforma_list_screen.dart';
@@ -277,8 +278,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       duration: const Duration(seconds: 6),
-      content: Text('No signal — punch saved on your phone at ${hhmm(at)}. '
-          'It will be sent by itself when you have signal.'),
+      content: Text('No signal. Punch saved at ${hhmm(at)}, sends by itself.'),
     ));
   }
 
@@ -290,8 +290,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     final msg = humanError(e);
     if (!msg.toLowerCase().contains('location permission')) return _snack(msg);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: const Text('Location is not allowed for this app. '
-          'Allow it in Settings → Permissions → Location.'),
+      content: const Text('Allow location in Settings.'),
       duration: const Duration(seconds: 8),
       action: SnackBarAction(
           label: 'Settings', onPressed: TripTracker.I.openLocationSettings),
@@ -636,6 +635,10 @@ class _HomeDashboardState extends State<HomeDashboard>
                 () => _go(Session.I.company == kUnitRetreads
                 ? const RetreadOrdersScreen()
                 : const MyOrdersScreen())),
+        // Reps make pick lists; a manager only views them (manager screens).
+        if (Session.I.company != kUnitRetreads && !Session.I.isManager)
+          _Tile('Pick List', Icons.playlist_add_check,
+              () => _go(const PickListPage())),
         // Beside Collections on purpose: both are money the rep owes somebody
         // an answer about, and a condition is usually discharged by collecting.
         _Tile('My Conditions', Icons.rule,
@@ -745,8 +748,7 @@ class _HomeDashboardState extends State<HomeDashboard>
                   title: const Text('HR Manager',
                       style: TextStyle(
                           color: Colors.white, fontWeight: FontWeight.bold)),
-                  subtitle: const Text(
-                      'Approve managers\' attendance regularizations',
+                  subtitle: const Text('Attendance corrections',
                       style: TextStyle(color: Colors.white70)),
                   trailing:
                   const Icon(Icons.chevron_right, color: Colors.white),

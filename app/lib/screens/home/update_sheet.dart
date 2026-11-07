@@ -185,9 +185,7 @@ class _UpdateSheetState extends State<_UpdateSheet> {
               ),
             ],
             const SizedBox(height: 4),
-            const Text(
-              'Android will ask once for permission to install app files. '
-              'Nothing you have already sent is affected.',
+            const Text('Android will ask to allow the install.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 11, color: Colors.black45),
             ),

@@ -78,7 +78,7 @@ class _LeadOrderDetailScreenState extends State<LeadOrderDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Lead Order ${widget.orderName}')),
+      appBar: AppBar(title: const Text('Lead Order')),
       body: FutureBuilder<void>(
         future: _init,
         builder: (context, snap) {

@@ -83,6 +83,10 @@ class PickListItem {
 class PickList {
   final String name;
   final String salesOrder;
+
+  /// SAP's order number, once the sync has written it back. Shown instead of
+  /// the ERPNext name.
+  final String sapSalesOrder;
   final String customerName;
   final String salesPerson;
   final String status;
@@ -94,9 +98,18 @@ class PickList {
   final String approvedOn;
   final List<PickListItem> items;
 
+  /// SAP's side: the Hi-Tech pick list the sync sent, and what B1if made from
+  /// it. Blank until the sync has done each step.
+  final String sapPickList;
+  final String hitechInvoice;
+  final String mtGoodsReceipt;
+  final String mtDelivery;
+  final String sapError;
+
   const PickList({
     required this.name,
     required this.salesOrder,
+    this.sapSalesOrder = '',
     required this.customerName,
     required this.salesPerson,
     required this.status,
@@ -105,11 +118,19 @@ class PickList {
     this.approvedByName = '',
     this.approvedOn = '',
     required this.items,
+    this.sapPickList = '',
+    this.hitechInvoice = '',
+    this.mtGoodsReceipt = '',
+    this.mtDelivery = '',
+    this.sapError = '',
   });
 
   factory PickList.fromJson(Map m) => PickList(
         name: '${m['name'] ?? ''}',
         salesOrder: '${m['sales_order'] ?? ''}',
+        sapSalesOrder: '${m['sap_sales_order'] ?? ''}' == 'null'
+            ? ''
+            : '${m['sap_sales_order'] ?? ''}',
         customerName: '${m['customer_name'] ?? m['customer'] ?? ''}',
         salesPerson: '${m['sales_person'] ?? ''}',
         status: '${m['status'] ?? 'Submitted'}',
@@ -123,12 +144,20 @@ class PickList {
             .whereType<Map>()
             .map(PickListItem.fromJson)
             .toList(),
+        sapPickList: '${m['sap_pick_list'] ?? ''}',
+        hitechInvoice: '${m['hitech_invoice'] ?? ''}',
+        mtGoodsReceipt: '${m['mt_goods_receipt'] ?? ''}',
+        mtDelivery: '${m['mt_delivery'] ?? ''}',
+        sapError: '${m['sap_sync_error'] ?? ''}',
       );
 
   bool get isSubmitted => status == 'Submitted';
 
   /// Approved by production. A cancelled list never counts as approved.
   bool get isApproved => isSubmitted && approvalStatus == 'Approved';
+
+  /// SAP has delivered it to the customer: the products on it are picked.
+  bool get isDelivered => isSubmitted && mtDelivery.trim().isNotEmpty && mtDelivery != 'null';
 }
 
 /// What Submitted lists already took, per `Sales Order Item` name.

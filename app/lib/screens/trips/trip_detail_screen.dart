@@ -57,8 +57,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
           context: context,
           builder: (dctx) => AlertDialog(
             title: const Text('Add a vehicle leg first'),
-            content: const Text(
-                'A trip needs at least one vehicle leg before you can end it. Use "Start leg" to record how you travelled.'),
+            content: const Text('Add a vehicle leg first.'),
             actions: [
               TextButton(
                   onPressed: () => Navigator.pop(dctx),
@@ -82,8 +81,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         context: context,
         builder: (dctx) => AlertDialog(
           title: const Text('Vehicle leg still open'),
-          content: const Text(
-              'A vehicle leg is still in progress — its closing odometer has not been recorded. End the leg first so the distance is captured.'),
+          content: const Text('End the vehicle leg first.'),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(dctx, false),
@@ -145,8 +143,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       context: context,
       builder: (dctx) => AlertDialog(
         title: const Text('Cancel this trip?'),
-        content: const Text(
-            'The trip will be marked Cancelled and route recording will stop. Anything already added stays on the record, but the trip won\'t count as completed.'),
+        content: const Text('Cancel this trip? Route recording stops.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(dctx, false),
@@ -315,8 +312,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                 if (mode == 'Bus' || mode == 'Taxi')
                   const Padding(
                     padding: EdgeInsets.only(top: 8),
-                    child: Text(
-                        'No per-km rate. Enter the ticket/fare amount under Expenses (attach the bill).',
+                    child: Text('No per-km rate. Add the fare under Expenses.',
                         style: TextStyle(fontSize: 11, color: Colors.black54)),
                   ),
                 TextField(
@@ -543,8 +539,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                 if (mode == 'Bus' || mode == 'Taxi')
                   const Padding(
                       padding: EdgeInsets.symmetric(vertical: 8),
-                      child: Text(
-                          'Fare for this leg goes under Expenses (attach the bill).',
+                      child: Text('Add the fare under Expenses.',
                           style: TextStyle(fontSize: 12, color: Colors.black54))),
                 if (isOdo) ...[
                   const SizedBox(height: 8),
@@ -672,8 +667,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       if (legs.isEmpty)
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 8),
-          child: Text(
-              'No legs yet. Add one to set the vehicle mode and compute cost.',
+          child: Text('No legs yet.',
               style: TextStyle(color: Colors.black45, fontSize: 12)),
         )
       else
@@ -1228,8 +1222,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       if (exp.isEmpty)
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 8),
-          child: Text(
-              'No expenses yet. Add fuel, food, accommodation, allowance, bus/taxi ticket etc.',
+          child: Text('No expenses yet.',
               style: TextStyle(color: Colors.black45, fontSize: 12)),
         )
       else
@@ -1444,8 +1437,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       if (reps.isEmpty)
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 8),
-          child: Text(
-              'No one tagged. Tag teammates who travelled with you — this trip\'s visits are shared with them.',
+          child: Text('No one tagged.',
               style: TextStyle(color: Colors.black45, fontSize: 12)),
         )
       else
@@ -1468,8 +1460,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       if (_visits.isEmpty)
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 8),
-          child: Text(
-              'No visits linked yet. Visits you check into during this trip appear here.',
+          child: Text('No visits yet.',
               style: TextStyle(color: Colors.black45, fontSize: 12)),
         )
       else
@@ -1506,8 +1497,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                 Icon(Icons.fiber_manual_record, color: Colors.red, size: 18),
                 SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                      'Recording route — a point saves about every 5 min. It stops automatically when you End Trip; keep the notification running.',
+                  child: Text('Recording route. Stops at End Trip.',
                       style: TextStyle(fontSize: 13)),
                 ),
               ]),
@@ -1535,8 +1525,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                   if (otherActive)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                          'Another trip ($active) is recording. End that trip first.',
+                      child: Text('Another trip is recording. End it first.',
                           style: const TextStyle(
                               fontSize: 12, color: Colors.deepOrange)),
                     ),
@@ -1800,8 +1789,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
               leading: Icon(Icons.visibility, color: Color(0xFF4338CA)),
               title: Text('Shared trip — view only',
                   style: TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text(
-                  'You are tagged on this trip. Only the person who created it can make changes.'),
+              subtitle: Text('Only the trip creator can edit.'),
             ),
           ),
         if (_trip!['status'] == 'Active' && _canEdit)

@@ -104,8 +104,7 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Discard this order?'),
-        content: Text('${draft.customerName} — this cannot be undone, and the '
-            'order has never been sent.'),
+        content: Text('${draft.customerName} — never sent. This cannot be undone.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -175,9 +174,7 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
               Text('Everything has been sent',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
               SizedBox(height: 8),
-              Text(
-                'Orders you take without signal are kept here until you can '
-                'send them.',
+              Text('Orders taken without signal wait here.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: Colors.black54),
               ),
@@ -199,9 +196,7 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
             Icon(Icons.info_outline, size: 20, color: Color(0xFFB35309)),
             SizedBox(width: 10),
             Expanded(
-              child: Text(
-                'These have not reached the office. No stock is held for them, '
-                'and no order number exists until they are sent.',
+              child: Text('Not sent yet. No stock held.',
                 style: TextStyle(fontSize: 12.5, height: 1.4),
               ),
             ),

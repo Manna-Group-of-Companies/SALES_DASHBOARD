@@ -183,9 +183,7 @@ class _ExpenseSummaryScreenState extends State<ExpenseSummaryScreen> {
               _figure('Shared expenses', 'Rs ${money(t.sharedCost)}',
                   colour: const Color(0xFF92400E)),
               const SizedBox(height: 4),
-              const Text(
-                  'These trips were shared, so the amount is split between '
-                  'everyone tagged on them.',
+              const Text('Shared trips — amount is split.',
                   style: TextStyle(fontSize: 11, color: Color(0xFF92400E))),
             ],
           ]),

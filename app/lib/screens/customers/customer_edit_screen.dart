@@ -129,9 +129,7 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
                 Icon(Icons.route, size: 18, color: Colors.black54),
                 SizedBox(width: 8),
                 Expanded(
-                    child: Text(
-                        'The route is what production uses to plan delivery. '
-                        'Set it before taking an order.',
+                    child: Text('Needed before taking an order.',
                         style: TextStyle(fontSize: 12))),
               ]),
             ),

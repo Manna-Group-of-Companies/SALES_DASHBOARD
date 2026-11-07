@@ -174,7 +174,7 @@ export function AppShell() {
     // note on its route in routes.tsx.
     { to: '/leads', label: 'Leads', icon: 'userPlus', roles: ['sales_manager'], screen: 'leads', group: 'Sales' },
     { to: '/orders', label: 'Team Orders', icon: 'clipboard', roles: ['sales_manager'], screen: 'orders', count: myOrders.length, group: 'Sales' },
-    // What reps picked from Hi-Tech stock on approved orders (3 Nov 2026).
+    // What reps picked, view only.
     { to: '/pick-lists', label: 'Pick Lists', icon: 'listChecks', roles: ['sales_manager'], screen: 'orders', group: 'Sales' },
     { to: '/locations', label: 'Location Checks', icon: 'pin', roles: ['sales_manager'], screen: 'locations', group: 'Sales' },
     { to: '/team/regularizations', label: 'Attendance Corrections', icon: 'clock', roles: ['sales_manager'], screen: 'regularizations', group: 'Sales' },
@@ -185,8 +185,6 @@ export function AppShell() {
     // week rollup is gone.
 
     { to: '/production', label: 'Production Queue', icon: 'factory', roles: ['production_manager'], group: 'Production' },
-    // Approving the reps' pick lists (5 Nov 2026).
-    { to: '/production/pick-lists', label: 'Pick Lists', icon: 'listChecks', roles: ['production_manager'], group: 'Production' },
     // Dispatch Planning was here. Parked on 24 September 2026 on instruction —
     // SAP's invoice is dispatch for now. The page is kept; see routes.tsx.
 

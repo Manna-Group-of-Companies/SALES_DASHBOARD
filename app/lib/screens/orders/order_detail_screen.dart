@@ -108,45 +108,19 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       '${_order['custom_po_status'] ?? ''}' == 'PO Approved - Ready for SAP' &&
       '${_order['docstatus'] ?? 0}' != '2';
 
-  /// Pick lists (3 Nov 2026): which products go from Hi-Tech's stock now.
-  /// Approved orders only; made by the order's rep or their manager.
+  /// This order's pick lists. They are made on the Pick List page, not here.
   Widget _pickListSection() {
-    final canMake = _isOwner || Session.I.isManager;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Divider(height: 28),
       const Text('Pick list', style: TextStyle(fontWeight: FontWeight.bold)),
       const SizedBox(height: 2),
-      const Text(
-          'Tick the products Hi-Tech has in stock to send now; the rest can '
-          'be picked later. Production approves each list; it shows '
-          'Approved here once they have.',
-          style: TextStyle(fontSize: 12, color: Colors.black54)),
+      Text(
+          _pickLists.isEmpty
+              ? 'None yet. Pick lists are made on the Pick List page.'
+              : 'Made on the Pick List page.',
+          style: const TextStyle(fontSize: 12, color: Colors.black54)),
       const SizedBox(height: 8),
       for (final l in _pickLists) PickListCard(list: l, showOrder: false),
-      if (canMake)
-        FilledButton.icon(
-          style: FilledButton.styleFrom(backgroundColor: Colors.teal),
-          onPressed: _busy
-              ? null
-              : () async {
-                  final done = await Navigator.push<bool>(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => GeneratePickListScreen(orders: [
-                                {
-                                  ..._order,
-                                  'customer_name': _customer['customer_name'] ??
-                                      _order['customer'],
-                                }
-                              ])));
-                  if (done == true && mounted) {
-                    setState(() => _init = _load());
-                  }
-                },
-          icon: const Icon(Icons.playlist_add_check),
-          label: const Padding(
-              padding: EdgeInsets.all(10), child: Text('Generate pick list')),
-        ),
     ]);
   }
 
@@ -179,10 +153,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               size: 18, color: Colors.orange.shade900),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
-                'Your commitment: “$commitment”. The general manager decides '
-                'this order on it; once approved it appears under My '
-                'Conditions.',
+            child: Text('Your commitment: “$commitment”',
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 12.5)),
@@ -390,10 +361,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete this order?'),
-        content: const Text(
-            'The order and its lines are removed for good, and any minimum '
-            'stock it is holding goes back to the shelf. This cannot be '
-            'undone.'),
+        content: const Text('Delete this order? This cannot be undone.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -679,14 +647,12 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   /// ever.
   Widget _title() {
     final sap = '${_order['custom_sap_sales_order'] ?? ''}'.trim();
-    if (sap.isEmpty || sap == 'null') return Text('Order ${widget.orderName}');
+    if (sap.isEmpty || sap == 'null') return const Text('Order');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('SAP order $sap'),
-        Text(widget.orderName,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.normal)),
+        Text('Order $sap'),
       ],
     );
   }
@@ -765,9 +731,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                       size: 18, color: Colors.orange.shade900),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                        'Production moved this delivery. The customer asked '
-                        'for $_originalDelivery.',
+                    child: Text('Delivery moved. Customer asked for $_originalDelivery.',
                         style: TextStyle(
                             fontSize: 12, color: Colors.orange.shade900)),
                   ),
@@ -780,9 +744,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               const Text('1 · Proforma',
                   style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 2),
-              const Text(
-                  'Optional. The order is already with your manager — print '
-                  'this only if the customer wants a copy.',
+              const Text('Optional. Only if the customer wants a copy.',
                   style: TextStyle(fontSize: 12, color: Colors.black54)),
               const SizedBox(height: 8),
               // Nothing to request: the GM's approval of the credit is what

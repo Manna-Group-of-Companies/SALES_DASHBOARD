@@ -52,8 +52,7 @@ class _RetreadProformaListScreenState extends State<RetreadProformaListScreen> {
             return const Center(
                 child: Padding(
                     padding: EdgeInsets.all(24),
-                    child: Text(
-                        'No rate proformas yet. Tap "New proforma" to set retread rates for a customer.',
+                    child: Text('No rate proformas yet.',
                         textAlign: TextAlign.center)));
           }
           return ListView.separated(

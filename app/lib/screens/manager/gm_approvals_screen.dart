@@ -191,10 +191,7 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
                       style:
                           TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                   SizedBox(height: 4),
-                  Text(
-                      'Orders that take a customer past their credit limit, or '
-                      'whose customer is overdue past their payment terms, '
-                      'appear here.',
+                  Text('Over-limit and overdue orders appear here.',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: Colors.black54)),
                 ]),

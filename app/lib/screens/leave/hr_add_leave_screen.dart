@@ -73,8 +73,7 @@ class _HRAddLeaveScreenState extends State<HRAddLeaveScreen> {
         builder: (context, snap) {
           final reps = snap.data ?? [];
           return ListView(padding: const EdgeInsets.all(16), children: [
-            const Text(
-                'Mark leave on behalf of a rep (e.g. phoned-in). Recorded as already approved; any date is allowed.',
+            const Text('Recorded as approved.',
                 style: TextStyle(fontSize: 13, color: Colors.black54)),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(

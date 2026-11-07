@@ -5,7 +5,6 @@ import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/screens/leads/lead_order_detail_screen.dart';
 import 'package:manna_field_sales/screens/orders/combined_order_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
-import 'package:manna_field_sales/screens/orders/pick_list_screen.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -20,25 +19,6 @@ class MyOrdersScreen extends StatelessWidget {
       title: 'My Orders',
       loader: Api.getMyOrders,
       cacheKey: CacheKeys.orders,
-      // One button for the whole list (4 Nov 2026): it opens every product on
-      // the rep's manager-approved orders to pick from Hi-Tech's stock.
-      header: (reload) => Padding(
-        padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-        child: SizedBox(
-          width: double.infinity,
-          child: FilledButton.icon(
-            style: FilledButton.styleFrom(backgroundColor: Colors.teal),
-            onPressed: () async {
-              final done = await Navigator.of(context).push<bool>(
-                  MaterialPageRoute(
-                      builder: (_) => const GeneratePickListScreen()));
-              if (done == true) reload();
-            },
-            icon: const Icon(Icons.playlist_add_check),
-            label: const Text('Generate pick list'),
-          ),
-        ),
-      ),
       tileBuilder: (ctx, r, _) {
         // A combined order arrives as one row standing for all of its orders.
         // Its members are not listed separately — see Api.getMyOrders — so the
@@ -64,10 +44,10 @@ class MyOrdersScreen extends StatelessWidget {
 
           return ListTile(
             leading: const Icon(Icons.merge_type, color: Color(0xFF6D4C41)),
-            title: Text('${r['customer'] ?? r['name']}',
+            title: Text('${r['customer'] ?? 'Week order'}',
                 style: const TextStyle(fontWeight: FontWeight.w600)),
             subtitle: Text(
-                '${r['name']}  ·  $origin'
+                '$origin'
                 '\n$count ${count == 1 ? 'order' : 'orders'} combined  ·  '
                 'Rs ${r['grand_total'] ?? 0}'),
             isThreeLine: true,
@@ -154,7 +134,7 @@ class MyOrdersScreen extends StatelessWidget {
             if (!isLead) OrderCompleteTick(order: r, compact: true),
           ]),
           subtitle: Text('${r['transaction_date'] ?? ''}$ddText\n$statusLine'
-              '${combined.isEmpty ? '' : '\nWeek order: $combined'}'
+              '${combined.isEmpty ? '' : '\nIn a week order'}'
               // The delivery is what a rep repeats to a customer, so it gets
               // its own line rather than being run into the status.
               '${sapLine == null ? '' : '\n$sapLine'}'
@@ -236,9 +216,7 @@ class _DuplicateWarningState extends State<_DuplicateWarning> {
         Icon(Icons.copy_all_outlined, size: 18, color: Colors.orange.shade900),
         const SizedBox(width: 8),
         Expanded(
-          child: Text(
-            'Possible duplicate — products here are also on '
-            '${widget.duplicateOf}, which has not been dispatched yet.',
+          child: Text('Possible duplicate of an order not yet dispatched.',
             style: TextStyle(fontSize: 12, color: Colors.orange.shade900),
           ),
         ),

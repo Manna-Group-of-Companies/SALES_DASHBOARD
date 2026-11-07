@@ -39,7 +39,14 @@
         { "fieldname": "approval_status", "label": "Approval", "fieldtype": "Select", "options": "Pending\nApproved", "default": "Pending", "in_list_view": 1, "in_standard_filter": 1, "read_only": 1 },
         { "fieldname": "approved_by", "label": "Approved By", "fieldtype": "Link", "options": "User", "read_only": 1 },
         { "fieldname": "approved_on", "label": "Approved On", "fieldtype": "Datetime", "read_only": 1 },
-        { "fieldname": "items", "label": "Items", "fieldtype": "Table", "options": "Manna Pick List Item", "reqd": 1 }
+        { "fieldname": "items", "label": "Items", "fieldtype": "Table", "options": "Manna Pick List Item", "reqd": 1 },
+        { "fieldname": "sap_section", "label": "SAP", "fieldtype": "Section Break", "collapsible": 1 },
+        { "fieldname": "sap_pick_list", "label": "Hi-Tech SAP Pick List", "fieldtype": "Data", "read_only": 1, "description": "Written by the order sync (PASS K) when it sends this list to Hi-Tech's SAP." },
+        { "fieldname": "hitech_invoice", "label": "Hi-Tech Invoice", "fieldtype": "Data", "read_only": 1, "description": "Made by B1if from the SAP pick list; found by the sync by NumAtCard = this list's name." },
+        { "fieldname": "mt_goods_receipt", "label": "Manna Treads Goods Receipt", "fieldtype": "Data", "read_only": 1 },
+        { "fieldname": "mt_delivery", "label": "Manna Treads Delivery", "fieldtype": "Data", "read_only": 1 },
+        { "fieldname": "sap_sync_error", "label": "SAP Sync Error", "fieldtype": "Small Text", "read_only": 1, "description": "Why the sync did not send this list, or why B1if's documents are missing. Clear it to try again." },
+        { "fieldname": "sap_synced_on", "label": "SAP Synced On", "fieldtype": "Datetime", "read_only": 1 }
       ],
       "permissions": [
         { "role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1 }

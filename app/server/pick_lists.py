@@ -58,7 +58,8 @@ heads = frappe.get_all(
     filters=filters,
     fields=["name", "sales_order", "customer", "customer_name", "sales_person",
             "team", "status", "picked_on", "picked_by",
-            "approval_status", "approved_by", "approved_on"],
+            "approval_status", "approved_by", "approved_on",
+            "sap_pick_list", "hitech_invoice", "mt_goods_receipt", "mt_delivery", "sap_sync_error"],
     order_by="creation desc",
     limit_page_length=200,
 )
@@ -122,6 +123,11 @@ for h in heads:
         "approved_by_name": people.get(h.approved_by, "") if h.approved_by else "",
         "approved_on": str(h.approved_on or ""),
         "items": items.get(h.name, []),
+        "sap_pick_list": h.sap_pick_list or "",
+        "hitech_invoice": h.hitech_invoice or "",
+        "mt_goods_receipt": h.mt_goods_receipt or "",
+        "mt_delivery": h.mt_delivery or "",
+        "sap_sync_error": h.sap_sync_error or "",
     })
 
 frappe.response["message"] = out

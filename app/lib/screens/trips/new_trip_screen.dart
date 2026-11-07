@@ -240,8 +240,7 @@ class _NewTripScreenState extends State<NewTripScreen> {
               border: OutlineInputBorder()),
         ),
         const SizedBox(height: 12),
-        const Text(
-            'Odometer readings and photos are captured per vehicle leg (in "Add / switch vehicle") after the trip starts.',
+        const Text('Odometer is recorded per vehicle leg.',
             style: TextStyle(fontSize: 12, color: Colors.black45)),
         const SizedBox(height: 20),
         if (_error != null)

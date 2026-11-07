@@ -137,10 +137,7 @@ class _CommitmentThreadState extends State<CommitmentThread> {
           decoration: BoxDecoration(
               color: const Color(0xFFFFF3E0),
               borderRadius: BorderRadius.circular(6)),
-          child: const Text(
-              'No commitment from the rep. This order was raised before '
-              'commitments were asked for, or went over the limit after it was '
-              'sent. Ask the rep what the customer has promised.',
+          child: const Text('No commitment from the rep.',
               style: TextStyle(fontSize: 12, color: Colors.deepOrange)),
         ),
       for (final c in _comments)

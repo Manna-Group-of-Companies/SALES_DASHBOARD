@@ -108,9 +108,7 @@ class _UpdateRequiredScreenState extends State<UpdateRequiredScreen> {
                     style: TextStyle(fontSize: 13, color: Colors.black54),
                   )
                 else if (_update != null) ...[
-                  const Text(
-                    'Nothing you have already sent is lost. Install the new '
-                    'version and sign in again.',
+                  const Text('Nothing sent is lost. Install the new version.',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 13, color: Colors.black54),
                   ),
@@ -129,10 +127,7 @@ class _UpdateRequiredScreenState extends State<UpdateRequiredScreen> {
                   // nothing newer has been released yet. Falling back to the
                   // old instruction is right here — it is still true, and a
                   // dead end with no instruction at all is worse.
-                  const Text(
-                    'Nothing you have already sent is lost. Connect to the '
-                    'internet and try again, or ask the office for the new '
-                    'app file.',
+                  const Text('Nothing sent is lost. Connect and try again.',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 13, color: Colors.black54),
                   ),

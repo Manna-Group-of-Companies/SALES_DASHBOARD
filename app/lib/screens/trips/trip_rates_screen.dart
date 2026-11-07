@@ -81,8 +81,7 @@ class _TripRatesScreenState extends State<TripRatesScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(padding: const EdgeInsets.all(16), children: [
-        const Text(
-            'Per-kilometre reimbursement rates used to estimate trip cost.',
+        const Text('Per-km rates.',
             style: TextStyle(color: Colors.black54)),
         const SizedBox(height: 12),
         _rate('Own vehicle — car', _car),
@@ -90,8 +89,7 @@ class _TripRatesScreenState extends State<TripRatesScreen> {
         _rate('Company vehicle — car', _companyCar),
         _rate('Company vehicle — bike', _companyBike),
         const SizedBox(height: 8),
-        const Text(
-            'Bus / train and taxi have no per-km rate — the fare is entered as a trip expense with the bill. For "Mixed", the rep enters the amount they are claiming.',
+        const Text('Bus, train, taxi: enter the fare as an expense.',
             style: TextStyle(fontSize: 12, color: Colors.black45)),
         const SizedBox(height: 20),
         FilledButton(

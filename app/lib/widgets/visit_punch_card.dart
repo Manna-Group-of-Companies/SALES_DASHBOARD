@@ -305,9 +305,7 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'You have been checked in at $where since $since. '
-                'You can only be on one visit at a time.',
+              Text('Checked in at $where since $since.',
                 style: const TextStyle(fontSize: 13.5, height: 1.4),
               ),
               const SizedBox(height: 10),
@@ -354,9 +352,7 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'You are $away from $place. A visit can only be started '
-                'within $limit of where the place is registered.',
+              Text('You are $away from $place. Limit $limit.',
                 style: const TextStyle(fontSize: 13.5, height: 1.4),
               ),
               const SizedBox(height: 10),
@@ -492,9 +488,7 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
               Icon(Icons.cloud_off, size: 16, color: Color(0xFFB35309)),
               SizedBox(width: 6),
               Expanded(
-                child: Text(
-                    'Saved on your phone, not sent yet — it goes by itself '
-                    'when you have signal.',
+                child: Text('Saved on phone. Sends by itself.',
                     style: TextStyle(fontSize: 12, color: Color(0xFFB35309))),
               ),
             ]),

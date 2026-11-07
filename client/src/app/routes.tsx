@@ -39,7 +39,7 @@ import { TargetsPage } from '@/features/targets/TargetsPage';
 import { ProductSalesPage } from '@/features/products/ProductSalesPage';
 import { ProductsListPage } from '@/features/products/ProductsListPage';
 import { ProductDetailPage } from '@/features/products/ProductDetailPage';
-import { PickListApprovalPage } from '@/features/picklists/PickListApprovalPage';
+import { SalesPickListsPage } from '@/features/picklists/SalesPickListsPage';
 import { SalesDashboardPage } from '@/features/dashboard/SalesDashboardPage';
 import { HrDashboardPage } from '@/features/hr/HrDashboardPage';
 import { EmployeesPage } from '@/features/hr/EmployeesPage';
@@ -219,16 +219,12 @@ export function AppRoutes() {
           for a real loader, and restore its nav item in AppShell.tsx.
         */}
         <Route path="analysis" element={<Navigate to="/" replace />} />
-        {/*
-          Pick lists come from orders, so they go with the order pipeline. The
-          production manager's page, read-only (5 Nov 2026): the sales manager
-          sees what production approved but cannot approve.
-        */}
+        {/* Sales manager: approved orders → generate pick lists. */}
         <Route
           path="pick-lists"
           element={
             <TeamRoute screen="orders">
-              <PickListApprovalPage readOnly />
+              <SalesPickListsPage />
             </TeamRoute>
           }
         />
@@ -434,18 +430,8 @@ export function AppRoutes() {
           untouched) and restore its nav item in AppShell.tsx.
         */}
         <Route path="production/dispatch" element={<Navigate to="/production" replace />} />
-        {/*
-          The production manager approves the reps' pick lists (5 Nov 2026).
-          A static path, so it outranks `production/:orderId` below.
-        */}
-        <Route
-          path="production/pick-lists"
-          element={
-            <RoleRoute allow={['production_manager']}>
-              <PickListApprovalPage />
-            </RoleRoute>
-          }
-        />
+        {/* Pick lists are not approved any more. Static path, so it outranks `production/:orderId`. */}
+        <Route path="production/pick-lists" element={<Navigate to="/production" replace />} />
         <Route
           path="production/:orderId"
           element={

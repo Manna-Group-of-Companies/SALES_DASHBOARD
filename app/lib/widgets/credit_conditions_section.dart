@@ -86,9 +86,7 @@ class _CreditConditionsSectionState extends State<CreditConditionsSection> {
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
-              'This goes to the general manager, who decides whether it '
-              'settles the condition.',
+          const Text('The GM decides on this.',
               style: TextStyle(fontSize: 11, color: Colors.black45)),
         ]),
         actions: [

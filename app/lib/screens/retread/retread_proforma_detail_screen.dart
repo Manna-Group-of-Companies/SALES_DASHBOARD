@@ -28,8 +28,7 @@ class _RetreadProformaDetailScreenState
       context: context,
       builder: (dctx) => AlertDialog(
         title: const Text('Supersede proforma?'),
-        content: const Text(
-            'Mark this rate proforma as superseded (e.g. rates renegotiated). It stays on record but shows as inactive.'),
+        content: const Text('Mark as superseded? It stays on record.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(dctx, false),

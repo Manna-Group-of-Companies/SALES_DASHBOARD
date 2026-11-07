@@ -172,9 +172,7 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
                 Icon(Icons.info_outline, color: Colors.red, size: 20),
                 SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                      'This goes beyond the leave you have earned — it will be '
-                      'treated as without pay (LOP). You can still apply.',
+                  child: Text('Beyond earned leave — counts as LOP.',
                       style: TextStyle(color: Colors.red, fontSize: 13)),
                 ),
               ]),
