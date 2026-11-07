@@ -90,9 +90,6 @@ class _LeadOrderDetailScreenState extends State<LeadOrderDetailScreen> {
           final items = (_order['items'] as List?) ?? [];
           final total = items.fold<double>(
               0, (s, it) => s + (((it['amount'] ?? 0) as num).toDouble()));
-          final approved = status == 'Approved' ||
-              status == 'PO Uploaded' ||
-              status == 'PO Approved - Ready for SAP';
           // The proforma no longer waits for the manager (26 Sep 2026): rates
           // come from SAP, and a lead has no credit limit to escalate on, so
           // proforma_release.json never holds one. Only a rejected order has
@@ -141,24 +138,14 @@ class _LeadOrderDetailScreenState extends State<LeadOrderDetailScreen> {
                   label: const Padding(
                       padding: EdgeInsets.all(10), child: Text('Edit order')),
                 ),
-              )
-            else if (orderLockReason(_order).isNotEmpty)
-              InfoBox(
-                  icon: Icons.lock_clock,
-                  color: Colors.black54,
-                  text: orderLockReason(_order)),
+              ),
             if (proformaOpen) ...[
               const SizedBox(height: 16),
               const Text('Proforma',
                   style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 4),
-              Text(
-                  approved
-                      ? 'For the customer’s own records. Nothing has to come '
-                          'back — the order is already with the factory.'
-                      : 'For the customer’s own records. The order is with '
-                          'your manager for approval.',
-                  style: const TextStyle(fontSize: 12, color: Colors.black54)),
+              const Text('Optional. Only if the customer wants a copy.',
+                  style: TextStyle(fontSize: 12, color: Colors.black54)),
               const SizedBox(height: 8),
               FilledButton.icon(
                 onPressed: _busy ? null : () => _proforma(asPO: false),
