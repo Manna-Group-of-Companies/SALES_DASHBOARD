@@ -161,7 +161,14 @@ the order, and any quantity above what is still unpicked on its line
 (shared/fixtures/pick_list.json). That Hi-Tech has the stock is checked on the
 phone against the synced SAP figure and recorded on each row.
 
-**Approval by production (5 Nov 2026).** `approval_status` (Pending /
+**No approval since 7 Nov 2026.** Pick lists are no longer approved: the
+dashboard's approval page is gone, the order sync sends each list to SAP as
+the rep made it, and the phone shows a product as Picked once SAP's delivery
+for its list is back (`mt_delivery`). The rep makes lists on the phone's
+Pick List page; sales managers only view them. The fields and
+`manna_pick_list_approve` below are left in place but nothing uses them.
+
+**Approval by production (5 Nov 2026, retired).** `approval_status` (Pending /
 Approved), `approved_by` and `approved_on` were added to `Manna Pick List`,
 and `pick_list_approve.py` is the `manna_pick_list_approve` API Server
 Script. Only a production manager (`User.custom_is_production_manager`) or
