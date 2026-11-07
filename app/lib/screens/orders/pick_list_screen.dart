@@ -499,7 +499,7 @@ class PickListCard extends StatelessWidget {
                   children: [
                     Expanded(child: Text(i.itemName, style: const TextStyle(fontSize: 13))),
                     Text(
-                      '${trimQty(i.pickedQty)} ${i.unit}',
+                      '${trimQty(i.pickedQty)} ${i.pickedQty == 1 && i.unit == 'rolls' ? 'roll' : i.unit}',
                       style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                     ),
                   ],
