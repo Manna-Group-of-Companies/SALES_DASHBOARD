@@ -70,20 +70,16 @@ String humanError(Object? e) {
     case DioExceptionType.sendTimeout:
     case DioExceptionType.receiveTimeout:
     case DioExceptionType.transformTimeout:
-      return 'The server took too long to answer. Check your signal and try '
-          'again.';
+      return 'Server too slow. Check your signal and try again.';
     case DioExceptionType.connectionError:
-      return 'No connection. Your work is not lost — try again once you have '
-          'signal.';
+      return 'No connection. Try again with signal.';
     case DioExceptionType.badCertificate:
-      return 'Could not verify the server. If you are on a public or hotel '
-          'network, try mobile data.';
+      return 'Could not verify the server. Try mobile data.';
     case DioExceptionType.cancel:
       return 'Cancelled.';
     case DioExceptionType.unknown:
       if (isOffline(e)) {
-        return 'No connection. Your work is not lost — try again once you have '
-            'signal.';
+        return 'No connection. Try again with signal.';
       }
       return 'Something went wrong. Try again.';
     case DioExceptionType.badResponse:
@@ -97,26 +93,23 @@ String _fromResponse(Response? r) {
 
   switch (status) {
     case 401:
-      return 'Your login has expired. Sign out and sign in again.';
+      return 'Login expired. Sign in again.';
     case 403:
       // Frappe uses 403 both for a dead session and a genuine denial, and its
       // own message is the only thing that tells them apart.
       return backend ?? 'You do not have permission to do that.';
     case 404:
-      return backend ?? 'That record no longer exists — it may have been '
-          'deleted.';
+      return backend ?? 'Record no longer exists.';
     case 409:
     case 417:
       return backend ??
-          'Somebody else changed this while you had it open. Go back, reopen '
-              'it, and try again.';
+          'Changed by someone else. Reopen and try again.';
     case 429:
-      return 'Too many requests at once. Wait a moment and try again.';
+      return 'Too many requests. Try again shortly.';
   }
 
   if (status >= 500) {
-    return 'The server is having trouble. Try again in a few minutes, and tell '
-        'the office if it keeps happening.';
+    return 'Server error. Try later, or tell the office.';
   }
   return backend ?? 'Something went wrong. Try again.';
 }

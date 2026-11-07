@@ -72,8 +72,6 @@ export function checkCapture(input: {
     allowed: false,
     metresMoved,
     message:
-      `This would move the saved location ${describe(metresMoved)}, which would stop ` +
-      'anyone punching in at the place itself. Have the rep capture it while they are ' +
-      'standing there.',
+      `This moves the saved location ${describe(metresMoved)}. Capture it at the place.`,
   };
 }

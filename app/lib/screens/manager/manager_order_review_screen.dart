@@ -271,7 +271,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
         // screen because the messenger belongs to the app.
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           duration: const Duration(seconds: 12),
-          content: const Text('Approved, but the condition could not be saved.'),
+          content: const Text('Approved. Condition not saved.'),
           action: SnackBarAction(
             label: 'Retry',
             onPressed: () => Api.addCreditCondition(

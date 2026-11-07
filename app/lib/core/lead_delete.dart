@@ -49,12 +49,11 @@ String? leadDeleteRefusal(LeadDeleteBlockers b) {
   // for destroying their records — see core/visibility.dart. A duplicate that
   // genuinely needs removing is a thing to ask the owner or a manager for.
   if (b.ownedBy != null) {
-    return 'This lead belongs to ${b.ownedBy}. Only they can delete it.';
+    return 'Owned by ${b.ownedBy}. Only they can delete it.';
   }
 
   if (b.customer != null) {
-    return 'This lead was converted into the customer ${b.customer}. '
-        'Deleting it would break the trail from the lead to the account.';
+    return 'Converted to customer ${b.customer}. Cannot be deleted.';
   }
 
   if (b.leadOrders.isNotEmpty) {

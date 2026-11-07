@@ -60,7 +60,7 @@ void main() {
       final text = duplicateWarningText(
           const DuplicateFinding(order: 'SAL-ORD-1', items: ['TREAD X']));
       expect(text, contains('TREAD X'));
-      expect(text, contains('SAL-ORD-1'));
+      expect(text, isNot(contains('SAL-ORD-1')));
     });
 
     test('several are counted rather than listed', () {
@@ -68,7 +68,7 @@ void main() {
       final text = duplicateWarningText(const DuplicateFinding(
           order: 'SAL-ORD-2', items: ['A', 'B', 'C']));
       expect(text, contains('3 products'));
-      expect(text, contains('SAL-ORD-2'));
+      expect(text, isNot(contains('SAL-ORD-2')));
     });
   });
 }

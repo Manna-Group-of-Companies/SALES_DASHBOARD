@@ -59,8 +59,7 @@ class VersionGate {
   String get text {
     final m = (message ?? '').trim();
     if (m.isNotEmpty) return m;
-    return 'This version of the app is too old to take orders safely. '
-        'Update to $required or newer and sign in again.';
+    return 'App too old. Update to $required and sign in again.';
   }
 }
 

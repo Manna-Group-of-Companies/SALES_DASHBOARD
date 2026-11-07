@@ -16,8 +16,8 @@
   "roles": "rep = the rep who raised it; sales_manager = the manager whose team the rep is on; general_manager = the GM. Any other role is refused, as orderActions refuses it (credit_commitment.json).",
 
   "messages": {
-    "with_gm": "This order is with the general manager. Only they can change it now.",
-    "gm_approved": "The general manager approved this order as it stands, so it can no longer be changed. The sales manager pushes it to SAP, or the general manager rejects it."
+    "with_gm": "With the GM. Only they can change it.",
+    "gm_approved": "Approved by the GM. Cannot be changed."
   },
 
   "by_role": [

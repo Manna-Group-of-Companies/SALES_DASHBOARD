@@ -142,7 +142,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
             _card(
                 Icons.flag,
                 'Team Targets',
-                const Text('Set monthly targets · see invoiced sales'),
+                const Text('Targets and invoiced sales'),
                 const ManagerTargetsScreen()),
           if (parties)
             _card(

@@ -35,17 +35,12 @@ export const COMMITMENT_MIN_LENGTH = 10;
 /** How far out a condition falls due when the rep named no date. */
 export const CONDITION_DEFAULT_DAYS = 15;
 
-export const COMMITMENT_MISSING =
-  "Write what the customer has committed to. This order needs the general manager's credit approval, and they decide it on your word.";
-export const COMMITMENT_TOO_SHORT =
-  'Say what the customer has committed to, and by when. A word or two is not something anyone can be held to.';
-export const CONDITION_REQUIRED =
-  "This order came with the rep's commitment, so approving it makes that their condition. Keep the words or change them, but do not leave them empty.";
+export const COMMITMENT_MISSING = 'Write what the customer committed to. The GM decides on it.';
+export const COMMITMENT_TOO_SHORT = 'Say what, and by when.';
+export const CONDITION_REQUIRED = "Keep or edit the rep's commitment. It cannot be empty.";
 export const COMMENT_EMPTY = 'Write the comment first.';
-export const SALES_MANAGER_CANNOT_APPROVE =
-  "This order needs the general manager's credit approval: it takes the customer past their credit limit, or they have invoices overdue past their payment terms. Send it to the GM instead.";
-export const GM_DOES_NOT_PUSH =
-  'The general manager approves the credit; the sales manager pushes the order to SAP.';
+export const SALES_MANAGER_CANNOT_APPROVE = 'Needs GM credit approval. Send it to the GM.';
+export const GM_DOES_NOT_PUSH = 'The GM approves credit; the sales manager pushes to SAP.';
 
 /** Frappe reads an unset text field back as null, '' or the string 'null'. */
 function clean(v: string | null | undefined): string {

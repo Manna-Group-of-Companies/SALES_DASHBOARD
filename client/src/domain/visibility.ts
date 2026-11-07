@@ -194,4 +194,4 @@ export function isCoveringFor(
 }
 
 export const POOLED_UNIT_NOTE =
-  'Everyone in this unit shares its customers, leads and routes, so any of you can serve any of them while a colleague is away. Each one still has an owner, shown on the row.';
+  'Shared across the unit. Owner shown on each row.';

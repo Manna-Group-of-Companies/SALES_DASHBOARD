@@ -273,11 +273,6 @@ String escalationReason(Map<String, dynamic> customer, double orderTotal) {
 /// what is missing rather than an empty space. Asked for 21 August 2026.
 const String kAgingNoData = '—';
 
-const String kAgingNotSynced =
-    'SAP has not sent an age breakdown for this customer yet. '
-    'The total is still the total.';
+const String kAgingNotSynced = 'No age breakdown from SAP yet.';
 
-const String kAgingMismatch =
-    'The age breakdown does not add up to the outstanding balance. The balance '
-    'is what the credit limit is checked against; the breakdown needs '
-    're-syncing from SAP.';
+const String kAgingMismatch = 'Age breakdown does not match the balance. Re-sync from SAP.';

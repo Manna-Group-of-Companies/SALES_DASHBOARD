@@ -125,7 +125,7 @@ class _LeadOrderDetailScreenState extends State<LeadOrderDetailScreen> {
               const InfoBox(
                   icon: Icons.cancel,
                   color: Colors.red,
-                  text: 'This lead order was rejected by the manager.'),
+                  text: 'Rejected by the manager.'),
             // Editable on exactly the same terms as a customer order: until it
             // is approved or sent to the GM, by the rep who raised it or their
             // manager. Approved rates stay locked through the edit.

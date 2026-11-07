@@ -63,7 +63,7 @@ class TripTracker {
   Future<String?> start(String tripName, {bool interactive = true}) async {
     if (activeTrip.value == tripName) return null;
     if (activeTrip.value != null) {
-      return 'Another trip (${activeTrip.value}) is already recording. Stop it first.';
+      return 'Another trip is recording. Stop it first.';
     }
     if (_starting) return null;
     _starting = true;
