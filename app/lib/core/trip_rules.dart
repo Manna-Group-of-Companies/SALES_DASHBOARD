@@ -48,7 +48,7 @@ String describeRunningTrip(RunningTrip t) {
       .map((s) => s.trim())
       .where((s) => s.isNotEmpty)
       .join(' · ');
-  return head.isEmpty ? t.name : '$head (${t.name})';
+  return head.isEmpty ? 'in progress' : head;
 }
 
 /// Why a new trip cannot be started, or null when it can.
@@ -61,14 +61,11 @@ String? tripStartRefusal(List<RunningTrip> running) {
   if (running.isEmpty) return null;
 
   if (running.length == 1) {
-    return 'Trip ${describeRunningTrip(running.first)} is still running. '
-        'End that trip before starting another.';
+    return 'Trip ${describeRunningTrip(running.first)} is still running. End it first.';
   }
 
   final listed = running.take(3).map(describeRunningTrip).join(', ');
   final rest = running.length - 3;
-  return '${running.length} of your trips are still running '
-      '($listed${rest > 0 ? ', and $rest more' : ''}). '
-      'End them before starting another — only one trip can run at a time, so '
-      'the others have been collecting no route and no visits.';
+  return '${running.length} trips still running '
+      '($listed${rest > 0 ? ', and $rest more' : ''}). End them first.';
 }

@@ -70,10 +70,8 @@ export function isApproved(status: string | undefined | null): boolean {
 
 /** What the lines editor says when escalation, not the clock, shuts it. */
 export const EDIT_LOCK = {
-  withGm: 'This order is with the general manager. Only they can change it now.',
-  gmApproved:
-    'The general manager approved this order as it stands, so it can no longer be changed. ' +
-    'The sales manager pushes it to SAP, or the general manager rejects it.',
+  withGm: 'With the GM. Only they can change it.',
+  gmApproved: 'Approved by the GM. Cannot be changed.',
 } as const;
 
 /**

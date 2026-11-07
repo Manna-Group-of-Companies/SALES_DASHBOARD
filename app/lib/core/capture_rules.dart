@@ -39,9 +39,7 @@ class CaptureVerdict {
         : metresMoved! < 1000
             ? '${metresMoved!.round()} m away'
             : '${(metresMoved! / 1000).toStringAsFixed(1)} km away';
-    return 'This would move the saved location $away, which would stop anyone '
-        'punching in at the place itself. Have the rep capture it while they '
-        'are standing there.';
+    return 'This moves the saved location $away. Capture it at the place.';
   }
 }
 

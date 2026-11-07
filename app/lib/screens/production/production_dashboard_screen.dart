@@ -96,7 +96,7 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
               final rows = all.where(_match).toList();
               if (all.isEmpty) {
                 return const Center(
-                    child: Text('No approved POs waiting for SAP entry 🎉'));
+                    child: Text('Nothing waiting'));
               }
               if (rows.isEmpty) {
                 return const Center(child: Text('No matches.'));

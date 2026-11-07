@@ -368,9 +368,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       else if (paymentTermsOf(c).isNotEmpty)
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-          child: Text(
-              'Payment terms: ${paymentTermsOf(c)}. '
-              'Nothing overdue past them.',
+          child: Text('Terms: ${paymentTermsOf(c)}. Nothing overdue.',
               style: const TextStyle(fontSize: 11, color: Colors.black45)),
         ),
 

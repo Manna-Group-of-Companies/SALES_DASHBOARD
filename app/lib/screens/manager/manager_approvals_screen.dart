@@ -548,7 +548,7 @@ class _AttendanceQueueState
   Widget _actualRow(Map<String, dynamic> r) {
     final Widget body;
     if (_logsFailed) {
-      body = const Text('Could not read the punches for this day',
+      body = const Text('Could not load punches',
           style: TextStyle(fontSize: 13, color: kMuted));
     } else {
       final a = actualPunchOf(

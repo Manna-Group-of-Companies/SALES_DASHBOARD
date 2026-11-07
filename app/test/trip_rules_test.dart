@@ -26,8 +26,8 @@ void main() {
       ]);
       expect(r, isNotNull);
       expect(r, contains('2026-08-28'));
-      expect(r, contains('TRIP-2026-00042'));
-      expect(r, contains('End that trip'));
+      expect(r, isNot(contains('TRIP-')));
+      expect(r, contains('End it first'));
     });
 
     test('still names the trip when the rep skipped the purpose', () {
@@ -36,7 +36,7 @@ void main() {
       final r = tripStartRefusal(
           const [RunningTrip(name: 'TRIP-2026-00042', date: '2026-09-01')]);
       expect(r, contains('2026-09-01'));
-      expect(r, contains('TRIP-2026-00042'));
+      expect(r, isNot(contains('TRIP-')));
     });
   });
 
@@ -56,13 +56,13 @@ void main() {
 
     test('names both, so ending one does not just move the refusal', () {
       final r = tripStartRefusal(two);
-      expect(r, contains('TRIP-2026-00042'));
-      expect(r, contains('TRIP-2026-00051'));
-      expect(r, contains('2'));
+      expect(r, contains('2026-08-28'));
+      expect(r, contains('2026-09-07'));
+      expect(r, isNot(contains('TRIP-')));
     });
 
-    test('says the others recorded nothing — that is the damage', () {
-      expect(tripStartRefusal(two), contains('no route'));
+    test('asks for them to be ended first', () {
+      expect(tripStartRefusal(two), contains('End them first'));
     });
 
     test('lists a few and counts the rest rather than filling the screen', () {
@@ -71,10 +71,10 @@ void main() {
           RunningTrip(name: 'TRIP-2026-0004$i', date: '2026-09-0$i'),
       ];
       final r = tripStartRefusal(many)!;
-      expect(r, contains('5 of your trips'));
+      expect(r, contains('5 trips'));
       expect(r, contains('2 more'));
       // The last two are counted, not spelled out.
-      expect(r, isNot(contains('TRIP-2026-00045')));
+      expect(r, isNot(contains('2026-09-05')));
     });
   });
 
@@ -85,22 +85,18 @@ void main() {
               name: 'TRIP-2026-00042',
               date: '2026-08-28',
               purpose: 'customer visit')),
-          '2026-08-28 · customer visit (TRIP-2026-00042)');
+          '2026-08-28 · customer visit');
     });
 
-    test('carries the name, which is all that separates two trips on one day', () {
-      // The screenshot that started this had two 2026-08-28 rows. Without the
-      // name, "open 2026-08-28" is an instruction to guess.
+    test('never shows the ERPNext name (7 Nov 2026)', () {
       final a = describeRunningTrip(
           const RunningTrip(name: 'TRIP-2026-00042', date: '2026-08-28'));
-      final b = describeRunningTrip(
-          const RunningTrip(name: 'TRIP-2026-00043', date: '2026-08-28'));
-      expect(a, isNot(b));
+      expect(a, isNot(contains('TRIP-')));
     });
 
-    test('falls back to the name when the trip has neither date nor purpose', () {
+    test('says "in progress" when the trip has neither date nor purpose', () {
       expect(describeRunningTrip(const RunningTrip(name: 'TRIP-2026-00042')),
-          'TRIP-2026-00042');
+          'in progress');
     });
   });
 }

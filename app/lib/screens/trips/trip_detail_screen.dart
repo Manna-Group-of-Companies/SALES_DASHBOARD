@@ -1135,8 +1135,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                   onChanged: (v) => setD(() => notVerified = v ?? false),
                 ),
                 if (notVerified) ...[
-                  Text(
-                      'Typed: ${startO.toStringAsFixed(0)} → ${endO.toStringAsFixed(0)}. Enter the actual readings from the photo:',
+                  Text('Typed: ${startO.toStringAsFixed(0)} → ${endO.toStringAsFixed(0)}. Enter the readings:',
                       style:
                       const TextStyle(fontSize: 11, color: Colors.black54)),
                   const SizedBox(height: 6),

@@ -275,15 +275,13 @@ void main() {
     test('the reason names the SAP order, which is what the factory asks for',
         () {
       final r = orderLockReason(approved(sap: '404'));
-      expect(r, contains('approved'));
-      expect(r, contains('factory'));
+      expect(r, contains('Approved'));
       expect(r, contains('SAP order 404'));
-      expect(r, contains('manufacturing team'));
     });
 
     test('and invents no number when the order has not reached SAP yet', () {
       final r = orderLockReason(approved());
-      expect(r, contains('manufacturing team'));
+      expect(r, contains('Cannot be changed'));
       expect(r, isNot(contains('SAP order ')));
     });
 

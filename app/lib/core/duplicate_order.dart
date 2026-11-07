@@ -90,6 +90,5 @@ DuplicateFinding? findDuplicate({
 String duplicateWarningText(DuplicateFinding f) {
   final n = f.items.length;
   final what = n == 1 ? '${f.items.first}' : '$n products';
-  return 'Possible duplicate: $what already on ${f.order}, which has not been '
-      'dispatched yet.';
+  return 'Possible duplicate: $what already on an order not yet dispatched.';
 }

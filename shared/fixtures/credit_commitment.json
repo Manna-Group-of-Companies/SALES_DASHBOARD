@@ -101,12 +101,12 @@
     }
   ],
   "messages": {
-    "missing": "Write what the customer has committed to. This order needs the general manager's credit approval, and they decide it on your word.",
-    "too_short": "Say what the customer has committed to, and by when. A word or two is not something anyone can be held to.",
-    "condition_required": "This order came with the rep's commitment, so approving it makes that their condition. Keep the words or change them, but do not leave them empty.",
+    "missing": "Write what the customer committed to. The GM decides on it.",
+    "too_short": "Say what, and by when.",
+    "condition_required": "Keep or edit the rep's commitment. It cannot be empty.",
     "comment_empty": "Write the comment first.",
-    "sales_manager_cannot_approve": "This order needs the general manager's credit approval: it takes the customer past their credit limit, or they have invoices overdue past their payment terms. Send it to the GM instead.",
-    "gm_does_not_push": "The general manager approves the credit; the sales manager pushes the order to SAP."
+    "sales_manager_cannot_approve": "Needs GM credit approval. Send it to the GM.",
+    "gm_does_not_push": "The GM approves credit; the sales manager pushes to SAP."
   },
   "text": [
     {

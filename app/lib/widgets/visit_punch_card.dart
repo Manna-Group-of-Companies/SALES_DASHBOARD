@@ -144,8 +144,7 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
       trip: kind == PunchKind.visitIn ? TripTracker.I.activeTrip.value : null,
       checkNearby: checkNearby,
     );
-    _snack('No signal — saved on your phone at ${hhmm(at)}. '
-        'It will be sent by itself when you have signal.');
+    _snack('No signal. Saved at ${hhmm(at)}, sends by itself.');
   }
 
   void _snack(String m) {
@@ -156,7 +155,7 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
 
   Future<void> _punchIn() async {
     if (!widget.locationCaptured) {
-      return _snack('Capture the location first, then punch in.');
+      return _snack('Capture the location first.');
     }
     if (Session.I.salesPerson == null) {
       return _snack('No rep linked to this login.');
@@ -309,8 +308,7 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
                 style: const TextStyle(fontSize: 13.5, height: 1.4),
               ),
               const SizedBox(height: 10),
-              const Text(
-                'Go back and punch out there, then start this one.',
+              const Text('Punch out there first.',
                 style: TextStyle(fontSize: 12.5, color: Colors.black54),
               ),
             ]),
@@ -520,7 +518,7 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
               Icon(Icons.info_outline, size: 18, color: Colors.black45),
               SizedBox(width: 8),
               Expanded(
-                child: Text('Capture the location first to start a visit.',
+                child: Text('Capture the location first.',
                     style: TextStyle(fontSize: 12, color: Colors.black54)),
               ),
             ]),

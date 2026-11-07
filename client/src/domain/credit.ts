@@ -263,7 +263,7 @@ export function bucketsOf(a: Aging): AgingBucket[] {
 export const AGING_NO_DATA = '—';
 
 export const AGING_NOT_SYNCED =
-  'SAP has not sent an age breakdown for this customer yet. The total is still the total.';
+  'No age breakdown from SAP yet.';
 
 export const AGING_MISMATCH =
-  'The age breakdown does not add up to the outstanding balance. The balance is what the credit limit is checked against; the breakdown needs re-syncing from SAP.';
+  'Age breakdown does not match the balance. Re-sync from SAP.';

@@ -566,7 +566,7 @@ class _OrderScreenState extends State<OrderScreen> {
       commitmentDue: commitment?.due,
     );
     if (!mounted) return;
-    _snack('Saved on your phone — not sent yet. Send it from Unsent Orders.');
+    _snack('Saved on phone. Send from Unsent Orders.');
     await Future.delayed(const Duration(milliseconds: 600));
     if (mounted) Navigator.pop(context, true);
   }

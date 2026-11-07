@@ -59,7 +59,7 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
     if (_date == null) return _snack('Pick a leave date.');
     final now = DateTime.now();
     if (_halfDay && _sameDay(_date!, now) && now.hour >= 12) {
-      return _snack('A half-day for today must be applied before 12 pm.');
+      return _snack('Half-day for today: before 12 pm only.');
     }
     setState(() => _busy = true);
     try {
@@ -129,8 +129,7 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           title: const Text('Half day'),
-          subtitle: const Text(
-              'Counts as 0.5. For today, allowed only before 12 pm.'),
+          subtitle: const Text('Counts as 0.5. Today: before 12 pm.'),
           value: _halfDay,
           onChanged: (v) => setState(() => _halfDay = v),
         ),

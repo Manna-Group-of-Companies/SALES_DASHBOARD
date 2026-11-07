@@ -49,6 +49,6 @@ describe('what the person refused is told', () => {
     expect(v.allowed).toBe(false);
     expect(v.message).toContain('km away');
     // The one thing the person at a desk can actually do about it.
-    expect(v.message).toContain('rep');
+    expect(v.message).toContain('Capture it at the place');
   });
 });

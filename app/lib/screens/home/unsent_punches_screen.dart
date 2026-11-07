@@ -54,10 +54,9 @@ class _UnsentPunchesScreenState extends State<UnsentPunchesScreen> {
     await _load();
     if (!mounted) return;
     if (r.stoppedOffline && r.sent == 0) {
-      _snack('Still no signal. They are safe here and will go by themselves.');
+      _snack('Still no signal. Saved here.');
     } else if (r.failed.isNotEmpty) {
-      _snack('Sent ${r.sent}; ${r.failed.length} could not be sent — '
-          'the reason is on each one.');
+      _snack('Sent ${r.sent}; ${r.failed.length} failed.');
     } else if (r.sent > 0) {
       _snack('Sent ${r.sent} punch${r.sent == 1 ? '' : 'es'} ✓');
     }

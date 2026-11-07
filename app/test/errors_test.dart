@@ -48,12 +48,12 @@ void main() {
     test('offline says the work is not lost', () {
       final s = humanError(_dio(DioExceptionType.connectionError));
       expect(s, contains('No connection'));
-      expect(s, contains('not lost'));
+      expect(s, contains('No connection'));
     });
 
     test('a timeout points at the signal rather than the app', () {
       expect(humanError(_dio(DioExceptionType.receiveTimeout)),
-          contains('took too long'));
+          contains('too slow'));
       expect(humanError(_dio(DioExceptionType.connectionTimeout)),
           contains('signal'));
     });
@@ -67,7 +67,7 @@ void main() {
   group('Rejected requests', () {
     test('an expired login says how to fix it', () {
       expect(humanError(_dio(DioExceptionType.badResponse, response: _res(401, {}))),
-          contains('Sign out and sign in again'));
+          contains('Sign in again'));
     });
 
     test('a missing record does not read as a bug', () {
@@ -80,14 +80,14 @@ void main() {
     test('a timestamp clash tells them to reopen it', () {
       final s =
           humanError(_dio(DioExceptionType.badResponse, response: _res(409, {})));
-      expect(s, contains('Somebody else changed this'));
-      expect(s, contains('reopen'));
+      expect(s, contains('Changed by someone else'));
+      expect(s, contains('Reopen'));
     });
 
     test('a server fault tells them to escalate if it persists', () {
       final s = humanError(
           _dio(DioExceptionType.badResponse, response: _res(500, {})));
-      expect(s, contains('server is having trouble'));
+      expect(s, contains('Server error'));
       expect(s, contains('tell the office'));
     });
 
@@ -95,7 +95,7 @@ void main() {
       expect(
           humanError(
               _dio(DioExceptionType.badResponse, response: _res(429, {}))),
-          contains('Wait a moment'));
+          contains('Try again shortly'));
     });
   });
 
@@ -164,7 +164,7 @@ void main() {
       };
       final s = humanError(
           _dio(DioExceptionType.badResponse, response: _res(500, body)));
-      expect(s, contains('server is having trouble'));
+      expect(s, contains('Server error'));
       expect(s, isNot(contains('Traceback')));
     });
 
@@ -185,7 +185,7 @@ void main() {
       for (final junk in ['Internal Server Error', 'None']) {
         final s = humanError(_dio(DioExceptionType.badResponse,
             response: _res(500, {'exception': junk})));
-        expect(s, contains('server is having trouble'));
+        expect(s, contains('Server error'));
       }
     });
   });

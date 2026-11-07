@@ -67,7 +67,7 @@ void main() {
       expect(v.allowed, isFalse);
       expect(v.message, contains('km away'));
       // The one thing the person at a desk can actually do about it.
-      expect(v.message, contains('rep'));
+      expect(v.message, contains('Capture it at the place'));
     });
   });
 }

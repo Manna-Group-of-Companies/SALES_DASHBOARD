@@ -115,7 +115,7 @@ class _SitesSectionState extends State<SitesSection> {
         filePath: img.path,
         filename: 'site_banner.jpg',
       );
-      _snack('Site "$siteName" captured — sent for manager verification.');
+      _snack('Site "$siteName" sent for verification.');
       await _load();
     } catch (e) {
       _snack(humanError(e));

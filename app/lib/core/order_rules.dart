@@ -10,14 +10,10 @@
 import 'package:manna_field_sales/core/session.dart';
 
 /// What the rep and the sales manager are told once an order is with the GM.
-const String kEditLockWithGm =
-    'This order is with the general manager. Only they can change it now.';
+const String kEditLockWithGm = 'With the GM. Only they can change it.';
 
 /// What everyone is told once the GM has approved an order.
-const String kEditLockGmApproved =
-    'The general manager approved this order as it stands, so it can no '
-    'longer be changed. The sales manager pushes it to SAP, or the general '
-    'manager rejects it.';
+const String kEditLockGmApproved = 'Approved by the GM. Cannot be changed.';
 
 /// Whether an order at [poStatus] may be changed by [role] — `rep`,
 /// `sales_manager` or `general_manager` — as far as its approval goes.
@@ -56,10 +52,7 @@ String editRole() => Session.I.isGM
     : (Session.I.isManager ? 'sales_manager' : 'rep');
 
 /// What a lead order is told once it is approved.
-const String kEditLockLeadApproved =
-    'This lead order is approved and has gone to the factory as a customer '
-    'order. It cannot be changed here — to drop or reduce an item, ring the '
-    'manufacturing team.';
+const String kEditLockLeadApproved = 'Approved and sent to the factory. Cannot be changed.';
 
 /// Whether [order] is a Lead Order, whose approval lives in `status` rather
 /// than `custom_po_status`.
@@ -198,11 +191,8 @@ String orderLockReason(Map<String, dynamic> order) {
   // will ask for on the phone.
   if (orderApproved(order)) {
     final sap = '${order['custom_sap_sales_order'] ?? ''}'.trim();
-    final ref = (sap.isEmpty || sap == 'null') ? '' : ' Quote SAP order $sap.';
-    return 'This order is approved and is with the factory. It cannot be '
-        'changed here.$ref To drop or reduce an item, ring the manufacturing '
-        'team — anything already made will be delivered and the rest of the '
-        'order stays open.';
+    final ref = (sap.isEmpty || sap == 'null') ? '' : ' SAP order $sap.';
+    return 'Approved. Cannot be changed.$ref';
   }
   final po = editStatusOf(order);
   if (isLeadOrderDoc(order) && po == 'PO Approved - Ready for SAP') {
@@ -221,7 +211,7 @@ String orderLockReason(Map<String, dynamic> order) {
   if (owner.isNotEmpty &&
       owner != Session.I.salesPerson &&
       !(Session.I.isManager && Session.I.teamReps.contains(owner))) {
-    return 'Only $owner or their manager can change this order.';
+    return 'Only $owner or their manager can change it.';
   }
   return '';
 }

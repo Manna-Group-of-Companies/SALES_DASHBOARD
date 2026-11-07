@@ -29,24 +29,12 @@ const int kCommitmentMinLength = 10;
 /// How far out a condition falls due when the rep named no date.
 const int kConditionDefaultDays = 15;
 
-const String kCommitmentMissing =
-    'Write what the customer has committed to. This order needs the general '
-    "manager's credit approval, and they decide it on your word.";
-const String kCommitmentTooShort =
-    'Say what the customer has committed to, and by when. A word or two is '
-    'not something anyone can be held to.';
-const String kConditionRequired =
-    "This order came with the rep's commitment, so approving it makes that "
-    'their condition. Keep the words or change them, but do not leave them '
-    'empty.';
+const String kCommitmentMissing = 'Write what the customer committed to. The GM decides on it.';
+const String kCommitmentTooShort = 'Say what, and by when.';
+const String kConditionRequired = "Keep or edit the rep's commitment. It cannot be empty.";
 const String kCommentEmpty = 'Write the comment first.';
-const String kSalesManagerCannotApprove =
-    "This order needs the general manager's credit approval: it takes the "
-    'customer past their credit limit, or they have invoices overdue past '
-    'their payment terms. Send it to the GM instead.';
-const String kGmDoesNotPush =
-    'The general manager approves the credit; the sales manager pushes the '
-    'order to SAP.';
+const String kSalesManagerCannotApprove = 'Needs GM credit approval. Send it to the GM.';
+const String kGmDoesNotPush = 'The GM approves credit; the sales manager pushes to SAP.';
 
 /// The status the GM's approval writes. An option the Select carried unused
 /// until 24 Sep 2026; shown as "Approved by GM". The SAP sync only takes

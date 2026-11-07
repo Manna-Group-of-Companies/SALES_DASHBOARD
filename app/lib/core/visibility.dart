@@ -213,7 +213,4 @@ bool isCoveringFor(
   return visibleReps(people, personId).contains(ownerId);
 }
 
-const String kPooledUnitNote =
-    'Everyone in this unit shares its customers, leads and routes, so any of '
-    'you can serve any of them while a colleague is away. Each one still has '
-    'an owner, shown on the row.';
+const String kPooledUnitNote = 'Shared across the unit. Owner shown on each row.';

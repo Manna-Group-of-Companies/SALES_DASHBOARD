@@ -146,8 +146,7 @@ class _LockScreenState extends State<_LockScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-              const Text(
-                'Unlock with your fingerprint, face or phone screen lock',
+              const Text('Unlock with fingerprint, face or screen lock',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 14, color: Colors.black54),
               ),
