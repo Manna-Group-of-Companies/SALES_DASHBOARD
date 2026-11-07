@@ -741,7 +741,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             if (_approved) _pickListSection(),
             const Divider(height: 28),
             if (_isOwner) ...[
-              const Text('1 · Proforma',
+              const Text('Proforma',
                   style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 2),
               const Text('Optional. Only if the customer wants a copy.',
@@ -767,51 +767,29 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 ),
               const SizedBox(height: 20),
             ],
-            Text(_isOwner ? '2 · Changes' : 'Changes',
-                style: const TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            Text(
-                _editStatusNote,
-                style: const TextStyle(fontSize: 12, color: Colors.black54)),
-            const SizedBox(height: 8),
+            // Only while the order can still be changed. Once the manager has
+            // approved it nothing is said here: it is simply not editable.
             if (canEditOrder(_order)) ...[
+              const Text('Changes', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              Text(_editStatusNote, style: const TextStyle(fontSize: 12, color: Colors.black54)),
+              const SizedBox(height: 8),
               FilledButton.icon(
                 style: FilledButton.styleFrom(backgroundColor: Colors.indigo),
                 onPressed: _busy ? null : _edit,
                 icon: const Icon(Icons.edit),
-                label: const Padding(
-                    padding: EdgeInsets.all(10),
-                    child: Text('Add / Remove Products')),
+                label: const Padding(padding: EdgeInsets.all(10), child: Text('Add / Remove Products')),
               ),
-              // How often this order has already been changed, beside the
-              // button that changes it. A rep about to edit for the fifth time
-              // should see that, and so should the manager who approves it.
               if (_editCount > 0)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
                     editCountLabel(_editCount),
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
-                        fontSize: 12, color: Colors.black54),
+                    style: const TextStyle(fontSize: 12, color: Colors.black54),
                   ),
                 ),
-            ]
-            else
-              Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                      color: const Color(0xFFF5F5F5),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: Row(children: [
-                    const Icon(Icons.lock_outline,
-                        size: 20, color: Colors.black54),
-                    const SizedBox(width: 8),
-                    Expanded(
-                        child: Text(orderLockReason(_order),
-                            style: const TextStyle(
-                                fontSize: 12, color: Colors.black54))),
-                  ])),
+            ],
             /*
              * Deleting is deliberately last, quiet, and much narrower than
              * editing: only the rep who raised it, only while it is still a
