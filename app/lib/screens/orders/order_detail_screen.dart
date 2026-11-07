@@ -8,14 +8,12 @@ import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/stage_watch.dart';
 import 'package:manna_field_sales/core/app_bus.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
-import 'package:manna_field_sales/core/pick_list.dart';
 import 'package:manna_field_sales/core/proforma_release.dart';
 import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/pdf/proforma_pdf.dart';
 import 'package:manna_field_sales/screens/conditions/my_conditions_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
-import 'package:manna_field_sales/screens/orders/pick_list_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
 
@@ -45,7 +43,6 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
 
   /// This order's pick lists. Best-effort, like the follow-up: an order that
   /// cannot show them still shows everything else.
-  List<PickList> _pickLists = const [];
 
   @override
   void initState() {
@@ -95,33 +92,6 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       _conditions = const [];
       _thread = const [];
     }
-    if (_approved) {
-      try {
-        _pickLists = await Api.getPickLists(salesOrder: widget.orderName);
-      } catch (_) {
-        _pickLists = const [];
-      }
-    }
-  }
-
-  bool get _approved =>
-      '${_order['custom_po_status'] ?? ''}' == 'PO Approved - Ready for SAP' &&
-      '${_order['docstatus'] ?? 0}' != '2';
-
-  /// This order's pick lists. They are made on the Pick List page, not here.
-  Widget _pickListSection() {
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      const Divider(height: 28),
-      const Text('Pick list', style: TextStyle(fontWeight: FontWeight.bold)),
-      const SizedBox(height: 2),
-      Text(
-          _pickLists.isEmpty
-              ? 'None yet. Pick lists are made on the Pick List page.'
-              : 'Made on the Pick List page.',
-          style: const TextStyle(fontSize: 12, color: Colors.black54)),
-      const SizedBox(height: 8),
-      for (final l in _pickLists) PickListCard(list: l, showOrder: false),
-    ]);
   }
 
   /// Where the follow-up stands, in two lines, and the way to it.
@@ -720,7 +690,6 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 ]),
               ),
             if (po == 'PO Approved - Ready for SAP') ..._productionRows(),
-            if (_approved) _pickListSection(),
             const Divider(height: 28),
             if (_isOwner) ...[
               const Text('Proforma',
