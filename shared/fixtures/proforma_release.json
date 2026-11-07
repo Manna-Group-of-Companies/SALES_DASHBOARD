@@ -14,7 +14,7 @@
     "rejected": "A rejected over-limit order stays held: the GM did not approve the credit, or withdrew it."
   },
   "messages": {
-    "held": "This order needs the general manager's credit approval. The proforma unlocks once the general manager approves the credit."
+    "held": "Needs GM credit approval. Proforma unlocks after."
   },
   "cases": [
     {

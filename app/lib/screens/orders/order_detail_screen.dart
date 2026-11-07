@@ -404,24 +404,6 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     if (changed == true && mounted) setState(() => _init = _load());
   }
 
-  /// When this order stops taking changes, said outright, because it is the
-  /// kind of rule people only learn by being caught out by it. It is the
-  /// approval, not the delivery date: the 1 pm cutoff was dropped on
-  /// 11 October 2026 (order_locked_after_approval.json).
-  String get _editStatusNote {
-    if (canEditOrder(_order)) {
-      if (editStatusOf(_order) == 'Pending GM Approval') {
-        // Only the GM gets here (statusAllowsEdit).
-        return 'This order is with you. Only you can change it, until you '
-            'approve or reject it.';
-      }
-      return 'Products and quantities can be changed until the sales manager '
-          'approves the order or sends it to the GM.';
-    }
-    // The reason is in the box below.
-    return 'Changes are closed for this order.';
-  }
-
   /// What production moved since this phone last had the order open.
   ///
   /// Above the items, because it is the part the rep did not know — and the
@@ -771,8 +753,6 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             // approved it nothing is said here: it is simply not editable.
             if (canEditOrder(_order)) ...[
               const Text('Changes', style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 4),
-              Text(_editStatusNote, style: const TextStyle(fontSize: 12, color: Colors.black54)),
               const SizedBox(height: 8),
               FilledButton.icon(
                 style: FilledButton.styleFrom(backgroundColor: Colors.indigo),

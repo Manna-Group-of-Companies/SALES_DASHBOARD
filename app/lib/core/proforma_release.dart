@@ -12,9 +12,7 @@
 import 'package:manna_field_sales/core/credit.dart';
 
 /// What the rep is told while the proforma is held.
-const String kProformaHeld =
-    "This order needs the general manager's credit approval. The proforma "
-    'unlocks once the general manager approves the credit.';
+const String kProformaHeld = 'Needs GM credit approval. Proforma unlocks after.';
 
 /// The statuses that mean the GM has approved the credit: approved and back
 /// with the sales manager, or pushed to SAP after that. The sales manager

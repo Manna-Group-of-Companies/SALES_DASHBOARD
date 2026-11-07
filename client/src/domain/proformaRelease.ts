@@ -17,9 +17,7 @@ import { creditEscalates, type CustomerRow } from './credit';
 import { PO_STATUS } from './orderStatus';
 
 /** What the rep is told while the proforma is held. */
-export const PROFORMA_HELD =
-  "This order needs the general manager's credit approval. The proforma " +
-  'unlocks once the general manager approves the credit.';
+export const PROFORMA_HELD = 'Needs GM credit approval. Proforma unlocks after.';
 
 /**
  * The statuses that mean the GM has approved the credit: approved and back
