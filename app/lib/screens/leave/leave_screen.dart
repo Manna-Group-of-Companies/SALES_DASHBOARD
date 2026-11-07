@@ -79,9 +79,7 @@ class _LeaveScreenState extends State<LeaveScreen> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Leave balance', style: TextStyle(fontWeight: FontWeight.bold)),
             SizedBox(height: 8),
-            Text(
-                'You are not on the leave accrual scheme, so no balance is '
-                'held here. Speak to HR about your leave.',
+            Text('No leave balance. Ask HR.',
                 style: TextStyle(fontSize: 12, color: Colors.black54)),
           ]),
         ),
@@ -126,17 +124,13 @@ class _LeaveScreenState extends State<LeaveScreen> {
           if (b.overdrawn)
             Padding(
               padding: const EdgeInsets.only(top: 10),
-              child: Text(
-                  '${(b.taken - b.entitlement).toStringAsFixed(1)} day(s) beyond '
-                  'your entitlement - those are without pay (LOP).',
+              child: Text('${(b.taken - b.entitlement).toStringAsFixed(1)} day(s) LOP',
                   style: const TextStyle(fontSize: 12, color: Colors.red)),
             ),
           if (b.pending > 0)
             const Padding(
               padding: EdgeInsets.only(top: 8),
-              child: Text(
-                  'Pending days are shown but not deducted - a request that is '
-                  'refused was never leave.',
+              child: Text('Pending days not deducted.',
                   style: TextStyle(fontSize: 11, color: Colors.black54)),
             ),
         ]),
@@ -187,7 +181,7 @@ class _LeaveScreenState extends State<LeaveScreen> {
             if (leaves.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(16),
-                child: Text('No leave requests yet. Tap "Apply for Leave".',
+                child: Text('No leave requests yet.',
                     style: TextStyle(color: Colors.black54)),
               )
             else

@@ -33,15 +33,11 @@ Future<bool> ensureRouteSet(BuildContext context, OrderParty party) async {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '${party.label} is not on a delivery route, so an order cannot '
-              'be taken for them yet.',
+            Text('${party.label} has no delivery route.',
               style: const TextStyle(fontSize: 13.5, height: 1.4),
             ),
             const SizedBox(height: 10),
-            const Text(
-              'The route is the only thing the factory is told about where an '
-              'order is going. Without it the goods cannot be put on a van.',
+            const Text('Set a route before taking an order.',
               style: TextStyle(fontSize: 12.5, height: 1.4, color: Colors.black54),
             ),
             const SizedBox(height: 10),

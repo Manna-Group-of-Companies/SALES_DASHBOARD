@@ -192,10 +192,7 @@ class _ManagerTargetsScreenState extends State<ManagerTargetsScreen> {
                     children: [
                       const Padding(
                         padding: EdgeInsets.only(bottom: 8),
-                        child: Text(
-                            'Achieved = SAP invoices dated this month '
-                            '(before GST). Approved orders not yet invoiced '
-                            'do not count.',
+                        child: Text('Achieved = SAP invoices this month (before GST).',
                             style:
                                 TextStyle(fontSize: 12, color: Colors.black54)),
                       ),
@@ -341,9 +338,9 @@ class TargetInvoicesScreen extends StatelessWidget {
           return ListTile(
             dense: true,
             contentPadding: EdgeInsets.zero,
-            title: Text(l.customerName.isEmpty ? l.order : l.customerName),
+            title: Text(l.customerName.isEmpty ? 'Invoice ${l.invoice}' : l.customerName),
             subtitle: Text('Invoice ${l.invoice} · ${l.invoiceDate}\n'
-                '${l.itemName} · ${l.order}'),
+                '${l.itemName}'),
             isThreeLine: true,
             trailing: Column(
                 mainAxisAlignment: MainAxisAlignment.center,

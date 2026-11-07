@@ -372,7 +372,6 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
                         ? '—'
                         : '${c['customer_group']}'),
                 row('Phone', phone.isEmpty ? '—' : phone),
-                row('Customer ID', '${c['name']}'),
                 row('Outstanding', '₹${bal.toStringAsFixed(0)}',
                     color: bal > 0 ? Colors.red : null),
                 row('Credit limit', lim > 0 ? '₹${lim.toStringAsFixed(0)}' : '—'),

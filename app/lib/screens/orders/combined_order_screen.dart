@@ -117,8 +117,7 @@ class _CombinedOrderScreenState extends State<CombinedOrderScreen> {
                 return const Center(
                     child: Padding(
                         padding: EdgeInsets.all(24),
-                        child: Text(
-                            'No orders are in this combined order any more.',
+                        child: Text('No orders left in it.',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.black54))));
               }
@@ -129,7 +128,7 @@ class _CombinedOrderScreenState extends State<CombinedOrderScreen> {
                   final r = rows[i];
                   return ListTile(
                     leading: const Icon(Icons.receipt_long),
-                    title: Text('${r['name']}'),
+                    title: Text(_orderTitle(r)),
                     subtitle: Text(
                         '${r['transaction_date'] ?? ''}'
                         '  ·  ${r['custom_sales_person'] ?? '—'}'),
@@ -156,4 +155,10 @@ class _CombinedOrderScreenState extends State<CombinedOrderScreen> {
       ]),
     );
   }
+}
+
+/// "Order 558" once SAP has numbered it, else "Order".
+String _orderTitle(Map o) {
+  final s = '${o['custom_sap_sales_order'] ?? ''}'.trim();
+  return s.isEmpty || s == 'null' ? 'Order' : 'Order $s';
 }

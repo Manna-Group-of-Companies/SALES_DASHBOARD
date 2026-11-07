@@ -198,10 +198,7 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Correct this location?'),
-          content: const Text(
-            'This replaces the saved location with where you are standing '
-            'right now, and sends it to your manager to verify.\n\n'
-            'Only do this if you are at the place.',
+          content: const Text('Save where you are now as the location? Your manager will verify it.',
             style: TextStyle(fontSize: 13.5, height: 1.4),
           ),
           actions: [
@@ -248,8 +245,7 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
               ]),
               const SizedBox(height: 6),
               Text(
-                'You can take an order, but your manager cannot approve it '
-                'until this lead has: ${missing.join(', ')}.',
+                'Missing: ${missing.join(', ')}.',
                 style: const TextStyle(fontSize: 13, height: 1.4),
               ),
               const SizedBox(height: 4),
@@ -487,7 +483,7 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                   final r = rows[i];
                   return ListTile(
                     leading: const Icon(Icons.receipt_long),
-                    title: Text('${r['name']}  ·  Rs ${(r['total_amount'] ?? 0)}'),
+                    title: Text('Lead order  ·  Rs ${(r['total_amount'] ?? 0)}'),
                     subtitle:
                     Text('${r['order_date'] ?? ''}  ·  ${r['status'] ?? ''}'),
                     trailing: const Icon(Icons.chevron_right),

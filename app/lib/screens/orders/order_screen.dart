@@ -454,10 +454,7 @@ class _OrderScreenState extends State<OrderScreen> {
                         fontSize: 12.5, fontWeight: FontWeight.w600),
                   ),
                 const SizedBox(height: 6),
-                const Text(
-                  'Your manager cannot approve this order on their own. They '
-                  'send it to the general manager, who decides it on what you '
-                  'write here — and once approved, it becomes your condition.',
+                const Text('Over limit — the GM decides. Write what the customer promised.',
                   style: TextStyle(fontSize: 12, color: Colors.black54),
                 ),
                 const SizedBox(height: 12),
@@ -544,10 +541,7 @@ class _OrderScreenState extends State<OrderScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('No signal'),
-        content: const Text(
-          'This order has not been sent, so no stock on it is held for you. '
-          'Another rep with signal can still take it.\n\n'
-          'Keep the order on the phone and send it when you have signal?',
+        content: const Text('Not sent — no stock held.\n\nKeep it on the phone and send later?',
         ),
         actions: [
           TextButton(

@@ -69,10 +69,8 @@ class _UnsentPunchesScreenState extends State<UnsentPunchesScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Discard this punch?'),
-        content: Text('${_title(p)} at ${hhmm(p.at)} has never reached the '
-            'office. Discarding it cannot be undone.'
-            '${closes > 0 ? '\n\nThe punch-out that goes with it is '
-                'discarded too — it has nothing to close without it.' : ''}'),
+        content: Text('${_title(p)} at ${hhmm(p.at)} was never sent. This cannot be undone.'
+            '${closes > 0 ? '\n\nIts punch-out goes too.' : ''}'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -149,9 +147,7 @@ class _UnsentPunchesScreenState extends State<UnsentPunchesScreen> {
             Text('Every punch has been sent',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             SizedBox(height: 8),
-            Text(
-              'Punches you make without signal are kept here until they '
-              'can be sent.',
+            Text('Punches made without signal wait here.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: Colors.black54),
             ),
@@ -171,10 +167,7 @@ class _UnsentPunchesScreenState extends State<UnsentPunchesScreen> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'These have not reached the office yet. Each keeps the time you '
-              'punched, and they are sent by themselves when you have signal.'
-              '${Session.I.offlineStart ? ' The app opened without signal, '
-                  'so it will first check your sign-in.' : ''}',
+              'Not sent yet. They send by themselves when you have signal.',
               style: const TextStyle(fontSize: 12.5, height: 1.4),
             ),
           ),

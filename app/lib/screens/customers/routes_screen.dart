@@ -70,9 +70,7 @@ class _RoutesScreenState extends State<RoutesScreen> {
             onSubmitted: (v) => Navigator.pop(ctx, v),
           ),
           const SizedBox(height: 8),
-          const Text(
-              'Type the area only — your name is added automatically so your '
-              'routes stay together in every list.',
+          const Text('Area name only. Your name is added.',
               style: TextStyle(fontSize: 12, color: Colors.black54)),
         ]),
         actions: [
@@ -105,10 +103,7 @@ class _RoutesScreenState extends State<RoutesScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete this route?'),
-        content: Text(
-            '$name will be removed.\n\nIf any customer, lead or site is still '
-            'on this route, it cannot be deleted — move them to another route '
-            'first.'),
+        content: Text('$name will be removed.\n\nMove its customers to another route first.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -176,10 +171,7 @@ class _RoutesScreenState extends State<RoutesScreen> {
                           style: TextStyle(
                               fontSize: 16, fontWeight: FontWeight.w600)),
                       SizedBox(height: 8),
-                      Text(
-                        'Production plans every delivery by route, so a '
-                        'customer without one cannot be scheduled. Add the '
-                        'areas you cover.',
+                      Text('Add the areas you cover.',
                         textAlign: TextAlign.center,
                         style: TextStyle(fontSize: 13, color: Colors.black54),
                       ),

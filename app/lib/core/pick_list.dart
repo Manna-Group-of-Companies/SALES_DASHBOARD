@@ -10,8 +10,8 @@
 // applies the same ordered/remaining rule again and refuses any product that
 // is not on the order, so a phone cannot talk its way round it.
 //
-// Since 5 Nov 2026 a production manager approves each list on the dashboard
-// (the `manna_pick_list_approve` Server Script); the phone only shows it.
+// Lists are not approved (7 Nov 2026): the sync sends each one to SAP as made,
+// and a product counts as picked once SAP's delivery for its list is back.
 
 double _num(Object? v) => v is num ? v.toDouble() : double.tryParse('$v') ?? 0;
 int _int(Object? v) => v is num ? v.toInt() : int.tryParse('$v') ?? 0;
@@ -159,6 +159,10 @@ class PickListItem {
 class PickList {
   final String name;
   final String salesOrder;
+
+  /// SAP's order number, once the sync has written it back. Shown instead of
+  /// the ERPNext name.
+  final String sapSalesOrder;
   final String customerName;
   final String salesPerson;
   final String status;
@@ -170,7 +174,8 @@ class PickList {
   final String approvedOn;
   final List<PickListItem> items;
 
-  /// SAP's side (5 Nov 2026), empty until the sync and B1if have made it.
+  /// SAP's side: the Hi-Tech pick list the sync sent, and what B1if made from
+  /// it. Blank until the sync has done each step.
   final String sapPickList;
   final String hitechInvoice;
   final String mtGoodsReceipt;
@@ -180,6 +185,7 @@ class PickList {
   const PickList({
     required this.name,
     required this.salesOrder,
+    this.sapSalesOrder = '',
     required this.customerName,
     required this.salesPerson,
     required this.status,
@@ -198,6 +204,9 @@ class PickList {
   factory PickList.fromJson(Map m) => PickList(
         name: '${m['name'] ?? ''}',
         salesOrder: '${m['sales_order'] ?? ''}',
+        sapSalesOrder: '${m['sap_sales_order'] ?? ''}' == 'null'
+            ? ''
+            : '${m['sap_sales_order'] ?? ''}',
         customerName: '${m['customer_name'] ?? m['customer'] ?? ''}',
         salesPerson: '${m['sales_person'] ?? ''}',
         status: '${m['status'] ?? 'Submitted'}',
@@ -222,6 +231,9 @@ class PickList {
 
   /// Approved by production. A cancelled list never counts as approved.
   bool get isApproved => isSubmitted && approvalStatus == 'Approved';
+
+  /// SAP has delivered it to the customer: the products on it are picked.
+  bool get isDelivered => isSubmitted && mtDelivery.trim().isNotEmpty && mtDelivery != 'null';
 }
 
 /// What Submitted lists already took, per `Sales Order Item` name.

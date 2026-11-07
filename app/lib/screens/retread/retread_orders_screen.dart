@@ -47,8 +47,7 @@ class _RetreadOrdersScreenState extends State<RetreadOrdersScreen> {
             return const Center(
                 child: Padding(
                     padding: EdgeInsets.all(24),
-                    child: Text(
-                        'No orders yet. Order ready tyres from "Ready Tyres".',
+                    child: Text('No orders yet.',
                         textAlign: TextAlign.center)));
           }
           final groups = <String, List<Map<String, dynamic>>>{};

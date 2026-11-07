@@ -149,10 +149,7 @@ class _ProductRowState extends State<ProductRow> {
               const SizedBox(height: 12),
             ],
             Text(
-              'This is what the product is priced by, and it cannot be changed '
-              'from the app once saved.'
-              '${needsRoll || needsBelts ? ' It is also written into SAP the next time stock is synced.' : ''}'
-              ' Check it before you save.',
+              'Cannot be changed after saving. Check it first.',
               style: const TextStyle(fontSize: 12, color: Colors.black54),
             ),
           ]),

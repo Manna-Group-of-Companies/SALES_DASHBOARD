@@ -158,10 +158,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Correct this shop\'s location?'),
-          content: const Text(
-            'This replaces the saved location with where you are standing '
-            'right now, and sends it to your manager to verify.\n\n'
-            'Only do this if you are at the shop.',
+          content: const Text('Save where you are now as the shop location? Your manager will verify it.',
             style: TextStyle(fontSize: 13.5, height: 1.4),
           ),
           actions: [
@@ -243,7 +240,6 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                       tooltip: 'Call',
                       icon: const Icon(Icons.call, color: Colors.green),
                       onPressed: () => _call(phone))),
-          row(Icons.badge_outlined, 'Customer ID', '${c['name']}'),
           row(
               Icons.location_on_outlined,
               'Location',
@@ -365,9 +361,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             const Icon(Icons.schedule, color: Colors.red, size: 20),
             const SizedBox(width: 8),
             Expanded(
-                child: Text(
-                    '${pastTermsPhrase(c)}. '
-                    'New orders go to the GM for credit approval.',
+                child: Text('${pastTermsPhrase(c)}. GM approval needed.',
                     style: const TextStyle(color: Colors.red))),
           ]),
         )
@@ -391,9 +385,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             Icon(Icons.warning_amber, color: Colors.red, size: 20),
             SizedBox(width: 8),
             Expanded(
-                child: Text(
-                    'Over credit limit — orders go to the general manager, and '
-                    'the proforma unlocks once they approve.',
+                child: Text('Over credit limit — GM approval needed.',
                     style: TextStyle(color: Colors.red))),
           ]),
         ),
@@ -491,8 +483,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                 Icon(Icons.route, size: 14, color: Colors.orange.shade800),
                 const SizedBox(width: 4),
                 Expanded(
-                  child: Text('No sales route set — production cannot plan a '
-                      'delivery for this customer.',
+                  child: Text('No sales route set.',
                       style: TextStyle(
                           fontSize: 11, color: Colors.orange.shade800)),
                 ),

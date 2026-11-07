@@ -121,8 +121,7 @@ Future<String?> pickSalesRoute(
   if (!context.mounted) return null;
   if (routes.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text(
-            'No sales routes exist yet — ask the office to create them.')));
+        content: Text('No routes yet. Ask the office.')));
     return null;
   }
   return showDialog<String>(

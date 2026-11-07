@@ -118,7 +118,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
             _card(
                 Icons.playlist_add_check,
                 'Pick Lists',
-                const Text('What your reps picked from Hi-Tech stock'),
+                const Text('View only'),
                 const PickListsScreen()),
           if (_can(ManagerScreen.regularizations))
             _card(

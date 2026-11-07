@@ -150,9 +150,7 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
               ),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'The general manager reviews this and decides whether it settles '
-              'the condition.',
+            const Text('The GM decides on this.',
               style: TextStyle(fontSize: 12),
             ),
           ],
@@ -395,10 +393,7 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
                   ? const Center(
                       child: Padding(
                         padding: EdgeInsets.all(24),
-                        child: Text(
-                          'Nothing outstanding.\n\nWhen the general manager '
-                          'approves an over-limit order on terms, those terms '
-                          'appear here.',
+                        child: Text('Nothing outstanding.',
                           textAlign: TextAlign.center,
                         ),
                       ),

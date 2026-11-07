@@ -69,7 +69,7 @@ class _LeaveApprovalsScreenState extends State<LeaveApprovalsScreen> {
       await Api.approveLeave(l['name'] as String, approve);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('${approve ? 'Approved' : 'Rejected'} ${l['name']}')));
+            content: Text('${approve ? 'Approved' : 'Rejected'} ${l['employee_name'] ?? ''}'.trim())));
       }
       _reload();
     } catch (e) {

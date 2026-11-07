@@ -449,11 +449,17 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
 
   // -------------------------------------------------------------- build ---
 
+  String _title() {
+    if (_isLead) return 'Lead Order';
+    final s = '${_order['custom_sap_sales_order'] ?? ''}'.trim();
+    return s.isEmpty || s == 'null' ? 'Order' : 'Order $s';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.orderName),
+        title: FutureBuilder<void>(future: _init, builder: (_, __) => Text(_title())),
         actions: const [SyncAppBarButton(), SizedBox(width: 4)],
       ),
       body: FutureBuilder<void>(
@@ -602,8 +608,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                     fontWeight: FontWeight.bold, fontSize: 16)),
           ]),
           const SizedBox(height: 4),
-          const Text(
-              'New party — no trading history or credit limit to check against.',
+          const Text('New party — no history.',
               style: TextStyle(fontSize: 12, color: Colors.black54)),
         ]),
       );

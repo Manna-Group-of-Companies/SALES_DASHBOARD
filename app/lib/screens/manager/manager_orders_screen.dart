@@ -114,7 +114,7 @@ class OrderCard extends StatelessWidget {
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
             child: Text(textOf(r['customer']).isEmpty
-                    ? '${r['name']}'
+                    ? 'Order'
                     : textOf(r['customer']),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -129,7 +129,7 @@ class OrderCard extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
             [
-              if (sapNo.isNotEmpty) 'SAP $sapNo' else '${r['name']}',
+              if (sapNo.isNotEmpty) 'SAP $sapNo' else 'Not in SAP yet',
               textOf(r['custom_sales_person']),
               shortDate(r['transaction_date']),
             ].where((s) => s.isNotEmpty).join(' · '),

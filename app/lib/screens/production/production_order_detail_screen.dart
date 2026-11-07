@@ -156,10 +156,15 @@ class _ProductionOrderDetailScreenState
     return v is num ? v.toInt() : (int.tryParse('${v ?? ''}'.trim()) ?? 0);
   }
 
+  String _title() {
+    final s = '${_order['custom_sap_sales_order'] ?? ''}'.trim();
+    return s.isEmpty || s == 'null' ? 'Order' : 'Order $s';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.orderName)),
+      appBar: AppBar(title: FutureBuilder<void>(future: _init, builder: (_, __) => Text(_title()))),
       body: FutureBuilder<void>(
         future: _init,
         builder: (context, snap) {
@@ -207,9 +212,7 @@ class _ProductionOrderDetailScreenState
                     fontWeight: FontWeight.bold, color: Colors.red.shade700)),
           ]),
           const SizedBox(height: 4),
-          const Text(
-              'Items or quantities were edited after production was told about '
-              'this order. Check the lines below before making anything else.',
+          const Text('Edited after production was told. Check the lines.',
               style: TextStyle(fontSize: 12)),
           const SizedBox(height: 8),
           OutlinedButton.icon(
@@ -316,9 +319,7 @@ class _ProductionOrderDetailScreenState
                 child: Text('Move delivery date')),
           ),
           const SizedBox(height: 2),
-          const Text(
-              'Postpone or bring forward to a date the floor can actually meet. '
-              'The rep sees the new date on their order.',
+          const Text('The rep sees the new date.',
               style: TextStyle(fontSize: 11, color: Colors.black45)),
         ]),
       ),

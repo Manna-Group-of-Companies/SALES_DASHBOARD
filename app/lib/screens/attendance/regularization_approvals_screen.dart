@@ -68,7 +68,7 @@ class _RegularizationApprovalsScreenState
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(
-                '${approve ? 'Approved' : 'Rejected'} ${reg['name']}')));
+                '${approve ? 'Approved' : 'Rejected'} ${reg['employee_name'] ?? ''}'.trim())));
       }
       _reload();
     } catch (e) {

@@ -102,8 +102,7 @@ class _RetreadReadyTyresScreenState extends State<RetreadReadyTyresScreen> {
             return const Center(
                 child: Padding(
                     padding: EdgeInsets.all(24),
-                    child: Text(
-                        'No ready tyres yet. When production marks your tagged tyres Ready, they appear here to order.',
+                    child: Text('No ready tyres yet.',
                         textAlign: TextAlign.center)));
           }
           final widgets = <Widget>[];

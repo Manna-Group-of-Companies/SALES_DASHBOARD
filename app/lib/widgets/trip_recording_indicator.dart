@@ -27,8 +27,7 @@ class TripRecordingIndicator extends StatelessWidget {
     if (!context.mounted) return;
     if (err != null && err.contains('Location permission')) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: const Text('Location is not allowed for this app. '
-            'Allow it in Settings → Permissions → Location.'),
+        content: const Text('Allow location in Settings.'),
         duration: const Duration(seconds: 8),
         action: SnackBarAction(
             label: 'Settings', onPressed: TripTracker.I.openLocationSettings),
@@ -77,10 +76,7 @@ class TripRecordingIndicator extends StatelessWidget {
                     style: const TextStyle(color: Colors.black54)),
                 if (partial) ...[
                   const SizedBox(height: 12),
-                  const Text(
-                      'Location is set to "while using the app", so the route '
-                      'may stop being recorded once your screen is off. Set it '
-                      'to "Allow all the time" to record the whole trip.',
+                  const Text('Set location to "Allow all the time".',
                       style: TextStyle(fontSize: 13, color: Color(0xFF92400E))),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(

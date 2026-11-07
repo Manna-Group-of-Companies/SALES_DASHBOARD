@@ -144,7 +144,7 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
                         children: [
                           Text(
                               '${_soldBy(r)}  ·  ${r['destination'] ?? 'No route set'}'
-                              '\n${r['name']}  ·  raised ${r['transaction_date'] ?? ''}'
+                              '\n${_sapPrefix(r)}raised ${r['transaction_date'] ?? ''}'
                               '\nDeliver by ${delivery.isEmpty || delivery == 'null' ? 'not set' : delivery}'),
                           const SizedBox(height: 4),
                           // The tick reads SAP (orderProgress), which has no
@@ -180,3 +180,8 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
   }
 }
 
+/// "SAP 558  ·  " once SAP has numbered the order, else nothing.
+String _sapPrefix(Map r) {
+  final s = '${r['custom_sap_sales_order'] ?? ''}'.trim();
+  return s.isEmpty || s == 'null' ? '' : 'SAP $s  ·  ';
+}

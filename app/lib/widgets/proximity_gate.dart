@@ -138,9 +138,7 @@ Future<void> _showBlocked(
               const SizedBox(height: 6),
               // The two questions a rep asks on seeing this, answered before
               // they ring the office to ask them.
-              const Text(
-                'Your own leads and customers never block you, and neither '
-                'does another unit selling to the same shop.',
+              const Text('Your own leads and customers never block you.',
                 style: TextStyle(fontSize: 12, color: Colors.black54),
               ),
               const SizedBox(height: 12),
@@ -176,10 +174,7 @@ Future<void> _showBlocked(
                         ]),
                   )),
               const Divider(),
-              const Text(
-                'If this really is a different shop, ask your sales manager to '
-                'remove the duplicate. Reps cannot delete leads or customers '
-                'themselves.',
+              const Text('Different shop? Ask your sales manager.',
                 style: TextStyle(fontSize: 12.5, height: 1.4),
               ),
             ]),
