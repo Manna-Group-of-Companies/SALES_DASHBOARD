@@ -8,7 +8,6 @@ import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/party_location.dart';
 import 'package:manna_field_sales/core/proximity.dart' show RegisteredPlace;
 import 'package:manna_field_sales/widgets/credit_conditions_section.dart';
-import 'package:manna_field_sales/widgets/sap_sync_bar.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/collections/collection_screen.dart';
@@ -282,34 +281,6 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       ),
     );
 
-    // One age bucket. Narrower than the two headline boxes because four of
-    // them share a row, and only the oldest is coloured — if every box
-    // shouted, none would.
-    Widget bucket(AgingBucket b) => Expanded(
-      child: Card(
-        margin: const EdgeInsets.symmetric(horizontal: 2),
-        color: b.overdue ? const Color(0xFFFFEBEE) : null,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(b.label,
-                style: const TextStyle(fontSize: 10, color: Colors.black54)),
-            const SizedBox(height: 3),
-            // A dash, not a zero, when SAP has sent no breakdown — see
-            // kAgingNoData. Zero would say "nothing due in this band", which
-            // is a statement nobody has the data to make.
-            Text(a.bucketsKnown ? '₹${b.amount.toStringAsFixed(0)}' : kAgingNoData,
-                style: TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.bold,
-                    color: (b.overdue && a.bucketsKnown)
-                        ? Colors.red.shade700
-                        : null)),
-          ]),
-        ),
-      ),
-    );
-
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
         box('Outstanding', '₹${a.total.toStringAsFixed(0)}',
@@ -321,35 +292,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             over ? const Color(0xFFFFEBEE) : null),
       ]),
 
-      // Directly under the two figures it describes. A limit raised in SAP
-      // does not reach here until somebody syncs, and a rep being refused by
-      // a stale number has no other way to tell.
-      const SapSyncBar(),
-
-      // How old the debt is. Shown, never enforced: the credit rule is still
-      // the total against the limit, and nothing here blocks an order.
-      // The buckets are always drawn, synced or not: a reader can then see
-      // WHICH bands are unknown, and the four labels stay in the same place
-      // either way. The explanation follows underneath when there is one.
-      const SizedBox(height: 4),
-      Row(children: a.buckets.map(bucket).toList()),
-      if (!a.bucketsKnown)
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-          child: Text(kAgingNotSynced,
-              style: const TextStyle(fontSize: 11, color: Colors.black45)),
-        ),
-
-      if (a.mismatch)
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-          child: Text(kAgingMismatch,
-              style: TextStyle(fontSize: 11, color: Colors.orange.shade900)),
-        ),
-
-      // Payment terms (11 Oct 2026). Unlike the four boxes, being overdue past
-      // the terms DOES send this customer's orders to the GM, so it is said in
-      // words, with the term it is measured against.
+      // The SAP sync bar and the debt-age boxes were removed (9 Nov 2026, the
+      // user). Being overdue past terms still sends orders to the GM, so that
+      // warning stays.
       if (overduePastTerms(c) > kOverdueTolerance)
         Container(
           margin: const EdgeInsets.only(top: 4),
@@ -364,12 +309,6 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                 child: Text('${pastTermsPhrase(c)}. GM approval needed.',
                     style: const TextStyle(color: Colors.red))),
           ]),
-        )
-      else if (paymentTermsOf(c).isNotEmpty)
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-          child: Text('Terms: ${paymentTermsOf(c)}. Nothing overdue.',
-              style: const TextStyle(fontSize: 11, color: Colors.black45)),
         ),
 
       if (over)
