@@ -537,7 +537,7 @@ function InvoiceTable({
             ))}
         {pending.map((o) => (
           <tr key={`so-${o.id}`}>
-            <td>{o.id}</td>
+            <td>{o.sapSalesOrder ? `SO ${o.sapSalesOrder}` : <span className="dim">Not in SAP yet</span>}</td>
             <td>{shortDate(o.placedOn)}</td>
             <td>—</td>
             <td className="right">{m(o.netTotal)}</td>
