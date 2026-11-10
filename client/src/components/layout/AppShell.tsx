@@ -213,6 +213,8 @@ export function AppShell() {
     { to: '/hr/calendar', label: 'Monthly Calendar', icon: 'calendar', roles: ['hr'], group: 'People' },
     { to: '/hr/odometer', label: 'Odometer Check', icon: 'gauge', roles: ['hr'], group: 'People' },
     { to: '/hr/trips', label: 'Trips & Routes', icon: 'map', roles: ['hr'], group: 'People' },
+    // What the reps asked for, read-only; the accountant answers (10 Nov 2026).
+    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['hr'], group: 'People' },
 
     { to: '/reports/expenses', label: 'Monthly Expenses', icon: 'receipt', roles: ['hr'], group: 'Reports' },
     { to: '/reports/summary', label: 'Range Summary', icon: 'chart', roles: ['hr'], group: 'Reports' },

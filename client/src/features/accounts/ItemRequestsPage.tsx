@@ -1,8 +1,13 @@
-/** Accountant: the reps' item requests. Create the item in SAP, then answer with its code, or reject. */
+/**
+ * The reps' item requests. The accountant creates the item in SAP, then
+ * answers with its code, or rejects. HR sees the same list, read-only.
+ */
 import { useEffect, useMemo, useState } from 'react';
 import { decideItemRequest, listItemRequests, type ItemRequest, type ItemRequestStatus } from '@/api/itemRequests';
 import { Alert, Badge, Button, Card, Empty, Icon, Input, Modal, Select, Skeleton, Tabs, Textarea } from '@/components/ui';
 import { RefreshButton } from '@/components/common/RefreshButton';
+import { useAppSelector } from '@/store/hooks';
+import { selectUser } from '@/store/selectors';
 import '@/components/layout/layout.css';
 import './accounts.css';
 
@@ -22,6 +27,8 @@ export function ItemRequestsPage() {
   const [show, setShow] = useState<Show>('Pending');
   const [rep, setRep] = useState('');
   const [open, setOpen] = useState<ItemRequest | null>(null);
+  // manna_item_request refuses anyone else's answer, so nobody else is offered one.
+  const canAnswer = useAppSelector(selectUser)?.role === 'accountant';
 
   useEffect(() => {
     let live = true;
@@ -123,8 +130,12 @@ export function ItemRequestsPage() {
                       )}
                     </td>
                     <td className="right">
-                      <Button size="sm" variant={r.status === 'Pending' ? 'primary' : 'default'} onClick={() => setOpen(r)}>
-                        {r.status === 'Pending' ? 'Answer' : 'View'}
+                      <Button
+                        size="sm"
+                        variant={canAnswer && r.status === 'Pending' ? 'primary' : 'default'}
+                        onClick={() => setOpen(r)}
+                      >
+                        {canAnswer && r.status === 'Pending' ? 'Answer' : 'View'}
                       </Button>
                     </td>
                   </tr>
@@ -138,6 +149,7 @@ export function ItemRequestsPage() {
       {open && (
         <AnswerModal
           r={open}
+          readOnly={!canAnswer}
           onClose={() => setOpen(null)}
           onDone={() => {
             setOpen(null);
@@ -149,7 +161,17 @@ export function ItemRequestsPage() {
   );
 }
 
-function AnswerModal({ r, onClose, onDone }: { r: ItemRequest; onClose: () => void; onDone: () => void }) {
+function AnswerModal({
+  r,
+  readOnly,
+  onClose,
+  onDone,
+}: {
+  r: ItemRequest;
+  readOnly: boolean;
+  onClose: () => void;
+  onDone: () => void;
+}) {
   const [code, setCode] = useState(r.itemCode);
   const [reply, setReply] = useState(r.reply);
   const [busy, setBusy] = useState(false);
@@ -194,22 +216,29 @@ function AnswerModal({ r, onClose, onDone }: { r: ItemRequest; onClose: () => vo
             <Icon name="file" size={14} /> Photo
           </a>
         )}
+        {readOnly && line('Status', r.status)}
+        {readOnly && line('Item code', r.itemCode)}
+        {readOnly && line('Reply', r.reply)}
       </div>
-      {err && <Alert tone="danger">{err}</Alert>}
-      <label className="tiny dim">Item code created in SAP</label>
-      <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. PMD00101002" disabled={busy} />
-      <label className="tiny dim" style={{ marginTop: 10, display: 'block' }}>
-        Reply to the rep
-      </label>
-      <Textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={2} disabled={busy} />
-      <div className="ir-actions">
-        <Button onClick={() => save('Rejected')} disabled={busy}>
-          Reject
-        </Button>
-        <Button variant="primary" onClick={() => save('Done')} loading={busy}>
-          Done
-        </Button>
-      </div>
+      {!readOnly && (
+        <>
+          {err && <Alert tone="danger">{err}</Alert>}
+          <label className="tiny dim">Item code created in SAP</label>
+          <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. PMD00101002" disabled={busy} />
+          <label className="tiny dim" style={{ marginTop: 10, display: 'block' }}>
+            Reply to the rep
+          </label>
+          <Textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={2} disabled={busy} />
+          <div className="ir-actions">
+            <Button onClick={() => save('Rejected')} disabled={busy}>
+              Reject
+            </Button>
+            <Button variant="primary" onClick={() => save('Done')} loading={busy}>
+              Done
+            </Button>
+          </div>
+        </>
+      )}
     </Modal>
   );
 }

@@ -181,6 +181,8 @@ const MD: Role[] = ['managing_director'];
 // Manager, so another role here would see a Create button that is refused.
 const ACCOUNTANT: Role[] = ['accountant'];
 const HR: Role[] = ['hr'];
+// The accountant answers; HR reads them (10 Nov 2026).
+const ITEM_REQUESTS: Role[] = ['accountant', 'hr'];
 
 export function AppRoutes() {
   const user = useAppSelector(selectUser);
@@ -386,7 +388,7 @@ export function AppRoutes() {
         <Route
           path="item-requests"
           element={
-            <RoleRoute allow={ACCOUNTANT}>
+            <RoleRoute allow={ITEM_REQUESTS}>
               <ItemRequestsPage />
             </RoleRoute>
           }

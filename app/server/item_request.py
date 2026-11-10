@@ -14,6 +14,8 @@
 # the way in, and it decides who may do what:
 #   - an accountant (User.custom_is_accountant) or System Manager: lists every
 #     request and decides them;
+#   - HR (User.custom_is_hr_manager): lists every request, decides none
+#     (10 Nov 2026);
 #   - anyone with a Sales Person: submits, and lists their own.
 # Done is the accountant's word that the item exists in SAP; it does not
 # create anything. Item codes reach ERPNext from SAP.
@@ -28,6 +30,7 @@ is_sys = user == "Administrator" or bool(frappe.get_all(
     "Has Role", filters={"parent": user, "parenttype": "User", "role": "System Manager"}, limit=1
 ))
 is_acct = is_sys or frappe.utils.cint(frappe.db.get_value("User", user, "custom_is_accountant")) == 1
+is_hr = frappe.utils.cint(frappe.db.get_value("User", user, "custom_is_hr_manager")) == 1
 mine = frappe.get_all("Sales Person", filters={"custom_user": user, "is_group": 0}, pluck="name", limit=1)
 me = mine[0] if mine else None
 
@@ -50,9 +53,9 @@ if action == "list":
     status = clean(frappe.form_dict.get("status"))
     if status:
         filters["status"] = status
-    if not is_acct:
+    if not (is_acct or is_hr):
         if not me:
-            frappe.throw("Only a rep or the accountant can see item requests.")
+            frappe.throw("Only a rep, the accountant or HR can see item requests.")
         filters["sales_person"] = me
     rows = frappe.get_all("Manna Item Request", filters=filters, fields=FIELDS,
                           order_by="creation desc", limit_page_length=500)
