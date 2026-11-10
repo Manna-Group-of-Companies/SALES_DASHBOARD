@@ -35,7 +35,7 @@ export const COMMITMENT_MIN_LENGTH = 10;
 /** How far out a condition falls due when the rep named no date. */
 export const CONDITION_DEFAULT_DAYS = 15;
 
-export const COMMITMENT_MISSING = 'Write what the customer committed to. The GM decides on it.';
+export const COMMITMENT_MISSING = "Write the customer's promise.";
 export const COMMITMENT_TOO_SHORT = 'Say what, and by when.';
 export const CONDITION_REQUIRED = "Keep or edit the rep's commitment. It cannot be empty.";
 export const COMMENT_EMPTY = 'Write the comment first.';

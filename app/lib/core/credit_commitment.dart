@@ -29,7 +29,7 @@ const int kCommitmentMinLength = 10;
 /// How far out a condition falls due when the rep named no date.
 const int kConditionDefaultDays = 15;
 
-const String kCommitmentMissing = 'Write what the customer committed to. The GM decides on it.';
+const String kCommitmentMissing = "Write the customer's promise.";
 const String kCommitmentTooShort = 'Say what, and by when.';
 const String kConditionRequired = "Keep or edit the rep's commitment. It cannot be empty.";
 const String kCommentEmpty = 'Write the comment first.';
