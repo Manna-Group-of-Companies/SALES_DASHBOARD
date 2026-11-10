@@ -32,15 +32,11 @@ void main() {
     }
   });
 
-  testWidgets('the order page says whose desk it is on', (t) async {
-    Future<void> banner(String po) => t.pumpWidget(MaterialApp(
-        home: Scaffold(body: GmBanner(poStatus: po, commitment: promise))));
-    await banner('Pending Approval');
-    expect(find.text('With manager'), findsOneWidget);
-    expect(find.textContaining('send it to the GM'), findsOneWidget);
-    await banner('Pending GM Approval');
-    expect(find.text('With GM'), findsOneWidget);
-    expect(find.textContaining('Waiting for the GM'), findsOneWidget);
+  test('the locked proforma button says whose desk the order is on', () {
+    for (final s in ['Pending Approval', 'PO Uploaded - Pending Approval', 'Pending Rate Approval']) {
+      expect(proformaHeldLabel(s), 'With manager', reason: s);
+    }
+    expect(proformaHeldLabel('Pending GM Approval'), 'With GM · waiting for approval');
   });
 
   Future<void> show(WidgetTester t, Widget? w) =>

@@ -671,8 +671,6 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             Text(
                 'Order total: Rs ${total.toStringAsFixed(2)}  ·  ${items.length} item(s)'),
             const SizedBox(height: 12),
-            GmBanner(
-                poStatus: po, commitment: _order['custom_credit_commitment']),
             if (_proformaHeld)
               Container(
                   padding: const EdgeInsets.all(10),
@@ -751,14 +749,15 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                   style: TextStyle(fontSize: 12, color: Colors.black54)),
               const SizedBox(height: 8),
               // Nothing to request: the GM's approval of the credit is what
-              // unlocks it (proforma_release.json, 26 Sep 2026).
+              // unlocks it (proforma_release.json, 26 Sep 2026). Until then
+              // the button says whose desk the order is on (10 Nov 2026).
               if (_proformaHeld)
                 FilledButton.icon(
                   onPressed: null,
                   icon: const Icon(Icons.lock_clock),
-                  label: const Padding(
-                      padding: EdgeInsets.all(10),
-                      child: Text('Proforma waits for GM approval')),
+                  label: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Text(proformaHeldLabel(po))),
                 )
               else
                 FilledButton.icon(

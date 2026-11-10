@@ -66,47 +66,14 @@ class GmPill extends StatelessWidget {
   }
 }
 
-/// The notice at the top of the order page.
-class GmBanner extends StatelessWidget {
-  final String poStatus;
-  final dynamic commitment;
-  const GmBanner({super.key, required this.poStatus, this.commitment});
-
-  @override
-  Widget build(BuildContext context) {
-    final s = gmStatusOf(poStatus, commitment: commitment);
-    if (s == null) return const SizedBox.shrink();
-    final text = switch (poStatus.trim()) {
-      'Pending GM Approval' =>
-        'Over credit limit. Your manager sent it to the GM. Waiting for the GM.',
-      'Pending Final Approval' =>
-        'The GM approved it. Waiting for your manager to send it to SAP.',
-      _ => 'Over credit limit. Your manager will check it and send it to the GM.',
-    };
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: s.color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: s.color.withValues(alpha: 0.25)),
-      ),
-      child: Row(children: [
-        Icon(s.icon, color: s.color),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(s.label,
-                style: TextStyle(
-                    fontWeight: FontWeight.w700, color: s.color, fontSize: 15)),
-            const SizedBox(height: 2),
-            Text(text, style: const TextStyle(fontSize: 13)),
-          ]),
-        ),
-      ]),
-    );
-  }
-}
+/// The locked proforma button while the credit waits (10 Nov 2026): whose
+/// desk the order is on, instead of a banner at the top of the order page.
+/// Once the GM approves, the proforma unlocks (proforma_release.dart) and this
+/// is not shown.
+String proformaHeldLabel(String poStatus) =>
+    poStatus.trim() == 'Pending GM Approval'
+        ? 'With GM · waiting for approval'
+        : 'With manager';
 
 /// Chat-style ticks for an order waiting on the manager or the GM:
 /// one grey tick when sent, two blue ticks once a manager has opened it,
