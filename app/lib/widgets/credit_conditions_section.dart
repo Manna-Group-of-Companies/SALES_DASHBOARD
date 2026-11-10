@@ -32,6 +32,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/condition_answer_sheet.dart';
 
 class CreditConditionsSection extends StatefulWidget {
   final String customer;
@@ -67,46 +68,17 @@ class _CreditConditionsSectionState extends State<CreditConditionsSection> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
   Future<void> _respond(Map<String, dynamic> r) async {
-    final ctrl = TextEditingController(text: '${r['response'] ?? ''}');
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Your response'),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('${r['condition'] ?? ''}',
-              style: const TextStyle(fontSize: 12, color: Colors.black54)),
-          const SizedBox(height: 12),
-          TextField(
-            controller: ctrl,
-            autofocus: true,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'What you did about it',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text('The GM decides on this.',
-              style: TextStyle(fontSize: 11, color: Colors.black45)),
-        ]),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Send')),
-        ],
-      ),
-    );
-    if (ok != true || ctrl.text.trim().isEmpty || !mounted) return;
+    final text = await showConditionAnswerSheet(context,
+        condition: '${r['condition'] ?? ''}',
+        initial: '${r['response'] ?? ''}');
+    if (text == null || !mounted) return;
 
     setState(() => _busy = true);
     try {
-      await Api.respondToCondition('${r['name']}', ctrl.text.trim(),
+      await Api.respondToCondition('${r['name']}', text,
           salesOrder: '${r['sales_order'] ?? ''}', customer: '${r['customer'] ?? ''}');
       await _load();
-      if (mounted) _snack('Sent to the general manager.');
+      if (mounted) _snack('Sent to the GM.');
     } catch (e) {
       if (mounted) _snack(humanError(e));
     } finally {

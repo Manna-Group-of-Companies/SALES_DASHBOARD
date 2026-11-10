@@ -2808,7 +2808,8 @@ class Api {
     final rep = Session.I.salesPerson;
     if (rep == null || rep.isEmpty) return const [];
     return _list('Manna Credit Condition',
-        fields: '["name","customer","sales_person","sales_order","condition",'
+        fields: '["name","customer","customer.customer_name as customer_name",'
+            '"sales_person","sales_order","condition",'
             '"due_date","status","set_by","set_on","response","responded_on",'
             '"close_note","closed_by","closed_on"]',
         filters: '[["sales_person","=","$rep"]]',
