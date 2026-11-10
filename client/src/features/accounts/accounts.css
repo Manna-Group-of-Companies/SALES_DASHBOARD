@@ -149,3 +149,12 @@
 }
 .acct__filters .select { width: auto; }
 .acct-lines td.num { white-space: nowrap; }
+
+/* Item Requests (10 Nov 2026) */
+.ir-tools { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.ir-tools .tabs { border-bottom: 0; }
+.ir-tools select { width: auto; margin-left: auto; }
+.ir-detail { display: grid; gap: 6px; margin-bottom: 14px; }
+.ir-line { display: grid; grid-template-columns: 90px 1fr; gap: 8px; font-size: 13px; }
+.ir-photo { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.ir-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }

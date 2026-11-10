@@ -19,6 +19,7 @@ import 'package:manna_field_sales/core/duplicate_order.dart';
 import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/core/trip_totals.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
+import 'package:manna_field_sales/core/item_request.dart';
 import 'package:manna_field_sales/core/pick_list.dart';
 import 'package:manna_field_sales/core/proximity.dart';
 import 'package:manna_field_sales/core/sales_target.dart';
@@ -1478,6 +1479,29 @@ class Api {
     final m = r.data is Map ? r.data['message'] : null;
     if (r.statusCode != 200 || m is! Map) throw Exception(_frappeError(r));
     return TargetMonth.fromJson(m);
+  }
+
+  // -------- Item requests --------
+  //
+  // Through the `manna_item_request` Server Script (app/server/item_request.py):
+  // a rep submits and sees their own; the accountant answers on the dashboard.
+
+  static Future<List<ItemRequest>> getItemRequests() async {
+    final r = await Session.I.dio.post('/api/method/manna_item_request', data: {'action': 'list'});
+    final m = r.data is Map ? r.data['message'] : null;
+    if (r.statusCode != 200 || m is! List) throw Exception(_frappeError(r));
+    return m.whereType<Map>().map(ItemRequest.fromJson).toList();
+  }
+
+  /// Submits a request; [photoPath] is uploaded first and linked by its URL.
+  static Future<void> submitItemRequest(Map<String, dynamic> fields, {String? photoPath}) async {
+    String? photo;
+    if (photoPath != null) {
+      photo = await uploadFileGetUrl(filePath: photoPath, filename: 'item_request.jpg');
+    }
+    final r = await Session.I.dio.post('/api/method/manna_item_request',
+        data: {...fields, 'action': 'submit', 'photo': ?photo});
+    if (r.statusCode != 200) throw Exception(_frappeError(r));
   }
 
   // -------- Pick lists --------
