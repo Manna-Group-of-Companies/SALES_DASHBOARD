@@ -39,21 +39,16 @@ class CondStatusBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (String label, IconData icon, Color fg, Color bg) = switch (kind) {
-      CondBadge.overdue => ('Overdue', Icons.error_rounded, CondColors.red, const Color(0xFFFDECEC)),
-      CondBadge.closed => ('Closed', Icons.check_circle_rounded, CondColors.green, const Color(0xFFE8F6EE)),
-      CondBadge.awaiting => ('Awaiting review', Icons.hourglass_top_rounded, CondColors.orange, CondColors.lightOrange),
-      CondBadge.open => ('Open', Icons.radio_button_checked_rounded, Colors.white, CondColors.orange),
+    final (String label, Color fg, Color bg) = switch (kind) {
+      CondBadge.overdue => ('Overdue', CondColors.red, const Color(0xFFFDECEC)),
+      CondBadge.closed => ('Closed', CondColors.green, const Color(0xFFE8F6EE)),
+      CondBadge.awaiting => ('Awaiting review', CondColors.muted, const Color(0xFFF3F3F3)),
+      CondBadge.open => ('Open', CondColors.orange, CondColors.lightOrange),
     };
     return Container(
-      padding: const EdgeInsets.fromLTRB(8, 4, 10, 4),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 13, color: fg),
-        const SizedBox(width: 4),
-        Text(label,
-            style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: fg, letterSpacing: 0.1)),
-      ]),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
+      child: Text(label, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: fg)),
     );
   }
 }

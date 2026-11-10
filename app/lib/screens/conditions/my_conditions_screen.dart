@@ -248,163 +248,87 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
     final customer = _s(r, 'customer_name').isNotEmpty ? _s(r, 'customer_name') : _s(r, 'customer');
     final committed = _commitments[order] ?? '';
     final events = _events(r);
-    final open = _expanded[name] ?? (!closed || _isFocus(r));
+    final open = _expanded[name] ?? _isFocus(r);
 
     // The rule, in the one place it matters: a rep may answer, never close.
     // `canMoveCondition` decides, so the button and the API agree by
     // construction rather than by memory.
     final canAnswer = canMoveCondition(status: status, action: CondAction.respond, actor: 'rep');
 
+    // A missing deadline is said out loud rather than left blank. Blank reads
+    // as a rendering fault; the rep needs to know there genuinely is no date.
+    final meta = [
+      condDate(due).isNotEmpty ? 'Due ${condDate(due)}' : 'No deadline',
+      if (setBy.isNotEmpty) 'Set by $setBy',
+    ].join('  ·  ');
+
     // The row the rep came here for, outlined so it is found at a glance.
     final focus = _isFocus(r);
 
-    return TweenAnimationBuilder<double>(
+    return Container(
       key: _keys.putIfAbsent(name, () => GlobalKey()),
-      tween: Tween(begin: 0, end: 1),
-      duration: Duration(milliseconds: 260 + 50 * index.clamp(0, 6)),
-      curve: Curves.easeOutCubic,
-      builder: (_, t, child) => Opacity(
-        opacity: t,
-        child: Transform.translate(offset: Offset(0, 12 * (1 - t)), child: child),
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      decoration: BoxDecoration(
+        color: CondColors.card,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: focus ? CondColors.orange : CondColors.border, width: focus ? 1.5 : 1),
       ),
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-        decoration: BoxDecoration(
-          color: CondColors.card,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-              color: focus ? CondColors.orange : CondColors.border, width: focus ? 1.6 : 1),
-          boxShadow: [
-            BoxShadow(
-                color: const Color(0xFFB4693A).withValues(alpha: 0.08),
-                blurRadius: 18,
-                offset: const Offset(0, 6)),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(18),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            // An accent along the top: what state it is in, before reading.
-            Container(
-              height: 4,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(colors: late
-                    ? [CondColors.red, const Color(0xFFF87171)]
-                    : closed
-                        ? [CondColors.green, const Color(0xFF4ADE80)]
-                        : [CondColors.orange, CondColors.orange2]),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(
+                child: Text(customer,
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: CondColors.text)),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    alignment: Alignment.center,
-                    decoration: const BoxDecoration(color: CondColors.lightOrange, shape: BoxShape.circle),
-                    child: Text(customer.isNotEmpty ? customer[0].toUpperCase() : '?',
-                        style: const TextStyle(
-                            fontSize: 17, fontWeight: FontWeight.w800, color: CondColors.orange)),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(customer,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 15.5, fontWeight: FontWeight.w700, color: CondColors.text, height: 1.25)),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  CondStatusBadge(_badge(status, late)),
-                ]),
-                const SizedBox(height: 12),
-                Text(_s(r, 'condition'),
-                    maxLines: open ? null : 2,
-                    overflow: open ? null : TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 14.5, height: 1.45, color: CondColors.text)),
-                // The rep's own words, where the GM approved on different ones.
-                if (open && committed.isNotEmpty && committed != _s(r, 'condition')) ...[
-                  const SizedBox(height: 6),
-                  Text('You committed: $committed',
-                      style: const TextStyle(fontSize: 12.5, fontStyle: FontStyle.italic, color: CondColors.muted)),
-                ],
-                const SizedBox(height: 12),
-                Wrap(spacing: 8, runSpacing: 8, children: [
-                  CondMetaChip(
-                    icon: late ? Icons.alarm_rounded : Icons.event_rounded,
-                    text: condDate(due).isNotEmpty ? 'Due ${condDate(due)}' : 'No deadline',
-                    alert: late,
-                  ),
-                  if (setBy.isNotEmpty) CondMetaChip(icon: Icons.person_outline_rounded, text: 'Set by $setBy'),
-                ]),
-              ]),
-            ),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 240),
-              curve: Curves.easeOutCubic,
-              alignment: Alignment.topCenter,
-              child: open
-                  ? Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        const Text('ACTIVITY',
-                            style: TextStyle(
-                                fontSize: 11, fontWeight: FontWeight.w700, color: CondColors.muted, letterSpacing: 0.8)),
-                        const SizedBox(height: 10),
-                        CondTimeline(events: events),
-                      ]),
-                    )
-                  : const SizedBox(width: double.infinity),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 10, 12, 12),
-              child: Row(children: [
-                TextButton.icon(
-                  style: TextButton.styleFrom(foregroundColor: CondColors.muted),
-                  onPressed: () => setState(() => _expanded[name] = !open),
-                  icon: AnimatedRotation(
-                    turns: open ? 0.5 : 0,
-                    duration: const Duration(milliseconds: 240),
-                    child: const Icon(Icons.expand_more_rounded, size: 20),
-                  ),
-                  label: Text(open ? 'Hide activity' : 'Activity (${events.length})',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
-                const Spacer(),
-                if (canAnswer)
-                  status == kCondAwaiting
-                      ? OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: CondColors.orange,
-                            side: const BorderSide(color: CondColors.orange, width: 1.3),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                          ),
-                          onPressed: _busy ? null : () => _respond(r),
-                          icon: const Icon(Icons.edit_rounded, size: 17),
-                          label: const Text('Change my answer',
-                              style: TextStyle(fontWeight: FontWeight.w700)),
-                        )
-                      : FilledButton.icon(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: CondColors.orange,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                          ),
-                          onPressed: _busy ? null : () => _respond(r),
-                          icon: const Icon(Icons.reply_rounded, size: 18),
-                          label: const Text('Answer this', style: TextStyle(fontWeight: FontWeight.w700)),
-                        ),
-              ]),
-            ),
+              const SizedBox(width: 8),
+              CondStatusBadge(_badge(status, late)),
+            ]),
+            const SizedBox(height: 8),
+            Text(_s(r, 'condition'),
+                style: const TextStyle(fontSize: 14, height: 1.4, color: CondColors.text)),
+            // The rep's own words, where the GM approved on different ones.
+            if (committed.isNotEmpty && committed != _s(r, 'condition')) ...[
+              const SizedBox(height: 4),
+              Text('You committed: $committed',
+                  style: const TextStyle(fontSize: 12.5, fontStyle: FontStyle.italic, color: CondColors.muted)),
+            ],
+            const SizedBox(height: 8),
+            Text(meta,
+                style: TextStyle(
+                    fontSize: 12.5,
+                    color: late ? CondColors.red : CondColors.muted,
+                    fontWeight: late ? FontWeight.w600 : FontWeight.w400)),
           ]),
         ),
-      ),
+        if (open)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            child: CondTimeline(events: events),
+          ),
+        const SizedBox(height: 10),
+        const Divider(height: 1, thickness: 1, color: CondColors.border),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 4, 8, 4),
+          child: Row(children: [
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: CondColors.muted),
+              onPressed: () => setState(() => _expanded[name] = !open),
+              child: Text(open ? 'Hide activity' : 'Activity (${events.length})',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            ),
+            const Spacer(),
+            if (canAnswer && !closed)
+              TextButton(
+                style: TextButton.styleFrom(foregroundColor: CondColors.orange),
+                onPressed: _busy ? null : () => _respond(r),
+                child: Text(status == kCondAwaiting ? 'Change my answer' : 'Answer this',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+              ),
+          ]),
+        ),
+      ]),
     );
   }
 
