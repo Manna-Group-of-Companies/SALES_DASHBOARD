@@ -169,7 +169,10 @@ class _PickListPageState extends State<PickListPage> {
     final lists = results[1] as List<PickList>;
     return [
       for (final o in orders)
-        if ('${o['custom_po_status'] ?? ''}' == _kApproved)
+        // Only orders already in SAP: a pick list goes against Hi-Tech's
+        // sales order, so one without its number could never be released.
+        if ('${o['custom_po_status'] ?? ''}' == _kApproved &&
+            _text(o['custom_sap_sales_order']).isNotEmpty)
           _OrderBlock(o, lists.where((l) => l.salesOrder == o['name']).toList()),
     ];
   }
