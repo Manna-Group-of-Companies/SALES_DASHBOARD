@@ -90,6 +90,10 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
     _order = _isLead
         ? await Api.getLeadOrder(widget.orderName)
         : await Api.getOrder(widget.orderName);
+    // The rep sees a double tick once a manager has opened it.
+    if (!_isLead && Session.I.isManager) {
+      Api.markOrderSeen(widget.orderName, '${_order['custom_po_status'] ?? ''}');
+    }
 
     final party = _isLead ? '${_order['lead']}' : '${_order['customer']}';
     final results = await Future.wait([

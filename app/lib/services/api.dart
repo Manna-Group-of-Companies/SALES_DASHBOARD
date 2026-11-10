@@ -2816,6 +2816,21 @@ class Api {
         orderBy: 'status asc, due_date asc');
   }
 
+  /// A manager opened an order waiting for them: the rep sees a double tick.
+  /// The manna_order_seen Server Script decides who may and writes it once.
+  /// Best effort — a missed tick must never stop the manager reading it.
+  static void markOrderSeen(String order, String poStatus) {
+    const waiting = {
+      'Pending Approval',
+      'PO Uploaded - Pending Approval',
+      'Pending Rate Approval',
+    };
+    if (!waiting.contains(poStatus)) return;
+    Session.I.dio
+        .post('/api/method/manna_order_seen', data: {'order': order})
+        .then((_) {}, onError: (_) {});
+  }
+
   /// The rep's answer. Moves it to Awaiting Review — the rep says what they
   /// did, the GM decides whether that settles it.
   ///
