@@ -73,12 +73,12 @@ Check 'a list on an order of the old route is left to Hi-Tech by hand' ((Get-PkS
 Check 'a list whose order has no Hi-Tech order yet waits' ((Get-PkSkipReason -Pick $pick -Order (Od @{ custom_sap_sales_order = '' }) -Flow $flow).Kind -eq 'wait')
 Check 'a list on a cancelled order is refused' ((Get-PkSkipReason -Pick $pick -Order (Od @{ docstatus = 2 }) -Flow $flow).Kind -eq 'refuse')
 Check 'a list whose order is gone is refused' ((Get-PkSkipReason -Pick $pick -Order $null -Flow $flow).Kind -eq 'refuse')
+# 9 Nov 2026: no approval in ERPNext - the store confirms the list in SAP instead.
 $r = Get-PkSkipReason -Pick (Pk @{ approval_status = 'Pending' }) -Order $order -Flow $flow
-Check 'a list production has not approved waits, and says so' ($r.Kind -eq 'wait' -and $r.Why -match 'approve') "$($r.Kind) $($r.Why)"
-Check 'a list made before approval existed (blank) waits for approval too' ((Get-PkSkipReason -Pick (Pk @{ approval_status = '' }) -Order $order -Flow $flow).Kind -eq 'wait')
+Check 'a list nobody approved in ERPNext is sent - the store confirms it in SAP' ($r.Kind -eq '') "$($r.Kind) $($r.Why)"
 $bare = $pick | ConvertTo-Json -Depth 5 | ConvertFrom-Json; $bare.PSObject.Properties.Remove('approval_status')
-Check 'a site without the approval field sends nothing - no field is not approval' ((Get-PkSkipReason -Pick $bare -Order $order -Flow $flow).Kind -eq 'wait')
-Check 'an unapproved list waits even on a cancelled order - nothing is written on it before approval' ((Get-PkSkipReason -Pick (Pk @{ approval_status = 'Pending' }) -Order (Od @{ docstatus = 2 }) -Flow $flow).Kind -eq 'wait')
+Check 'a site without the approval field sends the list too' ((Get-PkSkipReason -Pick $bare -Order $order -Flow $flow).Kind -eq '')
+Check 'a list on a cancelled order is refused whatever its approval says' ((Get-PkSkipReason -Pick (Pk @{ approval_status = 'Pending' }) -Order (Od @{ docstatus = 2 }) -Flow $flow).Kind -eq 'refuse')
 $noKg = J '{"name":"PICK-00009","status":"Submitted","approval_status":"Approved","sap_pick_list":"","sap_sync_error":"","items":[{"sales_order_item":"r1","item_name":"PCTR 197","picked_qty":1}]}'
 $r = Get-PkSkipReason -Pick $noKg -Order $order -Flow $flow
 Check 'a list made before kilos were asked for is refused, naming the product' ($r.Kind -eq 'refuse' -and $r.Why -match 'PCTR 197') $r.Why

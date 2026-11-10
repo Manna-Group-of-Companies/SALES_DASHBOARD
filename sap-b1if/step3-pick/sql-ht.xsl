@@ -11,10 +11,22 @@
   is added (TEST, 5 Nov 2026 - pick list 3 made at 14:48:33, no object 156
   event in any status). So each run looks for the work itself:
 
-    waiting  a pick list not closed, whose Remarks carry an ERPNext name, and
-             no live Hi-Tech invoice carries that name in NumAtCard yet. The
-             invoice is the last thing that can be missing - B1if makes the
-             three documents in one run, all or none.
+    waiting  a pick list not closed, whose Remarks carry an ERPNext name,
+             CONFIRMED in SAP (U_Confirmed = 'Y'), and no live Hi-Tech invoice
+             carries that name in NumAtCard yet. The invoice is the last thing
+             that can be missing - B1if makes the three documents in one run,
+             all or none.
+
+  Confirmed (9 Nov 2026, the user's decision): nobody approves a pick list in
+  ERPNext any more - PASS K sends every submitted one - so the check before
+  anything is invoiced is Hi-Tech's store ticking "Confirmed" on the SAP pick
+  list once it is picked. Until then the list only reserves stock.
+
+  Kg = the PICKED kilos when the store entered any on the list (Picked
+  column, PKL1.PickQtty): what was weighed is what is invoiced, received and
+  delivered, and a line picked as 0 is left off all three - that product was
+  not sent. When the store entered none, the released kilos (what ERPNext
+  asked for), as before.
     which    one per run, in turn by the minute of the clock, so a list that
              is refused every time (no batch stock, say) cannot hold up the
              lists behind it.
@@ -53,7 +65,8 @@
 			<Statement>
 SELECT
 	ISNULL(CAST(P.AbsEntry AS nvarchar(11)), '') AS PickEntry, ISNULL(P.PickName, '') AS PickName, ISNULL(P.N, 0) AS Waiting,
-	L.PickEntry AS PickLine, L.BaseObject, L.OrderEntry, L.OrderLine, L.RelQtty AS Kg,
+	L.PickEntry AS PickLine, L.BaseObject, L.OrderEntry, L.OrderLine,
+	CASE WHEN PQ.AnyPicked = 1 THEN L.PickQtty ELSE L.RelQtty END AS Kg,
 	ISNULL(O.DocNum, 0) AS SoNum, ISNULL(O.CANCELED, '') AS SoCancelled, ISNULL(O.CardCode, '') AS SoCard,
 	ISNULL(O.U_MannaMtPo, '') AS MtPo, ISNULL(O.NumAtCard, '') AS OrderName,
 	ISNULL(R.ItemCode, '') AS ItemCode, ISNULL(R.LineStatus, '') AS SoLineStatus, ISNULL(R.WhsCode, '') AS WhsCode,
@@ -78,12 +91,13 @@ LEFT JOIN (
 				THEN SUBSTRING(CAST(K.Remarks AS nvarchar(254)), 9, CHARINDEX(' - ', CAST(K.Remarks AS nvarchar(254))) - 9)
 				ELSE '' END AS PickName
 		) X
-		WHERE K.Status &lt;&gt; 'C' AND X.PickName &lt;&gt; ''
+		WHERE K.Status &lt;&gt; 'C' AND X.PickName &lt;&gt; '' AND ISNULL(K.U_Confirmed, 'N') = 'Y'
 			AND NOT EXISTS (SELECT 1 FROM OINV V WHERE V.NumAtCard = X.PickName AND V.CANCELED = 'N')
 	) W
 	WHERE W.Rn = DATEDIFF(MINUTE, '20260101', GETDATE()) % W.N + 1
 ) P ON 1 = 1
-LEFT JOIN PKL1 L ON L.AbsEntry = P.AbsEntry
+OUTER APPLY (SELECT CASE WHEN EXISTS (SELECT 1 FROM PKL1 Z WHERE Z.AbsEntry = P.AbsEntry AND Z.PickQtty &gt; 0) THEN 1 ELSE 0 END AS AnyPicked) PQ
+LEFT JOIN PKL1 L ON L.AbsEntry = P.AbsEntry AND (PQ.AnyPicked = 0 OR L.PickQtty &gt; 0)
 LEFT JOIN ORDR O ON O.DocEntry = L.OrderEntry AND L.BaseObject = 17
 LEFT JOIN RDR1 R ON R.DocEntry = L.OrderEntry AND R.LineNum = L.OrderLine AND L.BaseObject = 17
 LEFT JOIN OITM I ON I.ItemCode = R.ItemCode

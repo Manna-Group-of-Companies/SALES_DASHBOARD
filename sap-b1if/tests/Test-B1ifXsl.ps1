@@ -250,6 +250,9 @@ Check 'step3_sql_ht_skips_a_closed_list' ($st -match "K\.Status <> 'C'")
 Check 'step3_sql_ht_takes_waiting_lists_in_turn_so_a_refused_one_cannot_block_the_rest' ($st -match "W\.Rn = DATEDIFF\(MINUTE, '20260101', GETDATE\(\)\) % W\.N \+ 1")
 Check 'step3_sql_ht_always_returns_the_settings_row' ($st -match "FROM \(\s*SELECT\s+MAX\(CASE WHEN Code = 'ENABLED'" -and $st -match 'LEFT JOIN \(\s*SELECT W\.AbsEntry')
 Check 'step3_sql_ht_starts_with_select_for_the_call_sql_atom' ($st.TrimStart().StartsWith('SELECT'))
+Check 'step3_sql_ht_waits_until_the_store_confirms_the_pick_list_in_sap' ($st -match "ISNULL\(K\.U_Confirmed, 'N'\) = 'Y'")
+Check 'step3_sql_ht_invoices_the_picked_kilos_when_the_store_entered_any' ($st -match 'CASE WHEN PQ\.AnyPicked = 1 THEN L\.PickQtty ELSE L\.RelQtty END AS Kg')
+Check 'step3_sql_ht_leaves_off_a_line_picked_as_zero' ($st -match 'LEFT JOIN PKL1 L ON L\.AbsEntry = P\.AbsEntry AND \(PQ\.AnyPicked = 0 OR L\.PickQtty > 0\)')
 
 function PkRow { param([hashtable] $Over = @{})
 	$r = [ordered]@{
