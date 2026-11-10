@@ -377,7 +377,7 @@ class _OrderScreenState extends State<OrderScreen> {
     if (_deliveryDate == null) return 'Pick a required delivery date.';
     final unpriced = _picked.where((l) => l.needsRate).toList();
     if (unpriced.isNotEmpty) {
-      return 'Enter a rate for ${unpriced.first.product.name}.';
+      return 'No price in SAP for ${unpriced.first.product.name}.';
     }
     final broken = _picked.where((l) => l.product.isMisconfigured).toList();
     if (broken.isNotEmpty) {

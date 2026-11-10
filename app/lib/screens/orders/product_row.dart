@@ -554,59 +554,37 @@ class _ProductRowState extends State<ProductRow> {
     );
   }
 
-  /// An item Manna Treads' SAP prices is sold at that price, and nothing else:
-  /// the screen has already put it in the box, and the box is locked (the
-  /// user, 26 Sep 2026 — no typing over it, and no "Use" button, which is what
-  /// it had on 25 Sep). A different price for a dealer is a special price in
-  /// SAP, and for a lead it goes through Higher Management once they are a
-  /// customer; neither is the rep's to type.
-  ///
-  /// An item SAP does not price is typed by hand, and is never prefilled:
-  /// field pricing is negotiated per customer, and a prefilled number is one a
-  /// tired rep will accept.
-  ///
-  /// Once the manager has approved it the field goes read-only rather than
-  /// disappearing — the rep still needs to see what was agreed while they are
-  /// talking to the customer.
+  /// The rate is SAP's, never typed (10 Nov 2026): the box shows Manna
+  /// Treads' SAP rate for this customer and cannot be edited. An item SAP has
+  /// no rate for cannot be ordered until the office prices it in SAP. Once the
+  /// manager has approved the order it stays shown, read-only.
   Widget _rateField() {
     final sap = widget.sapRate;
     final unit = p.category.rateUnit;
-    final fromSap = !widget.rateLocked && sap != null;
-    final locked = widget.rateLocked || fromSap;
+    final noPrice = !widget.rateLocked && sap == null && line.rate <= 0;
     return TextField(
       controller: _rate,
-      readOnly: locked,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [
-        FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))
-      ],
+      readOnly: true,
+      enableInteractiveSelection: false,
       decoration: InputDecoration(
         labelText: 'Rate per $unit',
         prefixText: 'Rs ',
+        hintText: noPrice ? 'No price in SAP' : null,
         border: const OutlineInputBorder(),
         isDense: true,
-        filled: locked,
+        filled: true,
         fillColor: const Color(0xFFF0F0F0),
-        suffixIcon: locked
-            ? const Icon(Icons.lock_outline, size: 16, color: Colors.black45)
-            : null,
-        errorText: line.needsRate ? 'Enter a rate' : null,
+        suffixIcon:
+            const Icon(Icons.lock_outline, size: 16, color: Colors.black45),
+        errorText: noPrice && !line.isEmpty ? 'No price in SAP' : null,
         helperText: widget.rateLocked
-            ? 'Approved by your manager — ask them to reopen it'
+            ? 'Approved by your manager'
             : (sap != null
                 ? (widget.leadOrder ? sap.leadHint(unit) : sap.fixedHint(unit))
-                : ((p.doc['standard_rate'] is num &&
-                        (p.doc['standard_rate'] as num) > 0)
-                    ? 'List rate Rs ${trimQty((p.doc['standard_rate'] as num).toDouble())}'
-                    : null)),
+                : null),
         helperMaxLines: 2,
         helperStyle: const TextStyle(fontSize: 11),
       ),
-      onChanged: (v) {
-        if (locked) return;
-        line.rate = double.tryParse(v) ?? 0;
-        widget.onChanged();
-      },
     );
   }
 
