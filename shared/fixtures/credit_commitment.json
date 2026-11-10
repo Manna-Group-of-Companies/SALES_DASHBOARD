@@ -101,7 +101,7 @@
     }
   ],
   "messages": {
-    "missing": "Write what the customer committed to. The GM decides on it.",
+    "missing": "Write the customer's promise.",
     "too_short": "Say what, and by when.",
     "condition_required": "Keep or edit the rep's commitment. It cannot be empty.",
     "comment_empty": "Write the comment first.",

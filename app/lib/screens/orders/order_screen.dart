@@ -423,51 +423,88 @@ class _OrderScreenState extends State<OrderScreen> {
     final why = escalationOf(widget.party.doc, _total);
     String rs(double v) => 'Rs ${v.toStringAsFixed(0)}';
 
-    return showDialog<({String text, String? due})?>(
+    const orange = Color(0xFFF46A21);
+    Widget figure(String label, String value, {bool red = false}) => Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+            decoration: BoxDecoration(
+              color: red ? const Color(0xFFFFEBEE) : const Color(0xFFF7F7F8),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(children: [
+              Text(label,
+                  style: const TextStyle(fontSize: 11.5, color: Colors.black54)),
+              const SizedBox(height: 2),
+              Text(value,
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: red ? Colors.red.shade700 : Colors.black87)),
+            ]),
+          ),
+        );
+
+    return showModalBottomSheet<({String text, String? due})?>(
       context: context,
-      barrierDismissible: false,
+      isScrollControlled: true,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          // Over the limit, overdue past the payment terms (11 Oct 2026), or
-          // both — the rep is told which, with the figures behind it.
-          title: Text(why.overLimit && why.pastTerms
-              ? 'Over the limit and overdue'
-              : why.overLimit
-                  ? 'Over the credit limit'
-                  : 'Overdue past payment terms'),
-          content: SingleChildScrollView(
+        builder: (ctx, setLocal) => Padding(
+          padding: EdgeInsets.fromLTRB(
+              20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+          child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (why.overLimit)
-                  Text(
-                    'Owes ${rs(a.total)} · this order ${rs(_total)} · '
-                    'limit ${rs(a.creditLimit)}.',
+                // Over the limit, overdue past the payment terms (11 Oct
+                // 2026), or both — the rep is told which.
+                Text(
+                    why.overLimit && why.pastTerms
+                        ? 'Over limit and overdue'
+                        : why.overLimit
+                            ? 'Over credit limit'
+                            : 'Overdue',
                     style: const TextStyle(
-                        fontSize: 12.5, fontWeight: FontWeight.w600),
-                  ),
-                if (why.pastTerms)
-                  Text(
-                    '${pastTermsPhrase(widget.party.doc)}.',
-                    style: const TextStyle(
-                        fontSize: 12.5, fontWeight: FontWeight.w600),
-                  ),
-                const SizedBox(height: 6),
-                const Text('Over limit — the GM decides. Write what the customer promised.',
-                  style: TextStyle(fontSize: 12, color: Colors.black54),
-                ),
+                        fontSize: 18, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 12),
+                if (why.overLimit)
+                  Row(children: [
+                    figure('Owes', rs(a.total)),
+                    const SizedBox(width: 8),
+                    figure('This order', rs(_total)),
+                    const SizedBox(width: 8),
+                    figure('Limit', rs(a.creditLimit), red: true),
+                  ]),
+                if (why.pastTerms) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFFFEBEE),
+                        borderRadius: BorderRadius.circular(12)),
+                    child: Text('${pastTermsPhrase(widget.party.doc)}.',
+                        style: TextStyle(
+                            fontSize: 13, color: Colors.red.shade700)),
+                  ),
+                ],
+                const SizedBox(height: 16),
                 TextField(
                   controller: ctrl,
                   autofocus: true,
-                  maxLines: 4,
+                  minLines: 3,
+                  maxLines: 5,
                   textCapitalization: TextCapitalization.sentences,
                   decoration: InputDecoration(
-                    labelText: 'What has the customer committed to?',
-                    hintText:
-                        'Cheque for 50,000 on Friday, balance with the next order',
-                    border: const OutlineInputBorder(),
+                    labelText: "Customer's promise",
+                    filled: true,
+                    fillColor: const Color(0xFFF7F7F8),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide:
+                            const BorderSide(color: orange, width: 1.5)),
                     errorText: problem,
                     errorMaxLines: 3,
                   ),
@@ -475,11 +512,11 @@ class _OrderScreenState extends State<OrderScreen> {
                     if (problem != null) setLocal(() => problem = null);
                   },
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 Row(children: [
-                  const Text('By when', style: TextStyle(fontSize: 13)),
-                  const Spacer(),
-                  TextButton(
+                  ActionChip(
+                    avatar: const Icon(Icons.event, size: 18, color: orange),
+                    label: Text(due == null ? 'By when (optional)' : isoDate(due!)),
                     onPressed: () async {
                       final now = DateTime.now();
                       final picked = await showDatePicker(
@@ -490,7 +527,6 @@ class _OrderScreenState extends State<OrderScreen> {
                       );
                       if (picked != null) setLocal(() => due = picked);
                     },
-                    child: Text(due == null ? 'Optional' : isoDate(due!)),
                   ),
                   if (due != null)
                     IconButton(
@@ -499,28 +535,33 @@ class _OrderScreenState extends State<OrderScreen> {
                       onPressed: () => setLocal(() => due = null),
                     ),
                 ]),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: orange,
+                    minimumSize: const Size.fromHeight(50),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  icon: const Icon(Icons.send_rounded, size: 18),
+                  label: const Text('Send for approval',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                  onPressed: () {
+                    final p = commitmentProblem(ctrl.text);
+                    if (p != null) {
+                      setLocal(() => problem = p);
+                      return;
+                    }
+                    Navigator.pop(ctx, (
+                      text: ctrl.text.trim(),
+                      due: due == null ? null : isoDate(due!),
+                    ));
+                  },
+                ),
               ],
             ),
           ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, null),
-                child: const Text('Back to the order')),
-            FilledButton(
-              onPressed: () {
-                final p = commitmentProblem(ctrl.text);
-                if (p != null) {
-                  setLocal(() => problem = p);
-                  return;
-                }
-                Navigator.pop(ctx, (
-                  text: ctrl.text.trim(),
-                  due: due == null ? null : isoDate(due!),
-                ));
-              },
-              child: const Text('Send for approval'),
-            ),
-          ],
         ),
       ),
     );
