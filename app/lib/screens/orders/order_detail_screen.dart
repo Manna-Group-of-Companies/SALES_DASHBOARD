@@ -671,7 +671,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             Text(
                 'Order total: Rs ${total.toStringAsFixed(2)}  ·  ${items.length} item(s)'),
             const SizedBox(height: 12),
-            GmBanner(poStatus: po),
+            GmBanner(
+                poStatus: po, commitment: _order['custom_credit_commitment']),
             if (_proformaHeld)
               Container(
                   padding: const EdgeInsets.all(10),

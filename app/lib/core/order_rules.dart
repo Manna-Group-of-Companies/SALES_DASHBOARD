@@ -232,7 +232,7 @@ String approvalLabel(dynamic rawStatus) {
     case 'Pending Rate Approval':
       return 'Waiting for rate approval';
     case 'Pending GM Approval':
-      return 'Sent to GM';
+      return 'With GM';
     // The GM approved the credit; the sales manager has still to push it to
     // SAP. Not "Approved" — nothing has reached the factory yet.
     case 'Pending Final Approval':

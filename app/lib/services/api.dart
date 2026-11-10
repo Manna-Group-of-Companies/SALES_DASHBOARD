@@ -2318,7 +2318,9 @@ class Api {
                     // query, and this list is the rep's whole order history.
                     '"custom_sap_sales_order",'
                     '"custom_sap_invoice","custom_sap_invoice_date",'
-                    '"custom_sap_synced_at","custom_sap_sync_error"]',
+                    '"custom_sap_synced_at","custom_sap_sync_error",'
+                    // Over the credit limit: the list says whose desk it is on.
+                    '"custom_credit_commitment"]',
                 filters: _mineFilter('custom_sales_person'),
                 limit: 50),
             // A rep's own lead orders. Failing here must not cost them their
