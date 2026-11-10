@@ -169,6 +169,7 @@ export function AppShell() {
     { to: '/rates', label: 'Rates & Dealer Prices', icon: 'rupee', roles: ['managing_director'], group: 'Overview' },
     // The accountant's one screen: every order at Hi-Tech with its real customer (8 Oct 2026).
     { to: '/manna-treads', label: 'Orders at Hi-Tech', icon: 'file', roles: ['accountant'], group: 'Accounts' },
+    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['accountant'], group: 'Accounts' },
     { to: '/customers', label: 'Customers', icon: 'users', roles: ['sales_manager'], screen: 'customers', group: 'Sales' },
     // Team Analysis is hidden until SAP's sales history is wired in — see the
     // note on its route in routes.tsx.

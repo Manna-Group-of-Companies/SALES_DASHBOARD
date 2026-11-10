@@ -1,0 +1,41 @@
+{
+  "about": "Manna Item Request (10 Nov 2026): a rep asks for a product that is not in the catalogue; the accountant creates it in SAP and answers with the new item code, or rejects it with a reason. System Manager only, like the pick lists: every read and write goes through the manna_item_request Server Script (item_request.py), which decides who sees and does what. Done does not create the item; it tells the rep. The item reaches ERPNext from SAP.",
+  "doctypes": [
+    {
+      "doctype": "DocType",
+      "name": "Manna Item Request",
+      "module": "Selling",
+      "custom": 1,
+      "autoname": "format:IREQ-{#####}",
+      "sort_field": "creation",
+      "sort_order": "DESC",
+      "track_changes": 1,
+      "permissions": [
+        { "role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1 }
+      ],
+      "fields": [
+        { "fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "Pending\nDone\nRejected", "default": "Pending", "in_list_view": 1, "in_standard_filter": 1 },
+        { "fieldname": "product_line", "label": "Product Line", "fieldtype": "Select", "options": "Black Pearl\nPlatinum\nSilver\nPolygold\nDiamond\nHot\nBonding Gum\nSolution\nOther", "reqd": 1, "in_list_view": 1 },
+        { "fieldname": "item_type", "label": "Type", "fieldtype": "Select", "options": "Precured\nHot\nBonding Gum\nSolution\nOther", "reqd": 1 },
+        { "fieldname": "pattern", "label": "Pattern", "fieldtype": "Data" },
+        { "fieldname": "size", "label": "Size", "fieldtype": "Data", "description": "e.g. 205 x 129" },
+        { "fieldname": "column_break_1", "fieldtype": "Column Break" },
+        { "fieldname": "customer", "label": "Customer", "fieldtype": "Link", "options": "Customer" },
+        { "fieldname": "quantity", "label": "Expected Quantity", "fieldtype": "Float" },
+        { "fieldname": "unit", "label": "Unit", "fieldtype": "Select", "options": "Rolls\nKg\nNos\nLitre" },
+        { "fieldname": "section_note", "fieldtype": "Section Break" },
+        { "fieldname": "note", "label": "Note", "fieldtype": "Small Text" },
+        { "fieldname": "photo", "label": "Photo", "fieldtype": "Attach Image" },
+        { "fieldname": "section_who", "label": "Requested", "fieldtype": "Section Break" },
+        { "fieldname": "sales_person", "label": "Sales Person", "fieldtype": "Link", "options": "Sales Person", "read_only": 1, "in_list_view": 1, "in_standard_filter": 1 },
+        { "fieldname": "requested_by", "label": "Requested By", "fieldtype": "Link", "options": "User", "read_only": 1 },
+        { "fieldname": "requested_on", "label": "Requested On", "fieldtype": "Datetime", "read_only": 1 },
+        { "fieldname": "section_answer", "label": "Answer", "fieldtype": "Section Break" },
+        { "fieldname": "item_code", "label": "New Item Code", "fieldtype": "Data", "in_list_view": 1, "description": "The code created in SAP" },
+        { "fieldname": "reply", "label": "Reply", "fieldtype": "Small Text" },
+        { "fieldname": "decided_by", "label": "Decided By", "fieldtype": "Link", "options": "User", "read_only": 1 },
+        { "fieldname": "decided_on", "label": "Decided On", "fieldtype": "Datetime", "read_only": 1 }
+      ]
+    }
+  ]
+}

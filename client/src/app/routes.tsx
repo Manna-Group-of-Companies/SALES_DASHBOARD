@@ -30,6 +30,7 @@ import { GmFollowUpPage } from '@/features/orders/GmFollowUpPage';
 import { RatesPage } from '@/features/rates/RatesPage';
 import { GmFollowUpOrderPage } from '@/features/orders/GmFollowUpOrderPage';
 import { MannaTreadsOrdersPage } from '@/features/accounts/MannaTreadsOrdersPage';
+import { ItemRequestsPage } from '@/features/accounts/ItemRequestsPage';
 import { LocationVerificationPage } from '@/features/approvals/LocationVerificationPage';
 import { TeamRegularizationsPage } from '@/features/approvals/TeamRegularizationsPage';
 import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
@@ -379,6 +380,14 @@ export function AppRoutes() {
           element={
             <RoleRoute allow={ACCOUNTANT}>
               <MannaTreadsOrdersPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="item-requests"
+          element={
+            <RoleRoute allow={ACCOUNTANT}>
+              <ItemRequestsPage />
             </RoleRoute>
           }
         />
