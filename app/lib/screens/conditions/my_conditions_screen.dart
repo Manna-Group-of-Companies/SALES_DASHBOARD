@@ -23,6 +23,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/credit_condition.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/condition_answer_sheet.dart';
 
 class MyConditionsScreen extends StatefulWidget {
   /// Open on this order's row: scrolled to and outlined. Set when the rep
@@ -128,46 +129,8 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
   /// The rep's answer. It moves to Awaiting Review — saying what you did is
   /// not the same as being let off, and only the GM decides the latter.
   Future<void> _respond(Map<String, dynamic> r) async {
-    final ctrl = TextEditingController(text: _s(r, 'response'));
-    final text = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('What have you done about it?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(_s(r, 'condition'),
-                style: const TextStyle(fontStyle: FontStyle.italic)),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              autofocus: true,
-              maxLines: 4,
-              decoration: const InputDecoration(
-                hintText: 'Collected 40,000 on the 3rd, cheque for the rest',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text('The GM decides on this.',
-              style: TextStyle(fontSize: 12),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () {
-              final t = ctrl.text.trim();
-              if (t.isNotEmpty) Navigator.pop(ctx, t);
-            },
-            child: const Text('Send for review'),
-          ),
-        ],
-      ),
-    );
+    final text = await showConditionAnswerSheet(context,
+        condition: _s(r, 'condition'), initial: _s(r, 'response'));
     if (text == null || !mounted) return;
 
     setState(() => _busy = true);
@@ -177,7 +140,7 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
       await _load();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Sent to the general manager')),
+          const SnackBar(content: Text('Sent to the GM')),
         );
       }
     } catch (e) {
@@ -236,7 +199,10 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
             Row(
               children: [
                 Expanded(
-                  child: Text(_s(r, 'customer'),
+                  child: Text(
+                      _s(r, 'customer_name').isNotEmpty
+                          ? _s(r, 'customer_name')
+                          : _s(r, 'customer'),
                       style: const TextStyle(fontWeight: FontWeight.w600)),
                 ),
                 Container(
@@ -306,8 +272,6 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
                         fontSize: 12,
                         color: late ? Colors.red.shade700 : null,
                         fontWeight: late ? FontWeight.w600 : null)),
-                if (order.isNotEmpty)
-                  Text('Order $order', style: const TextStyle(fontSize: 12)),
                 if (setBy.isNotEmpty)
                   Text('Set by $setBy', style: const TextStyle(fontSize: 12)),
               ],
