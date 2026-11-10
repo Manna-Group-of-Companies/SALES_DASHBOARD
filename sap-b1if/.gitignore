@@ -1,0 +1,5 @@
+erpnext/.sapsync-local-key.txt
+__pycache__/
+# Generated: the zips and each step's bodies (customer names, payments) - rebuilt by packages/build_*.py and Test-*.ps1
+packages/out/
+packages/out-httptest/

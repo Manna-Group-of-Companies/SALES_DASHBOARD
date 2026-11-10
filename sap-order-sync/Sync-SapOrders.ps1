@@ -2752,10 +2752,12 @@ function Get-PkSkipReason {
     $sent = ConvertTo-CleanText (Get-JsonProp $Pick 'sap_pick_list')
     if ($sent -ne '') { return @{ Kind = 'skip'; Why = "already SAP pick list $sent" } }
     if ((ConvertTo-CleanText (Get-JsonProp $Pick 'sap_sync_error')) -ne '') { return @{ Kind = 'skip'; Why = 'an error is recorded on it - clear sap_sync_error to try again' } }
-    # No approval (7 Nov 2026, the user): a list goes to SAP as the rep made it,
-    # whatever approval_status says. B1if invoices it within a minute of
-    # arriving, so the rep's list is the decision. Only manager-approved orders
-    # can have a list at all (manna_pick_list_submit).
+    # No approval in ERPNext (9 Nov 2026, the user's decision; it was required
+    # from 6 Nov). A submitted list goes to SAP as it is, and the check before
+    # anything is invoiced moved there: Hi-Tech's store ticks "Confirmed"
+    # (OPKL.U_Confirmed) once the list is picked, and B1if's step 3 waits for
+    # it (sap-b1if/step3-pick/sql-ht.xsl). Until then the list only reserves
+    # the stock. approval_status is no longer read.
     if ($null -eq $Order) { return @{ Kind = 'refuse'; Why = 'its sales order was not found' } }
     if ([int](ConvertTo-Number (Get-JsonProp $Order 'docstatus')) -eq 2) { return @{ Kind = 'refuse'; Why = 'its sales order is cancelled' } }
     if (-not (Test-MfOwns -Row $Order -Flow $Flow)) { return @{ Kind = 'skip'; Why = 'its order is not on the Manna Treads first route - Hi-Tech picks it by hand as before' } }
@@ -4649,18 +4651,7 @@ try {
                                         # line) goes on the list; anything else is the run's problem.
                                         if ($res.Status -eq 400) {
                                             $sapMsg = "$($res.Body)"
-                                            # error.message is {lang,value} on some Service Layer versions and a plain
-                                            # string on others; reading .value off a string gave '' and blanked the reason
-                                            # (6 Nov 2026). Keep the raw body unless a real message is found.
-                                            try {
-                                                $slErr = ($res.Body | ConvertFrom-Json).error
-                                                $slMsg = $(if ($slErr.message -is [string]) { $slErr.message } else { "$($slErr.message.value)" })
-                                                if ("$slMsg".Trim()) { $sapMsg = "$slMsg".Trim() }
-                                                if ("$($slErr.code)".Trim()) { $sapMsg = "{0} (SAP {1})" -f $sapMsg, "$($slErr.code)".Trim() }
-                                            } catch { }
-                                            # Windows PowerShell often leaves ErrorDetails (and so Body) empty; the
-                                            # readable reason is then only in Text (Format-HttpError).
-                                            if (-not "$sapMsg".Trim()) { $sapMsg = "$($res.Text)" }
+                                            try { $sapMsg = "$((($res.Body | ConvertFrom-Json).error.message.value))" } catch { }
                                             Write-PkRefusal -Name $pn -Message ("Hi-Tech SAP refused the pick list: {0}" -f $sapMsg) -When $pkNow -IsDryRun $false
                                         } else {
                                             Write-Log ERROR ("PASS K {0}: FAILED - left for the next run: {1}" -f $pn, $res.Text)

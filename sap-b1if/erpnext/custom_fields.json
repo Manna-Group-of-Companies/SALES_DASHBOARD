@@ -1,0 +1,124 @@
+{
+  "_about": "Fields the B1iF status package writes (9 Nov 2026). New ones, so the live sync scripts' custom_sap_sales_order_status and invoice fields are never overwritten while both run. Added by install_local.py on the local site; on live, add the same rows by hand or with that script pointed there deliberately.",
+  "fields": [
+    {
+      "dt": "Sales Order",
+      "fieldname": "custom_sap_order_status",
+      "label": "SAP Order Status",
+      "fieldtype": "Select",
+      "options": "\nIn SAP\nPartially Picked\nPicked\nPartially Dispatched\nDispatched\nCancelled",
+      "insert_after": "custom_sap_sales_order_status",
+      "read_only": 1,
+      "allow_on_submit": 1,
+      "no_copy": 1,
+      "in_list_view": 0,
+      "in_standard_filter": 1
+    },
+    {
+      "dt": "Sales Order",
+      "fieldname": "custom_sap_status_synced_at",
+      "label": "SAP Status Synced At",
+      "fieldtype": "Datetime",
+      "insert_after": "custom_sap_order_status",
+      "read_only": 1,
+      "allow_on_submit": 1,
+      "no_copy": 1
+    },
+    {
+      "dt": "Sales Order Item",
+      "fieldname": "custom_sap_line_status",
+      "label": "SAP Line Status",
+      "fieldtype": "Select",
+      "options": "\nIn SAP\nPicked\nDispatched\nCancelled",
+      "insert_after": "custom_hitech_delivery_refs",
+      "read_only": 1,
+      "allow_on_submit": 1,
+      "no_copy": 1,
+      "in_list_view": 1,
+      "columns": 1
+    },
+    {
+      "dt": "Sales Order Item",
+      "fieldname": "custom_sap_ht_stage",
+      "label": "Hi-Tech Stage",
+      "fieldtype": "Data",
+      "insert_after": "custom_sap_line_status",
+      "read_only": 1,
+      "hidden": 1,
+      "allow_on_submit": 1,
+      "no_copy": 1,
+      "description": "What Hi-Tech last reported for this line: In SAP, Picked or Cancelled"
+    },
+    {
+      "dt": "Sales Order Item",
+      "fieldname": "custom_sap_mt_dispatched",
+      "label": "Invoiced by Manna Treads",
+      "fieldtype": "Check",
+      "insert_after": "custom_sap_ht_stage",
+      "read_only": 1,
+      "hidden": 1,
+      "allow_on_submit": 1,
+      "no_copy": 1
+    },
+    {
+      "dt": "SAP Sync Control",
+      "fieldname": "custom_b1if_writes",
+      "label": "B1iF: syncs that write",
+      "fieldtype": "Small Text",
+      "description": "Which B1iF syncs may change ERPNext: any of customers, items, stock, status, weights, payments, credit, invoices, pricing - separated by commas - or all. A sync not named here only reports what it would do (manna_sap_in). Empty = nothing is written."
+    },
+    {
+      "dt": "SAP Sync Control",
+      "fieldname": "custom_b1if_last",
+      "label": "B1iF: last answers",
+      "fieldtype": "Code",
+      "options": "JSON",
+      "read_only": 1,
+      "insert_after": "custom_b1if_writes",
+      "description": "What each B1iF sync was last answered, and when (written by manna_sap_in on every post). dry_run true = it only reported."
+    }
+  ],
+  "docperms_about": "Rights the sync user's role needs that no ignore_permissions can stand in for. Stock Reconciliation: ERPNext's own stock code checks the Write permission while the document is validated (get_stock_balance_for), so manna_sap_stock cannot write as a user without it (10 Nov 2026). The doctype's permissions are already Custom DocPerm rows on the site (Stock Manager), so adding a row does not switch any standard row off. Every right is spelled out: a row posted with only some rights gets write/create/delete = 1 by default. Item: the same stock code (_get_stock_balance) also checks Read on Item; read-only, nothing else. The endpoints themselves write items with ignore_permissions after their own role check.",
+  "docperms": [
+    {
+      "parent": "Stock Reconciliation",
+      "role": "SAP Sync Bot",
+      "permlevel": 0,
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "submit": 1,
+      "cancel": 0,
+      "delete": 0,
+      "amend": 0,
+      "report": 0,
+      "export": 0,
+      "import": 0,
+      "share": 0,
+      "print": 0,
+      "email": 0,
+      "select": 0,
+      "if_owner": 0
+    },
+    {
+      "parent": "Item",
+      "role": "SAP Sync Bot",
+      "permlevel": 0,
+      "read": 1,
+      "write": 0,
+      "create": 0,
+      "submit": 0,
+      "cancel": 0,
+      "delete": 0,
+      "amend": 0,
+      "report": 0,
+      "export": 0,
+      "import": 0,
+      "share": 0,
+      "print": 0,
+      "email": 0,
+      "select": 1,
+      "if_owner": 0
+    }
+  ]
+}
