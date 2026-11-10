@@ -1,11 +1,12 @@
 # WhatsApp messages to customers
 
-The customer gets a WhatsApp message from the company's number at two points:
+The customer gets a WhatsApp message from the company's number at three points:
 
 | # | When | Template | Who triggers it |
 |---|---|---|---|
 | 1 | A manager approves the order | `manna_order_confirmed` | Manager, from the dashboard or the app |
 | 2 | The factory creates a **delivery** for it in SAP | `manna_order_dispatched` | The SAP order sync, once it sees the delivery note |
+| 3 | A **payment** is posted against an invoice in SAP (10 Nov 2026) | `manna_payment_received` | The credit sync, or B1if's `Z.erpinv`, updating `SAP Invoice.paid` |
 
 Nothing is sent when the rep places the order. The customer hears nothing
 until a manager has approved it (decided 5 November 2026).
@@ -110,6 +111,16 @@ version, create the same names in language `ml` and set *Language Code* in the
 settings. Changing the wording of an approved template is fine. Changing the
 number or order of `{{n}}` means changing the queue script too.
 
+**`manna_payment_received`**: sent when SAP records a payment
+```
+Dear {{1}}, we have received your payment of {{2}} against invoice {{3}}.
+
+Balance on this invoice: {{4}}
+
+Thank you.
+```
+Samples: `Sri Murugan Tyres`, `₹ 25,000.00`, `624`, `₹ 4,905.00`
+
 ## 3. ERPNext: two DocTypes (System Manager, Desk or the Composio connector)
 
 **`Manna WhatsApp Settings`**: *Is Single* ✓, module *Selling*.
@@ -136,7 +147,7 @@ Manager read. Nobody else needs it, because the scripts insert with
 | `dedupe_key` | Data | **Unique** ✓, read only. `order\|event\|DN` |
 | `sales_order` | Link → Sales Order | In list view, in standard filter |
 | `customer` | Link → Customer | In list view |
-| `event` | Select | `Order Approved` / `Delivery Created`. In list view |
+| `event` | Select | `Order Approved` / `Delivery Created` / `Payment Received`. In list view |
 | `delivery_note` | Data | SAP DN number, for event 3 |
 | `phone` | Data | As it was on the customer when queued |
 | `template` | Data | |
@@ -147,13 +158,24 @@ Manager read. Nobody else needs it, because the scripts insert with
 | `sent_at` | Datetime | |
 | `error` | Small Text | Meta's refusal, or why it was skipped |
 
-## 4. ERPNext: two Server Scripts
+Both are also in `doctypes.json`, ready for `frappe.client.insert`.
+
+## 4. ERPNext: three Server Scripts
 
 Desk → *Server Script → New*, pasting the files in `server-scripts/` exactly.
 The settings for each are in the comment at the top of the file.
 
 - `manna_whatsapp_queue.py`: DocType Event, Sales Order, **After Save**
+- `manna_whatsapp_payment.py`: DocType Event, SAP Invoice, **After Save**
 - `manna_whatsapp_sender.py`: Scheduler Event, **Cron** `* * * * *`
+
+**A safe_exec trap the first version fell into (found 10 Nov 2026).** A
+Server Script's own names live in a separate locals dict, so a function
+defined in the script cannot call another function defined there, and cannot
+see `doc`. The queue script's `item_summary` called `qty_text` and failed with
+"name 'qty_text' is not defined" on every approval, so nothing was ever
+queued. Every helper is now a leaf (its arguments and `frappe` only) and the
+work is done at the top level. Keep it that way.
 
 The scheduler has to be enabled on the site (Frappe Cloud: it is, by default).
 The queue script uses `frappe.utils.formatdate`, `fmt_money` and
