@@ -1097,3 +1097,25 @@ status was `Approved`. The dashboard writes `Converted`, so a lead order
 approved on the web was offered for approval again on the phone, which would
 have raised a second Sales Order. `orderSignedOff` now accepts `Converted`,
 and `Api.approveLeadOrder` refuses an order already signed off.
+
+---
+
+## The order rate comes from SAP on the phone, is typed on the dashboard — **open, 10 November 2026**
+
+The user, 10 Nov 2026: a rep is not asked for the rate per kg. The rate is
+the one SAP holds for the product (Manna Treads' `manna_customer_rates`: the
+dealer's special price, else Price List 01), shown read-only. An item SAP has
+no rate for cannot be ordered ("No price in SAP") until the office prices it
+in SAP. Done on the phone (`app/lib/screens/orders/product_row.dart`).
+
+**The dashboard has not followed yet.** Its order form
+(`client/src/features/orders/ProductRow.tsx`, used by `TakeOrderPage`) still
+has a typed rate box and does not call `manna_customer_rates` at all; it never
+did, even when the phone first locked SAP-priced items on 26 Sep 2026. So a
+manager taking an order on the dashboard can still type any rate. To close:
+have `TakeOrderPage` read the customer's SAP rates, fill the box from them,
+lock it, and refuse a line with none — the same as the phone — and move the
+rule into a fixture.
+
+The manager's rate decision on review (`rateEditable`) is a separate feature
+and is not touched by this.

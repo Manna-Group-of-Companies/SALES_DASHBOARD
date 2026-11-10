@@ -131,6 +131,21 @@ void main() {
     expect(find.text('Loose belts'), findsNothing);
   });
 
+  testWidgets('the rate is never typed: read-only, and no SAP price says so',
+      (tester) async {
+    final line = OrderLine(product: _pctr());
+    line.rolls = 2;
+    await tester.pumpWidget(_host(ProductRow(
+      line: line,
+      stock: null,
+      onChanged: () {},
+    )));
+    final rate = tester.widget<TextField>(find.byWidgetPredicate(
+        (w) => w is TextField && (w.decoration?.labelText ?? '').startsWith('Rate per')));
+    expect(rate.readOnly, isTrue);
+    expect(find.text('No price in SAP'), findsWidgets);
+  });
+
   testWidgets('tapping + adds a roll and reports the derived weight',
       (tester) async {
     final line = OrderLine(product: _pctr(), rate: 200);
