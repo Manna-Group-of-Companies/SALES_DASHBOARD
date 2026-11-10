@@ -1,0 +1,183 @@
+{
+  "about": "SAP Payment (10 Nov 2026): Manna Treads' incoming payments from customers, as SAP holds them, so the apps can list what a customer has paid and ERPNext can act when money arrives. Written only by B1iF's payments package through the Server Script manna_sap_payments (sap-b1if/erpnext): every customer payment posted in the current financial year, for customers ERPNext holds by custom_bp_code. A row is a mirror, never edited by hand. Named by sap_key = '<company>-<DocEntry>', as SAP Invoice is. A payment SAP cancels is kept and marked Cancelled, not deleted. Rows are inserted and saved as documents, so a Server Script on SAP Payment (After Insert / After Save) is the place for 'when a payment is received': act only when new_payment = 1, which a first load of old payments does not have.",
+  "doctypes": [
+    {
+      "doctype": "DocType",
+      "name": "SAP Payment",
+      "module": "Selling",
+      "custom": 1,
+      "autoname": "field:sap_key",
+      "naming_rule": "By fieldname",
+      "sort_field": "posting_date",
+      "sort_order": "DESC",
+      "title_field": "payment_no",
+      "search_fields": "customer,payment_no",
+      "fields": [
+        {
+          "fieldname": "sap_key",
+          "label": "SAP Key",
+          "fieldtype": "Data",
+          "reqd": 1,
+          "unique": 1,
+          "description": "<company>-<SAP DocEntry>",
+          "read_only": 1
+        },
+        {
+          "fieldname": "customer",
+          "label": "Customer",
+          "fieldtype": "Link",
+          "options": "Customer",
+          "reqd": 1,
+          "in_list_view": 1,
+          "in_standard_filter": 1,
+          "read_only": 1
+        },
+        {
+          "fieldname": "company",
+          "label": "Company",
+          "fieldtype": "Data",
+          "in_standard_filter": 1,
+          "read_only": 1
+        },
+        {
+          "fieldname": "payment_no",
+          "label": "Payment No",
+          "fieldtype": "Data",
+          "in_list_view": 1,
+          "description": "SAP DocNum",
+          "read_only": 1
+        },
+        {
+          "fieldname": "sap_doc_entry",
+          "label": "SAP DocEntry",
+          "fieldtype": "Int",
+          "read_only": 1
+        },
+        {
+          "fieldname": "sap_card_code",
+          "label": "SAP Customer Code",
+          "fieldtype": "Data",
+          "read_only": 1
+        },
+        {
+          "fieldname": "column_break_dates",
+          "fieldtype": "Column Break"
+        },
+        {
+          "fieldname": "posting_date",
+          "label": "Posting Date",
+          "fieldtype": "Date",
+          "in_list_view": 1,
+          "read_only": 1
+        },
+        {
+          "fieldname": "status",
+          "label": "Status",
+          "fieldtype": "Data",
+          "in_list_view": 1,
+          "in_standard_filter": 1,
+          "description": "Posted, or Cancelled when SAP cancelled the payment",
+          "read_only": 1
+        },
+        {
+          "fieldname": "mode",
+          "label": "Mode",
+          "fieldtype": "Data",
+          "description": "Bank Transfer, Cheque, Cash, Card - whichever SAP holds a sum for",
+          "read_only": 1
+        },
+        {
+          "fieldname": "reference",
+          "label": "Reference",
+          "fieldtype": "Data",
+          "read_only": 1
+        },
+        {
+          "fieldname": "new_payment",
+          "label": "New Payment",
+          "fieldtype": "Check",
+          "description": "1 when the payment reached ERPNext within 3 days of its posting date. A 'payment received' trigger should act only on these: a first load of old payments has 0.",
+          "read_only": 1
+        },
+        {
+          "fieldname": "section_money",
+          "label": "Amounts",
+          "fieldtype": "Section Break"
+        },
+        {
+          "fieldname": "amount",
+          "label": "Amount",
+          "fieldtype": "Currency",
+          "in_list_view": 1,
+          "read_only": 1
+        },
+        {
+          "fieldname": "on_account",
+          "label": "On Account",
+          "fieldtype": "Currency",
+          "description": "The part not set against any invoice",
+          "read_only": 1
+        },
+        {
+          "fieldname": "invoices",
+          "label": "Invoices Paid",
+          "fieldtype": "Small Text",
+          "description": "INV 1234: 5000.00, INV 1240: 2000.00",
+          "read_only": 1
+        },
+        {
+          "fieldname": "remarks",
+          "label": "Remarks",
+          "fieldtype": "Data",
+          "read_only": 1
+        },
+        {
+          "fieldname": "sap_last_synced",
+          "label": "Last Synced",
+          "fieldtype": "Datetime",
+          "read_only": 1
+        }
+      ],
+      "permissions": [
+        {
+          "role": "System Manager",
+          "read": 1,
+          "write": 1,
+          "create": 1,
+          "delete": 1,
+          "report": 1,
+          "export": 1
+        },
+        {
+          "role": "SAP Sync Bot",
+          "read": 1,
+          "write": 1,
+          "create": 1,
+          "delete": 1
+        },
+        {
+          "role": "Sales Manager",
+          "read": 1,
+          "report": 1,
+          "export": 1
+        },
+        {
+          "role": "Sales User",
+          "read": 1,
+          "report": 1
+        },
+        {
+          "role": "Accounts Manager",
+          "read": 1,
+          "report": 1,
+          "export": 1
+        },
+        {
+          "role": "Accounts User",
+          "read": 1,
+          "report": 1
+        }
+      ]
+    }
+  ]
+}
