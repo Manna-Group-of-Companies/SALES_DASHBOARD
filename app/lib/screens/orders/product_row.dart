@@ -465,16 +465,12 @@ class _ProductRowState extends State<ProductRow> {
       ]);
     }
     final avail = s.availableQty;
-    final belts = s.availableLooseBelts;
     final unit = p.category.stockUnit;
     // Empty is the only state worth colouring now. "Below the minimum" was
     // orange here until 21 August 2026, but the minimum is management's figure
     // and is no longer shown to reps — a colour keyed to a number the rep
     // cannot see is a warning they have no way to read.
-    final colour = (avail <= 0 && belts <= 0) ? Colors.red : Colors.green;
-    // Belts are only mentioned when there are some — on CTR, bonding gum and
-    // solution the counter is always zero and saying so would be noise.
-    final beltSuffix = belts > 0 ? ' + $belts loose belt${belts == 1 ? '' : 's'}' : '';
+    final colour = avail <= 0 ? Colors.red : Colors.green;
 
     // Nothing is shown about what other reps are holding. There is no such
     // figure any more: SAP has already taken every open order off this number,
@@ -485,9 +481,9 @@ class _ProductRowState extends State<ProductRow> {
       const SizedBox(width: 4),
       Expanded(
         child: Text(
-          (avail <= 0 && belts <= 0)
+          avail <= 0
               ? 'None left'
-              : '${trimQty(avail)} $unit$beltSuffix available',
+              : '${trimQty(avail)} $unit available',
           style: TextStyle(
               fontSize: 12, color: colour, fontWeight: FontWeight.w500),
         ),
@@ -499,23 +495,9 @@ class _ProductRowState extends State<ProductRow> {
 
   Widget _inputs() {
     switch (p.category) {
+      // Rolls only (10 Nov 2026): loose belts are no longer taken on an order.
       case ProductCategory.pctr:
-        return Row(children: [
-          Expanded(
-              child: _counter('Rolls', line.rolls, (v) {
-            line.rolls = v;
-            widget.onChanged();
-          })),
-          const SizedBox(width: 10),
-          Expanded(
-              child: _counter('Loose belts', line.looseBelts, (v) {
-            line.looseBelts = v;
-            widget.onChanged();
-          })),
-        ]);
       case ProductCategory.ctr:
-        // No belt entry: CTR leaves the factory as whole fixed-weight rolls,
-        // so a half roll is not a thing a rep can sell.
         return _counter('Rolls', line.rolls, (v) {
           line.rolls = v;
           widget.onChanged();
