@@ -24,6 +24,7 @@ import 'package:manna_field_sales/core/credit_condition.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/condition_answer_sheet.dart';
+import 'package:manna_field_sales/widgets/condition_ui.dart';
 
 class MyConditionsScreen extends StatefulWidget {
   /// Open on this order's row: scrolled to and outlined. Set when the rep
@@ -59,6 +60,10 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
   /// Scrolled to once, on the first load. A refresh afterwards must not yank
   /// the list back to it while the rep is reading something else.
   bool _focused = false;
+
+  /// Cards the rep opened or folded. Unset, a card is open while it is still
+  /// owed and folded once closed.
+  final Map<String, bool> _expanded = {};
 
   bool _isFocus(Map<String, dynamic> r) {
     final f = (widget.focusSalesOrder ?? '').trim();
@@ -153,179 +158,331 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
     }
   }
 
-  Widget _card(Map<String, dynamic> r, DateTime today) {
+  CondBadge _badge(String status, bool late) {
+    if (late) return CondBadge.overdue;
+    if (status == kCondClosed) return CondBadge.closed;
+    if (status == kCondAwaiting) return CondBadge.awaiting;
+    return CondBadge.open;
+  }
+
+  /// The condition's history, oldest first: the GM setting it, what the
+  /// sales manager and the GM said about the order, the rep's answers, and
+  /// the GM closing it.
+  List<CondEvent> _events(Map<String, dynamic> r) {
+    final order = _s(r, 'sales_order');
+    final thread = _comments[order] ?? const <Map<String, dynamic>>[];
+    final answer = _s(r, 'response');
+    final setBy = _s(r, 'set_by');
+    final due = _s(r, 'due_date');
+    return [
+      CondEvent(
+        icon: Icons.flag_rounded,
+        color: CondColors.orange,
+        who: setBy.isNotEmpty ? setBy : 'GM',
+        role: 'set this condition',
+        when: condDate(_s(r, 'set_on')),
+        // A missing deadline is said out loud rather than left blank. Blank
+        // reads as a rendering fault; the rep needs to know there genuinely
+        // is no date rather than assume one is hidden.
+        text: condDate(due).isNotEmpty ? 'Due by ${condDate(due)}' : 'No deadline',
+      ),
+      for (final c in thread)
+        // The rep's own answers sit in the thread too, since 25 Sep 2026, so
+        // every answer is kept; they read as "You" rather than as the rep's
+        // own name.
+        if (_s(c, 'author_role') == 'Sales Rep')
+          CondEvent(
+            icon: Icons.person_rounded,
+            color: CondColors.orange,
+            who: 'You',
+            when: condDate(_s(c, 'posted_on')),
+            text: _s(c, 'comment'),
+            mine: true,
+          )
+        else
+          CondEvent(
+            icon: _s(c, 'author_role') == 'General Manager'
+                ? Icons.workspace_premium_rounded
+                : _s(c, 'author_role') == 'Sales Manager'
+                    ? Icons.supervisor_account_rounded
+                    : Icons.chat_bubble_outline_rounded,
+            color: const Color(0xFF5B5B5B),
+            who: _s(c, 'author').isNotEmpty ? _s(c, 'author') : _s(c, 'author_role'),
+            role: _s(c, 'author').isNotEmpty ? _s(c, 'author_role') : '',
+            when: condDate(_s(c, 'posted_on')),
+            text: _s(c, 'comment'),
+          ),
+      // Only when the thread does not already show it — an answer given
+      // before answers were kept on the order exists only here.
+      if (answer.isNotEmpty &&
+          !thread.any((c) => _s(c, 'author_role') == 'Sales Rep' && _s(c, 'comment') == answer))
+        CondEvent(
+          icon: Icons.person_rounded,
+          color: CondColors.orange,
+          who: 'You',
+          role: 'your answer',
+          when: condDate(_s(r, 'responded_on')),
+          text: answer,
+          mine: true,
+        ),
+      if (_s(r, 'status') == kCondClosed)
+        CondEvent(
+          icon: Icons.check_circle_rounded,
+          color: CondColors.green,
+          who: _s(r, 'closed_by').isNotEmpty ? _s(r, 'closed_by') : 'GM',
+          role: 'closed it',
+          when: condDate(_s(r, 'closed_on')),
+          text: _s(r, 'close_note'),
+        ),
+    ];
+  }
+
+  Widget _card(Map<String, dynamic> r, DateTime today, int index) {
+    final name = '${r['name']}';
     final status = _s(r, 'status');
     final due = _s(r, 'due_date');
     final late = conditionOverdue(status: status, dueDateIso: due, today: today);
     final closed = status == kCondClosed;
-
-    final Color chipBg;
-    final String chipText;
-    if (late) {
-      chipBg = Colors.red.shade50;
-      chipText = 'Overdue';
-    } else if (closed) {
-      chipBg = Colors.green.shade50;
-      chipText = 'Closed';
-    } else if (status == kCondAwaiting) {
-      chipBg = Colors.blue.shade50;
-      chipText = 'Awaiting review';
-    } else {
-      chipBg = Colors.orange.shade50;
-      chipText = 'Open';
-    }
-
     final order = _s(r, 'sales_order');
     final setBy = _s(r, 'set_by');
-    final answer = _s(r, 'response');
-    final noteOnClose = _s(r, 'close_note');
-    final hasDeadline = due.isNotEmpty && due != 'null';
+    final customer = _s(r, 'customer_name').isNotEmpty ? _s(r, 'customer_name') : _s(r, 'customer');
+    final committed = _commitments[order] ?? '';
+    final events = _events(r);
+    final open = _expanded[name] ?? (!closed || _isFocus(r));
+
+    // The rule, in the one place it matters: a rep may answer, never close.
+    // `canMoveCondition` decides, so the button and the API agree by
+    // construction rather than by memory.
+    final canAnswer = canMoveCondition(status: status, action: CondAction.respond, actor: 'rep');
 
     // The row the rep came here for, outlined so it is found at a glance.
     final focus = _isFocus(r);
-    return Card(
-      key: _keys.putIfAbsent('${r['name']}', () => GlobalKey()),
-      margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-      shape: focus
-          ? RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: BorderSide(color: Colors.blue.shade600, width: 2))
-          : null,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                      _s(r, 'customer_name').isNotEmpty
-                          ? _s(r, 'customer_name')
-                          : _s(r, 'customer'),
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
-                ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                      color: chipBg, borderRadius: BorderRadius.circular(10)),
-                  child: Text(chipText, style: const TextStyle(fontSize: 11)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(_s(r, 'condition')),
-            // The rep's own words, where the GM approved on different ones.
-            if ((_commitments[order] ?? '').isNotEmpty &&
-                _commitments[order] != _s(r, 'condition')) ...[
-              const SizedBox(height: 4),
-              Text('You committed: ${_commitments[order]}',
-                  style: const TextStyle(
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic,
-                      color: Colors.black54)),
-            ],
-            if ((_comments[order] ?? const []).isNotEmpty) ...[
-              const SizedBox(height: 8),
-              for (final c in _comments[order]!)
-                Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.only(top: 4),
-                  padding: const EdgeInsets.fromLTRB(8, 2, 0, 2),
-                  decoration: const BoxDecoration(
-                      border: Border(
-                          left: BorderSide(color: Colors.black12, width: 2))),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // The rep's own answers sit in the thread too, since
-                        // 25 Sep 2026, so every answer is kept; they read as
-                        // "You" rather than as the rep's own name.
-                        Text(
-                            _s(c, 'author_role') == 'Sales Rep'
-                                ? [
-                                    'You',
-                                    if (_s(c, 'posted_on').length >= 10)
-                                      _s(c, 'posted_on').substring(0, 10),
-                                  ].join(' · ')
-                                : [_s(c, 'author'), _s(c, 'author_role')]
-                                    .where((x) => x.isNotEmpty)
-                                    .join(' · '),
-                            style: const TextStyle(
-                                fontSize: 11, color: Colors.black54)),
-                        Text(_s(c, 'comment'),
-                            style: const TextStyle(fontSize: 12.5)),
-                      ]),
-                ),
-            ],
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 14,
-              runSpacing: 2,
-              children: [
-                // A missing deadline is said out loud rather than left blank.
-                // Blank reads as a rendering fault; the rep needs to know
-                // there genuinely is no date rather than assume one is hidden.
-                Text(hasDeadline ? 'Due $due' : 'No deadline',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: late ? Colors.red.shade700 : null,
-                        fontWeight: late ? FontWeight.w600 : null)),
-                if (setBy.isNotEmpty)
-                  Text('Set by $setBy', style: const TextStyle(fontSize: 12)),
-              ],
-            ),
-            // Only when the thread does not already show it — an answer given
-            // before answers were kept on the order exists only here.
-            if (answer.isNotEmpty &&
-                !(_comments[order] ?? const []).any((c) =>
-                    _s(c, 'author_role') == 'Sales Rep' &&
-                    _s(c, 'comment') == answer)) ...[
-              const SizedBox(height: 10),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    borderRadius: BorderRadius.circular(6)),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Your answer',
-                        style: TextStyle(fontSize: 11, color: Colors.black54)),
-                    const SizedBox(height: 2),
-                    Text(answer),
-                  ],
-                ),
-              ),
-            ],
-            if (closed && noteOnClose.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text('Closed: $noteOnClose',
-                  style: const TextStyle(fontSize: 12)),
-            ],
-            // The rule, in the one place it matters: a rep may answer, never
-            // close. `canMoveCondition` decides, so the button and the API
-            // agree by construction rather than by memory.
-            if (canMoveCondition(
-                status: status, action: CondAction.respond, actor: 'rep')) ...[
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerRight,
-                child: OutlinedButton(
-                  onPressed: _busy ? null : () => _respond(r),
-                  child: Text(status == kCondAwaiting
-                      ? 'Change my answer'
-                      : 'Answer this'),
-                ),
-              ),
-            ],
+
+    return TweenAnimationBuilder<double>(
+      key: _keys.putIfAbsent(name, () => GlobalKey()),
+      tween: Tween(begin: 0, end: 1),
+      duration: Duration(milliseconds: 260 + 50 * index.clamp(0, 6)),
+      curve: Curves.easeOutCubic,
+      builder: (_, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(offset: Offset(0, 12 * (1 - t)), child: child),
+      ),
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+        decoration: BoxDecoration(
+          color: CondColors.card,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+              color: focus ? CondColors.orange : CondColors.border, width: focus ? 1.6 : 1),
+          boxShadow: [
+            BoxShadow(
+                color: const Color(0xFFB4693A).withValues(alpha: 0.08),
+                blurRadius: 18,
+                offset: const Offset(0, 6)),
           ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            // An accent along the top: what state it is in, before reading.
+            Container(
+              height: 4,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: late
+                    ? [CondColors.red, const Color(0xFFF87171)]
+                    : closed
+                        ? [CondColors.green, const Color(0xFF4ADE80)]
+                        : [CondColors.orange, CondColors.orange2]),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    alignment: Alignment.center,
+                    decoration: const BoxDecoration(color: CondColors.lightOrange, shape: BoxShape.circle),
+                    child: Text(customer.isNotEmpty ? customer[0].toUpperCase() : '?',
+                        style: const TextStyle(
+                            fontSize: 17, fontWeight: FontWeight.w800, color: CondColors.orange)),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(customer,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 15.5, fontWeight: FontWeight.w700, color: CondColors.text, height: 1.25)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  CondStatusBadge(_badge(status, late)),
+                ]),
+                const SizedBox(height: 12),
+                Text(_s(r, 'condition'),
+                    maxLines: open ? null : 2,
+                    overflow: open ? null : TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14.5, height: 1.45, color: CondColors.text)),
+                // The rep's own words, where the GM approved on different ones.
+                if (open && committed.isNotEmpty && committed != _s(r, 'condition')) ...[
+                  const SizedBox(height: 6),
+                  Text('You committed: $committed',
+                      style: const TextStyle(fontSize: 12.5, fontStyle: FontStyle.italic, color: CondColors.muted)),
+                ],
+                const SizedBox(height: 12),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  CondMetaChip(
+                    icon: late ? Icons.alarm_rounded : Icons.event_rounded,
+                    text: condDate(due).isNotEmpty ? 'Due ${condDate(due)}' : 'No deadline',
+                    alert: late,
+                  ),
+                  if (setBy.isNotEmpty) CondMetaChip(icon: Icons.person_outline_rounded, text: 'Set by $setBy'),
+                ]),
+              ]),
+            ),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.topCenter,
+              child: open
+                  ? Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        const Text('ACTIVITY',
+                            style: TextStyle(
+                                fontSize: 11, fontWeight: FontWeight.w700, color: CondColors.muted, letterSpacing: 0.8)),
+                        const SizedBox(height: 10),
+                        CondTimeline(events: events),
+                      ]),
+                    )
+                  : const SizedBox(width: double.infinity),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 10, 12, 12),
+              child: Row(children: [
+                TextButton.icon(
+                  style: TextButton.styleFrom(foregroundColor: CondColors.muted),
+                  onPressed: () => setState(() => _expanded[name] = !open),
+                  icon: AnimatedRotation(
+                    turns: open ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 240),
+                    child: const Icon(Icons.expand_more_rounded, size: 20),
+                  ),
+                  label: Text(open ? 'Hide activity' : 'Activity (${events.length})',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
+                const Spacer(),
+                if (canAnswer)
+                  status == kCondAwaiting
+                      ? OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: CondColors.orange,
+                            side: const BorderSide(color: CondColors.orange, width: 1.3),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          ),
+                          onPressed: _busy ? null : () => _respond(r),
+                          icon: const Icon(Icons.edit_rounded, size: 17),
+                          label: const Text('Change my answer',
+                              style: TextStyle(fontWeight: FontWeight.w700)),
+                        )
+                      : FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: CondColors.orange,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          ),
+                          onPressed: _busy ? null : () => _respond(r),
+                          icon: const Icon(Icons.reply_rounded, size: 18),
+                          label: const Text('Answer this', style: TextStyle(fontWeight: FontWeight.w700)),
+                        ),
+              ]),
+            ),
+          ]),
         ),
       ),
     );
   }
+
+  /// The count at the top: what is still owed, and how much of it is late.
+  Widget _summary(int outstanding, int overdue, int awaiting) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 18),
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [CondColors.orange, CondColors.orange2]),
+        boxShadow: [
+          BoxShadow(
+              color: CondColors.orange.withValues(alpha: 0.28), blurRadius: 20, offset: const Offset(0, 8)),
+        ],
+      ),
+      child: Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('$outstanding',
+                style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, color: Colors.white, height: 1)),
+            const SizedBox(height: 6),
+            Text(outstanding == 1 ? 'Outstanding condition' : 'Outstanding conditions',
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
+            const SizedBox(height: 10),
+            Wrap(spacing: 8, runSpacing: 6, children: [
+              if (overdue > 0) _pill('$overdue overdue', Icons.error_rounded),
+              if (awaiting > 0) _pill('$awaiting awaiting review', Icons.hourglass_top_rounded),
+              if (overdue == 0 && awaiting == 0 && outstanding > 0) _pill('Waiting for your answer', Icons.reply_rounded),
+              if (outstanding == 0) _pill('All clear', Icons.check_rounded),
+            ]),
+          ]),
+        ),
+        Container(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), shape: BoxShape.circle),
+          child: const Icon(Icons.fact_check_rounded, color: Colors.white, size: 28),
+        ),
+      ]),
+    );
+  }
+
+  Widget _pill(String text, IconData icon) => Container(
+        padding: const EdgeInsets.fromLTRB(8, 4, 10, 4),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 13, color: CondColors.orange),
+          const SizedBox(width: 4),
+          Text(text, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: CondColors.orange)),
+        ]),
+      );
+
+  Widget _message({required IconData icon, required String title, String? body, Widget? action}) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: const BoxDecoration(color: CondColors.lightOrange, shape: BoxShape.circle),
+              child: Icon(icon, size: 34, color: CondColors.orange),
+            ),
+            const SizedBox(height: 16),
+            Text(title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: CondColors.text)),
+            if (body != null) ...[
+              const SizedBox(height: 6),
+              Text(body, textAlign: TextAlign.center, style: const TextStyle(fontSize: 13.5, color: CondColors.muted, height: 1.4)),
+            ],
+            if (action != null) ...[const SizedBox(height: 16), action],
+          ]),
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -333,66 +490,88 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
     final open = _rows.where((r) => '${r['status']}' != kCondClosed).toList();
     final overdue = open
         .where((r) => conditionOverdue(
-            status: '${r['status']}',
-            dueDateIso: '${r['due_date'] ?? ''}',
-            today: today))
+            status: '${r['status']}', dueDateIso: '${r['due_date'] ?? ''}', today: today))
         .length;
+    final awaiting = open.where((r) => '${r['status']}' == kCondAwaiting).length;
+
+    final Widget body;
+    if (_loading && _rows.isEmpty) {
+      body = const Center(child: CircularProgressIndicator(color: CondColors.orange));
+    } else if (_error != null) {
+      body = _message(
+        icon: Icons.cloud_off_rounded,
+        title: 'Could not load',
+        body: _error,
+        action: FilledButton.icon(
+          style: FilledButton.styleFrom(backgroundColor: CondColors.orange),
+          onPressed: _load,
+          icon: const Icon(Icons.refresh_rounded),
+          label: const Text('Try again'),
+        ),
+      );
+    } else if (_rows.isEmpty) {
+      body = _message(
+        icon: Icons.task_alt_rounded,
+        title: 'Nothing outstanding',
+        body: 'Conditions the GM sets on your orders show up here.',
+      );
+    } else {
+      // Every row is built up front, not lazily, so the one the rep was sent
+      // to can be scrolled to wherever it sits. A rep's conditions run to a
+      // handful, not hundreds.
+      body = RefreshIndicator(
+        color: CondColors.orange,
+        onRefresh: _load,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: Center(
+            child: ConstrainedBox(
+              // Phones fill the width; a tablet keeps cards readable.
+              constraints: const BoxConstraints(maxWidth: 640),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                _summary(open.length, overdue, awaiting),
+                for (var i = 0; i < _rows.length; i++) _card(_rows[i], today, i),
+                const SizedBox(height: 24),
+              ]),
+            ),
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
+      backgroundColor: CondColors.background,
       appBar: AppBar(
-        title: const Text('My Conditions'),
+        backgroundColor: Colors.white,
+        foregroundColor: CondColors.text,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        titleSpacing: 4,
+        title: const Text('My Conditions',
+            style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: CondColors.text)),
         actions: [
-          IconButton(
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: IconButton(
+              tooltip: 'Refresh',
+              style: IconButton.styleFrom(backgroundColor: CondColors.lightOrange),
               onPressed: _loading ? null : _load,
-              icon: const Icon(Icons.refresh)),
+              icon: _loading && _rows.isNotEmpty
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: CondColors.orange))
+                  : const Icon(Icons.refresh_rounded, color: CondColors.orange),
+            ),
+          ),
         ],
+        bottom: const PreferredSize(
+          preferredSize: Size.fromHeight(1),
+          child: Divider(height: 1, thickness: 1, color: CondColors.border),
+        ),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(
-                  child: Padding(
-                      padding: const EdgeInsets.all(24), child: Text(_error!)))
-              : _rows.isEmpty
-                  ? const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Text('Nothing outstanding.',
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    )
-                  // Every row is built up front, not lazily, so the one the rep
-                  // was sent to can be scrolled to wherever it sits. A rep's
-                  // conditions run to a handful, not hundreds.
-                  : RefreshIndicator(
-                      onRefresh: _load,
-                      child: SingleChildScrollView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (open.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                              child: Text(
-                                overdue > 0
-                                    ? '${open.length} outstanding · $overdue overdue'
-                                    : '${open.length} outstanding',
-                                style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: overdue > 0
-                                        ? Colors.red.shade700
-                                        : Colors.black54),
-                              ),
-                            ),
-                          for (final r in _rows) _card(r, today),
-                          const SizedBox(height: 24),
-                        ],
-                        ),
-                      ),
-                    ),
+      body: AnimatedSwitcher(duration: const Duration(milliseconds: 200), child: body),
     );
   }
 }
