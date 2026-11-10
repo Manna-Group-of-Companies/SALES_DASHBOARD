@@ -429,14 +429,17 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   /// invoice loop and nobody sets it in the app. So a line reads Pushed to SAP,
   /// Dispatched once its own invoice exists, or Cancelled in SAP. Old stage
   /// values may still sit in `custom_production_stage`; they are not shown.
-  /// "22.40 kg/roll · 8 belts/roll". The weight is the line's own (its
-  /// kilos over its rolls), falling back to the product's; belts per roll is
-  /// the product's. Null when neither is known.
+  /// "20.00 kg/roll · 4 belts/roll", as SAP holds them: the item master's
+  /// weight per roll and belts per roll, which the item sync copies from
+  /// SAP's U_WeightPerRoll / U_BeltsPerRoll. Only an item SAP has no weight
+  /// for falls back to the line's own kilos over its rolls. Null when
+  /// neither is known.
   String? _perRoll(Map<String, dynamic> it) {
     final p = _products['${it['item_code']}'];
     final rolls = (it['custom_rolls'] as num?)?.toDouble() ?? 0;
     final kg = (it['custom_total_weight'] as num?)?.toDouble() ?? 0;
-    final perRoll = rolls > 0 && kg > 0 ? kg / rolls : (p?.rollWeight ?? 0);
+    final sapWeight = p?.weightPerRoll ?? 0;
+    final perRoll = sapWeight > 0 ? sapWeight : (rolls > 0 && kg > 0 ? kg / rolls : 0);
     final belts = p?.beltsPerRoll ?? 0;
     final parts = [
       if (perRoll > 0) '${perRoll.toStringAsFixed(2)} kg/roll',
