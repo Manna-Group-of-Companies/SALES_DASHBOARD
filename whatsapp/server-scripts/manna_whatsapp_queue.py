@@ -60,63 +60,24 @@ def dn_numbers(refs):
     return out
 
 
-def all_dns(order):
-    out = {}
-    if not order:
-        return out
-    for it in order.get("items") or []:
-        found = dn_numbers(it.get("custom_hitech_delivery_refs"))
-        for k in found:
-            out[k] = found[k]
-    return out
-
-
 def qty_text(it):
-    rolls = it.get("custom_rolls") or 0
+    # "2 rolls", not "2.0 rolls": whole numbers without the decimal.
+    rolls = frappe.utils.flt(it.get("custom_rolls"), 2)
     if rolls:
-        return "%s rolls" % frappe.utils.flt(rolls, 2)
-    kg = it.get("custom_total_weight") or 0
+        n = ("%d" % rolls) if rolls == int(rolls) else ("%s" % rolls)
+        return n + (" roll" if rolls == 1 else " rolls")
+    kg = frappe.utils.flt(it.get("custom_total_weight"), 2)
     if kg:
-        return "%s kg" % frappe.utils.flt(kg, 2)
-    return "%s %s" % (frappe.utils.flt(it.get("qty"), 2), it.get("uom") or "")
+        return (("%d" % kg) if kg == int(kg) else ("%s" % kg)) + " kg"
+    q = frappe.utils.flt(it.get("qty"), 2)
+    return (("%d" % q) if q == int(q) else ("%s" % q)) + " " + (it.get("uom") or "")
 
 
-def item_summary(order, only_dn):
-    parts = []
-    for it in order.get("items") or []:
-        if only_dn and only_dn not in dn_numbers(it.get("custom_hitech_delivery_refs")):
-            continue
-        name = it.get("item_name") or it.get("item_code")
-        if only_dn:
-            parts.append(name)
-        else:
-            parts.append("%s - %s" % (name, qty_text(it)))
-    return "; ".join(parts)
-
-
-def queue(event, ref, template, params):
-    key = "%s|%s|%s" % (doc.name, event, ref or "")
-    if frappe.db.exists("Manna WhatsApp Message", {"dedupe_key": key}):
-        return
-    cust = frappe.db.get_value(
-        "Customer", doc.customer, ["customer_name", "custom_phone", "mobile_no"], as_dict=True
-    ) or {}
-    phone = cust.get("custom_phone") or cust.get("mobile_no") or ""
-    frappe.get_doc({
-        "doctype": "Manna WhatsApp Message",
-        "dedupe_key": key,
-        "sales_order": doc.name,
-        "customer": doc.customer,
-        "event": event,
-        "delivery_note": ref or "",
-        "phone": phone,
-        "template": template,
-        "params": json.dumps(params),
-        "status": "Queued",
-        "attempts": 0,
-    }).insert(ignore_permissions=True)
-
-
+# safe_exec runs this with the script's names in a separate locals dict: a
+# function here cannot see `doc` or call another function defined here (found
+# 10 Nov 2026 — "name 'qty_text' is not defined", so nothing was ever queued).
+# So every helper above is a leaf that uses only its arguments and frappe, and
+# the work below is done at the top level.
 try:
     enabled = frappe.db.get_value(
         "Manna WhatsApp Settings", "Manna WhatsApp Settings", "enabled"
@@ -129,31 +90,78 @@ try:
         company = clean(doc.get("custom_company") or doc.get("company"), 100)
         order_date = frappe.utils.formatdate(doc.get("transaction_date"), "dd-MM-yyyy")
 
+        # Every delivery note on the order now and before this save.
+        now_dns = {}
+        line_dns = []
+        for it in doc.get("items") or []:
+            found = dn_numbers(it.get("custom_hitech_delivery_refs"))
+            line_dns.append([it, found])
+            for k in found:
+                now_dns[k] = found[k]
+        old_dns = {}
+        if before:
+            for it in before.get("items") or []:
+                found = dn_numbers(it.get("custom_hitech_delivery_refs"))
+                for k in found:
+                    old_dns[k] = found[k]
+
+        # [event, ref, template, params]
+        wanted = []
+
         # 1. Approved: thank the customer, with the order's number, items
         # and amount.
         if status == APPROVED and old != APPROVED:
-            queue("Order Approved", "", TEMPLATE_APPROVED, [
+            parts = []
+            for pair in line_dns:
+                it = pair[0]
+                parts.append("%s - %s" % (it.get("item_name") or it.get("item_code"), qty_text(it)))
+            wanted.append(["Order Approved", "", TEMPLATE_APPROVED, [
                 customer_name,
                 company,
                 doc.name,
                 order_date,
-                clean(item_summary(doc, None), 700),
+                clean("; ".join(parts), 700),
                 clean(frappe.utils.fmt_money(doc.get("grand_total"), currency="INR"), 40),
-            ])
+            ]])
 
         # 2. A delivery note SAP did not have the last time this order saved.
         if status == APPROVED and before:
-            now_dns = all_dns(doc)
-            old_dns = all_dns(before)
             for num in now_dns:
                 if num in old_dns:
                     continue
-                queue("Delivery Created", num, TEMPLATE_DELIVERY, [
+                names = []
+                for pair in line_dns:
+                    if num in pair[1]:
+                        names.append(pair[0].get("item_name") or pair[0].get("item_code"))
+                wanted.append(["Delivery Created", num, TEMPLATE_DELIVERY, [
                     customer_name,
                     doc.name,
                     num,
                     clean(now_dns[num], 20),
-                    clean(item_summary(doc, num), 700),
-                ])
+                    clean("; ".join(names), 700),
+                ]])
+
+        if wanted:
+            cust = frappe.db.get_value(
+                "Customer", doc.customer, ["customer_name", "custom_phone", "mobile_no"], as_dict=True
+            ) or {}
+            phone = cust.get("custom_phone") or cust.get("mobile_no") or ""
+            for w in wanted:
+                key = "%s|%s|%s" % (doc.name, w[0], w[1] or "")
+                if frappe.db.exists("Manna WhatsApp Message", {"dedupe_key": key}):
+                    continue
+                frappe.get_doc({
+                    "doctype": "Manna WhatsApp Message",
+                    "dedupe_key": key,
+                    "sales_order": doc.name,
+                    "customer": doc.customer,
+                    "event": w[0],
+                    "delivery_note": w[1] or "",
+                    "phone": phone,
+                    "template": w[2],
+                    "params": json.dumps(w[3]),
+                    "status": "Queued",
+                    "attempts": 0,
+                }).insert(ignore_permissions=True)
 except Exception as e:
     frappe.log_error(title="manna_whatsapp_queue %s" % doc.name, message="%s" % e)
