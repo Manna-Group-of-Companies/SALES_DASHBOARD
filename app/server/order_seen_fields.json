@@ -1,0 +1,27 @@
+{
+  "about": "When the manager first opened an order waiting for them (10 Nov 2026). Written only by the manna_order_seen Server Script (order_seen.py), never by a form. The rep's app shows it as a double tick on the order page.",
+  "custom_fields": [
+    {
+      "doctype": "Custom Field",
+      "dt": "Sales Order",
+      "fieldname": "custom_manager_seen_on",
+      "label": "Manager Seen On",
+      "fieldtype": "Datetime",
+      "insert_after": "custom_po_status",
+      "read_only": 1,
+      "allow_on_submit": 1,
+      "no_copy": 1
+    },
+    {
+      "doctype": "Custom Field",
+      "dt": "Sales Order",
+      "fieldname": "custom_manager_seen_by",
+      "label": "Manager Seen By",
+      "fieldtype": "Data",
+      "insert_after": "custom_manager_seen_on",
+      "read_only": 1,
+      "allow_on_submit": 1,
+      "no_copy": 1
+    }
+  ]
+}

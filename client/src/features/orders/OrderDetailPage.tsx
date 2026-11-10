@@ -61,6 +61,7 @@ import {
 import { lineStatusFromSap, reachedSap } from '@/domain/sapOrderState';
 import { formatDate } from '@/domain/orderRules';
 import { Api } from '@/api/client';
+import { markOrderSeen } from '@/api/orderSeen';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import { Alert, Button, Card, Empty, Field, Input, Textarea } from '@/components/ui';
@@ -151,6 +152,7 @@ export function OrderDetailPage() {
       .then(async (o) => {
         if (!live) return;
         setOrder(o);
+        if (user?.role === 'sales_manager') markOrderSeen(o.id, o.poStatus);
 
         // Diff before the snapshot is overwritten, then record what is now on
         // screen. Keyed on the child row name, which survives an edit.

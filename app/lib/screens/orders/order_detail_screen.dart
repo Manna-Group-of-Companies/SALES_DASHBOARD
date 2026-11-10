@@ -663,8 +663,20 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             _itemsCard(items),
             _statusRow('Order placed', _placedAt),
             _statusRow('Proforma', pf),
-            _statusRow('Approval',
-                orderApprovalLabel(po, SapOrderState.fromOrder(_order))),
+            if (approvalTicks(po, _order['custom_manager_seen_on']) case final t?)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Approval',
+                          style: TextStyle(color: Colors.black54)),
+                      t,
+                    ]),
+              )
+            else
+              _statusRow('Approval',
+                  orderApprovalLabel(po, SapOrderState.fromOrder(_order))),
             _followUpCard(),
             if (ratesLocked(_order)) _statusRow('Rates', 'Locked by manager'),
             if ('${_order['delivery_date'] ?? ''}'.isNotEmpty &&

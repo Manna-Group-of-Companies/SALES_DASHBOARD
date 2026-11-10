@@ -82,3 +82,32 @@ class GmBanner extends StatelessWidget {
     );
   }
 }
+
+/// Chat-style ticks for an order waiting on the manager or the GM:
+/// one grey tick when sent, two blue ticks once a manager has opened it,
+/// "Sent to GM" once escalated. Null for every other status.
+Widget? approvalTicks(String poStatus, dynamic managerSeenOn) {
+  final po = poStatus.trim();
+  final seen = '${managerSeenOn ?? ''}'.trim();
+  const waiting = {
+    'Pending Approval',
+    'PO Uploaded - Pending Approval',
+    'Pending Rate Approval',
+  };
+  Widget row(IconData icon, Color color, String text) =>
+      Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 4),
+        Text(text,
+            style: TextStyle(fontWeight: FontWeight.w600, color: color)),
+      ]);
+  if (waiting.contains(po)) {
+    return seen.isNotEmpty && seen != 'null'
+        ? row(Icons.done_all_rounded, const Color(0xFF1E88E5), 'Seen by manager')
+        : row(Icons.done_rounded, Colors.black45, 'Sent to manager');
+  }
+  if (po == 'Pending GM Approval') {
+    return row(Icons.forward_to_inbox_rounded, const Color(0xFF6A1B9A), 'Sent to GM');
+  }
+  return null;
+}
