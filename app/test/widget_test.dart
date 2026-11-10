@@ -69,8 +69,9 @@ void main() {
     )));
 
     expect(find.textContaining('booked'), findsNothing);
-    expect(find.textContaining('6 rolls + 2 loose belts available'),
-        findsOneWidget);
+    // Rolls only since 10 Nov 2026: loose belts are not offered on an order.
+    expect(find.textContaining('6 rolls available'), findsOneWidget);
+    expect(find.textContaining('loose belt'), findsNothing);
   });
 
   testWidgets('an item with no weights set says so, and offers no figure',
@@ -104,7 +105,7 @@ void main() {
     expect(find.text('No minimum stock'), findsNothing);
   });
 
-  testWidgets('PCTR offers rolls and loose belts; CTR offers rolls only',
+  testWidgets('PCTR and CTR both offer rolls only, never loose belts',
       (tester) async {
     await tester.pumpWidget(_host(ProductRow(
       line: OrderLine(product: _pctr()),
@@ -112,7 +113,7 @@ void main() {
       onChanged: () {},
     )));
     expect(find.text('Rolls'), findsOneWidget);
-    expect(find.text('Loose belts'), findsOneWidget);
+    expect(find.text('Loose belts'), findsNothing);
 
     await tester.pumpWidget(_host(ProductRow(
       line: OrderLine(

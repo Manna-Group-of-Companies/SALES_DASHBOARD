@@ -4,7 +4,7 @@
  * The whole of spec 1.2–1.5 is visible here: which fields a category offers,
  * what it shows read-only, and how quantity is derived.
  *
- *   PCTR — shows avg weight/roll and belts/roll; rep keys rolls + loose belts.
+ *   PCTR — shows avg weight/roll and belts/roll; rep keys rolls only (loose belts dropped 10 Nov 2026).
  *   CTR  — exact weight/roll; rep keys rolls only, weight is derived.
  *   BG   — kg only, snapped to 5 kg steps, with box/roll breakdown.
  *   VS   — tins of a fixed 10L or 30L size, priced per tin.
@@ -137,21 +137,6 @@ export const ProductRow = memo(function ProductRow({
                   value={input.rolls ?? ''}
                   invalid={Boolean(issueFor('rolls'))}
                   onChange={(e) => set({ rolls: toNum(e.target.value) })}
-                />
-              </Field>
-            </div>
-            <div className="prow__input">
-              <Field label="Loose belts" error={issueFor('looseBelts')}>
-                <Input
-                  numeric
-                  compact
-                  type="number"
-                  min={0}
-                  step={1}
-                  placeholder="0"
-                  value={input.looseBelts ?? ''}
-                  invalid={Boolean(issueFor('looseBelts'))}
-                  onChange={(e) => set({ looseBelts: toNum(e.target.value) })}
                 />
               </Field>
             </div>
