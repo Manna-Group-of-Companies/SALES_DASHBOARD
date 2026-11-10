@@ -8,8 +8,9 @@
 // outstanding? An obligation on a shop nobody is visiting this week was
 // invisible until the deadline had already gone past.
 //
-// So this lists them across every customer, soonest deadline first, with the
-// overdue ones called out. Asked for 7 September 2026.
+// So this lists them across every customer, with the overdue ones called
+// out. Asked for 7 September 2026. Newest first since 10 November 2026; it
+// was soonest deadline first.
 //
 // WHO CAN DO WHAT
 //
@@ -82,7 +83,14 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
       _error = null;
     });
     try {
-      final rows = await Api.myCreditConditions();
+      // Newest first (10 Nov 2026, the user): the condition the GM set last
+      // is the one the rep is most likely looking for. MCC- names count up,
+      // so they break a tie on the same day.
+      final rows = [...await Api.myCreditConditions()]
+        ..sort((a, b) {
+          final byDate = _s(b, 'set_on').compareTo(_s(a, 'set_on'));
+          return byDate != 0 ? byDate : _s(b, 'name').compareTo(_s(a, 'name'));
+        });
       final orders = [
         for (final r in rows)
           if (_s(r, 'sales_order').isNotEmpty) _s(r, 'sales_order')
