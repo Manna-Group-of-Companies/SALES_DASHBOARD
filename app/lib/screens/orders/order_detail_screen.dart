@@ -15,6 +15,7 @@ import 'package:manna_field_sales/pdf/proforma_pdf.dart';
 import 'package:manna_field_sales/screens/conditions/my_conditions_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
+import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/gm_status.dart';
 
@@ -41,6 +42,9 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   /// to, so this screen does not become a second place to hold it.
   List<Map<String, dynamic>> _conditions = const [];
   List<Map<String, dynamic>> _thread = const [];
+
+  /// Each line's product, for its kg per roll and belts per roll.
+  Map<String, Product> _products = const {};
 
   /// This order's pick lists. Best-effort, like the follow-up: an order that
   /// cannot show them still shows everything else.
@@ -80,6 +84,11 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         _customer = await Api.getCustomerDoc(cust as String);
       } catch (_) {}
     }
+    try {
+      _products = {
+        for (final d in await Api.getItems()) '${d['name']}': Product(d)
+      };
+    } catch (_) {}
     // Best-effort: a follow-up line that will not load is left off rather
     // than failing the order the rep came to see.
     try {
@@ -420,6 +429,22 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   /// invoice loop and nobody sets it in the app. So a line reads Pushed to SAP,
   /// Dispatched once its own invoice exists, or Cancelled in SAP. Old stage
   /// values may still sit in `custom_production_stage`; they are not shown.
+  /// "22.40 kg/roll · 8 belts/roll". The weight is the line's own (its
+  /// kilos over its rolls), falling back to the product's; belts per roll is
+  /// the product's. Null when neither is known.
+  String? _perRoll(Map<String, dynamic> it) {
+    final p = _products['${it['item_code']}'];
+    final rolls = (it['custom_rolls'] as num?)?.toDouble() ?? 0;
+    final kg = (it['custom_total_weight'] as num?)?.toDouble() ?? 0;
+    final perRoll = rolls > 0 && kg > 0 ? kg / rolls : (p?.rollWeight ?? 0);
+    final belts = p?.beltsPerRoll ?? 0;
+    final parts = [
+      if (perRoll > 0) '${perRoll.toStringAsFixed(2)} kg/roll',
+      if (belts > 0) '$belts belts/roll',
+    ];
+    return parts.isEmpty ? null : parts.join('  ·  ');
+  }
+
   Widget _itemsCard(List items) {
     final moved = changedLineIds(_stageNews);
     final sap = SapOrderState.fromOrder(_order);
@@ -482,6 +507,15 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                           Text('${it['custom_packing_note'] ?? ''}',
                               style: const TextStyle(
                                   fontSize: 11, color: Colors.black54)),
+                          if (_perRoll(it) case final pr?)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(pr,
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFFB4530F))),
+                            ),
                           stageLine('Status', status),
                           if (showDispatched)
                             stageLine('Dispatched', dispatchedLabel(it)),
