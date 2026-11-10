@@ -10,6 +10,7 @@ import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/history_list.dart';
 import 'package:manna_field_sales/widgets/order_complete_tick.dart';
+import 'package:manna_field_sales/widgets/gm_status.dart';
 
 class MyOrdersScreen extends StatelessWidget {
   const MyOrdersScreen({super.key});
@@ -128,6 +129,7 @@ class MyOrdersScreen extends StatelessWidget {
               color: isLead ? const Color(0xFF5C6BC0) : null),
           title: Row(children: [
             Expanded(child: Text(r['customer'] ?? r['name'])),
+            if (!isLead) GmPill(poStatus: '${r['custom_po_status'] ?? ''}'),
             // A lead order is not a Sales Order yet, so it has no production
             // status to tick — showing an empty box against one would read as
             // "not finished" rather than "not applicable".

@@ -16,6 +16,7 @@ import 'package:manna_field_sales/screens/conditions/my_conditions_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/gm_status.dart';
 
 class OrderDetailScreen extends StatefulWidget {
   final String orderName;
@@ -633,6 +634,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             Text(
                 'Order total: Rs ${total.toStringAsFixed(2)}  ·  ${items.length} item(s)'),
             const SizedBox(height: 12),
+            GmBanner(poStatus: po),
             if (_proformaHeld)
               Container(
                   padding: const EdgeInsets.all(10),
