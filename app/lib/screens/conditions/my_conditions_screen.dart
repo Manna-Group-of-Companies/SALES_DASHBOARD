@@ -408,59 +408,6 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
     );
   }
 
-  /// The count at the top: what is still owed, and how much of it is late.
-  Widget _summary(int outstanding, int overdue, int awaiting) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 16, 16, 18),
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [CondColors.orange, CondColors.orange2]),
-        boxShadow: [
-          BoxShadow(
-              color: CondColors.orange.withValues(alpha: 0.28), blurRadius: 20, offset: const Offset(0, 8)),
-        ],
-      ),
-      child: Row(children: [
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('$outstanding',
-                style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, color: Colors.white, height: 1)),
-            const SizedBox(height: 6),
-            Text(outstanding == 1 ? 'Outstanding condition' : 'Outstanding conditions',
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
-            const SizedBox(height: 10),
-            Wrap(spacing: 8, runSpacing: 6, children: [
-              if (overdue > 0) _pill('$overdue overdue', Icons.error_rounded),
-              if (awaiting > 0) _pill('$awaiting awaiting review', Icons.hourglass_top_rounded),
-              if (overdue == 0 && awaiting == 0 && outstanding > 0) _pill('Waiting for your answer', Icons.reply_rounded),
-              if (outstanding == 0) _pill('All clear', Icons.check_rounded),
-            ]),
-          ]),
-        ),
-        Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), shape: BoxShape.circle),
-          child: const Icon(Icons.fact_check_rounded, color: Colors.white, size: 28),
-        ),
-      ]),
-    );
-  }
-
-  Widget _pill(String text, IconData icon) => Container(
-        padding: const EdgeInsets.fromLTRB(8, 4, 10, 4),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 13, color: CondColors.orange),
-          const SizedBox(width: 4),
-          Text(text, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: CondColors.orange)),
-        ]),
-      );
-
   Widget _message({required IconData icon, required String title, String? body, Widget? action}) => Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -487,12 +434,6 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
   @override
   Widget build(BuildContext context) {
     final today = DateTime.now();
-    final open = _rows.where((r) => '${r['status']}' != kCondClosed).toList();
-    final overdue = open
-        .where((r) => conditionOverdue(
-            status: '${r['status']}', dueDateIso: '${r['due_date'] ?? ''}', today: today))
-        .length;
-    final awaiting = open.where((r) => '${r['status']}' == kCondAwaiting).length;
 
     final Widget body;
     if (_loading && _rows.isEmpty) {
@@ -529,7 +470,7 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
               // Phones fill the width; a tablet keeps cards readable.
               constraints: const BoxConstraints(maxWidth: 640),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                _summary(open.length, overdue, awaiting),
+                const SizedBox(height: 16),
                 for (var i = 0; i < _rows.length; i++) _card(_rows[i], today, i),
                 const SizedBox(height: 24),
               ]),
