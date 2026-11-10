@@ -182,6 +182,18 @@ The queue script uses `frappe.utils.formatdate`, `fmt_money` and
 `doc.get_doc_before_save()`, and avoids the safe_exec traps listed in the root
 `CLAUDE.md`.
 
+## Where live stands (10 Nov 2026)
+
+Installed on mannarubber.m.frappe.cloud through the Composio connector:
+both DocTypes, `manna_whatsapp_queue` and `manna_whatsapp_sender`. Settings:
+**enabled off**, test mode on, no token. Nothing is queued or sent until
+someone fills the settings and ticks `enabled`.
+
+**Not installed: `manna_whatsapp_payment`.** It hangs off `SAP Invoice`, and
+live has no such DocType yet (it exists only on the local copy, with
+`manna_sap_invoice_sync`). Install the invoice doctype and that sync first,
+then this script.
+
 ## 5. Going live, in this order
 
 1. Create both DocTypes. Leave `enabled` **off**.
