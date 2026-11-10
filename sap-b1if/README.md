@@ -297,6 +297,32 @@ event, including the ones it skips.
 the credit sync (or a one-off run) fills SAP Invoice once; after that B1if
 keeps it current.
 
+### Step 5 as an importable package: `exports/Z.erpinv.zip` (10 Nov 2026)
+
+Built the same way as the team's own `Z.erpcust` / `Z.erpstock` packages, so
+it imports instead of being built atom by atom:
+
+    python sap-b1if/step5-invoice/build_package.py
+    powershell -NoProfile -File sap-b1if/tests/Test-ErpInvPackage.ps1
+
+| Step | Event | Atoms |
+|---|---|---|
+| `Z.erpinvar` | object 13, A/R invoice | atom1 xform (statement) -> atom2 Call SQL (SysId 0010000119) -> atom3 xform (JSON) -> atom0 final |
+| `Z.erpinvpay` | object 24, incoming payment | the same; atom1 reads the invoices the payment was applied to |
+
+1. **Scenarios -> Import** `Z.erpinv.zip`.
+2. In **Step Design**, open each step's **Processing** and add the **httpCall**
+   after atom3, exactly as in `Z.erpcustbp`: the ERPNext HTTP system, POST,
+   path from `/vpf:Msg/vpf:Body/vpf:Payload[@id='atom3']/Http/Endpoint`, body
+   from `.../Http/Body`, `Content-Type: application/json`.
+3. **Setup**: sender = the Manna Treads system, then **Activate**.
+4. `@MANNA_IC`: `ERP_INVOICE_SYNC = N` until tested; with N the body carries an
+   empty list and ERPNext changes nothing. `ERP_COMPANY = Manna Treads`. The URL
+   comes from the HTTP system, not from `ERP_URL`.
+
+ERPNext needs `manna_sap_invoice_sync` (`app/server/sap_invoice_sync.py`)
+installed first. The package carries no credentials.
+
 ## Not covered yet
 
 - **Edits and cancellations.** If a sales order is changed or cancelled in Manna
