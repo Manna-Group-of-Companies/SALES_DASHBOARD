@@ -238,6 +238,65 @@ To switch off, set `ENABLED = N` in either company. The script will not take
 over: after 30 minutes PASS P puts an error on each ERPNext order still
 without a purchase order, and those are made by hand until B1if is back on.
 
+## Step 5: invoices and payments → ERPNext (10 Nov 2026)
+
+When an **A/R invoice** is added, changed or cancelled in Manna Treads, or an
+**incoming payment** is added or cancelled, B1if sends the invoice(s) to
+ERPNext, which updates **SAP Invoice** (total, paid, balance, Open/Closed).
+Team Targets reads those rows. It writes the same rows, in the same shape, as
+the credit sync, so the two can run side by side.
+
+| File | What |
+|---|---|
+| `step5-invoice/sql.xsl` | Invoice event: that invoice. Payment event: every invoice in `RCT2` for it (InvType 13), with SAP's `PaidToDate` after the payment |
+| `step5-invoice/final.xsl` | The decision and the JSON body for ERPNext |
+| `../app/server/sap_invoice_sync.py` | The ERPNext Server Script (API) `manna_sap_invoice_sync` that receives it |
+| `tests/Test-InvoiceXsl.ps1` | 17 offline checks |
+
+**ERPNext.** Install `app/server/sap_invoice_sync.py` as a Server Script:
+type **API**, API Method `manna_sap_invoice_sync`. Make a user with the
+**SAP Sync Bot** role only, and generate its API key and secret. Tested on the
+local copy on 10 Nov 2026: create, part payment, paid in full (Closed), unknown
+customer code (skipped with the reason), cancelled (row removed), and refused
+for a user without the role.
+
+**SAP, Manna Treads, `@MANNA_IC`:**
+
+| Code | Value |
+|---|---|
+| `ERP_INVOICE_SYNC` | `N` until tested, then `Y` |
+| `ERP_COMPANY` | `Manna Treads` (the name ERPNext keys rows by: `Manna Treads-<DocEntry>`) |
+| `ERP_URL` | `https://mannarubber.m.frappe.cloud` (test: the ERPNext the test company pairs with) |
+
+**B1if.** Two steps, same atoms; only the inbound object differs.
+
+| Step | Inbound |
+|---|---|
+| `vBIU.manna.erp.invoice` | B1 Event, Manna Treads system, Object **13** (A/R Invoice), Transaction **A, U, C** |
+| `vBIU.manna.erp.payment` | B1 Event, Manna Treads system, Object **24** (Incoming Payment), Transaction **A, C** |
+
+| Atom | Type | Setting |
+|---|---|---|
+| atom0 | xform | `step5-invoice/sql.xsl` |
+| atom1 | Call SQL | SysId = Manna Treads. Statement `/vpf:Msg/vpf:Body/vpf:Payload[@id='atom0']/Sql/Statement` |
+| atom2 | xform | `step5-invoice/final.xsl` |
+| atom3 | if / condition | `/vpf:Msg/vpf:Body/vpf:Payload[@id='atom2']/Decision/Send = 'Y'` |
+| atom4 | HTTP call, inside the condition | **POST** to `Decision/Url`, body `Decision/Body`, header `Content-Type: application/json` and `Authorization: token <api key>:<api secret>` |
+
+The API key and secret go **only** in the HTTP atom or the SLD HTTP system,
+never in a file here. The SAP server needs HTTPS out to the ERPNext site. If
+your B1if numbers atoms differently, change `sqlAtom` at the top of
+`final.xsl`.
+
+**Test** on `TEST_MANNA_TREADS` with the local ERPNext: add an invoice, then a
+part payment, then the rest, then cancel; Team Targets should go Not due →
+part paid → Paid → gone. B1if's message log shows `Decision/Reason` for every
+event, including the ones it skips.
+
+**First load.** Events only carry new changes. For the invoices already in SAP,
+the credit sync (or a one-off run) fills SAP Invoice once; after that B1if
+keeps it current.
+
 ## Not covered yet
 
 - **Edits and cancellations.** If a sales order is changed or cancelled in Manna
