@@ -128,9 +128,24 @@ screen from the same `SAP Pricing Control` copy:
 - `?customer=`: the dealer's special price, else Price List 01.
 - `?lead=`: Price List 01 only. Lead orders are taken at the list price.
 
-For now it answers only for item group `ZZ - Test`, and only for an item with
-a Hi-Tech twin. So a dealer rule shows on the phone only once its DTW file has
-been imported and **Sync** pressed. `shared/DIVERGENCES.md` has the rest.
+It answers for every item in the snapshot that has a Hi-Tech twin (since
+11 Nov 2026; until then only item group `ZZ - Test`). Its source is
+[`manna_customer_rates.py`](manna_customer_rates.py). So a dealer rule shows on
+the phone only once its DTW file has been imported and **Sync** pressed.
+`shared/DIVERGENCES.md` has the rest.
+
+**The phone cannot order an item that is not here.** Since 10 Nov 2026 the
+rate box on the phone is SAP's price and cannot be typed into. An item is in
+the snapshot, and so can be ordered, only when, in Manna Treads' SAP:
+
+1. it has its quality ticked: one of the named item properties (Black Pearl,
+   Platinum, Polygold, Silver, Diamond, ...). That is what puts it in the
+   snapshot;
+2. it has a Price List 01 price, per kg, GST-inclusive;
+3. Hi-Tech has an item with the same code and the same name, active;
+
+and the snapshot has been synced since (*Sync from SAP* on the rates screen,
+which the office server answers).
 
 ## The procedure
 

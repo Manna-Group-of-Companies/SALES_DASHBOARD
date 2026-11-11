@@ -1843,8 +1843,8 @@ class Api {
   /// A lead is always given Price List 01, and the answer says so
   /// ([SapRates.listOnly]): lead orders are taken at the list price.
   /// The script answers only the party's own rep (or a manager), only for
-  /// Manna Treads, and for now only for the test items (item group ZZ - Test
-  /// in Manna Treads' SAP). Not cached: a stale rate is worse than none, and
+  /// Manna Treads, for every item in the snapshot (11 Nov 2026; only item
+  /// group ZZ - Test before). Not cached: a stale rate is worse than none, and
   /// without signal the screen simply shows no rates.
   static Future<SapRates> getSapRates(String party, {bool lead = false}) async {
     final r = await Session.I.dio.get('/api/method/manna_customer_rates',

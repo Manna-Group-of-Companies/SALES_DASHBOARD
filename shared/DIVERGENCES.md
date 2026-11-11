@@ -940,8 +940,11 @@ Prices are per kg and GST-inclusive, as SAP holds them. The rates come from
 the copy of SAP that `sap-pricing/Sync-SapPricingSnapshot.ps1` writes into
 `SAP Pricing Control`. The script answers only the customer's own rep or a
 manager, only for a Manna Treads customer (`custom_bp_code` is a Treads code
-only there), and for now only for Manna Treads item group `ZZ - Test`
-(`ONLY_GROUP` in the script).
+only there). It answered only for Manna Treads item group `ZZ - Test` until
+11 November 2026; now every item in the snapshot (`ONLY_GROUP = ""` in
+`sap-pricing/manna_customer_rates.py`). An item reaches the snapshot only when
+it has its quality ticked and a Price List 01 price in Manna Treads' SAP; see
+`sap-pricing/README.md`.
 
 **Phone:** `app/lib/models/sap_rates.dart`, `Api.getSapRates`, the order
 screen and `ProductRow`. **An item with an SAP rate is sold at it, and the
