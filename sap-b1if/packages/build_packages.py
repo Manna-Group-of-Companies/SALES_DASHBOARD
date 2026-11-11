@@ -64,6 +64,7 @@ FROM OITM I
 LEFT JOIN OCHP C ON C.AbsEntry = I.ChapterID
 WHERE I.SellItem = 'Y'"""
 
+# Warehouse 01 STORE: the one the order flow picks from (see ../stock/stock.sql). The same text as that file.
 STOCK_SQL = """SELECT W.ItemCode AS code, CAST(W.OnHand - W.IsCommited AS decimal(19, 3)) AS qty
 FROM OITW W
 JOIN OITM I ON I.ItemCode = W.ItemCode
