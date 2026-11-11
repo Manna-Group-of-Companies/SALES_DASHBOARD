@@ -95,11 +95,9 @@ export function ItemRequestsPage() {
                 <tr>
                   <th>Date</th>
                   <th>Rep</th>
-                  <th>Customer</th>
                   <th>Product</th>
                   <th>Pattern</th>
                   <th>Size</th>
-                  <th className="right">Qty</th>
                   <th>Status</th>
                   <th />
                 </tr>
@@ -109,14 +107,12 @@ export function ItemRequestsPage() {
                   <tr key={r.name}>
                     <td className="nowrap">{day(r.requestedOn)}</td>
                     <td className="nowrap">{r.salesPerson}</td>
-                    <td>{r.customerName || '—'}</td>
                     <td className="nowrap">
                       {r.productLine}
                       <div className="tiny dim">{r.itemType}</div>
                     </td>
                     <td>{r.pattern || '—'}</td>
                     <td className="nowrap">{r.size || '—'}</td>
-                    <td className="right nowrap">{qty(r)}</td>
                     <td>
                       {r.status === 'Done' ? (
                         <>

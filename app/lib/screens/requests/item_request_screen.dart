@@ -3,7 +3,6 @@
 // why not). See core/item_request.dart.
 
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/item_request.dart';
@@ -128,37 +127,26 @@ class NewItemRequestScreen extends StatefulWidget {
   State<NewItemRequestScreen> createState() => _NewItemRequestScreenState();
 }
 
+/// Product line, type, pattern and size only (11 Nov 2026, the user): no
+/// quantity, unit, customer, note or photo any more. The server still takes
+/// those fields, so older requests that carry them keep showing them.
 class _NewItemRequestScreenState extends State<NewItemRequestScreen> {
   String _line = kItemRequestLines.first;
   String _type = kItemRequestTypes.first;
-  String _unit = kItemRequestUnits.first;
   final _pattern = TextEditingController();
   final _size = TextEditingController();
-  final _qty = TextEditingController();
-  final _note = TextEditingController();
-  Map<String, dynamic>? _customer;
-  List<Map<String, dynamic>> _customers = const [];
-  XFile? _photo;
   bool _busy = false;
 
   @override
-  void initState() {
-    super.initState();
-    Api.getCustomers().then((c) {
-      if (mounted) setState(() => _customers = c);
-    }).catchError((_) {});
-  }
-
-  String _cname(Map c) => '${c['customer_name'] ?? c['name'] ?? ''}';
-
-  Future<void> _pickPhoto(ImageSource src) async {
-    final f = await ImagePicker().pickImage(source: src, imageQuality: 60);
-    if (f != null && mounted) setState(() => _photo = f);
+  void dispose() {
+    _pattern.dispose();
+    _size.dispose();
+    super.dispose();
   }
 
   Future<void> _submit() async {
-    if (_pattern.text.trim().isEmpty && _size.text.trim().isEmpty && _note.text.trim().isEmpty) {
-      _snack('Enter a pattern, a size or a note.');
+    if (_pattern.text.trim().isEmpty && _size.text.trim().isEmpty) {
+      _snack('Enter a pattern or a size.');
       return;
     }
     setState(() => _busy = true);
@@ -168,11 +156,7 @@ class _NewItemRequestScreenState extends State<NewItemRequestScreen> {
         'item_type': _type,
         'pattern': _pattern.text.trim(),
         'size': _size.text.trim(),
-        'quantity': double.tryParse(_qty.text.trim()) ?? 0,
-        'unit': _unit,
-        'note': _note.text.trim(),
-        if (_customer != null) 'customer': '${_customer!['name']}',
-      }, photoPath: _photo?.path);
+      });
       if (!mounted) return;
       _snack('Request sent.');
       Navigator.pop(context, true);
@@ -215,47 +199,6 @@ class _NewItemRequestScreenState extends State<NewItemRequestScreen> {
         _text('Pattern', _pattern, hint: 'e.g. VIKING'),
         gap,
         _text('Size', _size, hint: 'e.g. 205 x 129'),
-        gap,
-        Row(children: [
-          Expanded(child: _text('Quantity', _qty, type: const TextInputType.numberWithOptions(decimal: true))),
-          const SizedBox(width: 10),
-          SizedBox(width: 120, child: _drop('Unit', _unit, kItemRequestUnits, (v) => setState(() => _unit = v))),
-        ]),
-        gap,
-        Autocomplete<Map<String, dynamic>>(
-          displayStringForOption: _cname,
-          optionsBuilder: (t) {
-            final q = t.text.trim().toLowerCase();
-            if (q.isEmpty) return const Iterable.empty();
-            return _customers.where((c) => _cname(c).toLowerCase().contains(q)).take(20);
-          },
-          onSelected: (c) => setState(() => _customer = c),
-          fieldViewBuilder: (context, ctl, focus, _) => TextField(
-            controller: ctl,
-            focusNode: focus,
-            enabled: !_busy,
-            onChanged: (_) => _customer = null,
-            decoration: const InputDecoration(labelText: 'Customer (optional)', border: OutlineInputBorder(), isDense: true),
-          ),
-        ),
-        gap,
-        _text('Note', _note, lines: 3),
-        gap,
-        Row(children: [
-          OutlinedButton.icon(
-            onPressed: _busy ? null : () => _pickPhoto(ImageSource.camera),
-            icon: const Icon(Icons.photo_camera),
-            label: const Text('Photo'),
-          ),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(
-            onPressed: _busy ? null : () => _pickPhoto(ImageSource.gallery),
-            icon: const Icon(Icons.photo_library),
-            label: const Text('Gallery'),
-          ),
-          const SizedBox(width: 8),
-          if (_photo != null) const Icon(Icons.check_circle, color: Color(0xFF2E7D32)),
-        ]),
         const SizedBox(height: 24),
         FilledButton(
           style: FilledButton.styleFrom(backgroundColor: _kOrange),
