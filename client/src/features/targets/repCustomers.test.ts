@@ -56,6 +56,24 @@ describe('buildRepCustomers', () => {
     expect(statusOf(s)).toBe('unknown');
   });
 
+  // 11 Nov 2026: Drona Tyres and its demo copy had one name; the real one's
+  // orders were matched by name and shown under the copy.
+  it('keeps two customers of one name apart', () => {
+    const two = buildRepCustomers(
+      [cust('C-DEMO', 'Drona Tyres', { outstanding: 174081 })],
+      [
+        { id: 'SO-7', customer: 'C-DEMO', customerName: 'Drona Tyres', placedOn: '2026-11-10', netTotal: 6808 },
+        { id: 'SO-8', customer: 'C-REAL', customerName: 'Drona Tyres', placedOn: '2026-11-06', netTotal: 90000 },
+      ],
+      [],
+    );
+    expect(two).toHaveLength(2);
+    expect(two.find((r) => r.id === 'C-DEMO')!.ordered).toBe(6808);
+    const real = two.find((r) => r.id === 'C-REAL')!;
+    expect(real.ordered).toBe(90000);
+    expect(real.assigned).toBe(false);
+  });
+
   it('labels what each owes', () => {
     expect(statusOf(by('Alpha Rubber'))).toBe('overdue');
     expect(statusOf(by('Beta Treads'))).toBe('owes');

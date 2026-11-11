@@ -63,12 +63,16 @@ export function buildRepCustomers(
   orders: RepMonthOrder[],
   lines: InvoicedLine[],
 ): RepCustomerRow[] {
+  const rows: RepCustomerRow[] = [];
   const byId = new Map<string, RepCustomerRow>();
+  // For invoice lines only, which carry a name and no id. The first customer
+  // of a name keeps it: two customers of one name are still two rows.
   const byName = new Map<string, RepCustomerRow>();
 
   const add = (row: RepCustomerRow) => {
+    rows.push(row);
     if (row.id) byId.set(row.id, row);
-    byName.set(key(row.name), row);
+    if (!byName.has(key(row.name))) byName.set(key(row.name), row);
     return row;
   };
 
@@ -118,7 +122,12 @@ export function buildRepCustomers(
 
   const orderCustomer = new Map<string, RepCustomerRow>();
   for (const o of orders) {
-    const row = byId.get(o.customer) ?? byName.get(key(o.customerName)) ?? blank(o.customer, o.customerName);
+    // An order names its customer exactly: matched by name it landed under a
+    // different customer of the same name (11 Nov 2026, Drona Tyres and its
+    // demo copy). Only an order with no customer id falls back to the name.
+    const row =
+      byId.get(o.customer) ??
+      (o.customer ? blank(o.customer, o.customerName) : (byName.get(key(o.customerName)) ?? blank('', o.customerName)));
     row.orders.push(o);
     row.ordered += o.netTotal;
     if (!row.lastOrder || o.placedOn > row.lastOrder) row.lastOrder = o.placedOn;
@@ -140,7 +149,7 @@ export function buildRepCustomers(
   }
 
   // Most active first: invoiced, then ordered, then what they owe.
-  return [...new Set(byName.values())].sort(
+  return rows.sort(
     (a, b) =>
       b.invoiced - a.invoiced ||
       b.ordered - a.ordered ||
