@@ -33,6 +33,28 @@ and no import in B1iF, and a site nobody has told anything writes nothing.
 **"B1iF: last answers"** (`custom_b1if_last`) on the same page holds what each
 kind was last answered and when — read it instead of B1iF's message log.
 
+## A batch that is old is ignored
+
+B1iF keeps every message it could not deliver and sends them all when ERPNext
+answers again: after one night with the local site down (10-11 Nov 2026), 884
+arrived in ten minutes. Most kinds are the whole current state, so an old batch
+written after a newer one puts yesterday's figures back.
+
+Every query stamps SAP's UTC time on its rows (`sent_at`, added by
+`../packages/build_packages.py`), atom3 puts the first row's into the body, and
+`manna_sap_in` answers a batch older than ten minutes (`MAX_AGE`) with
+`"stale": true` - status 200, so B1iF counts it delivered and drops it. The
+next run carries the same state, fresh.
+
+- Not for `customers` and `items`: a late one is still the newest word on that
+  record.
+- A batch with no `sent_at` (an older package, a result with no rows) or one
+  that is not a time is let through, not refused.
+- Each answer in "B1iF: last answers" records `age_seconds`; ignored batches
+  are counted beside it under `<kind> (stale, ignored)`. A SAP server clock
+  more than ten minutes behind ERPNext's would make every batch stale - that
+  is where it would show.
+
 ## What a site needs
 
 `install_local.py` puts all of it on the **local** site (127.0.0.1:8000, the key

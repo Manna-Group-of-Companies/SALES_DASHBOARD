@@ -146,11 +146,11 @@ All bodies go to the one address `/api/method/manna_sap_in`; `"kind"` picks the 
 |---|---|---|---|
 | `Z.erpcustall` | Manna Treads | Minute `10`, Hour `1` | every customer (what an event missed) |
 | `Z.erpitemall` | Manna Treads | Minute `20`, Hour `1` | every sales item |
-| `Z.erpweight` | Hi-Tech | Minute `8,38` | roll figures, fills blanks only |
-| `Z.erpcredit` | Manna Treads | Minute `3,18,33,48` | credit limit, outstanding, ageing, terms, overdue |
-| `Z.erpinv` | Manna Treads | Minute `4,19,34,49` | the SAP Invoice mirror |
-| `Z.erppay` | Manna Treads | Minute `2,7,12,17,22,27,32,37,42,47,52,57` | the SAP Payment mirror |
-| `Z.erpprice` | Manna + Hi-Tech | Minute `12,42` | the price snapshot (two SQL calls, one post) |
+| `Z.erpweight` | Hi-Tech | Minute `14,44` | roll figures, fills blanks only |
+| `Z.erpcredit` | Manna Treads | Minute `4,19,34,49` | credit limit, outstanding, ageing, terms, overdue |
+| `Z.erpinv` | Manna Treads | Minute `9,24,39,54` | the SAP Invoice mirror |
+| `Z.erppay` | Manna Treads | Minute `3,8,13,18,23,28,33,38,43,48,53,58` | the SAP Payment mirror |
+| `Z.erpprice` | Manna + Hi-Tech | Minute `29,59` | the price snapshot (two SQL calls, one post) |
 
 Hour, Day, Month, Day Of Week, Year stay `*` except the two nightly steps' Hour.
 Import, Setup -> Steps (tick all seven), no Sender (timer package), each step's
@@ -160,3 +160,27 @@ carries it, the clock for each step, Activate.
 ERPNext needs, beside the endpoints: the doctype `SAP Payment`
 (`app/server/sap_payment_doctypes.json`), and for a "payment received" action a
 Server Script on SAP Payment, After Insert, acting only when `new_payment = 1`.
+
+## The 11 Nov 2026 build: send time on every batch, schedules in the packages
+
+Two changes, in all six `Z.erp...` packages (`Z.mannaic` and `Z.mannaicpk` are
+not touched):
+
+1. **Every query stamps SAP's UTC time on its rows and atom3 sends it as
+   `"sent_at"`.** ERPNext ignores a whole-state batch older than ten minutes
+   (`../erpnext/README.md`, "A batch that is old is ignored"). The ERPNext side
+   is already installed locally and takes the older packages' bodies as before,
+   so the order of the two does not matter.
+2. **Each timer step's schedule is in its channel**
+   (`<Scheduler min=".." hour=".." .../>`, as B1if's export of `Z.mannaicpk`
+   holds its own): stock `0,5,..`, status Hi-Tech `1,6,..`, status Manna
+   `2,7,..`, and the table above for `Z.erpmore`. Not proved until one import
+   shows it: after importing, open one clock in Setup and read it.
+
+To take the build, for each of the six packages: Setup -> Deactivate;
+Scenarios -> Import the zip; Step Design -> each step -> save once; Setup ->
+the steps still ticked, the sender still there on `Z.erpcust` and `Z.erpitem`
+only, one look at a clock; Activate.
+
+Proof it landed: SAP Sync Control -> "B1iF: last answers" - each kind's entry
+gains `age_seconds` (a few seconds on a healthy run).
