@@ -14,8 +14,8 @@
 # the way in, and it decides who may do what:
 #   - an accountant (User.custom_is_accountant) or System Manager: lists every
 #     request and decides them;
-#   - HR (User.custom_is_hr_manager) and HR's assistant
-#     (User.custom_is_hr_assistant, 11 Nov 2026): list every request, decide
+#   - HR (User.custom_is_hr_manager) and accounts staff
+#     (User.custom_is_accounts_staff, 11 Nov 2026): list every request, decide
 #     none (10 Nov 2026);
 #   - anyone with a Sales Person: submits, and lists their own.
 # Done is the accountant's word that the item exists in SAP; it does not
@@ -32,7 +32,7 @@ is_sys = user == "Administrator" or bool(frappe.get_all(
 ))
 is_acct = is_sys or frappe.utils.cint(frappe.db.get_value("User", user, "custom_is_accountant")) == 1
 is_hr = (frappe.utils.cint(frappe.db.get_value("User", user, "custom_is_hr_manager")) == 1
-         or frappe.utils.cint(frappe.db.get_value("User", user, "custom_is_hr_assistant")) == 1)
+         or frappe.utils.cint(frappe.db.get_value("User", user, "custom_is_accounts_staff")) == 1)
 mine = frappe.get_all("Sales Person", filters={"custom_user": user, "is_group": 0}, pluck="name", limit=1)
 me = mine[0] if mine else None
 

@@ -22,12 +22,12 @@ export type Role =
   | 'stock_manager'
   | 'hr'
   /**
-   * HR's assistant (11 Nov 2026): HR's monthly calendar, odometer check,
+   * Accounts staff (11 Nov 2026, not the Accountant): HR's monthly calendar, odometer check,
    * trips and routes, monthly expenses and range summary, and the item
    * requests (read-only) — nothing else of HR's. From
-   * `User.custom_is_hr_assistant`.
+   * `User.custom_is_accounts_staff`.
    */
-  | 'hr_assistant'
+  | 'accounts_staff'
   /**
    * The Managing Director (25 Sep 2026): quality-wise list prices and dealer
    * prices for Hi-Tech Pretreads in SAP, handed over as DTW files. From
@@ -49,7 +49,7 @@ export const ROLE_LABEL: Record<Role, string> = {
   production_manager: 'Production Manager',
   stock_manager: 'Stock Manager',
   hr: 'HR',
-  hr_assistant: 'HR Assistant',
+  accounts_staff: 'Accounts Staff',
 };
 
 /**

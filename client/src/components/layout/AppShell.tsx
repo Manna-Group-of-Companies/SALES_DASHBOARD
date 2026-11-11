@@ -81,8 +81,8 @@ export function AppShell() {
 
   // HR works on an entirely different set of records — loading the product
   // catalogue and the order book for them would be pure waste.
-  // HR's assistant reads the same records, on a few of HR's pages (11 Nov 2026).
-  const isHr = user?.role === 'hr' || user?.role === 'hr_assistant';
+  // Accounts staff read the same records, on a few of HR's pages (11 Nov 2026).
+  const isHr = user?.role === 'hr' || user?.role === 'accounts_staff';
   // Nor for the accountant (26 Sep 2026): his screen reads its own orders, and
   // his ERPNext role, Accounts User, cannot read Bin — the stock poll would
   // fail every minute.
@@ -211,16 +211,16 @@ export function AppShell() {
     { to: '/hr/employees', label: 'Employees', icon: 'user', roles: ['hr'], count: headcount, group: 'People' },
     { to: '/hr/leave', label: 'Leave Requests', icon: 'calendarMinus', roles: ['hr'], count: pendingLeave.length, urgent: pendingLeave.length > 0, group: 'People' },
     { to: '/hr/regularizations', label: 'Regularizations', icon: 'clock', roles: ['hr'], group: 'People' },
-    // HR's assistant has these three, the two reports and the item requests
+    // Accounts staff have these three, the two reports and the item requests
     // (11 Nov 2026).
-    { to: '/hr/calendar', label: 'Monthly Calendar', icon: 'calendar', roles: ['hr', 'hr_assistant'], group: 'People' },
-    { to: '/hr/odometer', label: 'Odometer Check', icon: 'gauge', roles: ['hr', 'hr_assistant'], group: 'People' },
-    { to: '/hr/trips', label: 'Trips & Routes', icon: 'map', roles: ['hr', 'hr_assistant'], group: 'People' },
+    { to: '/hr/calendar', label: 'Monthly Calendar', icon: 'calendar', roles: ['hr', 'accounts_staff'], group: 'People' },
+    { to: '/hr/odometer', label: 'Odometer Check', icon: 'gauge', roles: ['hr', 'accounts_staff'], group: 'People' },
+    { to: '/hr/trips', label: 'Trips & Routes', icon: 'map', roles: ['hr', 'accounts_staff'], group: 'People' },
     // What the reps asked for, read-only; the accountant answers (10 Nov 2026).
-    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['hr', 'hr_assistant'], group: 'People' },
+    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['hr', 'accounts_staff'], group: 'People' },
 
-    { to: '/reports/expenses', label: 'Monthly Expenses', icon: 'receipt', roles: ['hr', 'hr_assistant'], group: 'Reports' },
-    { to: '/reports/summary', label: 'Range Summary', icon: 'chart', roles: ['hr', 'hr_assistant'], group: 'Reports' },
+    { to: '/reports/expenses', label: 'Monthly Expenses', icon: 'receipt', roles: ['hr', 'accounts_staff'], group: 'Reports' },
+    { to: '/reports/summary', label: 'Range Summary', icon: 'chart', roles: ['hr', 'accounts_staff'], group: 'Reports' },
 
     // Stock manager only since 11 October 2026 — nothing is imported from the
     // sales manager's side, so the entry was an invitation to break things.

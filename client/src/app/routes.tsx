@@ -150,9 +150,9 @@ function RoleHome() {
     // The accountant's login is the Manna Treads orders screen (26 Sep 2026).
     case 'accountant':
       return <Navigate to="/manna-treads" replace />;
-    // HR's assistant has no dashboard of HR's; the calendar is the first page
+    // Accounts staff have no dashboard of HR's; the calendar is the first page
     // of theirs (11 Nov 2026).
-    case 'hr_assistant':
+    case 'accounts_staff':
       return <Navigate to="/hr/calendar" replace />;
     /*
      * The production manager lands straight on the queue (B1), not on a
@@ -185,11 +185,11 @@ const MD: Role[] = ['managing_director'];
 // Manager, so another role here would see a Create button that is refused.
 const ACCOUNTANT: Role[] = ['accountant'];
 const HR: Role[] = ['hr'];
-// HR's pages that HR's assistant has too (11 Nov 2026): the monthly calendar,
+// HR's pages that accounts staff have too (11 Nov 2026): the monthly calendar,
 // odometer check, trips and routes, and the two reports.
-const HR_SHARED: Role[] = ['hr', 'hr_assistant'];
-// The accountant answers; HR and HR's assistant read them (10-11 Nov 2026).
-const ITEM_REQUESTS: Role[] = ['accountant', 'hr', 'hr_assistant'];
+const HR_SHARED: Role[] = ['hr', 'accounts_staff'];
+// The accountant answers; HR and accounts staff read them (10-11 Nov 2026).
+const ITEM_REQUESTS: Role[] = ['accountant', 'hr', 'accounts_staff'];
 
 export function AppRoutes() {
   const user = useAppSelector(selectUser);

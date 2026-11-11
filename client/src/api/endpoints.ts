@@ -1033,7 +1033,7 @@ export const USER_FIELD = {
    * 11 Nov 2026: HR's calendar, odometer, trips and expense pages and the
    * item requests, nothing else. A Check on User; must be created on the site.
    */
-  isHrAssistant: 'custom_is_hr_assistant',
+  isAccountsStaff: 'custom_is_accounts_staff',
   isProductionManager: 'custom_is_production_manager',
 
   /** Not on the site yet — the Stock Manager role cannot resolve until it is. */
