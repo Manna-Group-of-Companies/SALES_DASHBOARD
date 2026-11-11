@@ -66,3 +66,60 @@ def test_an_empty_batch_changes_nothing():
 def test_an_invoice_of_a_customer_erpnext_does_not_hold_is_left_out():
 	p = plan([row(code="C-9")], CUST, {})
 	assert p["create"] == [] and p["no_customer"] == 1
+
+
+class _Row(dict):
+	__getattr__ = dict.get
+
+
+def _site(existing):
+	"""A stand-in site for run(): records how a row was written. db.set_value is
+	there only to fail the test if anything reaches for it."""
+	log = {"saved": [], "inserted": [], "deleted": []}
+
+	class Doc:
+		def __init__(self, name):
+			self.name, self.changes = name, {}
+		def update(self, d):
+			self.changes.update(d)
+		def save(self, ignore_permissions=False):
+			log["saved"].append((self.name, self.changes))
+
+	def get_all(doctype, **kw):
+		if doctype == "Customer":
+			return [_Row(name="Rollex", custom_bp_code="C-1018")]
+		return [_Row(e, name=k) for k, e in existing.items()]
+
+	def set_value(*a, **kw):
+		raise AssertionError("db.set_value raises no After Save event - a changed row must be saved as a document")
+
+	f = types.SimpleNamespace(flags={"manna_test": True}, session=types.SimpleNamespace(user="Administrator"), response={},
+		form_dict={}, get_all=get_all, get_doc=lambda *a: Doc(a[1]), delete_doc=lambda dt, n, **kw: log["deleted"].append(n),
+		db=types.SimpleNamespace(set_value=set_value), utils=types.SimpleNamespace(cint=lambda v: int(v or 0), now=lambda: "2026-11-11 10:00:00"))
+	site = {"frappe": f}
+	exec(open(os.path.join(HERE, "manna_sap_invoices.py"), encoding="utf-8").read(), site)
+	return f, site["run"], log
+
+
+def test_a_payment_is_saved_as_a_document_so_the_payment_received_script_hears_it():
+	f, run, log = _site({"Manna Treads-9560": stored(paid=0.0, balance=29526.0)})
+	f.form_dict = {"invoices": [row()], "dry_run": 0}
+	run()
+	assert len(log["saved"]) == 1
+	name, changes = log["saved"][0]
+	assert name == "Manna Treads-9560" and changes["paid"] == 10000.46 and changes["balance"] == 19525.54
+	assert f.response["message"]["done"]["updated"] == 1 and f.response["message"]["errors"] == []
+
+
+def test_an_unchanged_row_is_not_saved_so_no_script_runs_for_it():
+	f, run, log = _site({"Manna Treads-9560": stored()})
+	f.form_dict = {"invoices": [row()], "dry_run": 0}
+	run()
+	assert log["saved"] == [] and f.response["message"]["done"]["updated"] == 0
+
+
+def test_a_dry_run_saves_nothing():
+	f, run, log = _site({"Manna Treads-9560": stored(paid=0.0, balance=29526.0)})
+	f.form_dict = {"invoices": [row()], "dry_run": 1}
+	run()
+	assert log["saved"] == [] and f.response["message"]["to_update"] == 1
