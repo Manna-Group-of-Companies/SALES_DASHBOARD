@@ -47,6 +47,15 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
     setState(() => _sending = true);
     // Captured before sending, because sent drafts are deleted on the way.
     final sending = List<PendingOrder>.from(_drafts);
+    // An app opened with no signal must re-confirm its sign-in first, as the
+    // punch queue does: without a CSRF token every draft would be refused by
+    // the server, marked refused, and never sent by itself again.
+    if (!await Api.recoverAfterOfflineStart()) {
+      if (!mounted) return;
+      setState(() => _sending = false);
+      _snack('Still no signal. Saved here.');
+      return;
+    }
     final result =
         await PendingOrders.sendAll(Api.sendPendingOrder, describe: humanError);
 

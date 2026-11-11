@@ -3731,6 +3731,13 @@ class Api {
     required Map<String, dynamic> args,
     Map<String, String> files = const {},
   }) async {
+    // An app opened with no signal has no CSRF token until its sign-in is
+    // re-confirmed; a write before that is refused by the server and would be
+    // lost. Not re-confirmed yet means not really back: keep it.
+    if (Session.I.offlineStart && !await recoverAfterOfflineStart()) {
+      await Outbox.add(kind: kind, label: label, args: args, files: files);
+      return false;
+    }
     final item = OutboxItem(
       id: 'now',
       kind: kind,

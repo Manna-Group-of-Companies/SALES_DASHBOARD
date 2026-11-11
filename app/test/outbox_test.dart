@@ -142,6 +142,23 @@ void main() {
     expect(() => Api.sendOutboxItem(item), throwsA(isA<OutboxRefused>()));
   });
 
+  // Found in review, 11 Nov 2026: an app opened with no signal has no CSRF
+  // token, and a write sent before its sign-in is re-confirmed was refused by
+  // the server and lost. It is kept instead.
+  test('a write before an offline-started sign-in is re-confirmed is kept',
+      () async {
+    Session.I.offlineStart = true;
+    addTearDown(() => Session.I.offlineStart = false);
+    final sent = await Api.sendOrQueue(
+        kind: 'complaint',
+        label: 'Complaint — Drona Tyres',
+        args: {'customer': 'C-1', 'complaint_type': 'Billing', 'description': 'x'});
+    expect(sent, isFalse);
+    final kept = (await Outbox.all()).single;
+    expect(kept.kind, 'complaint');
+    expect(kept.refused, isFalse);
+  });
+
   test('discarding one leaves the rest', () async {
     final a = await _add('Keep');
     final b = await _add('Drop');

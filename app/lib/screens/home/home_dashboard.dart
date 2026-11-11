@@ -639,15 +639,21 @@ class _HomeDashboardState extends State<HomeDashboard>
     // Punches still on the phone go with the sign-out — sent under the next
     // login they would be filed against the wrong person. So the rep is told
     // how many first, and can stay signed in until they have gone.
-    // The same for the rest of the field work kept on the phone (11 Nov 2026).
+    // The same for orders and the rest of the field work kept on the phone
+    // (11 Nov 2026). Orders were wiped on sign-out without a word.
     final waiting = await PendingPunches.count();
+    final orders = await PendingOrders.count();
     final items = await Outbox.count();
-    if ((waiting > 0 || items > 0) && mounted) {
-      final what = [
+    if ((waiting > 0 || orders > 0 || items > 0) && mounted) {
+      final parts = [
         if (waiting > 0) '$waiting punch${waiting == 1 ? '' : 'es'}',
+        if (orders > 0) '$orders order${orders == 1 ? '' : 's'}',
         if (items > 0) '$items other saved item${items == 1 ? '' : 's'}',
-      ].join(' and ');
-      final one = waiting + items == 1;
+      ];
+      final what = parts.length < 2
+          ? parts.join()
+          : '${parts.sublist(0, parts.length - 1).join(', ')} and ${parts.last}';
+      final one = waiting + orders + items == 1;
       final go = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(

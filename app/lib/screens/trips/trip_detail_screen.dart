@@ -1372,6 +1372,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     try {
       all = await Api.getAllSalesPersons();
     } catch (_) {}
+    // The rep may have left the trip while the list loaded.
+    if (!mounted) return;
     final me = Session.I.salesPerson;
     final selected = <String>{..._taggedReps};
     final ok = await showDialog<bool>(
@@ -1535,7 +1537,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                         : () async {
                       final err =
                       await TripTracker.I.start(widget.tripName);
-                      if (!mounted) return;
+                      // This context is the builder's, not the State's.
+                      if (!mounted || !context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                               content:

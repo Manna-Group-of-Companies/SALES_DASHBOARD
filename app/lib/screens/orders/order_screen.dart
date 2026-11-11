@@ -655,6 +655,38 @@ class _OrderScreenState extends State<OrderScreen> {
     final problem = _validate();
     if (problem != null) return _snack(problem);
 
+    final d = _deliveryDate!;
+    final dd = '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
+
+    // Lines waiting for SAP's price: try SAP again first, the signal may be
+    // back. Still none, and the order can only be kept on the phone — never
+    // sent at no price. Done before the customer's promise is asked, so the
+    // credit limit is judged on the priced total, not one missing lines.
+    var keepOnPhone = false;
+    if (_picked.any(_sapPriceLater)) {
+      setState(() => _submitting = true);
+      try {
+        final rates = await Api.getSapRates(widget.party.name,
+            lead: widget.party.isLead);
+        _sapRates = rates;
+        _ratesOffline = false;
+        _applySapRates();
+      } catch (e) {
+        if (!isNetworkFailure(e) || _isEdit) {
+          if (mounted) setState(() => _submitting = false);
+          return _snack(humanError(e));
+        }
+        keepOnPhone = true;
+      }
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      if (!keepOnPhone) {
+        final again = _validate();
+        if (again != null) return _snack(again);
+      }
+    }
+
     // Before anything is sent, so backing out of the dialog leaves the order
     // on screen exactly as the rep built it.
     ({String text, String? due})? commitment;
@@ -663,37 +695,12 @@ class _OrderScreenState extends State<OrderScreen> {
       if (commitment == null || !mounted) return;
     }
 
-    setState(() => _submitting = true);
-
-    final d = _deliveryDate!;
-    final dd = '${d.year}-${d.month.toString().padLeft(2, '0')}-'
-        '${d.day.toString().padLeft(2, '0')}';
-
-    // Lines waiting for SAP's price: try SAP again first, the signal may be
-    // back. Still none, and the order can only be kept on the phone — never
-    // sent at no price.
-    if (_picked.any(_sapPriceLater)) {
-      try {
-        final rates = await Api.getSapRates(widget.party.name,
-            lead: widget.party.isLead);
-        _sapRates = rates;
-        _ratesOffline = false;
-        _applySapRates();
-        if (mounted) setState(() {});
-        final again = _validate();
-        if (again != null) {
-          if (mounted) setState(() => _submitting = false);
-          return _snack(again);
-        }
-      } catch (e) {
-        if (!isNetworkFailure(e) || _isEdit) {
-          if (mounted) setState(() => _submitting = false);
-          return _snack(humanError(e));
-        }
-        await _offerDraft(dd, commitment: commitment);
-        return;
-      }
+    if (keepOnPhone) {
+      await _offerDraft(dd, commitment: commitment);
+      return;
     }
+
+    setState(() => _submitting = true);
 
     try {
       final String name;

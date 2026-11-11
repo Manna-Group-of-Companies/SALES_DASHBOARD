@@ -34,7 +34,7 @@ class MyVisitsScreen extends StatelessWidget {
         ],
       ),
     );
-    if (yes != true) return;
+    if (yes != true || !context.mounted) return;
 
     final messenger = ScaffoldMessenger.of(context);
     try {
