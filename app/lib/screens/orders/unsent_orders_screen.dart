@@ -211,7 +211,12 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
                         fontSize: 15, fontWeight: FontWeight.bold),
                   ),
                 ),
-                Text('₹${d.total.toStringAsFixed(2)}',
+                // Lines kept with no signal have no price until SAP gives one
+                // at send; ₹0.00 read as a free order.
+                Text(
+                    d.sapPending.isEmpty
+                        ? '₹${d.total.toStringAsFixed(2)}'
+                        : 'Price from SAP',
                     style: const TextStyle(
                         fontSize: 15, fontWeight: FontWeight.bold)),
               ],
