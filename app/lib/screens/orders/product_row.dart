@@ -51,6 +51,10 @@ class ProductRow extends StatefulWidget {
   /// before 10 Nov. Everywhere else the rate is SAP's and cannot be typed.
   final bool typedRate;
 
+  /// True when SAP's price could not be read for want of a signal: the line
+  /// can be kept on the phone and takes SAP's price when it is sent.
+  final bool sapPriceLater;
+
   final VoidCallback onChanged;
 
   const ProductRow({
@@ -63,6 +67,7 @@ class ProductRow extends StatefulWidget {
     this.sapRate,
     this.leadOrder = false,
     this.typedRate = false,
+    this.sapPriceLater = false,
   });
 
   @override
@@ -574,7 +579,9 @@ class _ProductRowState extends State<ProductRow> {
     final sap = widget.sapRate;
     final unit = p.category.rateUnit;
     final typed = widget.typedRate && !widget.rateLocked && sap == null;
-    final noPrice = !typed && !widget.rateLocked && sap == null && line.rate <= 0;
+    final later = widget.sapPriceLater && !typed && !widget.rateLocked && sap == null;
+    final noPrice =
+        !typed && !later && !widget.rateLocked && sap == null && line.rate <= 0;
     return TextField(
       controller: _rate,
       readOnly: !typed,
@@ -586,7 +593,9 @@ class _ProductRowState extends State<ProductRow> {
       decoration: InputDecoration(
         labelText: 'Rate per $unit',
         prefixText: 'Rs ',
-        hintText: noPrice ? 'No price in SAP' : null,
+        hintText: noPrice
+            ? 'No price in SAP'
+            : (later ? 'SAP price when sent' : null),
         border: const OutlineInputBorder(),
         isDense: true,
         filled: !typed,
@@ -601,7 +610,9 @@ class _ProductRowState extends State<ProductRow> {
             ? 'Approved by your manager'
             : (sap != null
                 ? (widget.leadOrder ? sap.leadHint(unit) : sap.fixedHint(unit))
-                : null),
+                : (later
+                    ? 'No signal: the price is taken from SAP when it is sent.'
+                    : null)),
         helperMaxLines: 2,
         helperStyle: const TextStyle(fontSize: 11),
       ),

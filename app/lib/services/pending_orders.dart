@@ -12,13 +12,37 @@
 //
 // Drafts belong to the rep who typed them and are cleared on sign-out, so a
 // shared handset never carries one person's orders into another's session.
+//
+// SENT BY ITSELF WHEN THE SIGNAL IS BACK (the user, 11 Nov 2026). They used to
+// wait for the rep to press Send, because an order once booked minimum stock
+// on the phone; nothing has been booked on the phone since 17 Sep 2026 — SAP
+// commits stock, and every order still waits for the manager. So the home
+// screen sends them on the same one-minute retry as punches. A draft the
+// server refuses is not retried by itself: it waits, with the reason, for the
+// rep to send it again or discard it.
+//
+// SAP PRICES WITH NO SIGNAL. A Manna Treads per-kg line takes SAP's price and
+// nothing else (10 Nov 2026), and with no signal there is none to take. Such a
+// line is kept with no price and named in [PendingOrder.sapPending]; SAP's
+// price is put on it when the draft is sent ([PendingOrders.priceFromSap]),
+// and a product SAP still has no price for keeps the draft back, refused.
 
 import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
+import 'package:manna_field_sales/models/sap_rates.dart';
+
+/// A draft the app will not send as it stands, with the sentence to show.
+class OrderRefused implements Exception {
+  final String message;
+  const OrderRefused(this.message);
+  @override
+  String toString() => message;
+}
 
 class PendingOrder {
   /// Local id. Not an order number — this has never reached the server.
@@ -43,6 +67,14 @@ class PendingOrder {
   final String? commitment;
   final String? commitmentDue;
 
+  /// Lines saved with no signal that take SAP's price when sent, by item code:
+  /// `{'f': rate per kg -> line rate factor, 'n': product name}`.
+  final Map<String, Map<String, dynamic>> sapPending;
+
+  /// True when the server (or the app) said no to it, rather than the signal
+  /// failing. Such a draft is not sent again by itself.
+  final bool refused;
+
   const PendingOrder({
     required this.id,
     required this.customer,
@@ -55,6 +87,8 @@ class PendingOrder {
     this.lastError,
     this.commitment,
     this.commitmentDue,
+    this.sapPending = const {},
+    this.refused = false,
   });
 
   double get total => items.fold(
@@ -77,6 +111,8 @@ class PendingOrder {
         if (lastError != null) 'last_error': lastError,
         if (commitment != null) 'commitment': commitment,
         if (commitmentDue != null) 'commitment_due': commitmentDue,
+        if (sapPending.isNotEmpty) 'sap_pending': sapPending,
+        if (refused) 'refused': true,
       };
 
   static PendingOrder? fromJson(dynamic json) {
@@ -95,10 +131,16 @@ class PendingOrder {
       lastError: json['last_error'] as String?,
       commitment: json['commitment'] as String?,
       commitmentDue: json['commitment_due'] as String?,
+      sapPending: {
+        if (json['sap_pending'] is Map)
+          for (final e in (json['sap_pending'] as Map).entries)
+            if (e.value is Map) '${e.key}': Map<String, dynamic>.from(e.value as Map),
+      },
+      refused: json['refused'] == true,
     );
   }
 
-  PendingOrder withError(String? error) => PendingOrder(
+  PendingOrder withError(String? error, {bool refused = false}) => PendingOrder(
         id: id,
         customer: customer,
         customerName: customerName,
@@ -110,6 +152,8 @@ class PendingOrder {
         lastError: error,
         commitment: commitment,
         commitmentDue: commitmentDue,
+        sapPending: sapPending,
+        refused: refused,
       );
 
   static List<Map<String, dynamic>> _rows(dynamic v) => (v as List? ?? [])
@@ -168,6 +212,7 @@ class PendingOrders {
     bool isLead = false,
     String? commitment,
     String? commitmentDue,
+    Map<String, Map<String, dynamic>> sapPending = const {},
   }) async {
     final now = serverNow();
     final existing = await _raw();
@@ -192,10 +237,46 @@ class PendingOrders {
       isLead: isLead,
       commitment: commitment,
       commitmentDue: commitmentDue,
+      sapPending: sapPending,
     );
     await _replaceAll([...existing, draft]);
     return draft;
   }
+
+  /// The draft's lines with SAP's price on every line that waited for one
+  /// ([PendingOrder.sapPending]): the rate per kg, the line rate and the
+  /// amount. Throws [OrderRefused] naming the first product SAP has no price
+  /// for. Lines that did not wait are copied as they are.
+  static List<Map<String, dynamic>> priceFromSap(PendingOrder d, SapRates rates) {
+    final out = <Map<String, dynamic>>[];
+    for (final item in d.items) {
+      final copy = Map<String, dynamic>.from(item);
+      final code = '${item['item_code'] ?? ''}';
+      final wait = d.sapPending[code];
+      if (wait != null) {
+        final r = rates[code];
+        if (r == null) {
+          throw OrderRefused('No price in SAP for ${wait['n'] ?? code}.');
+        }
+        final factor = (wait['f'] as num?)?.toDouble() ?? 1;
+        final qty = (item['qty'] as num?)?.toDouble() ?? 0;
+        final lineRate = r.rate * factor;
+        copy['rate'] = double.parse(lineRate.toStringAsFixed(4));
+        copy['amount'] = double.parse((qty * lineRate).toStringAsFixed(2));
+        copy['custom_rate_per_kg'] = r.rate;
+      }
+      out.add(copy);
+    }
+    return out;
+  }
+
+  /// What [items] come to: quantity times line rate.
+  static double totalOf(List<Map<String, dynamic>> items) => items.fold(
+      0.0,
+      (sum, i) =>
+          sum +
+          ((i['qty'] as num?)?.toDouble() ?? 0) *
+              ((i['rate'] as num?)?.toDouble() ?? 0));
 
   static Future<void> remove(String id) async =>
       _replaceAll((await _raw()).where((o) => o.id != id).toList());
@@ -203,23 +284,40 @@ class PendingOrders {
   /// Wipes every draft on the handset, not just this rep's. Called on sign-out.
   static Future<void> clear() async => (await _prefs).remove(_key);
 
+  static Future<SendResult>? _inFlight;
+
   /// Sends the drafts, oldest first.
   ///
   /// [submit] does the real work and returns the order number. A draft that
   /// sends is deleted; one that fails stays put with the reason attached, so
   /// nothing is lost when the signal drops again mid-batch.
   ///
-  /// Sending stops at the first failure. If the network has gone again, the
-  /// rest will fail the same way, and burning through ten drafts to collect ten
-  /// identical errors only delays telling the rep.
+  /// The signal going stops the run: the rest would fail the same way. A
+  /// refusal does not — it is that one order the server said no to, kept with
+  /// its reason and marked [PendingOrder.refused], and the next is tried.
+  ///
+  /// [auto] is the home screen sending by itself: refused drafts are left for
+  /// the rep, so one the server will not take is not resent every minute.
+  ///
+  /// One run at a time: the home screen's retry and the rep's Send button
+  /// overlapping would send the same order twice.
   static Future<SendResult> sendAll(
       Future<String> Function(PendingOrder draft) submit,
-      {String Function(Object error)? describe}) async {
+      {String Function(Object error)? describe, bool auto = false}) {
+    return _inFlight ??= _sendAll(submit, describe, auto)
+        .whenComplete(() => _inFlight = null);
+  }
+
+  static Future<SendResult> _sendAll(
+      Future<String> Function(PendingOrder draft) submit,
+      String Function(Object error)? describe,
+      bool auto) async {
     final sent = <String>[];
     final failed = <PendingOrder>[];
+    var offline = false;
 
     for (final draft in await all()) {
-      if (failed.isNotEmpty) {
+      if (offline || (auto && draft.refused)) {
         failed.add(draft);
         continue;
       }
@@ -228,12 +326,18 @@ class PendingOrders {
         await remove(draft.id);
       } catch (e) {
         final message = describe != null ? describe(e) : '$e';
-        await _update(draft.withError(message));
-        failed.add(draft.withError(message));
+        offline = isNetworkFailure(e);
+        final kept = draft.withError(message, refused: !offline);
+        await _update(kept);
+        failed.add(kept);
       }
     }
     return SendResult(sent, failed);
   }
+
+  /// Drafts the home screen would send by itself: not refused.
+  static Future<int> autoCount() async =>
+      (await all()).where((d) => !d.refused).length;
 
   // -- storage ---------------------------------------------------------------
 

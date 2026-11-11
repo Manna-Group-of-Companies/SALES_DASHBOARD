@@ -60,6 +60,11 @@ class _OrderScreenState extends State<OrderScreen> {
   /// with one is sold at it, in a locked box. Empty when there are none.
   SapRates _sapRates = SapRates.none;
 
+  /// True when SAP's prices could not be read for want of a signal (11 Nov
+  /// 2026). The order can then only be kept on the phone, and its Manna
+  /// Treads per-kg lines take SAP's price when it is sent.
+  bool _ratesOffline = false;
+
   String _company = '';
   String _q = '';
   DateTime? _deliveryDate;
@@ -213,7 +218,10 @@ class _OrderScreenState extends State<OrderScreen> {
     final Future<SapRates>? sapRates =
         (Session.I.isTreadsUnit && widget.party.name.isNotEmpty)
             ? Api.getSapRates(widget.party.name, lead: widget.party.isLead)
-                .catchError((Object _) => SapRates.none)
+                .catchError((Object e) {
+                if (isNetworkFailure(e)) _ratesOffline = true;
+                return SapRates.none;
+              })
             : null;
     final results = await Future.wait([
       Api.getItems(),
@@ -245,6 +253,14 @@ class _OrderScreenState extends State<OrderScreen> {
   /// Treads per-kg item is SAP's price or nothing.
   bool _typesRate(OrderLine line) =>
       !Session.I.isTreadsUnit || line.product.category.rateUnit != 'kg';
+
+  /// A line whose SAP price could not be read for want of a signal: kept on
+  /// the phone with no price, and priced from SAP when the draft is sent.
+  bool _sapPriceLater(OrderLine line) =>
+      _ratesOffline &&
+      !_typesRate(line) &&
+      _sapRateFor(line) == null &&
+      !_approvedLines.contains(line.product.code);
 
   /// An item with a Manna Treads SAP rate is sold at that rate and nothing
   /// else (the user, 26 Sep 2026: the rep must not edit "the rates that are
@@ -382,7 +398,8 @@ class _OrderScreenState extends State<OrderScreen> {
   String? _validate() {
     if (_picked.isEmpty) return 'Add at least one product.';
     if (_deliveryDate == null) return 'Pick a required delivery date.';
-    final unpriced = _picked.where((l) => l.needsRate).toList();
+    final unpriced =
+        _picked.where((l) => l.needsRate && !_sapPriceLater(l)).toList();
     if (unpriced.isNotEmpty) {
       final l = unpriced.first;
       return _typesRate(l)
@@ -592,7 +609,10 @@ class _OrderScreenState extends State<OrderScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('No signal'),
-        content: const Text('Not sent — no stock held.\n\nKeep it on the phone and send later?',
+        content: Text(
+          'Not sent — no stock held.\n\nKeep it on the phone? It is sent by '
+          'itself when the signal is back.'
+          '${_picked.any(_sapPriceLater) ? '\n\nPrices are taken from SAP when it is sent.' : ''}',
         ),
         actions: [
           TextButton(
@@ -615,9 +635,18 @@ class _OrderScreenState extends State<OrderScreen> {
       isLead: widget.party.isLead,
       commitment: commitment?.text,
       commitmentDue: commitment?.due,
+      sapPending: {
+        for (final l in _picked)
+          if (_sapPriceLater(l))
+            l.product.code: {
+              // Rate per kg -> line rate, as OrderLine.lineRate works it.
+              'f': l.product.rollWeight > 0 ? l.product.rollWeight : 1.0,
+              'n': l.product.name,
+            },
+      },
     );
     if (!mounted) return;
-    _snack('Saved on phone. Send from Unsent Orders.');
+    _snack('Saved on phone. It is sent when the signal is back.');
     await Future.delayed(const Duration(milliseconds: 600));
     if (mounted) Navigator.pop(context, true);
   }
@@ -639,6 +668,32 @@ class _OrderScreenState extends State<OrderScreen> {
     final d = _deliveryDate!;
     final dd = '${d.year}-${d.month.toString().padLeft(2, '0')}-'
         '${d.day.toString().padLeft(2, '0')}';
+
+    // Lines waiting for SAP's price: try SAP again first, the signal may be
+    // back. Still none, and the order can only be kept on the phone — never
+    // sent at no price.
+    if (_picked.any(_sapPriceLater)) {
+      try {
+        final rates = await Api.getSapRates(widget.party.name,
+            lead: widget.party.isLead);
+        _sapRates = rates;
+        _ratesOffline = false;
+        _applySapRates();
+        if (mounted) setState(() {});
+        final again = _validate();
+        if (again != null) {
+          if (mounted) setState(() => _submitting = false);
+          return _snack(again);
+        }
+      } catch (e) {
+        if (!isNetworkFailure(e) || _isEdit) {
+          if (mounted) setState(() => _submitting = false);
+          return _snack(humanError(e));
+        }
+        await _offerDraft(dd, commitment: commitment);
+        return;
+      }
+    }
 
     try {
       final String name;
@@ -928,6 +983,7 @@ class _OrderScreenState extends State<OrderScreen> {
                         sapRate: _sapRateFor(line),
                         leadOrder: _sapRates.listOnly,
                         typedRate: _typesRate(line),
+                        sapPriceLater: _sapPriceLater(line),
                         onChanged: () => setState(() {}),
                       ),
                   ],
@@ -947,6 +1003,7 @@ class _OrderScreenState extends State<OrderScreen> {
                         sapRate: _sapRateFor(line),
                         leadOrder: _sapRates.listOnly,
                         typedRate: _typesRate(line),
+                        sapPriceLater: _sapPriceLater(line),
                         onChanged: () => setState(() {}),
                       ),
                   ],

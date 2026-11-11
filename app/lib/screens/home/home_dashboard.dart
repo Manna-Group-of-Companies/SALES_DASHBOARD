@@ -160,6 +160,9 @@ class _HomeDashboardState extends State<HomeDashboard>
     }
     // Route points too: the same signal, the same moment.
     unawaited(TripTracker.I.flushPending());
+    // And orders kept on the phone (11 Nov 2026). Not awaited before the
+    // punches: a slow order send must not hold a punch back.
+    unawaited(_syncOrders());
     if (await PendingPunches.count() == 0) return;
     final r = await PendingPunches.flush(Api.sendPendingPunch,
         describe: humanError);
@@ -172,6 +175,32 @@ class _HomeDashboardState extends State<HomeDashboard>
           ? 'Sent ${r.sent} saved punch${r.sent == 1 ? '' : 'es'} ✓'
           : 'Sent ${r.sent}; ${r.failed.length} could not be sent — '
               'see Unsent Punches.');
+    }
+  }
+
+  /// Sends the orders kept on the phone, by itself, once there is a signal
+  /// (11 Nov 2026). Refused ones are left for the rep on Unsent Orders.
+  Future<void> _syncOrders() async {
+    if (await PendingOrders.autoCount() == 0) return;
+    // Told once, when a draft is refused, not every minute after.
+    final refusedBefore = {
+      for (final d in await PendingOrders.all())
+        if (d.refused) d.id
+    };
+    final r = await PendingOrders.sendAll(Api.sendPendingOrder,
+        describe: humanError, auto: true);
+    if (!mounted) return;
+    await _loadUnsent();
+    if (!mounted) return;
+    final refused =
+        r.failed.where((d) => d.refused && !refusedBefore.contains(d.id)).length;
+    if (r.sent.isNotEmpty) {
+      _snack(refused == 0
+          ? 'Sent ${r.sent.length} saved order${r.sent.length == 1 ? '' : 's'} ✓'
+          : 'Sent ${r.sent.length}; $refused could not be sent — '
+              'see Unsent Orders.');
+    } else if (refused > 0) {
+      _snack('A saved order could not be sent — see Unsent Orders.');
     }
   }
 
@@ -201,6 +230,7 @@ class _HomeDashboardState extends State<HomeDashboard>
       // usually still on that screen when the signal comes back.
       if (Session.I.offlineStart ||
           await PendingPunches.count() > 0 ||
+          await PendingOrders.autoCount() > 0 ||
           await TripTracker.I.pendingCount() > 0) {
         unawaited(_syncPunches());
       }

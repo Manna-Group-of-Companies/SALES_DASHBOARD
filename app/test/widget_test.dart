@@ -174,6 +174,25 @@ void main() {
     expect(find.text('Enter a rate'), findsNothing);
   });
 
+  // 11 Nov 2026: with no signal there is no SAP price to read, and "No price
+  // in SAP" stopped a Manna Treads rep keeping any order on the phone.
+  testWidgets('with no signal the line waits for the SAP price, not refused',
+      (tester) async {
+    final line = OrderLine(product: _pctr());
+    line.rolls = 2;
+    await tester.pumpWidget(_host(ProductRow(
+      line: line,
+      stock: null,
+      sapPriceLater: true,
+      onChanged: () {},
+    )));
+    final rate = tester.widget<TextField>(find.byWidgetPredicate(
+        (w) => w is TextField && (w.decoration?.labelText ?? '').startsWith('Rate per')));
+    expect(rate.readOnly, isTrue);
+    expect(find.text('SAP price when sent'), findsOneWidget);
+    expect(find.text('No price in SAP'), findsNothing);
+  });
+
   testWidgets('an SAP price stays locked even where typing is allowed',
       (tester) async {
     final line = OrderLine(product: _pctr(), rate: 200);

@@ -3682,6 +3682,38 @@ class Api {
     return mins;
   }
 
+  /// Sends one order from the phone's queue and returns its number. The sender
+  /// behind [PendingOrders.sendAll], for the home screen's automatic send and
+  /// the Unsent Orders button alike.
+  ///
+  /// Lines saved with no signal take SAP's price now ([PendingOrders.
+  /// priceFromSap]); a product SAP has no price for refuses the draft. A lost
+  /// signal on the way propagates as a network failure, and the draft waits.
+  static Future<String> sendPendingOrder(PendingOrder draft) async {
+    var items = draft.items;
+    if (draft.sapPending.isNotEmpty) {
+      final rates = await getSapRates(draft.customer, lead: draft.isLead);
+      items = PendingOrders.priceFromSap(draft, rates);
+    }
+    if (draft.isLead) {
+      return placeLeadOrder(
+        lead: draft.customer,
+        items: items,
+        deliveryDate: draft.deliveryDate,
+        total: PendingOrders.totalOf(items),
+      );
+    }
+    final company = await getCompany();
+    return placeOrder(
+      customer: draft.customer,
+      company: company,
+      items: items,
+      deliveryDate: draft.deliveryDate,
+      commitment: draft.commitment,
+      commitmentDue: draft.commitmentDue,
+    );
+  }
+
   /// Sends one punch from the phone's queue and returns the document it
   /// created or closed. The sender behind [PendingPunches.flush].
   ///

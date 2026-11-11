@@ -47,28 +47,8 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
     setState(() => _sending = true);
     // Captured before sending, because sent drafts are deleted on the way.
     final sending = List<PendingOrder>.from(_drafts);
-    final result = await PendingOrders.sendAll(
-      (draft) async {
-        if (draft.isLead) {
-          return Api.placeLeadOrder(
-            lead: draft.customer,
-            items: draft.items,
-            deliveryDate: draft.deliveryDate,
-            total: draft.total,
-          );
-        }
-        final company = await Api.getCompany();
-        return Api.placeOrder(
-          customer: draft.customer,
-          company: company,
-          items: draft.items,
-          deliveryDate: draft.deliveryDate,
-          commitment: draft.commitment,
-          commitmentDue: draft.commitmentDue,
-        );
-      },
-      describe: humanError,
-    );
+    final result =
+        await PendingOrders.sendAll(Api.sendPendingOrder, describe: humanError);
 
     if (!mounted) return;
     setState(() => _sending = false);
@@ -196,7 +176,8 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
             Icon(Icons.info_outline, size: 20, color: Color(0xFFB35309)),
             SizedBox(width: 10),
             Expanded(
-              child: Text('Not sent yet. No stock held.',
+              child: Text('Not sent yet. No stock held. Sent by itself when '
+                'there is signal.',
                 style: TextStyle(fontSize: 12.5, height: 1.4),
               ),
             ),
@@ -247,7 +228,10 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
                   color: const Color(0xFFFFEBEE),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Text('Last try: ${d.lastError}',
+                // A refused draft is not resent by itself; the rep decides.
+                child: Text(
+                    'Last try: ${d.lastError}'
+                    '${d.refused ? '\nNot sent by itself: press Send to try again, or discard it.' : ''}',
                     style: const TextStyle(fontSize: 12, height: 1.35)),
               ),
             ],
