@@ -114,7 +114,7 @@ Then add rows to `@MANNA_IC` (Code = Name = the setting) under
 | `ENABLED` | `N` until it is tested | | `ENABLED` | `N` |
 | `START_DATE` | the first day, `yyyy-mm-dd` | | `CUSTOMER` | `10118` |
 | `MARGIN` | `20` | | `SO_SERIES` | `179` |
-| `VENDOR` | `S-1010` | | `SO_WHS` | `07` |
+| `VENDOR` | `S-1010` | | `SO_WHS` | `01` |
 | `PO_SERIES` | `199` | | `HOME_STATE` | `KL` |
 | `PO_BRANCH` | `1` | | `TAX_IN_STATE` | `CG+SG@18` |
 | `PO_WHS` | `01` | | `TAX_OUT_STATE` | `IGST@18` |
