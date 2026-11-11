@@ -12,7 +12,9 @@
 #   - a row is '<company>-<DocEntry>' (DocNum restarts every financial year);
 #   - status is SAP's document status (O -> Open, C -> Closed), never worked out
 #     from the balance; balance = total - paid, from the rounded figures;
-#   - only changed fields are written; an unchanged row is not touched;
+#   - only changed fields are written; an unchanged row is not touched; a
+#     changed row is SAVED AS A DOCUMENT, so a Server Script on SAP Invoice
+#     (After Save - the "payment received" message) hears it;
 #   - a row whose invoice is no longer in the batch is deleted (SAP cancelled it,
 #     or it closed and is older than the year) - but a batch that would delete
 #     more than half of a mirror of 20 or more rows deletes nothing: an empty or
@@ -127,8 +129,22 @@ def run():
 			except Exception as e:
 				errors.append("%s: %s" % (rec["sap_key"], e))
 		for u in p["update"]:
-			frappe.db.set_value("SAP Invoice", u["name"], dict(u["fields"], sap_last_synced=stamp))
-			done["updated"] = done["updated"] + 1
+			# Saved as a document, never db.set_value (11 Nov 2026): the "payment
+			# received" message is a Server Script on SAP Invoice, After Save, that
+			# compares `paid` with the row before the save
+			# (whatsapp/server-scripts/manna_whatsapp_payment.py), and set_value
+			# raises no such event. This mirror and B1if's invoice events
+			# (Z.erpinv -> manna_sap_invoice_sync) both write a payment; when this
+			# one got there first by set_value, the event's save found nothing
+			# changed and the customer was never told. Whichever writes first now
+			# raises it, and that script's own key stops a second message.
+			try:
+				d = frappe.get_doc("SAP Invoice", u["name"])
+				d.update(dict(u["fields"], sap_last_synced=stamp))
+				d.save(ignore_permissions=True)
+				done["updated"] = done["updated"] + 1
+			except Exception as e:
+				errors.append("%s: %s" % (u["name"], e))
 		for name in p["delete"]:
 			try:
 				frappe.delete_doc("SAP Invoice", name, ignore_permissions=True)
