@@ -1,0 +1,14 @@
+{
+  "about": "HR's assistant (11 Nov 2026): a login that sees only HR's Monthly Calendar, Odometer Check, Trips & Routes, Monthly Expenses and Range Summary, and the Item Requests read-only. Ticked by hand on the User in Desk, like Is HR Manager. Create this field BEFORE installing the item_request.py that reads it: a Server Script asking for a column the site lacks fails for everyone. The login also needs the same ERPNext roles as the HR Manager login, so it can read what those pages show.",
+  "custom_fields": [
+    {
+      "doctype": "Custom Field",
+      "dt": "User",
+      "fieldname": "custom_is_hr_assistant",
+      "label": "Is HR Assistant",
+      "fieldtype": "Check",
+      "insert_after": "custom_is_hr_manager",
+      "default": "0"
+    }
+  ]
+}

@@ -697,6 +697,7 @@ async function fetchCurrentUser(): Promise<User> {
   else if (isSet(u[USER_FIELD.isAccountant])) role = 'accountant';
   else if (isSet(u[USER_FIELD.isGeneralManager])) role = 'general_manager';
   else if (isSet(u[USER_FIELD.isHr])) role = 'hr';
+  else if (isSet(u[USER_FIELD.isHrAssistant])) role = 'hr_assistant';
   else if (isSet(u[USER_FIELD.isStockManager])) role = 'stock_manager';
   else if (isSet(u[USER_FIELD.isProductionManager])) role = 'production_manager';
   else if (managedTeam || managesTeam) role = 'sales_manager';

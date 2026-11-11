@@ -238,6 +238,7 @@ export function roleCanSee(order: Order, role: Role): boolean {
     case 'stock_manager':
       return false;
     case 'hr':
+    case 'hr_assistant':
       // HR has no business in the order book — people data only.
       return false;
     case 'managing_director':

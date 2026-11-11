@@ -1029,6 +1029,11 @@ export const USER_FIELD = {
   /** Created 26 Sep 2026, for Jineesh. `manna_mt_so_request` admits it too. */
   isAccountant: 'custom_is_accountant',
   isHr: 'custom_is_hr_manager',
+  /**
+   * 11 Nov 2026: HR's calendar, odometer, trips and expense pages and the
+   * item requests, nothing else. A Check on User; must be created on the site.
+   */
+  isHrAssistant: 'custom_is_hr_assistant',
   isProductionManager: 'custom_is_production_manager',
 
   /** Not on the site yet — the Stock Manager role cannot resolve until it is. */
