@@ -4738,7 +4738,15 @@ try {
                                     }
                                     if ($link.Complete) { $script:Result.pkLinked++ }
                                     elseif (Test-B1ifLate -Since "$($row.sap_synced_on)" -Now (Get-Date) -Minutes $flow.B1ifWait) {
-                                        Write-PkRefusal -Name $pn -Message ("B1if has not made the invoice, goods receipt and delivery for Hi-Tech pick list {0} in {1} minutes - see B1if's message log, and @MANNA_IC in both companies." -f $row.sap_pick_list, $flow.B1ifWait) -When $pkNow -IsDryRun ([bool]$DryRun)
+                                        # Said, never written on the list (11 Nov 2026). Since 9 Nov B1if makes
+                                        # the documents only once Hi-Tech's store has ticked Confirmed on the
+                                        # SAP pick list, which can be hours after it was sent. Writing a refusal
+                                        # here took the list out of this pass for good (it reads only lists with
+                                        # no sap_sync_error), so a list confirmed after the wait was never given
+                                        # its invoice, goods receipt and delivery, and the phone never showed it
+                                        # picked. Found on PICK-00428, 34 minutes unconfirmed.
+                                        Write-Log INFO ("PASS K {0}: Hi-Tech pick list {1} has no invoice, goods receipt and delivery yet after {2} minutes - waiting for the store to confirm it in SAP (or see B1if's message log)." -f $pn, $row.sap_pick_list, $flow.B1ifWait)
+                                        $script:Result.pkWaiting++
                                     } else {
                                         Write-Log INFO ("PASS K {0}: waiting for B1if's documents for Hi-Tech pick list {1}." -f $pn, $row.sap_pick_list)
                                         $script:Result.pkWaiting++
