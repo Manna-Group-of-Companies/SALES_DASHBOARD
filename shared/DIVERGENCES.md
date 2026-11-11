@@ -1111,6 +1111,13 @@ dealer's special price, else Price List 01), shown read-only. An item SAP has
 no rate for cannot be ordered ("No price in SAP") until the office prices it
 in SAP. Done on the phone (`app/lib/screens/orders/product_row.dart`).
 
+**Typed where the phone has no SAP price at all (the user, 11 Nov 2026).**
+The SAP rate exists only for a Manna Treads party and an item priced per kg.
+So a rep of another unit (Retreads, UAE) and any item not priced per kg
+(solution, per can) types the rate again, never prefilled; without that they
+could not order anything. A Manna Treads per-kg item is still SAP's price or
+nothing (`_typesRate` in `order_screen.dart`, `ProductRow.typedRate`).
+
 **The dashboard has not followed yet.** Its order form
 (`client/src/features/orders/ProductRow.tsx`, used by `TakeOrderPage`) still
 has a typed rate box and does not call `manna_customer_rates` at all; it never

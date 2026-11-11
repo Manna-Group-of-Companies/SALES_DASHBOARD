@@ -239,6 +239,13 @@ class _OrderScreenState extends State<OrderScreen> {
   SapRate? _sapRateFor(OrderLine line) =>
       line.product.category.rateUnit == 'kg' ? _sapRates[line.product.code] : null;
 
+  /// Where the phone has no SAP price to offer, the rep types the rate (the
+  /// user, 11 Nov 2026): reps of another unit, whose parties have no Manna
+  /// Treads price, and items not priced per kg (solution, per can). A Manna
+  /// Treads per-kg item is SAP's price or nothing.
+  bool _typesRate(OrderLine line) =>
+      !Session.I.isTreadsUnit || line.product.category.rateUnit != 'kg';
+
   /// An item with a Manna Treads SAP rate is sold at that rate and nothing
   /// else (the user, 26 Sep 2026: the rep must not edit "the rates that are
   /// there in the list or are there from special rate of the business
@@ -377,7 +384,10 @@ class _OrderScreenState extends State<OrderScreen> {
     if (_deliveryDate == null) return 'Pick a required delivery date.';
     final unpriced = _picked.where((l) => l.needsRate).toList();
     if (unpriced.isNotEmpty) {
-      return 'No price in SAP for ${unpriced.first.product.name}.';
+      final l = unpriced.first;
+      return _typesRate(l)
+          ? 'Enter a rate for ${l.product.name}.'
+          : 'No price in SAP for ${l.product.name}.';
     }
     final broken = _picked.where((l) => l.product.isMisconfigured).toList();
     if (broken.isNotEmpty) {
@@ -917,6 +927,7 @@ class _OrderScreenState extends State<OrderScreen> {
                         rateLocked: _approvedLines.contains(line.product.code),
                         sapRate: _sapRateFor(line),
                         leadOrder: _sapRates.listOnly,
+                        typedRate: _typesRate(line),
                         onChanged: () => setState(() {}),
                       ),
                   ],
@@ -935,6 +946,7 @@ class _OrderScreenState extends State<OrderScreen> {
                         rateLocked: _approvedLines.contains(line.product.code),
                         sapRate: _sapRateFor(line),
                         leadOrder: _sapRates.listOnly,
+                        typedRate: _typesRate(line),
                         onChanged: () => setState(() {}),
                       ),
                   ],

@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
+import 'package:manna_field_sales/models/sap_rates.dart';
 import 'package:manna_field_sales/screens/orders/product_row.dart';
 
 Widget _host(Widget child) =>
@@ -144,6 +145,49 @@ void main() {
         (w) => w is TextField && (w.decoration?.labelText ?? '').startsWith('Rate per')));
     expect(rate.readOnly, isTrue);
     expect(find.text('No price in SAP'), findsWidgets);
+  });
+
+  // 11 Nov 2026: Retreads and UAE reps, and per-can items, have no SAP price
+  // on the phone at all; with the box locked they could not order anything.
+  testWidgets('where the phone has no SAP price, the rep types the rate',
+      (tester) async {
+    final line = OrderLine(product: _pctr());
+    line.rolls = 2;
+    // Rebuilt on every change, as the order screen does.
+    await tester.pumpWidget(_host(StatefulBuilder(
+      builder: (_, setState) => ProductRow(
+        line: line,
+        stock: null,
+        typedRate: true,
+        onChanged: () => setState(() {}),
+      ),
+    )));
+    final box = find.byWidgetPredicate(
+        (w) => w is TextField && (w.decoration?.labelText ?? '').startsWith('Rate per'));
+    expect(tester.widget<TextField>(box).readOnly, isFalse);
+    expect(find.text('Enter a rate'), findsOneWidget);
+    expect(find.text('No price in SAP'), findsNothing);
+
+    await tester.enterText(box, '212.5');
+    await tester.pump();
+    expect(line.rate, 212.5);
+    expect(find.text('Enter a rate'), findsNothing);
+  });
+
+  testWidgets('an SAP price stays locked even where typing is allowed',
+      (tester) async {
+    final line = OrderLine(product: _pctr(), rate: 200);
+    line.rolls = 1;
+    await tester.pumpWidget(_host(ProductRow(
+      line: line,
+      stock: null,
+      typedRate: true,
+      sapRate: const SapRate(rate: 200, source: 'list', list: 200),
+      onChanged: () {},
+    )));
+    final rate = tester.widget<TextField>(find.byWidgetPredicate(
+        (w) => w is TextField && (w.decoration?.labelText ?? '').startsWith('Rate per')));
+    expect(rate.readOnly, isTrue);
   });
 
   testWidgets('tapping + adds a roll and reports the derived weight',

@@ -45,6 +45,12 @@ class ProductRow extends StatefulWidget {
   /// only what the line under the box says.
   final bool leadOrder;
 
+  /// True where the phone has no SAP price to give (the user, 11 Nov 2026): a
+  /// rep of a unit other than Manna Treads, whose parties have no Manna Treads
+  /// price, or an item not priced per kg. The rep types the rate there, as
+  /// before 10 Nov. Everywhere else the rate is SAP's and cannot be typed.
+  final bool typedRate;
+
   final VoidCallback onChanged;
 
   const ProductRow({
@@ -56,6 +62,7 @@ class ProductRow extends StatefulWidget {
     this.rateLocked = false,
     this.sapRate,
     this.leadOrder = false,
+    this.typedRate = false,
   });
 
   @override
@@ -558,25 +565,38 @@ class _ProductRowState extends State<ProductRow> {
   /// Treads' SAP rate for this customer and cannot be edited. An item SAP has
   /// no rate for cannot be ordered until the office prices it in SAP. Once the
   /// manager has approved the order it stays shown, read-only.
+  ///
+  /// Except where the phone has no SAP price to give at all ([typedRate],
+  /// 11 Nov 2026): there the rep types it, never prefilled — field pricing is
+  /// negotiated per customer, and a prefilled number is one a tired rep will
+  /// accept.
   Widget _rateField() {
     final sap = widget.sapRate;
     final unit = p.category.rateUnit;
-    final noPrice = !widget.rateLocked && sap == null && line.rate <= 0;
+    final typed = widget.typedRate && !widget.rateLocked && sap == null;
+    final noPrice = !typed && !widget.rateLocked && sap == null && line.rate <= 0;
     return TextField(
       controller: _rate,
-      readOnly: true,
-      enableInteractiveSelection: false,
+      readOnly: !typed,
+      enableInteractiveSelection: typed,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: [
+        FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))
+      ],
       decoration: InputDecoration(
         labelText: 'Rate per $unit',
         prefixText: 'Rs ',
         hintText: noPrice ? 'No price in SAP' : null,
         border: const OutlineInputBorder(),
         isDense: true,
-        filled: true,
+        filled: !typed,
         fillColor: const Color(0xFFF0F0F0),
-        suffixIcon:
-            const Icon(Icons.lock_outline, size: 16, color: Colors.black45),
-        errorText: noPrice && !line.isEmpty ? 'No price in SAP' : null,
+        suffixIcon: typed
+            ? null
+            : const Icon(Icons.lock_outline, size: 16, color: Colors.black45),
+        errorText: typed
+            ? (line.needsRate ? 'Enter a rate' : null)
+            : (noPrice && !line.isEmpty ? 'No price in SAP' : null),
         helperText: widget.rateLocked
             ? 'Approved by your manager'
             : (sap != null
@@ -585,6 +605,12 @@ class _ProductRowState extends State<ProductRow> {
         helperMaxLines: 2,
         helperStyle: const TextStyle(fontSize: 11),
       ),
+      onChanged: typed
+          ? (v) {
+              line.rate = double.tryParse(v) ?? 0;
+              widget.onChanged();
+            }
+          : null,
     );
   }
 
