@@ -108,7 +108,12 @@ WHERE H.NumAtCard LIKE N'SAL-ORD-%'
 	AND ISNULL(L.ItemCode, '') &lt;&gt; ''
 ORDER BY H.NumAtCard, L.LineNum"""
 
-# id, step, sender, trigger (B1 object for an event; None = timer), endpoint, JSON list key,
+def every(n, first):
+	"""Minutes of the hour: every n, starting at `first` - "1,6,11,...,56"."""
+	return ",".join(str(m) for m in range(first, 60, n))
+
+
+# id, step, sender, trigger (B1 object for an event; None = timer, with cron = (minute, hour)), endpoint, JSON list key,
 # columns, SQL, the event key's column (event packages), extra JSON members, description
 PACKAGES = [
 	dict(pkg="Z.erpcust", step="Z.erpcustbp", sys=MANNA_TEST, obj="2", endpoint="manna_sap_customers", key="customers",
@@ -117,12 +122,12 @@ PACKAGES = [
 	dict(pkg="Z.erpitem", step="Z.erpitemit", sys=MANNA_TEST, obj="4", endpoint="manna_sap_items", key="items",
 		cols=["code", "name", "active", "uom", "hsn"], sql=ITEMS_SQL,
 		keycol="I.ItemCode", extra='"kind":"items",', desc="Manna Treads item add/update -> ERPNext Item, shared codes only (manna_sap_items)"),
-	dict(pkg="Z.erpstock", step="Z.erpstockht", sys=HITECH_TEST, obj=None, endpoint="manna_sap_stock", key="stock",
+	dict(pkg="Z.erpstock", step="Z.erpstockht", cron=(every(5, 0), "*"), sys=HITECH_TEST, obj=None, endpoint="manna_sap_stock", key="stock",
 		cols=["code", "qty"], sql=STOCK_SQL, keycol=None, extra='"kind":"stock",', desc="Hi-Tech 01 STORE available to promise -> ERPNext Finished Goods - MT (manna_sap_stock), timer"),
-	dict(pkg="Z.erpstatht", step="Z.erpstathtso", sys=HITECH_TEST, obj=None, endpoint="manna_sap_status", key="lines",
+	dict(pkg="Z.erpstatht", step="Z.erpstathtso", cron=(every(5, 1), "*"), sys=HITECH_TEST, obj=None, endpoint="manna_sap_status", key="lines",
 		cols=["order", "item", "stage"], sql=STATUS_HT_SQL, keycol=None, extra='"kind":"status","source":"hitech",',
 		desc="Hi-Tech SO lines (In SAP / Picked / Cancelled) -> ERPNext order status (manna_sap_status), timer"),
-	dict(pkg="Z.erpstatmt", step="Z.erpstatmtso", sys=MANNA_TEST, obj=None, endpoint="manna_sap_status", key="lines",
+	dict(pkg="Z.erpstatmt", step="Z.erpstatmtso", cron=(every(5, 2), "*"), sys=MANNA_TEST, obj=None, endpoint="manna_sap_status", key="lines",
 		cols=["order", "item", "stage"], sql=STATUS_MT_SQL, keycol=None, extra='"kind":"status","source":"manna",',
 		desc="Manna Treads invoiced SO lines (Dispatched) -> ERPNext order status (manna_sap_status), timer"),
 ]
@@ -152,11 +157,22 @@ HEAD = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+# When SAP read the batch, in UTC, on every row (11 Nov 2026). atom3 puts the
+# first row's into the body as "sent_at" and ERPNext ignores a whole-state batch
+# older than ten minutes (manna_sap_in, MAX_AGE): B1if keeps every message it
+# could not deliver and sends them all once ERPNext answers again, and an old
+# shelf or an old set of order stages must not be written over a newer one. On
+# the rows because Call SQL returns nothing but rows; UTC so that neither
+# server's time zone matters. A result with no rows carries no time, and
+# ERPNext lets that through.
+SENT_AT = ", CONVERT(varchar(19), GETUTCDATE(), 120) AS [sent_at]"
+
+
 def clean_select(cols):
 	"""The outer SELECT put round every statement: each column as text with tab,
 	CR and LF turned into a space - in SQL, where no stylesheet can spoil it."""
 	return "SELECT " + ", ".join(
-		"REPLACE(REPLACE(REPLACE(CAST(Q.[%s] AS nvarchar(4000)), CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' ') AS [%s]" % (c, c) for c in cols) + " FROM ("
+		"REPLACE(REPLACE(REPLACE(CAST(Q.[%s] AS nvarchar(4000)), CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' ') AS [%s]" % (c, c) for c in cols) + SENT_AT + " FROM ("
 
 
 def inner_sql(sql):
@@ -224,7 +240,7 @@ def json_xsl(p):
 			<ContentType>application/json</ContentType>
 			<Count><xsl:value-of select="count($rows)"/></Count>
 			<Body>
-				<xsl:text>{%(extra)s"dry_run":</xsl:text><xsl:value-of select="$dryRun"/><xsl:text>,"%(key)s":[</xsl:text>
+				<xsl:text>{%(extra)s"sent_at":"</xsl:text><xsl:value-of select="normalize-space($rows[1]/*[local-name()='sent_at'])"/><xsl:text>","dry_run":</xsl:text><xsl:value-of select="$dryRun"/><xsl:text>,"%(key)s":[</xsl:text>
 				<xsl:for-each select="$rows">
 				<xsl:if test="position() &gt; 1"><xsl:text>,</xsl:text></xsl:if>
 				<xsl:text>{</xsl:text>
@@ -308,8 +324,7 @@ def vbiu(p):
 	# Two inbound channels, each copied from a step B1if itself exported: the B1
 	# event (Z.erpcust, 10 Nov 2026) and the timer (Z.erpstock after its Inbound
 	# was switched in Step Design, 10 Nov 2026 - INB_AY_TIMR_ASYN_BIU, whose
-	# <obj> is the step's own id). A timer step's schedule is not in the package:
-	# it is set in Setup (the clock).
+	# <obj> is the step's own id).
 	head = ('<?xml version="1.0" encoding="UTF-8"?><vBIU xmlns:bfa="urn:com.sap.b1i.bizprocessor:bizatoms" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
 		'xmlns="urn:com.sap.b1i.vplatform:entity" xsi:schemaLocation="urn:com.sap.b1i.vplatform:entity ../../com.sap.b1i.vplatform.repository/xsd/vPlatform.xsd" '
 		'Id="%s" version="1.0.0" proc="" SId="%s" internal="false" parallel="false" mlogexcl="false" b1isncompmode="false" b1autocommit="false" bi1fver="">') % (p["step"], p["pkg"])
@@ -321,8 +336,14 @@ def vbiu(p):
 		channel = ('<Channel Id="INB_B1_EVNT_ASYN_EVT"><type>SAP Business One</type><mode>Asynchronous</mode><trigger>B1Event</trigger>'
 			'<obj>%s</obj><ident>B1 Event</ident><idpar>n.a.</idpar><idns></idns></Channel>') % p["obj"]
 		return head + "<Inbound>" + rest + channel + "</Inbound>" + tail
+	# The schedule rides in the channel, where B1if's export of Z.mannaicpk (10 Nov
+	# 2026) holds its own - <Scheduler min="*" hour="*" .../> after <idns> - so an
+	# import does not leave a step waiting for somebody to set ten clocks again.
+	# Setup's clock still shows it and can change it.
+	minute, hour = p["cron"]
 	channel = ('<Channel Id="INB_AY_TIMR_ASYN_BIU"><type>Void</type><mode>Asynchronous</mode><trigger>Timer</trigger>'
-		'<obj>%s</obj><ident>Void</ident><idpar>n.a.</idpar><idns></idns></Channel>') % p["step"]
+		'<obj>%s</obj><ident>Void</ident><idpar>n.a.</idpar><idns></idns>'
+		'<Scheduler min="%s" hour="%s" day="*" month="*" dow="*" year="*"></Scheduler></Channel>') % (p["step"], minute, hour)
 	return head + "<Inbound>" + channel + rest + "</Inbound>" + tail
 
 

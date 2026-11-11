@@ -15,8 +15,9 @@
 # Steps are made exactly as build_packages.py makes them (same atoms, same HTTP
 # call); the SQL is read from ../<sync>/*.sql - comment lines dropped, because
 # Call SQL picks how to run a statement by its first word - so the file that was
-# run on the local copies is the text B1if runs. A timer step has no sender and
-# its schedule is set in Setup (the clock); see SETUP.md.
+# run on the local copies is the text B1if runs. A timer step has no sender; its
+# schedule (cron, below - the ones entered in Setup on 10 Nov 2026) rides in the
+# step's channel and can still be changed in Setup (the clock); see SETUP.md.
 import json, os, zipfile
 from xml.sax.saxutils import escape
 import build_packages as bp
@@ -34,19 +35,19 @@ def sql_from(rel):
 
 
 STEPS = [
-	dict(step="Z.erpcustall", sys=MT, db="mt", key="customers", extra='"kind":"customers",', sql=bp.CUSTOMERS_SQL, when="nightly 01:10",
+	dict(step="Z.erpcustall", sys=MT, db="mt", key="customers", extra='"kind":"customers",', sql=bp.CUSTOMERS_SQL, when="nightly 01:10", cron=("10", "1"),
 		cols=["code", "name", "active", "sales_employee", "phone", "address", "state", "gstin"]),
-	dict(step="Z.erpitemall", sys=MT, db="mt", key="items", extra='"kind":"items",', sql=bp.ITEMS_SQL, when="nightly 01:20",
+	dict(step="Z.erpitemall", sys=MT, db="mt", key="items", extra='"kind":"items",', sql=bp.ITEMS_SQL, when="nightly 01:20", cron=("20", "1"),
 		cols=["code", "name", "active", "uom", "hsn"]),
-	dict(step="Z.erpweight", sys=HT, db="ht", key="weights", extra='"kind":"weights",', sql=sql_from("weights/weights.sql"), when="minutes 8,38",
+	dict(step="Z.erpweight", sys=HT, db="ht", key="weights", extra='"kind":"weights",', sql=sql_from("weights/weights.sql"), when="minutes 14,44", cron=("14,44", "*"),
 		cols=["code", "wpr", "bpr"]),
-	dict(step="Z.erpcredit", sys=MT, db="mt", key="credit", extra='"kind":"credit",', sql=sql_from("credit/credit.sql"), when="minutes 3,18,33,48",
+	dict(step="Z.erpcredit", sys=MT, db="mt", key="credit", extra='"kind":"credit",', sql=sql_from("credit/credit.sql"), when="minutes 4,19,34,49", cron=(bp.every(15, 4), "*"),
 		cols=["code", "limit", "balance", "terms_code", "terms", "b1", "b2", "b3", "b4", "od_amt", "od_days"]),
-	dict(step="Z.erpinv", sys=MT, db="mt", key="invoices", extra='"kind":"invoices",', sql=sql_from("invoices/invoices.sql"), when="minutes 4,19,34,49",
+	dict(step="Z.erpinv", sys=MT, db="mt", key="invoices", extra='"kind":"invoices",', sql=sql_from("invoices/invoices.sql"), when="minutes 9,24,39,54", cron=(bp.every(15, 9), "*"),
 		cols=["entry", "num", "code", "date", "due", "total", "paid", "status"]),
-	dict(step="Z.erppay", sys=MT, db="mt", key="payments", extra='"kind":"payments",', sql=sql_from("payments/payments.sql"), when="minutes 2,7,...,57",
+	dict(step="Z.erppay", sys=MT, db="mt", key="payments", extra='"kind":"payments",', sql=sql_from("payments/payments.sql"), when="minutes 3,8,...,58", cron=(bp.every(5, 3), "*"),
 		cols=["entry", "num", "code", "date", "amount", "on_account", "cancelled", "mode", "reference", "remarks", "invoices"]),
-	dict(step="Z.erpprice", sys=MT, db="mt", key="mt", extra='"kind":"pricing",', sql=sql_from("pricing/pricing_manna.sql"), when="minutes 12,42",
+	dict(step="Z.erpprice", sys=MT, db="mt", key="mt", extra='"kind":"pricing",', sql=sql_from("pricing/pricing_manna.sql"), when="minutes 29,59", cron=("29,59", "*"),
 		cols=["k"] + ["c%02d" % n for n in range(1, 15)],
 		sys2=HT, db2="ht", sql2=sql_from("pricing/pricing_hitech.sql"), cols2=["k"] + ["c%02d" % n for n in range(1, 12)]),
 ]
@@ -72,7 +73,7 @@ def two_set_json_xsl(p):
 			<ContentType>application/json</ContentType>
 			<Count><xsl:value-of select="count($one) + count($two)"/></Count>
 			<Body>
-				<xsl:text>{%s"dry_run":</xsl:text><xsl:value-of select="$dryRun"/><xsl:text>,"mt":[</xsl:text>
+				<xsl:text>{%s"sent_at":"</xsl:text><xsl:value-of select="normalize-space(($one | $two)[1]/*[local-name()='sent_at'])"/><xsl:text>","dry_run":</xsl:text><xsl:value-of select="$dryRun"/><xsl:text>,"mt":[</xsl:text>
 				<xsl:for-each select="$one">
 				<xsl:if test="position() &gt; 1"><xsl:text>,</xsl:text></xsl:if>
 				<xsl:text>[</xsl:text>

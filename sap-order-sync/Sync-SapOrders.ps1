@@ -198,6 +198,14 @@ param(
 Set-StrictMode -Version 1.0
 $ErrorActionPreference = 'Stop'
 
+# Dates and numbers are written the same way on every PC. In a .NET format
+# ':' means "this PC's time separator", and on a PC whose region uses '.'
+# (en-IN on this PC, 10 Nov 2026) 'HH:mm:ss' came out as 16.46.40 - ERPNext
+# refused the write-back, after the SAP order had been made. Nothing here
+# is shown to a person in their own format, so the script's thread is set to
+# the invariant culture once instead of at each of the timestamps.
+[System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
+
 $script:LogFile          = $null
 $script:StartedAt        = Get-Date
 $script:SapSkipCert      = $false
