@@ -15,13 +15,16 @@
  * on the tile's foot as well.
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { Order } from '@/domain/types';
+import type { TeamOrder } from '@/domain/types';
 import { formatDate, todayIso } from '@/domain/orderRules';
-import { orderTotal } from '@/domain/productRules';
+import { isApproved } from '@/domain/orderStatus';
+import { orderBucket } from '@/domain/sapOrderState';
+import { scopeFor, NO_TEAM_MESSAGE } from '@/domain/sales';
+import { Api } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
-import { selectOrders, selectPendingApproval, selectUser } from '@/store/selectors';
+import { selectUser } from '@/store/selectors';
 import { Alert, Badge, Button, Card, Empty } from '@/components/ui';
 import { money, moneyShort } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
@@ -29,16 +32,59 @@ import { daysWaiting } from './dashboardRules';
 import '@/components/layout/layout.css';
 import './dashboard.css';
 
+/*
+ * The team's orders, read exactly as Team Orders reads them (11 Nov 2026).
+ * The page used to count the Redux order list, the fixture-era path: on the
+ * live site those rows carry no `status`, so every tile read 0 while Team
+ * Orders showed orders waiting. Same team scope, same "To approve" rule, so
+ * the two pages cannot disagree.
+ */
+function useTeamOrders(salesPerson?: string) {
+  const [orders, setOrders] = useState<TeamOrder[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    Api.attendance
+      .listSalesPeople()
+      .then(async (people) => {
+        const team = scopeFor(people, salesPerson);
+        // Fail closed: an unresolved team shows nothing, never everyone.
+        if (!team) {
+          if (live) setError(NO_TEAM_MESSAGE);
+          return;
+        }
+        const rows = await Api.sales.listOrders(team);
+        if (live) setOrders(rows);
+      })
+      .catch((e: unknown) => {
+        if (live) setError(e instanceof Error ? e.message : 'Could not read orders.');
+      });
+    return () => {
+      live = false;
+    };
+  }, [salesPerson]);
+  return { orders, error };
+}
+
+const bucketOf = (o: TeamOrder) =>
+  orderBucket({
+    approved: isApproved(o.poStatus),
+    poStatus: o.poStatus,
+    salesOrderStatus: o.sapSalesOrderStatus,
+  });
+
 export function SalesDashboardPage() {
   const navigate = useNavigate();
   const user = useAppSelector(selectUser);
-  const orders = useAppSelector(selectOrders);
-  const pending = useAppSelector(selectPendingApproval);
+  const { orders, error } = useTeamOrders(user?.salesPerson);
 
   /** Oldest first: the queue is worked from the top, so the top must be the worst. */
   const waiting = useMemo(
-    () => [...pending].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
-    [pending],
+    () =>
+      orders
+        .filter((o) => bucketOf(o) === 'to_approve')
+        .sort((a, b) => a.placedOn.localeCompare(b.placedOn)),
+    [orders],
   );
 
   /*
@@ -48,23 +94,18 @@ export function SalesDashboardPage() {
    * so the queue below is now the only time-critical thing on the page.
    */
 
+  // Approved and not yet invoiced in full: still being made or delivered.
   const live = useMemo(
-    () =>
-      orders.filter(
-        (o) => o.status === 'approved' || o.status === 'in_production' || o.status === 'dispatched',
-      ),
+    () => orders.filter((o) => bucketOf(o) === 'approved' && !o.sapInvoice),
     [orders],
   );
 
-  const waitingValue = useMemo(
-    () => waiting.reduce((sum, o) => sum + orderTotal(o.items), 0),
-    [waiting],
-  );
+  const waitingValue = useMemo(() => waiting.reduce((sum, o) => sum + (o.total || 0), 0), [waiting]);
 
   if (!user) return null;
 
   const oldest = waiting[0];
-  const oldestDays = oldest ? daysWaiting(oldest.createdAt) : 0;
+  const oldestDays = oldest ? daysWaiting(oldest.placedOn) : 0;
 
   return (
     <div>
@@ -90,17 +131,18 @@ export function SalesDashboardPage() {
         approvals inbox itself went on 11 October 2026.
       */}
       <div className="stack gap-3" style={{ marginBottom: 16 }}>
+        {error && <Alert tone="danger">{error}</Alert>}
         {oldest && oldestDays >= 3 && (
           <Alert
             tone="danger"
-            title={`${oldest.orderNo} has been waiting ${oldestDays} days`}
+            title={`${orderNo(oldest)} has been waiting ${oldestDays} days`}
             actions={
               <Button size="sm" onClick={() => navigate('/orders')}>
                 Open queue
               </Button>
             }
           >
-            Raised by {oldest.repName} for {oldest.customerName}.
+            Raised by {oldest.rep} for {oldest.customerName}.
           </Alert>
         )}
       </div>
@@ -163,13 +205,16 @@ export function SalesDashboardPage() {
   );
 }
 
-function OrderRow({ order, onOpen }: { order: Order; onOpen: () => void }) {
-  const days = daysWaiting(order.createdAt);
+/** SAP's order number once SAP has it, the ERPNext name before. */
+const orderNo = (o: TeamOrder) => o.sapSalesOrder || o.id;
+
+function OrderRow({ order, onOpen }: { order: TeamOrder; onOpen: () => void }) {
+  const days = daysWaiting(order.placedOn);
   return (
     <tr onClick={onOpen} style={{ cursor: 'pointer' }}>
-      <td className="mono small">{order.orderNo}</td>
+      <td className="mono small">{orderNo(order)}</td>
       <td className="small">{order.customerName}</td>
-      <td className="right num">{money(orderTotal(order.items))}</td>
+      <td className="right num">{money(order.total)}</td>
       <td className="right num">
         <Badge tone={days >= 3 ? 'danger' : days >= 1 ? 'warn' : 'neutral'}>{days}d</Badge>
       </td>
