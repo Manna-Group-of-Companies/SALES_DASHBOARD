@@ -8,6 +8,7 @@ import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/item_request.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 
 const Color _kOrange = Color(0xFFF46A21);
 const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -151,14 +152,21 @@ class _NewItemRequestScreenState extends State<NewItemRequestScreen> {
     }
     setState(() => _busy = true);
     try {
-      await Api.submitItemRequest({
-        'product_line': _line,
-        'item_type': _type,
-        'pattern': _pattern.text.trim(),
-        'size': _size.text.trim(),
-      });
+      // Kept on the phone with no signal (11 Nov 2026).
+      final sent = await Api.sendOrQueue(
+        kind: 'item_request',
+        label: 'Item request — $_line ${_pattern.text.trim()} ${_size.text.trim()}'.trim(),
+        args: {
+          'fields': {
+            'product_line': _line,
+            'item_type': _type,
+            'pattern': _pattern.text.trim(),
+            'size': _size.text.trim(),
+          },
+        },
+      );
       if (!mounted) return;
-      _snack('Request sent.');
+      _snack(sent ? 'Request sent.' : kSavedOffline);
       Navigator.pop(context, true);
     } catch (e) {
       _snack(humanError(e));

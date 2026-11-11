@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 
 class CustomerEditScreen extends StatefulWidget {
   final Map<String, dynamic> customer;
@@ -67,9 +68,13 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
   }
 
   Future<void> _load() async {
+    // Each falls back on its own (11 Nov 2026): with no signal the form still
+    // opens, offering the customer's current route and group, and the edit is
+    // kept on the phone. One failing list used to fail both.
     final results = await Future.wait([
-      Api.getSalesRoutes(forRep: Session.I.salesPerson),
-      Api.getCustomerGroups(),
+      Api.getSalesRoutes(forRep: Session.I.salesPerson)
+          .catchError((Object _) => <String>[]),
+      Api.getCustomerGroups().catchError((Object _) => <String>[]),
     ]);
     _routes = results[0];
     _groups = results[1];
@@ -89,16 +94,21 @@ class _CustomerEditScreenState extends State<CustomerEditScreen> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      await Api.updateCustomer(
-        name: '${widget.customer['name']}',
-        salesRoute: _route,
-        customerGroup: _group,
-        phone: _phone.text,
-        address: _address.text,
-        gstin: _gstin.text,
-        state: _state.text,
+      // Kept on the phone with no signal (11 Nov 2026).
+      final sent = await Api.sendOrQueue(
+        kind: 'customer_update',
+        label: 'Edit — ${widget.customer['customer_name'] ?? widget.customer['name']}',
+        args: {
+          'name': '${widget.customer['name']}',
+          'sales_route': _route,
+          'customer_group': _group,
+          'phone': _phone.text,
+          'address': _address.text,
+          'gstin': _gstin.text,
+          'state': _state.text,
+        },
       );
-      _snack('Customer updated ✓');
+      _snack(sent ? 'Customer updated ✓' : kSavedOffline);
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       _snack(humanError(e));

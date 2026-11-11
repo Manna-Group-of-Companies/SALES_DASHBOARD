@@ -23,7 +23,9 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/credit_condition.dart';
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 import 'package:manna_field_sales/widgets/condition_answer_sheet.dart';
 import 'package:manna_field_sales/widgets/condition_ui.dart';
 
@@ -148,12 +150,30 @@ class _MyConditionsScreenState extends State<MyConditionsScreen> {
 
     setState(() => _busy = true);
     try {
-      await Api.respondToCondition(r['name'] as String, text,
-          salesOrder: _s(r, 'sales_order'), customer: _s(r, 'customer'));
-      await _load();
+      // Kept on the phone with no signal, at the time it was answered.
+      final sent = await Api.sendOrQueue(
+        kind: 'condition_answer',
+        label: 'Answer — ${_s(r, 'customer_name').isNotEmpty ? _s(r, 'customer_name') : _s(r, 'customer')}',
+        args: {
+          'name': r['name'] as String,
+          'response': text,
+          'sales_order': _s(r, 'sales_order'),
+          'customer': _s(r, 'customer'),
+          'at': nowStamp(),
+        },
+      );
+      if (sent) {
+        await _load();
+      } else if (mounted) {
+        // Shown as answered meanwhile, so the rep does not answer twice.
+        setState(() {
+          r['response'] = text;
+          r['status'] = kCondAwaiting;
+        });
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Sent to the GM')),
+          SnackBar(content: Text(sent ? 'Sent to the GM' : kSavedOffline)),
         );
       }
     } catch (e) {

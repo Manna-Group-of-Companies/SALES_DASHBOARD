@@ -16,6 +16,7 @@ import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/party_location.dart';
 import 'package:manna_field_sales/core/duplicate_order.dart';
+import 'package:manna_field_sales/core/errors.dart' show isNetworkFailure;
 import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/core/trip_totals.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
@@ -34,6 +35,7 @@ import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/models/sap_rates.dart';
 import 'package:manna_field_sales/services/offline_cache.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/services/pending_punches.dart';
 import 'package:manna_field_sales/services/stock_service.dart';
@@ -283,6 +285,8 @@ class Api {
     // HomeDashboard._logout. Sent under the next login they would be filed
     // against the wrong person, or refused.
     await PendingPunches.clear();
+    // And the rest of the field work, for the same reason (11 Nov 2026).
+    await Outbox.clear();
     Session.I.offlineStart = false;
   }
 
@@ -2861,10 +2865,11 @@ class Api {
   /// the answer itself is saved: the rep must not be told their answer failed
   /// when it reached the condition.
   static Future<void> respondToCondition(String name, String response,
-      {String? salesOrder, String? customer}) async {
+      {String? salesOrder, String? customer, String? respondedOn}) async {
     await _put('Manna Credit Condition', name, {
       'response': response,
-      'responded_on': nowStamp(),
+      // When the rep answered, when it is sent later from the outbox.
+      'responded_on': respondedOn ?? nowStamp(),
       'status': 'Awaiting Review',
     });
     await _postThreadComment(
@@ -3714,6 +3719,172 @@ class Api {
     );
   }
 
+  /// Sends a field write now, or keeps it in the outbox when there is no
+  /// signal (11 Nov 2026). True when it reached the server, false when it was
+  /// kept; any other failure is thrown, as the write itself would have.
+  ///
+  /// Sent through [sendOutboxItem], the same function the outbox uses later,
+  /// so the two paths cannot do different things.
+  static Future<bool> sendOrQueue({
+    required String kind,
+    required String label,
+    required Map<String, dynamic> args,
+    Map<String, String> files = const {},
+  }) async {
+    final item = OutboxItem(
+      id: 'now',
+      kind: kind,
+      label: label,
+      args: args,
+      files: files,
+      salesPerson: Session.I.salesPerson ?? '',
+      savedAt: serverNow(),
+    );
+    try {
+      await sendOutboxItem(item);
+      return true;
+    } catch (e) {
+      if (!isNetworkFailure(e)) rethrow;
+      // item.args carries a first step already done (`created`), if any.
+      await Outbox.add(kind: kind, label: label, args: item.args, files: files);
+      return false;
+    }
+  }
+
+  /// Sends one outbox item: the write its [OutboxItem.kind] names, with its
+  /// arguments. The sender behind [Outbox.flush] and [sendOrQueue].
+  static Future<void> sendOutboxItem(OutboxItem item) async {
+    final a = item.args;
+    String? s(String k) {
+      final v = a[k];
+      return v == null ? null : '$v';
+    }
+
+    double d(String k) => (a[k] as num?)?.toDouble() ?? 0;
+    double? dn(String k) => (a[k] as num?)?.toDouble();
+
+    switch (item.kind) {
+      case 'collection':
+        await createCollectionEntry(
+          customer: s('customer')!,
+          salesPerson: s('sales_person')!,
+          amount: d('amount'),
+          mode: s('mode')!,
+          referenceNo: s('reference_no'),
+          lat: d('lat'),
+          lng: d('lng'),
+          date: s('date'),
+        );
+      case 'expense':
+        await createExpense(
+          salesPerson: s('sales_person')!,
+          category: s('category')!,
+          amount: d('amount'),
+          remarks: s('remarks'),
+          date: s('date'),
+        );
+      case 'complaint':
+        await createComplaint(
+          customer: s('customer')!,
+          complaintType: s('complaint_type')!,
+          description: s('description')!,
+        );
+      case 'leave':
+        await createLeaveRequest(
+          leaveDate: s('leave_date')!,
+          halfDay: a['half_day'] == true,
+          halfPeriod: s('half_period'),
+          reason: s('reason') ?? '',
+        );
+      case 'regularization':
+        await createRegularization(
+          attendanceDate: s('attendance_date')!,
+          punchIn: s('punch_in'),
+          punchOut: s('punch_out'),
+          reason: s('reason') ?? '',
+        );
+      case 'item_request':
+        await submitItemRequest(Map<String, dynamic>.from(a['fields'] as Map));
+      case 'condition_answer':
+        await respondToCondition(s('name')!, s('response')!,
+            salesOrder: s('sales_order'),
+            customer: s('customer'),
+            respondedOn: s('at'));
+      case 'customer_location':
+        if (a['done'] != true) {
+          await captureCustomerLocation(
+            customer: s('customer')!,
+            salesPerson: s('sales_person')!,
+            lat: d('lat'),
+            lng: d('lng'),
+            recapture: a['recapture'] == true,
+            existingLat: dn('existing_lat'),
+            existingLng: dn('existing_lng'),
+          );
+          a['done'] = true;
+        }
+        final photo = item.files['photo'];
+        if (photo != null) {
+          await uploadPhoto(
+            doctype: 'Customer',
+            docname: s('customer')!,
+            fieldname: 'custom_banner_photo',
+            filePath: photo,
+            filename: 'banner.jpg',
+          );
+        }
+      case 'customer_site':
+        // Two steps: a resend after the photo failed must not make a second
+        // site, so the first step's answer is kept in the args.
+        var site = s('created');
+        if (site == null) {
+          site = await createCustomerSite(
+            customer: s('customer'),
+            lead: s('lead'),
+            siteName: s('site_name')!,
+            lat: d('lat'),
+            lng: d('lng'),
+          );
+          a['created'] = site;
+        }
+        final photo = item.files['photo'];
+        if (photo != null) {
+          await uploadPhoto(
+            doctype: 'Customer Site',
+            docname: site,
+            fieldname: 'banner_photo',
+            filePath: photo,
+            filename: 'site_banner.jpg',
+          );
+        }
+      case 'customer_update':
+        await updateCustomer(
+          name: s('name')!,
+          salesRoute: s('sales_route'),
+          customerGroup: s('customer_group'),
+          phone: s('phone'),
+          address: s('address'),
+          gstin: s('gstin'),
+          state: s('state'),
+        );
+      case 'lead_update':
+        await updateLead(
+          name: s('name')!,
+          leadName: s('lead_name')!,
+          company: s('company'),
+          mobile: s('mobile'),
+          email: s('email'),
+          gstin: s('gstin'),
+          address: s('address'),
+          paymentTerms: s('payment_terms'),
+          territory: s('territory'),
+          salesRoute: s('sales_route'),
+        );
+      default:
+        throw OutboxRefused('This app cannot send "${item.kind}".');
+    }
+  }
+
   /// Sends one punch from the phone's queue and returns the document it
   /// created or closed. The sender behind [PendingPunches.flush].
   ///
@@ -3985,9 +4156,11 @@ class Api {
     String? referenceNo,
     required double lat,
     required double lng,
+    // The day it was collected, when it is sent later from the outbox.
+    String? date,
   }) async {
     final body = {
-      'collection_date': today(),
+      'collection_date': date ?? today(),
       'sales_person': salesPerson,
       'customer': customer,
       'amount': amount,
@@ -4835,9 +5008,11 @@ class Api {
     required String category,
     required double amount,
     String? remarks,
+    // The day it was spent, when it is sent later from the outbox.
+    String? date,
   }) async {
     final body = {
-      'expense_date': today(),
+      'expense_date': date ?? today(),
       'sales_person': salesPerson,
       'category': category,
       'amount': amount,

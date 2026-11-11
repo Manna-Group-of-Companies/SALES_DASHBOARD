@@ -6,6 +6,7 @@ import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 
 class ApplyLeaveScreen extends StatefulWidget {
   final DateTime? initialDate; // pre-filled when opened from the calendar
@@ -65,12 +66,18 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
     try {
       final ds =
           '${_date!.year}-${_date!.month.toString().padLeft(2, '0')}-${_date!.day.toString().padLeft(2, '0')}';
-      await Api.createLeaveRequest(
-          leaveDate: ds,
-          halfDay: _halfDay,
-          halfPeriod: _halfPeriod,
-          reason: _reason.text.trim());
-      _snack('Leave applied — sent for approval.');
+      // Kept on the phone with no signal (11 Nov 2026).
+      final sent = await Api.sendOrQueue(
+        kind: 'leave',
+        label: 'Leave ${_halfDay ? '(half day) ' : ''}$ds',
+        args: {
+          'leave_date': ds,
+          'half_day': _halfDay,
+          'half_period': _halfPeriod,
+          'reason': _reason.text.trim(),
+        },
+      );
+      _snack(sent ? 'Leave applied — sent for approval.' : kSavedOffline);
       await Future.delayed(const Duration(milliseconds: 500));
       if (mounted) Navigator.pop(context, true);
     } catch (e) {

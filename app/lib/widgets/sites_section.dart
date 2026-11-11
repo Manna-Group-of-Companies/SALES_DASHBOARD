@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
 import 'package:manna_field_sales/widgets/route_picker.dart';
@@ -101,22 +102,22 @@ class _SitesSectionState extends State<SitesSection> {
     _snack('Getting GPS…');
     try {
       final pos = await getCurrentLocation(requireAccurate: true);
-      final created = await Api.createCustomerSite(
-        customer: widget.customer,
-        lead: widget.lead,
-        siteName: siteName,
-        lat: pos.latitude,
-        lng: pos.longitude,
+      // The site and its banner photo, kept on the phone with no signal
+      // (11 Nov 2026). Sent in two steps; a resend never makes a second site.
+      final sent = await Api.sendOrQueue(
+        kind: 'customer_site',
+        label: 'Site "$siteName"',
+        args: {
+          'customer': widget.customer,
+          'lead': widget.lead,
+          'site_name': siteName,
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+        },
+        files: {'photo': img.path},
       );
-      await Api.uploadPhoto(
-        doctype: 'Customer Site',
-        docname: created,
-        fieldname: 'banner_photo',
-        filePath: img.path,
-        filename: 'site_banner.jpg',
-      );
-      _snack('Site "$siteName" sent for verification.');
-      await _load();
+      _snack(sent ? 'Site "$siteName" sent for verification.' : kSavedOffline);
+      if (sent) await _load();
     } catch (e) {
       _snack(humanError(e));
     } finally {

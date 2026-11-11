@@ -31,7 +31,9 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 import 'package:manna_field_sales/widgets/condition_answer_sheet.dart';
 
 class CreditConditionsSection extends StatefulWidget {
@@ -75,10 +77,28 @@ class _CreditConditionsSectionState extends State<CreditConditionsSection> {
 
     setState(() => _busy = true);
     try {
-      await Api.respondToCondition('${r['name']}', text,
-          salesOrder: '${r['sales_order'] ?? ''}', customer: '${r['customer'] ?? ''}');
-      await _load();
-      if (mounted) _snack('Sent to the GM.');
+      // Kept on the phone with no signal, at the time it was answered.
+      final sent = await Api.sendOrQueue(
+        kind: 'condition_answer',
+        label: 'Answer — ${r['customer'] ?? ''}',
+        args: {
+          'name': '${r['name']}',
+          'response': text,
+          'sales_order': '${r['sales_order'] ?? ''}',
+          'customer': '${r['customer'] ?? ''}',
+          'at': nowStamp(),
+        },
+      );
+      if (sent) {
+        await _load();
+      } else if (mounted) {
+        // Shown as answered meanwhile, so the rep does not answer twice.
+        setState(() {
+          r['response'] = text;
+          r['status'] = 'Awaiting Review';
+        });
+      }
+      if (mounted) _snack(sent ? 'Sent to the GM.' : kSavedOffline);
     } catch (e) {
       if (mounted) _snack(humanError(e));
     } finally {

@@ -43,7 +43,9 @@ import 'package:manna_field_sales/screens/orders/unsent_orders_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/screens/conditions/my_conditions_screen.dart';
 import 'package:manna_field_sales/services/update_service.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
+import 'package:manna_field_sales/screens/home/unsent_items_screen.dart';
 import 'package:manna_field_sales/services/pending_punches.dart';
 import 'package:manna_field_sales/screens/home/unsent_punches_screen.dart';
 import 'package:manna_field_sales/services/location_service.dart';
@@ -74,6 +76,10 @@ class _HomeDashboardState extends State<HomeDashboard>
   /// Punches taken with no signal and not yet sent. Like [_unsent], the tile
   /// only appears when there are some.
   int _unsentPunches = 0;
+
+  /// Field work kept with no signal (the outbox, 11 Nov 2026). Like the
+  /// others, the tile only appears when there is some.
+  int _unsentItems = 0;
 
   /// Tries the punch queue once a minute while anything is waiting. Resume
   /// and refresh try too, but a rep who walks back into coverage with the app
@@ -139,11 +145,13 @@ class _HomeDashboardState extends State<HomeDashboard>
   Future<void> _loadUnsent() async {
     final n = await PendingOrders.count();
     final p = await PendingPunches.count();
+    final o = await Outbox.count();
     if (!mounted) return;
-    if (n != _unsent || p != _unsentPunches) {
+    if (n != _unsent || p != _unsentPunches || o != _unsentItems) {
       setState(() {
         _unsent = n;
         _unsentPunches = p;
+        _unsentItems = o;
       });
     }
   }
@@ -160,9 +168,11 @@ class _HomeDashboardState extends State<HomeDashboard>
     }
     // Route points too: the same signal, the same moment.
     unawaited(TripTracker.I.flushPending());
-    // And orders kept on the phone (11 Nov 2026). Not awaited before the
-    // punches: a slow order send must not hold a punch back.
+    // And orders and the rest of the field work kept on the phone (11 Nov
+    // 2026). Not awaited before the punches: a slow send must not hold a
+    // punch back.
     unawaited(_syncOrders());
+    unawaited(_syncOutbox());
     if (await PendingPunches.count() == 0) return;
     final r = await PendingPunches.flush(Api.sendPendingPunch,
         describe: humanError);
@@ -204,6 +214,31 @@ class _HomeDashboardState extends State<HomeDashboard>
     }
   }
 
+  /// Sends the rest of the field work kept on the phone (the outbox), by
+  /// itself, once there is a signal. Refused items are left for the rep.
+  Future<void> _syncOutbox() async {
+    if (await Outbox.autoCount() == 0) return;
+    // Told once, when an item is refused, not every minute after.
+    final refusedBefore = {
+      for (final i in await Outbox.all())
+        if (i.refused) i.id
+    };
+    final r = await Outbox.flush(Api.sendOutboxItem,
+        describe: humanError, auto: true);
+    if (!mounted) return;
+    await _loadUnsent();
+    if (!mounted) return;
+    final refused =
+        r.failed.where((i) => i.refused && !refusedBefore.contains(i.id)).length;
+    if (r.sent > 0) {
+      _snack(refused == 0
+          ? 'Sent ${r.sent} saved item${r.sent == 1 ? '' : 's'} ✓'
+          : 'Sent ${r.sent}; $refused could not be sent — see Waiting to Send.');
+    } else if (refused > 0) {
+      _snack('Something saved could not be sent — see Waiting to Send.');
+    }
+  }
+
   /// Offered once per launch. A rep who says "Later" is not asked again until
   /// they next open the app — the same prompt on every home-screen rebuild is
   /// how a convenience turns into something people learn to dismiss blind.
@@ -231,6 +266,7 @@ class _HomeDashboardState extends State<HomeDashboard>
       if (Session.I.offlineStart ||
           await PendingPunches.count() > 0 ||
           await PendingOrders.autoCount() > 0 ||
+          await Outbox.autoCount() > 0 ||
           await TripTracker.I.pendingCount() > 0) {
         unawaited(_syncPunches());
       }
@@ -603,17 +639,24 @@ class _HomeDashboardState extends State<HomeDashboard>
     // Punches still on the phone go with the sign-out — sent under the next
     // login they would be filed against the wrong person. So the rep is told
     // how many first, and can stay signed in until they have gone.
+    // The same for the rest of the field work kept on the phone (11 Nov 2026).
     final waiting = await PendingPunches.count();
-    if (waiting > 0 && mounted) {
+    final items = await Outbox.count();
+    if ((waiting > 0 || items > 0) && mounted) {
+      final what = [
+        if (waiting > 0) '$waiting punch${waiting == 1 ? '' : 'es'}',
+        if (items > 0) '$items other saved item${items == 1 ? '' : 's'}',
+      ].join(' and ');
+      final one = waiting + items == 1;
       final go = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Punches not sent yet'),
+          title: const Text('Not sent yet'),
           content: Text(
-              '$waiting punch${waiting == 1 ? ' has' : 'es have'} not reached '
-              'the office. Signing out deletes ${waiting == 1 ? 'it' : 'them'} '
-              'from this phone.\n\nStay signed in until you have signal and '
-              '${waiting == 1 ? 'it has' : 'they have'} been sent.'),
+              '$what ${one ? 'has' : 'have'} not reached the office. Signing '
+              'out deletes ${one ? 'it' : 'them'} from this phone.\n\nStay '
+              'signed in until you have signal and ${one ? 'it has' : 'they have'} '
+              'been sent.'),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, true),
@@ -655,6 +698,9 @@ class _HomeDashboardState extends State<HomeDashboard>
       if (isRep && _unsentPunches > 0)
         _Tile('Unsent Punches ($_unsentPunches)', Icons.cloud_upload_outlined,
             () => _go(const UnsentPunchesScreen())),
+      if (isRep && _unsentItems > 0)
+        _Tile('Waiting to Send ($_unsentItems)', Icons.cloud_queue,
+            () => _go(const UnsentItemsScreen())),
       if (isRep) ...[
         _Tile('Customers', Icons.store, () => _go(const CustomerListScreen())),
         // Reachable from the route filters too, but a rep setting up their

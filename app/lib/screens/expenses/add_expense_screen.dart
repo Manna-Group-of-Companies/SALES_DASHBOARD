@@ -3,7 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 
 class AddExpenseScreen extends StatefulWidget {
   const AddExpenseScreen({super.key});
@@ -28,7 +31,16 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
   @override
   void initState() {
     super.initState();
-    _reps = Api.getSalesPersons();
+    // With no signal the list cannot be read; the rep signed in is who the
+    // expense is for anyway, so it can still be saved (11 Nov 2026).
+    _reps = Api.getSalesPersons().catchError((Object _) {
+      final me = Session.I.salesPerson;
+      return me == null
+          ? <Map<String, dynamic>>[]
+          : [
+              {'name': me, 'sales_person_name': me}
+            ];
+    });
   }
 
   void _snack(String m) =>
@@ -40,13 +52,19 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     if (amt == null || amt <= 0) return _snack('Enter a valid amount.');
     setState(() => _busy = true);
     try {
-      final name = await Api.createExpense(
-        salesPerson: _rep!,
-        category: _category,
-        amount: amt,
-        remarks: _remarks.text.trim(),
+      // Kept on the phone with no signal, dated today (11 Nov 2026).
+      final sent = await Api.sendOrQueue(
+        kind: 'expense',
+        label: '$_category ₹${amt.toStringAsFixed(2)}',
+        args: {
+          'sales_person': _rep!,
+          'category': _category,
+          'amount': amt,
+          'remarks': _remarks.text.trim(),
+          'date': today(),
+        },
       );
-      _snack('Expense saved ✓  $name (₹${amt.toStringAsFixed(2)})');
+      _snack(sent ? 'Expense saved ✓ (₹${amt.toStringAsFixed(2)})' : kSavedOffline);
       await Future.delayed(const Duration(milliseconds: 600));
       if (mounted) Navigator.pop(context);
     } catch (e) {

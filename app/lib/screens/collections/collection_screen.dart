@@ -3,8 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 
 class CollectionScreen extends StatefulWidget {
   final Map<String, dynamic> customer;
@@ -19,6 +22,18 @@ class _CollectionScreenState extends State<CollectionScreen> {
   late Future<void> _init;
   List<String> _modes = [];
   String? _rep;
+
+  /// The reps to pick from. When the list could not be read (no signal), the
+  /// rep signed in, so a collection can still be saved (11 Nov 2026).
+  late final List<Map<String, dynamic>> _reps = widget.reps.isNotEmpty
+      ? widget.reps
+      : [
+          if (Session.I.salesPerson != null)
+            {
+              'name': Session.I.salesPerson,
+              'sales_person_name': Session.I.salesPerson,
+            },
+        ];
   String? _mode;
   final _amount = TextEditingController();
   final _ref = TextEditingController();
@@ -27,7 +42,7 @@ class _CollectionScreenState extends State<CollectionScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.reps.isNotEmpty) _rep = widget.reps.first['name'] as String;
+    if (_reps.isNotEmpty) _rep = _reps.first['name'] as String;
     _init = _load();
   }
 
@@ -50,16 +65,25 @@ class _CollectionScreenState extends State<CollectionScreen> {
     _snack('Getting GPS…');
     try {
       final pos = await getCurrentLocation();
-      final name = await Api.createCollectionEntry(
-        customer: widget.customer['name'],
-        salesPerson: _rep!,
-        amount: amt,
-        mode: _mode!,
-        referenceNo: _ref.text.trim(),
-        lat: pos.latitude,
-        lng: pos.longitude,
+      // Kept on the phone with no signal, dated today (11 Nov 2026).
+      final sent = await Api.sendOrQueue(
+        kind: 'collection',
+        label: 'Collection ₹${amt.toStringAsFixed(2)} — '
+            '${widget.customer['customer_name'] ?? widget.customer['name']}',
+        args: {
+          'customer': widget.customer['name'],
+          'sales_person': _rep!,
+          'amount': amt,
+          'mode': _mode!,
+          'reference_no': _ref.text.trim(),
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'date': today(),
+        },
       );
-      _snack('Collection saved ✓  $name (₹${amt.toStringAsFixed(2)})');
+      _snack(sent
+          ? 'Collection saved ✓ (₹${amt.toStringAsFixed(2)})'
+          : kSavedOffline);
       await Future.delayed(const Duration(milliseconds: 600));
       if (mounted) Navigator.pop(context);
     } catch (e) {
@@ -89,7 +113,7 @@ class _CollectionScreenState extends State<CollectionScreen> {
                 value: _rep,
                 decoration: const InputDecoration(
                     labelText: 'Sales Person', border: OutlineInputBorder()),
-                items: widget.reps
+                items: _reps
                     .map((r) => DropdownMenuItem(
                   value: r['name'] as String,
                   child: Text(r['sales_person_name'] ?? r['name']),

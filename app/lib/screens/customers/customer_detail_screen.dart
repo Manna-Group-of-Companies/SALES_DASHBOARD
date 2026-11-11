@@ -16,6 +16,7 @@ import 'package:manna_field_sales/screens/complaints/complaint_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
 import 'package:manna_field_sales/widgets/route_required_gate.dart';
 import 'package:manna_field_sales/widgets/sites_section.dart';
@@ -101,24 +102,22 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     _snack('Getting GPS...');
     try {
       final pos = await getCurrentLocation(requireAccurate: true);
-      await Api.captureCustomerLocation(
-        customer: c['name'],
-        salesPerson: rep,
-        lat: pos.latitude,
-        lng: pos.longitude,
-        recapture: recapture,
-        existingLat: _num(c['custom_verified_latitude']),
-        existingLng: _num(c['custom_verified_longitude']),
+      // The pin and its banner photo, kept on the phone with no signal
+      // (11 Nov 2026). The screen shows the new pin either way.
+      final sent = await Api.sendOrQueue(
+        kind: 'customer_location',
+        label: 'Location — ${c['customer_name'] ?? c['name']}',
+        args: {
+          'customer': c['name'],
+          'sales_person': rep,
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'recapture': recapture,
+          'existing_lat': _num(c['custom_verified_latitude']),
+          'existing_lng': _num(c['custom_verified_longitude']),
+        },
+        files: {if (img != null) 'photo': img.path},
       );
-      if (img != null) {
-        await Api.uploadPhoto(
-          doctype: 'Customer',
-          docname: c['name'],
-          fieldname: 'custom_banner_photo',
-          filePath: img.path,
-          filename: 'banner.jpg',
-        );
-      }
       final selfVerified = !Api.locationPhotoRequired;
       setState(() {
         c['custom_location_status'] =
@@ -135,11 +134,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           c['custom_verified_longitude'] = null;
         }
       });
-      _snack(selfVerified
-          ? 'Location captured ✓'
-          : recapture
-              ? 'Location corrected — you can punch in now.'
-              : 'Captured — sent for manager verification.');
+      _snack(!sent
+          ? kSavedOffline
+          : selfVerified
+              ? 'Location captured ✓'
+              : recapture
+                  ? 'Location corrected — you can punch in now.'
+                  : 'Captured — sent for manager verification.');
     } catch (e) {
       _snack(humanError(e));
     } finally {

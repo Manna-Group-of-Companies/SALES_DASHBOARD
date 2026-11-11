@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 
 class ComplaintScreen extends StatefulWidget {
   final Map<String, dynamic> customer;
@@ -34,12 +35,18 @@ class _ComplaintScreenState extends State<ComplaintScreen> {
     }
     setState(() => _busy = true);
     try {
-      final name = await Api.createComplaint(
-        customer: widget.customer['name'] as String,
-        complaintType: _type,
-        description: _desc.text.trim(),
+      // Kept on the phone with no signal (11 Nov 2026).
+      final sent = await Api.sendOrQueue(
+        kind: 'complaint',
+        label: 'Complaint ($_type) — '
+            '${widget.customer['customer_name'] ?? widget.customer['name']}',
+        args: {
+          'customer': widget.customer['name'] as String,
+          'complaint_type': _type,
+          'description': _desc.text.trim(),
+        },
       );
-      _snack('Complaint logged ✓  $name');
+      _snack(sent ? 'Complaint logged ✓' : kSavedOffline);
       await Future.delayed(const Duration(milliseconds: 500));
       if (mounted) Navigator.pop(context);
     } catch (e) {

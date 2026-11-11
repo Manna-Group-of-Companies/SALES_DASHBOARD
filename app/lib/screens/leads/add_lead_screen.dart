@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 import 'package:manna_field_sales/widgets/route_picker.dart';
 
 class AddLeadScreen extends StatefulWidget {
@@ -69,20 +70,38 @@ class _AddLeadScreenState extends State<AddLeadScreen> {
     setState(() => _busy = true);
     try {
       if (_editing) {
-        final updated = await Api.updateLead(
-            name: widget.lead!['name'] as String,
-            leadName: _name.text.trim(),
-            company: _company.text,
-            mobile: _mobile.text,
-            email: _email.text,
-            gstin: _gstin.text,
-            address: _address.text,
-            paymentTerms: _terms,
-            territory: _territory,
-            salesRoute: _route);
-        _snack('Lead updated ✓');
+        // Kept on the phone with no signal (11 Nov 2026). The lead's screen
+        // shows the edit either way: the same fields updateLead writes.
+        final changes = <String, dynamic>{
+          'lead_name': _name.text.trim(),
+          'company_name': _company.text.trim(),
+          'mobile_no': _mobile.text.trim(),
+          'email_id': _email.text.trim(),
+          'custom_gstin': _gstin.text.trim(),
+          'custom_address': _address.text.trim(),
+          'custom_payment_terms': (_terms ?? '').trim(),
+          'territory': (_territory ?? '').trim(),
+          'custom_sales_route': (_route ?? '').trim(),
+        };
+        final sent = await Api.sendOrQueue(
+          kind: 'lead_update',
+          label: 'Edit — ${_name.text.trim()}',
+          args: {
+            'name': widget.lead!['name'] as String,
+            'lead_name': _name.text.trim(),
+            'company': _company.text,
+            'mobile': _mobile.text,
+            'email': _email.text,
+            'gstin': _gstin.text,
+            'address': _address.text,
+            'payment_terms': _terms,
+            'territory': _territory,
+            'sales_route': _route,
+          },
+        );
+        _snack(sent ? 'Lead updated ✓' : kSavedOffline);
         await Future.delayed(const Duration(milliseconds: 500));
-        if (mounted) Navigator.pop(context, updated);
+        if (mounted) Navigator.pop(context, changes);
       } else {
         final n = await Api.createLead(
             leadName: _name.text.trim(),

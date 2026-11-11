@@ -7,6 +7,7 @@ import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/leave/apply_leave_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart';
 
 /// The day the app went live. Nobody was punching in before this, so days
 /// earlier than it are never marked absent.
@@ -435,15 +436,22 @@ class _AttendanceCalendarScreenState extends State<AttendanceCalendarScreen> {
         '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')} '
             '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:00';
     try {
-      await Api.createRegularization(
-        attendanceDate: _key(day),
-        punchIn: stamp(inT),
-        punchOut: stamp(outT),
-        reason: reason.text.trim(),
+      // Kept on the phone with no signal (11 Nov 2026).
+      final sent = await Api.sendOrQueue(
+        kind: 'regularization',
+        label: 'Regularization ${_key(day)}',
+        args: {
+          'attendance_date': _key(day),
+          'punch_in': stamp(inT),
+          'punch_out': stamp(outT),
+          'reason': reason.text.trim(),
+        },
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Regularization submitted for approval')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(sent
+                ? 'Regularization submitted for approval'
+                : kSavedOffline)));
       }
       _load();
     } catch (e) {
