@@ -3354,16 +3354,39 @@ class Api {
   ///
   /// The fallbacks matter: if the expected company has been renamed the app
   /// should still take the order rather than refuse to sell.
+  /// The company the rep's orders are raised in. Kept for use with no signal
+  /// (11 Nov 2026): the order screen loads it with the catalogue, and with no
+  /// saved copy it failed the whole screen — no order could be typed offline.
   static Future<String> getCompany() async {
-    final list = await _list('Company', fields: '["name"]');
-    final names = list.map((e) => e['name'] as String).toList();
-    if (names.isEmpty) return '';
-    final wanted = companyForUnit(Session.I.company);
-    return names.firstWhere(
-      (n) => n == wanted,
-      orElse: () => names.firstWhere(
-          (n) => !n.toLowerCase().contains('demo'),
-          orElse: () => names.first),
+    // Never read on this phone yet and no signal: the unit names its company.
+    // An order kept on the phone is sent later through this again anyway.
+    final Cached<String> cached;
+    try {
+      cached = await _readCompany();
+    } catch (e) {
+      final guess = companyForUnit(Session.I.company);
+      if (isNetworkFailure(e) && guess.isNotEmpty) return guess;
+      rethrow;
+    }
+    return cached.value;
+  }
+
+  static Future<Cached<String>> _readCompany() {
+    return OfflineCache.read<String>(
+      'company:${Session.I.company ?? ''}',
+      () async {
+        final list = await _list('Company', fields: '["name"]');
+        final names = list.map((e) => e['name'] as String).toList();
+        if (names.isEmpty) return '';
+        final wanted = companyForUnit(Session.I.company);
+        return names.firstWhere(
+          (n) => n == wanted,
+          orElse: () => names.firstWhere(
+              (n) => !n.toLowerCase().contains('demo'),
+              orElse: () => names.first),
+        );
+      },
+      decode: (j) => '${j ?? ''}',
     );
   }
 
