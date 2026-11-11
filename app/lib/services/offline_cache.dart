@@ -111,7 +111,10 @@ class OfflineCache {
       _lastAge[key] = '';
       return Cached(live);
     } catch (e) {
-      if (!isOffline(e)) rethrow;
+      // A timeout as well as no connection (11 Nov 2026): this is a read, so
+      // whether the request reached the server does not matter, and on a
+      // weak signal the saved copy beats an error screen.
+      if (!isNetworkFailure(e)) rethrow;
       final fallback = await peek<T>(key, decode);
       if (fallback == null) rethrow;
       _lastAge[key] = fallback.ageLabel;

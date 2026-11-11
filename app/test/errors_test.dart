@@ -36,6 +36,29 @@ void main() {
           isTrue);
     });
 
+    // 11 Nov 2026: the demo app's USB link to a PC whose ERPNext was down, and
+    // one bar of signal in the field, both broke the connection mid-request.
+    // Read as a real error, screens failed instead of showing their saved copy.
+    test('a connection that opened and then broke is offline', () {
+      for (final msg in [
+        'HttpException: Connection closed before full header was received',
+        'HttpException: Connection reset by peer',
+        'OS Error: Connection refused, errno = 111',
+        'Software caused connection abort',
+        'Network is unreachable',
+      ]) {
+        expect(isOffline(_dio(DioExceptionType.unknown, error: msg)), isTrue,
+            reason: msg);
+      }
+    });
+
+    test('an unknown failure that is not the connection stays an error', () {
+      expect(
+          isOffline(_dio(DioExceptionType.unknown,
+              error: 'FormatException: Unexpected character')),
+          isFalse);
+    });
+
     test('a rejected request is not offline — retrying it changes nothing', () {
       expect(isOffline(_dio(DioExceptionType.badResponse,
               response: _res(417, {'exception': 'ValidationError: nope'}))),

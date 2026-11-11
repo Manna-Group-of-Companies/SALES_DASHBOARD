@@ -771,8 +771,10 @@ class _OrderScreenState extends State<OrderScreen> {
       // No signal is the one failure worth offering a way out of: the rep is
       // standing in front of the customer and the order is already typed.
       // Every other failure means the server considered this order and said no,
-      // so a draft would only defer the same answer.
-      if (isOffline(e) && !_isEdit) {
+      // so a draft would only defer the same answer. A timeout counts as no
+      // signal (11 Nov 2026), as it does for every other queue: an order lost
+      // to one bar of signal is worse than one the duplicate check flags.
+      if (isNetworkFailure(e) && !_isEdit) {
         await _offerDraft(dd, commitment: commitment);
         return;
       }

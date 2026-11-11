@@ -27,12 +27,29 @@ bool isOffline(Object? e) {
     case DioExceptionType.connectionTimeout:
       return true;
     case DioExceptionType.unknown:
-      return '${e.error}'.contains('SocketException') ||
-          '${e.error}'.contains('Failed host lookup');
+      final s = '${e.error}';
+      return _brokenConnection.any(s.contains);
     default:
       return false;
   }
 }
+
+/// How a connection that opened and then broke shows up (11 Nov 2026). Not
+/// only no signal at all: on one bar the connection drops mid-request, and
+/// the demo app's USB link to a PC whose ERPNext is down accepts and then
+/// closes ("Connection closed before full header was received"). Read as
+/// anything else, the screen showed an error instead of its saved copy and a
+/// save failed instead of being kept on the phone.
+const _brokenConnection = [
+  'SocketException',
+  'Failed host lookup',
+  'Connection closed',
+  'Connection reset',
+  'Connection refused',
+  'Connection aborted',
+  'Software caused connection abort',
+  'Network is unreachable',
+];
 
 /// True when the request may not have reached the server, or its answer did
 /// not reach the phone — [isOffline] plus the two timeouts that happen after
