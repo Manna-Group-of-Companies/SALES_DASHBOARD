@@ -58,6 +58,22 @@ export interface PricingSnapshot {
   hitech?: HitechSide;
   /** Version 3: the office server's own check of SAP, worked out in PowerShell. */
   serverCheck?: ServerCheck;
+  /**
+   * Tread items (SAP item group HOT or PRECURED) the sync could not put in a
+   * group, and why: no quality in the name or U_SubTypeA, or the two disagree.
+   * Since 11 Nov 2026; see sap-pricing/AutoGroups.ps1.
+   */
+  ungrouped?: UngroupedItem[];
+  /** Synced from test companies (neither *_LIVE): some list prices are stand-ins, not SAP's. */
+  placeholderPrices?: boolean;
+}
+
+export interface UngroupedItem {
+  code: string;
+  name: string;
+  groupName?: string;
+  subType?: string;
+  reason: string;
 }
 
 export interface SnapItem {
@@ -81,9 +97,13 @@ export interface SnapItem {
   frozen: boolean;
   /** SAP's last change to the item, yyyy-mm-dd. */
   updated: string;
-  /** The named properties ticked on the item. */
+  /** The item's group: ticked in SAP, or worked out by the sync from its item group and quality. */
   props: number[];
+  /** 'ticked' in SAP, or 'auto' from the item group (HOT / PRECURED) and the quality. Absent before 11 Nov 2026. */
+  groupSource?: 'ticked' | 'auto';
   listPrice: number | null;
+  /** 'sap' Price List 01; 'placeholder' a stand-in for a local test (the group's median); 'none'. */
+  listPriceSource?: 'sap' | 'placeholder' | 'none';
   currency: string;
   /** Its Hi-Tech Pretreads twin's item code: same code, same name. */
   twin?: string | null;
@@ -326,6 +346,12 @@ export function buildPlan(
       }
       newList.set(it.code, next);
       listChanges.push({ item: it, propertyNo: p, quality: propertyName(snapshot, p), oldPrice: it.listPrice, newPrice: next, delta: roundMoney(next - Number(it.listPrice)) });
+    } else if (it.listPriceSource === 'placeholder' && Number(it.listPrice) > 0 && it.props.length === 1) {
+      // A local test's stand-in price: the dealer and Hi-Tech files are worked
+      // out from it, so file 1 writes it into SAP too, even when its group is
+      // not changing. Never on live: the sync refuses stand-ins there.
+      newList.set(it.code, it.listPrice);
+      listChanges.push({ item: it, propertyNo: it.props[0], quality: propertyName(snapshot, it.props[0]), oldPrice: it.listPrice, newPrice: Number(it.listPrice), delta: 0 });
     } else {
       newList.set(it.code, it.listPrice);
     }

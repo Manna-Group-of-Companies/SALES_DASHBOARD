@@ -7,8 +7,8 @@
  * a row opens its items, each with its Hi-Tech twin.
  */
 
-import { Alert, Badge, Card, Input } from '@/components/ui';
-import { roundMoney, type QualitySummary, type RatesPlan } from '@/domain/dealerRates';
+import { Alert, Badge, Button, Card, Input } from '@/components/ui';
+import { roundMoney, type QualitySummary, type RatesPlan, type UngroupedItem } from '@/domain/dealerRates';
 import { ExpandRow, Paged, keepRow, kindOf, matchItem, range, rs, signed, useOpenSet } from './parts';
 
 export function QualitiesTab({
@@ -17,13 +17,16 @@ export function QualitiesTab({
   hitechName,
   changeInput,
   setChange,
+  ungrouped = [],
 }: {
   summaries: QualitySummary[];
   plan: RatesPlan;
   hitechName: string;
   changeInput: Record<string, string>;
   setChange: (key: string, value: string) => void;
+  ungrouped?: UngroupedItem[];
 }) {
+  const leftOut = useOpenSet<string>();
   const rows = useOpenSet<string>();
   const newPrice = new Map(plan.listChanges.map((c) => [c.item.code, c.newPrice]));
   const hitechBy = new Map(plan.hitechRows.map((r) => [r.item.code, r]));
@@ -123,7 +126,14 @@ export function QualitiesTab({
                             {i.frozen && <Badge tone="danger">frozen</Badge>}
                           </td>
                           <td>{kindOf(i)}</td>
-                          <td className="right num">{rs(i.listPrice)}</td>
+                          <td className="right num">
+                            {rs(i.listPrice)}
+                            {i.listPriceSource === 'placeholder' && (
+                              <Badge tone="warn" title="SAP has no Price List 01 price; the group's median, for testing">
+                                stand-in
+                              </Badge>
+                            )}
+                          </td>
                           <td className="right num">{np !== undefined ? <b>{rs(np)}</b> : <span className="dim">{rs(i.listPrice)}</span>}</td>
                           <td className="right num">{np !== undefined ? signed(roundMoney(np - Number(i.listPrice))) : ''}</td>
                           <td className="right num">
@@ -153,6 +163,44 @@ export function QualitiesTab({
             Untick all but one in Manna Treads' SAP: {plan.multiGroup.slice(0, 10).map((i) => i.code).join(', ')}
             {plan.multiGroup.length > 10 ? `, …and ${plan.multiGroup.length - 10} more` : ''}.
           </Alert>
+        </div>
+      )}
+      {ungrouped.length > 0 && (
+        <div className="rates__pad">
+          <Alert tone="warn" title={`${ungrouped.length} HOT / PRECURED item(s) are in no group`}>
+            Their quality is not in the name or U_SubTypeA, or the two disagree. Fix the item in Manna Treads' SAP, or tick
+            its group, then Sync.{' '}
+            <Button size="sm" variant="ghost" onClick={() => leftOut.toggle('all')}>
+              {leftOut.has('all') ? 'Hide' : 'Show'} them
+            </Button>
+          </Alert>
+          {leftOut.has('all') && (
+            <Paged
+              rows={ungrouped}
+              match={(u, q) => `${u.code} ${u.name} ${u.reason}`.toLowerCase().includes(q.toLowerCase())}
+              placeholder="Filter items left out"
+              empty="None"
+              header={
+                <tr>
+                  <th>Item</th>
+                  <th>Name</th>
+                  <th>Item group</th>
+                  <th>U_SubTypeA</th>
+                  <th>Why</th>
+                </tr>
+              }
+            >
+              {(u) => (
+                <tr key={u.code}>
+                  <td className="mono">{u.code}</td>
+                  <td>{u.name}</td>
+                  <td>{u.groupName}</td>
+                  <td>{u.subType}</td>
+                  <td>{u.reason}</td>
+                </tr>
+              )}
+            </Paged>
+          )}
         </div>
       )}
       {itemProblems.length > 0 && (

@@ -41,10 +41,15 @@ function New-SapSession {
         CompanyDb = $CompanyDb
         Open      = $false
     }
+    # Optional sap.password_overrides.<CompanyDb>: a test company whose password is not the others'.
+    $password = "$($sap.password)"
+    if ($sap.PSObject.Properties['password_overrides'] -and $sap.password_overrides.PSObject.Properties[$CompanyDb]) {
+        $password = "$($sap.password_overrides.$CompanyDb)"
+    }
     $loginFile = Join-Path $env:TEMP "sap-pricing-$tag-login.json"
     try {
         [IO.File]::WriteAllText($loginFile,
-            (@{ CompanyDB = $CompanyDb; UserName = "$($sap.username)"; Password = "$($sap.password)" } | ConvertTo-Json -Compress),
+            (@{ CompanyDB = $CompanyDb; UserName = "$($sap.username)"; Password = $password } | ConvertTo-Json -Compress),
             $script:SapUtf8)
         $r = Invoke-SapCurl -Session $s -Method POST -Url "$($s.Base)/Login" -BodyFile $loginFile -SaveCookies
     } finally {

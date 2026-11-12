@@ -13,7 +13,15 @@
 #
 #   - "named" item properties are the price groups: any property whose name is
 #     not SAP's placeholder "Items Property <n>". An item is in the snapshot when
-#     it has at least one of them ticked (the query already asks for active items).
+#     it has at least one of them ticked (the query already asks for active items),
+#     or (11 Nov 2026) when it sits in item group HOT or PRECURED and its quality
+#     picks one: the item group gives the type, the name - else U_SubTypeA - the
+#     quality ("Hot - Black Pearl"). One that cannot be placed is listed under
+#     "ungrouped" with why. The port of sap-pricing/AutoGroups.ps1; both read
+#     shared/fixtures/price_groups.json.
+#   - on test companies only (neither database *_LIVE), an item with no Price
+#     List 01 price gets its group's median (its type's when the group has none)
+#     as a stand-in, listPriceSource "placeholder", so the screen can be tried.
 #   - an item's twin is Hi-Tech's item of the SAME code, when its name is the
 #     same (case and spacing aside) and it is active; the roll figures are the twin's.
 #   - prices are stored as SAP holds them (GST-inclusive, no margin applied). A
@@ -89,6 +97,83 @@ def is_placeholder(name):
 	return n.startswith("items property ") and n[len("items property "):].isdigit()
 
 
+# Quality from text with every space removed - no `re` in a Server Script, and
+# AutoGroups.ps1 matches the same way. "POLYCOLD" is U_SubTypeA's Polygold.
+# Lists of dicts, not tuples: safe_exec allows no unpacking (README, "Traps").
+QUALITY_WORDS = [{"q": "BLACK PEARL", "words": ["BLACKPEARL"]}, {"q": "PLATINUM", "words": ["PLATINUM", "PLATNIUM"]},
+	{"q": "POLYGOLD", "words": ["POLYGOLD", "POLYCOLD"]}, {"q": "SILVER", "words": ["SILVER"]}, {"q": "DIAMOND", "words": ["DIAMOND", "DAIMOND"]}]
+
+
+def quality_from_text(text):
+	t = "".join(str(text or "").upper().split())
+	found = []
+	for e in QUALITY_WORDS:
+		for w in e["words"]:
+			if w in t and e["q"] not in found:
+				found.append(e["q"])
+	if not found:
+		return ""
+	return found[0] if len(found) == 1 else "MULTI"
+
+
+def type_from_item_group(name):
+	g = str(name or "").strip().upper()
+	if g == "HOT":
+		return "HOT"
+	if g in ("PRECURED", "PCTR"):
+		return "PCTR"
+	return ""
+
+
+def split_group_name(name):
+	n = str(name or "")
+	i = n.find("-")
+	if i < 0:
+		return None
+	t = type_from_item_group(n[:i])
+	q = quality_from_text(n[i + 1:])
+	if not t or not q or q == "MULTI":
+		return None
+	return t + "|" + q
+
+
+def auto_group(name, sub_type, item_group, props):
+	"""{"no": property no or None, "why": why not} for an item with no property ticked."""
+	t = type_from_item_group(item_group)
+	if not t:
+		return {"no": None, "why": "item group %s is not HOT or PRECURED" % item_group}
+	by_name = quality_from_text(name)
+	by_sub = quality_from_text(sub_type)
+	if by_name == "MULTI":
+		return {"no": None, "why": "the name names more than one quality"}
+	if by_name and by_sub and by_sub != "MULTI" and by_name != by_sub:
+		return {"no": None, "why": "the name says %s, U_SubTypeA says %s" % (by_name, sub_type)}
+	q = by_name or (by_sub if by_sub != "MULTI" else "")
+	if not q:
+		return {"no": None, "why": "neither the name nor U_SubTypeA names a quality"}
+	for p in props:
+		if split_group_name(p["name"]) == t + "|" + q:
+			return {"no": p["no"], "why": ""}
+	return {"no": None, "why": "no group is named for %s %s" % (t, q)}
+
+
+def median_price(prices):
+	p = sorted([num(x) for x in prices if num(x) > 0])
+	if not p:
+		return None
+	mid = len(p) // 2
+	m = p[mid] if len(p) % 2 else (p[mid - 1] + p[mid]) / 2.0
+	return int(m + 0.5)
+
+
+def stand_in_companies(treads_db, hitech_db):
+	for d in (treads_db, hitech_db):
+		u = str(d or "").strip().upper()
+		if not u or u.endswith("_LIVE"):
+			return False
+	return True
+
+
 def rows_of(batch, kind):
 	return [list(r[1:]) + [""] * 14 for r in batch if r and str(r[0]) == kind]
 
@@ -107,11 +192,20 @@ def build(mt, ht, rules, margin, now):
 		hitech.setdefault(str(r[0]).lower(), r)
 	items = []
 	twins = []
+	ungrouped = []
 	for r in sorted(rows_of(mt, "I"), key=lambda r: str(r[0])):
-		code, name, flags = str(r[0]), str(r[1]), str(r[13])
+		code = str(r[0])
+		name = str(r[1])
+		flags = str(r[13])
 		ticked = [n for n in named if n <= len(flags) and flags[n - 1] == "Y"]
+		source = "ticked"
 		if not ticked:
-			continue
+			g = auto_group(name, r[8], r[3], props)
+			if g["no"] is None:
+				ungrouped.append({"code": code, "name": name, "groupName": r[3], "subType": r[8], "reason": g["why"]})
+				continue
+			ticked = [g["no"]]
+			source = "auto"
 		h = hitech.get(code.lower())
 		twin = None
 		note = None
@@ -132,8 +226,27 @@ def build(mt, ht, rules, margin, now):
 		items.append({"code": code, "name": name, "group": int(num(r[2])), "groupName": r[3] or None,
 			"type": KIND_LABEL.get(item_kind(norm(name)), ""), "quality": r[8], "uom": r[7] if str(r[7]).strip() else r[6],
 			"beltsPerRoll": belts, "weightPerRoll": weight, "stock": tidy(num(r[10])), "sales": r[4] == "Y", "frozen": r[5] == "Y",
-			"updated": str(r[9])[:10], "props": ticked, "listPrice": tidy(num(r[11])) if r[11] != "" else None, "currency": r[12] if r[11] != "" else "",
-			"twin": twin, "twinNote": note})
+			"updated": str(r[9])[:10], "props": ticked, "groupSource": source,
+			"listPrice": tidy(num(r[11])) if r[11] != "" else None, "listPriceSource": "sap" if num(r[11]) > 0 else "none",
+			"currency": r[12] if r[11] != "" else "", "twin": twin, "twinNote": note})
+	stand_ins = stand_in_companies(db_mt, db_ht)
+	if stand_ins:
+		type_of = {}
+		for p in props:
+			g = split_group_name(p["name"])
+			type_of[p["no"]] = g.split("|")[0] if g else ""
+		for p in props:
+			mine = [i for i in items if p["no"] in i["props"]]
+			m = median_price([i["listPrice"] for i in mine if i["listPriceSource"] == "sap"])
+			if m is None and type_of[p["no"]]:
+				m = median_price([i["listPrice"] for i in items if i["listPriceSource"] == "sap" and type_of.get(i["props"][0]) == type_of[p["no"]]])
+			if m is None:
+				continue
+			for i in mine:
+				if i["listPriceSource"] == "none":
+					i["listPrice"] = m
+					i["listPriceSource"] = "placeholder"
+					i["currency"] = "INR"
 	customers = [{"code": r[0], "name": r[1], "group": r[2] or None, "priceList": int(num(r[3])), "active": r[4] == "Y" and r[5] != "Y"}
 		for r in rows_of(mt, "C")]
 	special = [[r[1], r[0], tidy(num(r[2])), int(num(r[5])), 1 if r[6] == "Y" else 0, tidy(num(r[4])), 0 if r[7] == "N" else 1, r[3]]
@@ -142,7 +255,7 @@ def build(mt, ht, rules, margin, now):
 		"priceList": {"no": int(num(pl_mt[0])), "name": pl_mt[1]}, "syncedAt": now, "properties": props, "items": items, "customers": customers,
 		"specialCols": ["card", "item", "price", "priceList", "autoUpdate", "discount", "valid", "currency"], "specialRows": special,
 		"hitech": {"company": db_ht, "companyName": COMPANY_NAME["ht"], "priceList": {"no": int(num(pl_ht[0])), "name": pl_ht[1]}, "items": twins},
-		"serverCheck": check(items, twins, special, rules, margin)}
+		"serverCheck": check(items, twins, special, rules, margin), "ungrouped": ungrouped, "placeholderPrices": stand_ins}
 	return snap
 
 
@@ -242,10 +355,14 @@ def run():
 	c = snap["serverCheck"]
 	wrong = c["dealer"]["DRIFT"] + c["dealer"]["MISSING"] + c["dealer"]["KIND"] + c["hitech"]["DRIFT"] + c["hitech"]["MISSING"]
 	frappe.response["message"] = {"dry_run": dry, "refused": refused, "company": snap["company"], "hitech_company": snap["hitech"]["company"],
-		"properties": len(snap["properties"]), "items": len(snap["items"]), "twins": len(snap["hitech"]["items"]), "customers": len(snap["customers"]),
+		"properties": len(snap["properties"]), "items": len(snap["items"]), "ungrouped": len(snap["ungrouped"]),
+		"auto_grouped": len([i for i in snap["items"] if i["groupSource"] == "auto"]),
+		"stand_ins": len([i for i in snap["items"] if i["listPriceSource"] == "placeholder"]), "twins": len(snap["hitech"]["items"]), "customers": len(snap["customers"]),
 		"special_prices": len(snap["specialRows"]), "kb": int(len(text) / 1024), "serverCheck": c,
-		"summary": "SAP prices read: %d qualities, %d Manna Treads items (%d with a Hi-Tech twin), %d customers, %d special prices. Check: %d dealer price(s) and %d Hi-Tech price(s) right, %d not." % (
-			len(snap["properties"]), len(snap["items"]), len(snap["hitech"]["items"]), len(snap["customers"]), len(snap["specialRows"]), c["dealer"]["OK"], c["hitech"]["OK"], wrong)}
+		"summary": "SAP prices read: %d groups, %d Manna Treads items (%d grouped by item group and quality, %d left out; %d with a Hi-Tech twin%s), %d customers, %d special prices. Check: %d dealer price(s) and %d Hi-Tech price(s) right, %d not." % (
+			len(snap["properties"]), len(snap["items"]), len([i for i in snap["items"] if i["groupSource"] == "auto"]), len(snap["ungrouped"]), len(snap["hitech"]["items"]),
+			("; %d with a stand-in price" % len([i for i in snap["items"] if i["listPriceSource"] == "placeholder"])) if snap["placeholderPrices"] else "",
+			len(snap["customers"]), len(snap["specialRows"]), c["dealer"]["OK"], c["hitech"]["OK"], wrong)}
 
 
 if not frappe.flags.get("manna_test"):

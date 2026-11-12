@@ -109,3 +109,64 @@ def test_the_snapshot_is_version_3_with_the_company_databases_named():
 	s = snap()
 	assert s["version"] == 3 and s["company"] == "MANNA_TREADS_LIVE" and s["hitech"]["company"] == "HITECH_PRETREADS_LIVE"
 	assert s["customers"] == [{"code": "C-1001", "name": "Aman Tyres", "group": "Sales - Cinto", "priceList": 1, "active": True}]
+
+
+# ---- price groups and stand-ins (11 Nov 2026): shared/fixtures/price_groups.json, which Test-AutoGroups.ps1 reads too ----
+FX = json.load(open(os.path.join(HERE, "..", "..", "shared", "fixtures", "price_groups.json"), encoding="utf-8"))
+auto_group, median_price, stand_in_companies = ns["auto_group"], ns["median_price"], ns["stand_in_companies"]
+
+
+def test_price_groups_fixture():
+	props = [{"no": p["no"], "name": p["name"]} for p in FX["properties"]]
+	for c in FX["groups"]:
+		g = auto_group(c["name"], c["subType"], c["itemGroup"], props)
+		assert g["no"] == c["property"], c["why"]
+		assert g["no"] is not None or g["why"], c["why"] + ": left out with no reason"
+
+
+def test_stand_in_companies_fixture():
+	for c in FX["standIns"]:
+		assert stand_in_companies(c["treads"], c["hitech"]) == c["on"], c["why"]
+
+
+def test_median_fixture():
+	for c in FX["medians"]:
+		assert median_price(c["prices"]) == c["median"], c["why"]
+
+
+TEST_MT = [["D", "TEST_MANNA_TREADS"], ["L", "1", "selling price"], ["P", "1", "Hot - Black Pearl"], ["P", "6", "PCTR - Black Pearl"],
+	["P", "10", "PCTR - Diamond"], ["C", "C-1001", "Aman Tyres", "Sales - Cinto", "1", "Y", "N"]]
+TEST_HT = [["D", "TEST_HITECH_PRETREADS"], ["L", "1", "Price List 01"]]
+
+
+def tread(code, name, group, price, sub="", ticked=()):
+	r = item(code=code, name=name, price=price, ticked=ticked)
+	r[4] = group
+	r[9] = sub
+	return r
+
+
+def test_an_untagged_tread_joins_its_group_and_one_that_cannot_is_listed_with_why():
+	s = build(TEST_MT + [tread("A", "PCTR BLACK PEARL 205", "PRECURED", "200.000000"), tread("B", "HOT MANNA DOUBLE BLUE 35", "HOT", ""),
+		tread("C", "PATCH BLACK PEARL", "PATCHES", "10.000000"), tread("D", "HOT X", "HOT", "190.000000", ticked=(1,))], TEST_HT, [], 10, "now")
+	by = {i["code"]: i for i in s["items"]}
+	assert by["A"]["props"] == [6] and by["A"]["groupSource"] == "auto"
+	assert by["D"]["props"] == [1] and by["D"]["groupSource"] == "ticked"
+	assert sorted(u["code"] for u in s["ungrouped"]) == ["B", "C"]
+	assert [u["reason"] for u in s["ungrouped"] if u["code"] == "B"] == ["neither the name nor U_SubTypeA names a quality"]
+
+
+def test_a_test_company_gives_an_unpriced_item_its_groups_median_or_its_types():
+	mt = TEST_MT + [tread("A", "PCTR BLACK PEARL 1", "PRECURED", "200.000000"), tread("B", "PCTR BLACK PEARL 2", "PRECURED", "211.000000"),
+		tread("C", "PCTR BLACK PEARL 3", "PRECURED", ""), tread("Z", "PCTR BLACK PEARL 4", "PRECURED", "0.000000"),
+		tread("D", "PCTR DIAMOND 1", "PRECURED", "")]
+	s = build(mt, TEST_HT, [], 10, "now")
+	by = {i["code"]: (i["listPrice"], i["listPriceSource"]) for i in s["items"]}
+	assert s["placeholderPrices"] is True
+	assert by["A"] == (200, "sap") and by["C"] == (206, "placeholder") and by["Z"] == (206, "placeholder")
+	assert by["D"] == (206, "placeholder")
+
+
+def test_live_never_gets_a_stand_in():
+	s = build([r if r[0] != "D" else ["D", "MANNA_TREADS_LIVE"] for r in TEST_MT] + [tread("C", "PCTR BLACK PEARL 3", "PRECURED", "")], TEST_HT, [], 10, "now")
+	assert s["placeholderPrices"] is False and s["items"][0]["listPrice"] is None and s["items"][0]["listPriceSource"] == "none"

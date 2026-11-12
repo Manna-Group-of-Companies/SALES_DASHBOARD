@@ -1,0 +1,40 @@
+{
+  "_about": "Which price group (Manna Treads item property) an item belongs to when none is ticked, and a local test's stand-in price. Decided with the user on 11 Nov 2026. Two implementations read this file: sap-pricing/AutoGroups.ps1 (Test-AutoGroups.ps1) and sap-b1if/erpnext/manna_sap_pricing.py (test_manna_sap_pricing.py). A ticked property always wins; these cases are for items with none. Type: the SAP item group (HOT -> HOT, PRECURED or PCTR -> PCTR). Quality: the name, else U_SubTypeA; matched as text with spaces removed, so 'POLY GOLD' and 'POLYCOLD' are Polygold. Both naming different qualities, or neither naming one: no group.",
+  "properties": [
+    { "no": 1, "name": "Hot - Black Pearl" },
+    { "no": 2, "name": "Hot -Platinum" },
+    { "no": 3, "name": "Hot - Polygold" },
+    { "no": 6, "name": "PCTR - Black Pearl" },
+    { "no": 8, "name": "PCTR - Polygold" },
+    { "no": 9, "name": "PCTR -- Silver" },
+    { "no": 11, "name": "BONDING GUM - Black Pearl" }
+  ],
+  "groups": [
+    { "why": "precured, quality from the name", "name": "TREAD RUBBER PRECURED BLACK PEARL 120 IR 66\"", "subType": "", "itemGroup": "PRECURED", "property": 6 },
+    { "why": "hot, quality from U_SubTypeA when the name has none", "name": "HOT MANNA DOUBLE BLUE 32 12", "subType": "BLACK PEARL", "itemGroup": "HOT", "property": 1 },
+    { "why": "odd spacing in the group's name", "name": "TREAD RUBBER HOT PLATINUM 34*14", "subType": "", "itemGroup": "HOT", "property": 2 },
+    { "why": "a double dash in the group's name", "name": "PCTR SILVER 200", "subType": "", "itemGroup": "PRECURED", "property": 9 },
+    { "why": "the type is the item group, not the name", "name": "HOT VERDO POLY GOLD 32 8", "subType": "", "itemGroup": "PRECURED", "property": 8 },
+    { "why": "POLYCOLD in U_SubTypeA is Polygold", "name": "PCTR VERDO 32", "subType": "POLYCOLD", "itemGroup": "PRECURED", "property": 8 },
+    { "why": "item group name in any case, with spaces", "name": "PCTR BLACK PEARL 205", "subType": "", "itemGroup": " precured ", "property": 6 },
+    { "why": "U_SubTypeA that is not a quality leaves the name to decide", "name": "PCTR SILVER 200", "subType": "Precured", "itemGroup": "PRECURED", "property": 9 },
+    { "why": "the name and U_SubTypeA disagree: left out", "name": "TREAD RUBBER PRECURED PLATINUM 150 VK 96", "subType": "BLACK PEARL", "itemGroup": "PRECURED", "property": null },
+    { "why": "the name names two qualities: left out", "name": "PCTR PLATINUM / SILVER 200", "subType": "", "itemGroup": "PRECURED", "property": null },
+    { "why": "no quality anywhere: left out", "name": "HOT MANNA DOUBLE BLUE 35 8", "subType": "", "itemGroup": "HOT", "property": null },
+    { "why": "not a tread item group: left out", "name": "PATCH BLACK PEARL", "subType": "", "itemGroup": "PATCHES", "property": null },
+    { "why": "no group named for that type and quality: left out", "name": "HOT DIAMOND 32", "subType": "", "itemGroup": "HOT", "property": null },
+    { "why": "a BONDING GUM group is only ever ticked, never worked out", "name": "BONDING GUM BLACK PEARL", "subType": "", "itemGroup": "BONDING GUM", "property": null }
+  ],
+  "standIns": [
+    { "why": "both test companies", "treads": "TEST_MANNA_TREADS", "hitech": "TEST_HITECH_PRETREADS", "on": true },
+    { "why": "live Manna Treads", "treads": "MANNA_TREADS_LIVE", "hitech": "TEST_HITECH_PRETREADS", "on": false },
+    { "why": "live Hi-Tech, in any case", "treads": "TEST_MANNA_TREADS", "hitech": "hitech_pretreads_live", "on": false },
+    { "why": "a company not named", "treads": "TEST_MANNA_TREADS", "hitech": "", "on": false }
+  ],
+  "medians": [
+    { "why": "odd count", "prices": [150, 200, 175], "median": 175 },
+    { "why": "even count, rounded half away from zero to whole rupees", "prices": [150, 175, 180, 201], "median": 178 },
+    { "why": "zero is no price", "prices": [0, 160], "median": 160 },
+    { "why": "nothing priced", "prices": [], "median": null }
+  ]
+}

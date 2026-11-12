@@ -51,16 +51,22 @@
 param(
     [Parameter(Mandatory = $true)] [string] $ConfigPath,
     [switch] $DryRun,
-    [string] $ResultJsonPath
+    [string] $ResultJsonPath,
+    # The companies read. The defaults are the live ones; a local test names TEST_MANNA_TREADS / TEST_HITECH_PRETREADS.
+    [string] $TreadsDb = 'MANNA_TREADS_LIVE',
+    [string] $HitechDb = 'HITECH_PRETREADS_LIVE'
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'SapSession.ps1')
 . (Join-Path $PSScriptRoot 'RupeeRules.ps1')
+. (Join-Path $PSScriptRoot 'AutoGroups.ps1')
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 [Net.ServicePointManager]::Expect100Continue = $false
 
-$TreadsDb = 'MANNA_TREADS_LIVE'
-$HitechDb = 'HITECH_PRETREADS_LIVE'
+# Test companies only: an item with no Price List 01 price gets its group's
+# median (AutoGroups.ps1). Never when either company is live. manna_sap_pricing.py
+# decides the same way, from the same database names.
+$PlaceholderPrices = Test-StandInCompanies $TreadsDb $HitechDb
 $PriceList = 1        # both companies: Manna Treads' "selling price", Hi-Tech's "Price List 01"
 $RuleDoctype = 'SAP Dealer Rate Rule'
 $result = [ordered]@{ exitCode = 1; changed = 0; failures = 0; items = 0; twins = 0; specialPrices = 0; customers = 0; summary = $null; error = $null }
@@ -98,12 +104,15 @@ try {
         $groups = @{}; foreach ($g in @(Get-SapAll $t 'ItemGroups?$select=Number,GroupName')) { $groups["$($g.Number)"] = "$($g.GroupName)" }
         $plName = "$((Get-SapOne $t "PriceLists($PriceList)?`$select=PriceListNo,PriceListName").PriceListName)"
 
+        # An item is read when it has a group ticked, or sits in an item group
+        # (HOT, PRECURED) whose items join a group by their quality (AutoGroups.ps1).
         $raw = @()
+        $treadGroups = @($groups.Keys | Where-Object { Get-TypeFromItemGroup $groups[$_] })
         if ($props.Count) {
             $pSel = ($props | ForEach-Object { "Properties$($_.no)" }) -join ','
-            $pFlt = ($props | ForEach-Object { "Properties$($_.no) eq 'tYES'" }) -join ' or '
+            $pFlt = @($props | ForEach-Object { "Properties$($_.no) eq 'tYES'" }) + @($treadGroups | ForEach-Object { "ItemsGroupCode eq $_" })
             $sel = "ItemCode,ItemName,ItemsGroupCode,SalesItem,Frozen,InventoryUOM,SalesUnit,U_SubTypeA,UpdateDate,QuantityOnStock,ItemPrices,$pSel"
-            $raw = @(Get-SapAll $t "Items?`$select=$sel&`$filter=($pFlt) and Valid eq 'tYES'")
+            $raw = @(Get-SapAll $t "Items?`$select=$sel&`$filter=($($pFlt -join ' or ')) and Valid eq 'tYES'")
         }
 
         $bpGroups = @{}; foreach ($g in @(Get-SapAll $t 'BusinessPartnerGroups?$select=Code,Name')) { $bpGroups["$($g.Code)"] = "$($g.Name)" }
@@ -146,8 +155,19 @@ try {
 
     $hitech = New-Object System.Collections.Generic.List[object]
     $hitechPrice = @{}
+    $ungrouped = New-Object System.Collections.Generic.List[object]
     $items = @(foreach ($it in $raw) {
         $code = "$($it.ItemCode)"; $name = "$($it.ItemName)"
+        $ticked = @($props | Where-Object { $it."Properties$($_.no)" -eq 'tYES' } | ForEach-Object { $_.no })
+        $groupSource = 'ticked'
+        if ($ticked.Count -eq 0) {
+            $auto = Get-AutoGroup -Name $name -SubType "$($it.U_SubTypeA)" -ItemGroupName $groups["$($it.ItemsGroupCode)"] -Properties $props
+            if ($null -eq $auto.Property) {
+                $ungrouped.Add([ordered]@{ code = $code; name = $name; groupName = $groups["$($it.ItemsGroupCode)"]; subType = "$($it.U_SubTypeA)"; reason = $auto.Reason })
+                continue
+            }
+            $ticked = @($auto.Property); $groupSource = 'auto'
+        }
         $lp = @($it.ItemPrices | Where-Object { [int]$_.PriceList -eq $PriceList })[0]
         $twin = $null; $note = $null; $belts = $null; $kg = $null
         $hx = $hiItems[$code]
@@ -177,12 +197,32 @@ try {
             stock = [double]$it.QuantityOnStock
             sales = ("$($it.SalesItem)" -eq 'tYES'); frozen = ("$($it.Frozen)" -eq 'tYES')
             updated = (Get-Date10 $it.UpdateDate)
-            props = @($props | Where-Object { $it."Properties$($_.no)" -eq 'tYES' } | ForEach-Object { $_.no })
+            props = @($ticked); groupSource = $groupSource
             listPrice = $(if ($lp) { [double]$lp.Price } else { $null })
+            listPriceSource = $(if ($lp -and [double]$lp.Price -gt 0) { 'sap' } else { 'none' })
             currency = $(if ($lp) { "$($lp.Currency)" } else { '' })
             twin = $twin; twinNote = $note
         }
     })
+
+    # ---- local tests: a stand-in price where SAP has none ----
+    $placeholders = 0
+    if ($PlaceholderPrices) {
+        $typeOf = @{}; foreach ($p in $props) { $g = Split-GroupName $p.name; $typeOf[$p.no] = $(if ($g) { $g.Type } else { '' }) }
+        foreach ($p in $props) {
+            $mine = @($items | Where-Object { $_.props -contains $p.no })
+            $median = Get-MedianPrice @($mine | Where-Object { $_.listPriceSource -eq 'sap' } | ForEach-Object { [double]$_.listPrice })
+            if ($null -eq $median) {
+                # A group SAP prices nothing in (Hot - Diamond in TEST_MANNA_TREADS): the median of its type.
+                $kind = $typeOf[$p.no]
+                $median = Get-MedianPrice @($items | Where-Object { $_.listPriceSource -eq 'sap' -and $kind -and $typeOf[$_.props[0]] -eq $kind } | ForEach-Object { [double]$_.listPrice })
+            }
+            if ($null -eq $median) { continue }
+            foreach ($i in $mine) {
+                if ($i.listPriceSource -eq 'none') { $i.listPrice = $median; $i.listPriceSource = 'placeholder'; $i.currency = 'INR'; $placeholders++ }
+            }
+        }
+    }
 
     # ---- this server's own check, to set beside the screen's ----
     $checkItems = @(foreach ($i in $items) { [pscustomobject]@{ Code = $i.code; Props = @($i.props); ListPrice = $i.listPrice; Twin = $i.twin } })
@@ -193,6 +233,7 @@ try {
         priceList = [ordered]@{ no = $PriceList; name = $plName }
         syncedAt = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         properties = @($props); items = @($items); customers = @($customers)
+        ungrouped = $ungrouped.ToArray(); placeholderPrices = [bool]$PlaceholderPrices
         specialCols = @('card', 'item', 'price', 'priceList', 'autoUpdate', 'discount', 'valid', 'currency')
         specialRows = $special.ToArray()
         hitech = [ordered]@{ company = $HitechDb; companyName = 'Hi-Tech Pretreads'; priceList = [ordered]@{ no = $PriceList; name = $hiPlName }; items = $hitech.ToArray() }
@@ -202,8 +243,10 @@ try {
     $result.items = $items.Count; $result.twins = $hitech.Count; $result.specialPrices = $special.Count; $result.customers = $customers.Count
     $result.changed = $result.items + $result.specialPrices
     $bad = $check.dealer.DRIFT + $check.dealer.MISSING + $check.dealer.KIND + $check.hitech.DRIFT + $check.hitech.MISSING
-    $result.summary = ("SAP prices read: {0} qualities, {1} Manna Treads items ({2} with a Hi-Tech twin), {3} customers, {4} special prices ({5:N0} KB). Check: {6} dealer price(s) and {7} Hi-Tech price(s) right, {8} not." -f `
-        $props.Count, $result.items, $result.twins, $result.customers, $result.specialPrices, ($json.Length / 1KB), $check.dealer.OK, $check.hitech.OK, $bad)
+    $auto = @($items | Where-Object { $_.groupSource -eq 'auto' }).Count
+    $result.summary = ("SAP prices read: {0} groups, {1} Manna Treads items ({9} grouped by item group and quality, {10} left out; {2} with a Hi-Tech twin{11}), {3} customers, {4} special prices ({5:N0} KB). Check: {6} dealer price(s) and {7} Hi-Tech price(s) right, {8} not." -f `
+        $props.Count, $result.items, $result.twins, $result.customers, $result.specialPrices, ($json.Length / 1KB), $check.dealer.OK, $check.hitech.OK, $bad,
+        $auto, $ungrouped.Count, $(if ($PlaceholderPrices) { "; $placeholders with a stand-in price" } else { '' }))
 
     if ($DryRun) {
         $out = Join-Path $env:TEMP 'sap-pricing-snapshot.json'

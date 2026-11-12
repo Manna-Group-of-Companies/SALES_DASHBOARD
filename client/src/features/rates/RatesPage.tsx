@@ -344,6 +344,12 @@ export function RatesPage() {
         </Alert>
       )}
       {snapshot && snapshot.version < 3 && <Alert tone="warn" title="SAP data out of date — sync from SAP" />}
+      {snapshot?.placeholderPrices && (
+        <Alert tone="warn" title={`Test data: ${snapshot.items.filter((i) => i.listPriceSource === 'placeholder').length} stand-in list prices`}>
+          {snapshot.company} has no Price List 01 price for these items, so each has its group's median. The files will
+          write them into SAP. Never on live.
+        </Alert>
+      )}
       {snapshot && !margin && (
         <Alert tone="warn" title="Inter-company margin not set">
           ERPNext: SAP Pricing Control → Hi-Tech Bills Manna Treads Less.
@@ -408,6 +414,7 @@ export function RatesPage() {
               hitechName={hitechName}
               changeInput={changeInput}
               setChange={(no, value) => setChangeInput((p) => ({ ...p, [no]: value }))}
+              ungrouped={snapshot.ungrouped}
             />
           )}
           {tab === 'dealers' && (

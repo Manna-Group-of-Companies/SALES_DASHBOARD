@@ -187,6 +187,17 @@ describe('the plan', () => {
     expect(plan.problems[0].kind).toBe('conflict');
   });
 
+  it("writes a local test's stand-in prices into SAP, changed or not; SAP's own prices only when changed", () => {
+    const stand = { ...item('S', [2], 180), listPriceSource: 'placeholder' as const };
+    const sap = { ...item('A', [2], 175), listPriceSource: 'sap' as const };
+    const moved = { ...item('B', [1], 190), listPriceSource: 'placeholder' as const };
+    const plan = buildPlan(snapshot([stand, sap, moved]), [], [change(1, 5)]);
+    expect(plan.listChanges.map((c) => [c.item.code, c.newPrice, c.delta])).toEqual([
+      ['S', 180, 0],
+      ['B', 195, 5],
+    ]);
+  });
+
   it('never lets a list price fall to zero or below', () => {
     const plan = buildPlan(snapshot([item('BP', [1], 4)]), [], [change(1, -5)]);
     expect(plan.listChanges).toHaveLength(0);
