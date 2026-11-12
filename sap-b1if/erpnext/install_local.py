@@ -4,7 +4,10 @@
 # these scripts write customers, so they reach the live site only by hand, later.
 import json, os, sys, urllib.request, urllib.error
 HERE = os.path.dirname(os.path.abspath(__file__))
-ENV = r"C:\Users\Melvin\Documents\MANNA\Manna_CMMS\server\.env"
+# The CMMS beside this repo, as on the first PC - not a path with one person's Windows login in it, which
+# stopped this on every other PC (12 Nov 2026). MANNA_CMMS_DIR names it where it is kept somewhere else, the
+# same rule as MannaHRM/localdev/paths.mjs.
+ENV = os.path.join(os.environ.get("MANNA_CMMS_DIR") or os.path.join(HERE, "..", "..", "..", "Manna_CMMS"), "server", ".env")
 env = dict(l.strip().split("=", 1) for l in open(ENV, encoding="utf-8") if "=" in l and not l.startswith("#"))
 URL = env["ERPNEXT_URL"].rstrip("/")
 if URL not in ("http://127.0.0.1:8000", "http://localhost:8000"):
