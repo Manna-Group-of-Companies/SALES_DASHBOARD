@@ -1,6 +1,7 @@
 // Item requests on the phone (10 Nov 2026): the rep asks for a product that is
 // not in the catalogue and sees the accountant's answer (the new item code, or
-// why not). See core/item_request.dart.
+// why not). From 12 Nov 2026 the rep's manager approves it first, on
+// ItemRequestApprovalsScreen below. See core/item_request.dart.
 
 import 'package:flutter/material.dart';
 
@@ -76,13 +77,16 @@ class _ItemRequestScreenState extends State<ItemRequestScreen> {
 
 class _RequestCard extends StatelessWidget {
   final ItemRequest r;
-  const _RequestCard({required this.r});
+  final bool showRep;
+  final Widget? actions;
+  const _RequestCard({required this.r, this.showRep = false, this.actions});
 
   @override
   Widget build(BuildContext context) {
     final color = switch (r.status) {
       'Done' => const Color(0xFF2E7D32),
       'Rejected' => Colors.red.shade700,
+      kItemRequestWithAccountant => const Color(0xFF1565C0),
       _ => const Color(0xFFB26A00),
     };
     final qty = r.quantity > 0 ? '${trimQty(r.quantity)} ${r.unit}'.trim() : '';
@@ -97,12 +101,18 @@ class _RequestCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(color: color.withValues(alpha: 0.10), borderRadius: BorderRadius.circular(20)),
-              child: Text(r.status, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color)),
+              child: Text(r.label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color)),
             ),
           ]),
           const SizedBox(height: 4),
           Text(
-            [r.itemType, if (r.customerName.isNotEmpty) r.customerName, if (qty.isNotEmpty) qty, _date(r.requestedOn)]
+            [
+              if (showRep && r.salesPerson.isNotEmpty) r.salesPerson,
+              r.itemType,
+              if (r.customerName.isNotEmpty) r.customerName,
+              if (qty.isNotEmpty) qty,
+              _date(r.requestedOn),
+            ]
                 .where((s) => s.isNotEmpty)
                 .join('  ·  '),
             style: const TextStyle(fontSize: 12.5, color: Colors.black54),
@@ -114,8 +124,135 @@ class _RequestCard extends StatelessWidget {
           if (r.reply.isNotEmpty) ...[
             const SizedBox(height: 4),
             Text(r.reply, style: TextStyle(fontSize: 13, color: r.status == 'Rejected' ? Colors.red.shade700 : Colors.black87)),
+          ] else if (r.managerNote.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text('Manager: ${r.managerNote}', style: const TextStyle(fontSize: 13, color: Colors.black87)),
           ],
+          ?actions,
         ]),
+      ),
+    );
+  }
+}
+
+/// The manager's (or the GM's) item requests to approve on to the accountant
+/// (12 Nov 2026). The server says which ones this login may decide
+/// (can_approve) and refuses the rest, so the screen only offers those.
+class ItemRequestApprovalsScreen extends StatefulWidget {
+  const ItemRequestApprovalsScreen({super.key});
+  @override
+  State<ItemRequestApprovalsScreen> createState() => _ItemRequestApprovalsScreenState();
+}
+
+class _ItemRequestApprovalsScreenState extends State<ItemRequestApprovalsScreen> {
+  late Future<List<ItemRequest>> _future = Api.getItemRequests();
+  final Set<String> _busy = {};
+
+  void _reload() => setState(() => _future = Api.getItemRequests());
+
+  void _snack(String m) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  Future<void> _decide(ItemRequest r, bool approve) async {
+    var note = '';
+    if (!approve) {
+      final c = TextEditingController();
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Reject request'),
+          content: TextField(
+            controller: c,
+            autofocus: true,
+            maxLines: 2,
+            decoration: const InputDecoration(labelText: 'Why? The rep sees this', border: OutlineInputBorder()),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Reject')),
+          ],
+        ),
+      );
+      note = c.text.trim();
+      c.dispose();
+      if (ok != true) return;
+      if (note.isEmpty) return _snack('Say why it is rejected.');
+    }
+    setState(() => _busy.add(r.name));
+    try {
+      await Api.approveItemRequest(r.name, approve: approve, note: note);
+      _snack(approve ? 'Approved: sent to the accountant.' : 'Rejected.');
+      _reload();
+    } catch (e) {
+      _snack(humanError(e));
+    } finally {
+      if (mounted) setState(() => _busy.remove(r.name));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Item Request Approvals')),
+      body: FutureBuilder<List<ItemRequest>>(
+        future: _future,
+        builder: (context, snap) {
+          if (snap.connectionState != ConnectionState.done) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snap.hasError) {
+            return Center(
+                child: Padding(padding: const EdgeInsets.all(20), child: Text(humanError(snap.error), textAlign: TextAlign.center)));
+          }
+          final all = snap.data!;
+          final waiting = all.where((r) => r.canApprove).toList();
+          // The rest of the team's, decided or with the accountant, below - so
+          // a manager can answer "where is my rep's request?" from here.
+          final rest = all.where((r) => !r.canApprove).toList();
+          return RefreshIndicator(
+            onRefresh: () async => _reload(),
+            child: ListView(padding: const EdgeInsets.all(12), children: [
+              Text(waiting.isEmpty ? 'Nothing waiting for you.' : 'Waiting for you (${waiting.length})',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              for (final r in waiting)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _RequestCard(
+                    r: r,
+                    showRep: true,
+                    actions: Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Row(children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _busy.contains(r.name) ? null : () => _decide(r, false),
+                            child: const Text('Reject'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: FilledButton(
+                            style: FilledButton.styleFrom(backgroundColor: _kOrange),
+                            onPressed: _busy.contains(r.name) ? null : () => _decide(r, true),
+                            child: const Text('Approve'),
+                          ),
+                        ),
+                      ]),
+                    ),
+                  ),
+                ),
+              if (rest.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text('Earlier requests', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                for (final r in rest)
+                  Padding(padding: const EdgeInsets.only(bottom: 8), child: _RequestCard(r: r, showRep: true)),
+              ],
+            ]),
+          );
+        },
       ),
     );
   }

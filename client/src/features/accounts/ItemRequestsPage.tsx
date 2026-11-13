@@ -1,9 +1,22 @@
 /**
- * The reps' item requests. The accountant creates the item in SAP, then
- * answers with its code, or rejects. HR sees the same list, read-only.
+ * The reps' item requests. The rep's manager (or the GM) approves a new one
+ * first (12 Nov 2026); the accountant then creates the item in SAP and answers
+ * with its code, or rejects - the accounts staff, from 12 Nov 2026 (the
+ * accountant before; the accountant no longer has this page). HR sees the
+ * same list, read-only.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { decideItemRequest, listItemRequests, type ItemRequest, type ItemRequestStatus } from '@/api/itemRequests';
+import {
+  WITH_ACCOUNTANT,
+  WITH_MANAGER,
+  accountantAnswers,
+  approveItemRequest,
+  decideItemRequest,
+  itemRequestLabel,
+  listItemRequests,
+  type ItemRequest,
+  type ItemRequestStatus,
+} from '@/api/itemRequests';
 import { Alert, Badge, Button, Card, Empty, Icon, Input, Modal, Select, Skeleton, Tabs, Textarea } from '@/components/ui';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import { useAppSelector } from '@/store/hooks';
@@ -24,11 +37,15 @@ export function ItemRequestsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
-  const [show, setShow] = useState<Show>('Pending');
+  const role = useAppSelector(selectUser)?.role;
+  // manna_item_request refuses anyone else's answer, so nobody else is offered one.
+  // Accounts staff answer (12 Nov 2026; the accountant until then) - the only ones manna_item_request lets.
+  const answersRequests = role === 'accounts_staff';
+  const isManager = role === 'sales_manager' || role === 'general_manager';
+  const [show, setShow] = useState<Show>(isManager ? WITH_MANAGER : WITH_ACCOUNTANT);
   const [rep, setRep] = useState('');
   const [open, setOpen] = useState<ItemRequest | null>(null);
-  // manna_item_request refuses anyone else's answer, so nobody else is offered one.
-  const canAnswer = useAppSelector(selectUser)?.role === 'accountant';
+  const canAnswer = (r: ItemRequest) => answersRequests && accountantAnswers(r.status);
 
   useEffect(() => {
     let live = true;
@@ -53,7 +70,9 @@ export function ItemRequestsPage() {
       <div className="page-head">
         <div className="grow">
           <div className="page-head__title">Item Requests</div>
-          <div className="tiny dim">New products the reps asked for</div>
+          <div className="tiny dim">
+            New products the reps asked for: the manager approves, then accounts make it in SAP
+          </div>
         </div>
         <RefreshButton onClick={() => setTick((t) => t + 1)} loading={loading} />
       </div>
@@ -64,7 +83,8 @@ export function ItemRequestsPage() {
         <div className="ir-tools">
           <Tabs<Show>
             tabs={[
-              { id: 'Pending', label: 'Pending', count: count('Pending') },
+              { id: WITH_MANAGER, label: 'With manager', count: count(WITH_MANAGER) },
+              { id: WITH_ACCOUNTANT, label: 'With accountant', count: count(WITH_ACCOUNTANT) },
               { id: 'Done', label: 'Done', count: count('Done') },
               { id: 'Rejected', label: 'Rejected', count: count('Rejected') },
               { id: 'all', label: 'All', count: byRep.length },
@@ -87,7 +107,7 @@ export function ItemRequestsPage() {
             <Skeleton height={120} />
           </div>
         ) : shown.length === 0 ? (
-          <Empty title={show === 'Pending' ? 'Nothing waiting' : 'No requests'} />
+          <Empty title={show === WITH_MANAGER || show === WITH_ACCOUNTANT ? 'Nothing waiting' : 'No requests'} />
         ) : (
           <div className="scroll-x">
             <table className="table">
@@ -122,16 +142,16 @@ export function ItemRequestsPage() {
                       ) : r.status === 'Rejected' ? (
                         <Badge tone="danger">Rejected</Badge>
                       ) : (
-                        <Badge tone="warn">Pending</Badge>
+                        <Badge tone="warn">{itemRequestLabel(r.status)}</Badge>
                       )}
                     </td>
                     <td className="right">
                       <Button
                         size="sm"
-                        variant={canAnswer && r.status === 'Pending' ? 'primary' : 'default'}
+                        variant={canAnswer(r) || r.canApprove ? 'primary' : 'default'}
                         onClick={() => setOpen(r)}
                       >
-                        {canAnswer && r.status === 'Pending' ? 'Answer' : 'View'}
+                        {canAnswer(r) ? 'Answer' : r.canApprove ? 'Approve' : 'View'}
                       </Button>
                     </td>
                   </tr>
@@ -142,17 +162,27 @@ export function ItemRequestsPage() {
         )}
       </Card>
 
-      {open && (
-        <AnswerModal
-          r={open}
-          readOnly={!canAnswer}
-          onClose={() => setOpen(null)}
-          onDone={() => {
-            setOpen(null);
-            setTick((t) => t + 1);
-          }}
-        />
-      )}
+      {open &&
+        (open.canApprove ? (
+          <ApproveModal
+            r={open}
+            onClose={() => setOpen(null)}
+            onDone={() => {
+              setOpen(null);
+              setTick((t) => t + 1);
+            }}
+          />
+        ) : (
+          <AnswerModal
+            r={open}
+            readOnly={!canAnswer(open)}
+            onClose={() => setOpen(null)}
+            onDone={() => {
+              setOpen(null);
+              setTick((t) => t + 1);
+            }}
+          />
+        ))}
     </div>
   );
 }
@@ -212,7 +242,8 @@ function AnswerModal({
             <Icon name="file" size={14} /> Photo
           </a>
         )}
-        {readOnly && line('Status', r.status)}
+        {line("Manager's note", r.managerNote)}
+        {readOnly && line('Status', itemRequestLabel(r.status))}
         {readOnly && line('Item code', r.itemCode)}
         {readOnly && line('Reply', r.reply)}
       </div>
@@ -235,6 +266,60 @@ function AnswerModal({
           </div>
         </>
       )}
+    </Modal>
+  );
+}
+
+/** The manager's (or the GM's) decision on a new request (12 Nov 2026). */
+function ApproveModal({ r, onClose, onDone }: { r: ItemRequest; onClose: () => void; onDone: () => void }) {
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save(approve: boolean) {
+    if (!approve && !note.trim()) return setErr('Say why it is rejected.');
+    setBusy(true);
+    setErr(null);
+    try {
+      await approveItemRequest(r.name, approve, note.trim());
+      onDone();
+    } catch (e: unknown) {
+      setErr(e instanceof Error && e.message ? e.message : 'Could not save.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const line = (k: string, v: string) =>
+    v ? (
+      <div className="ir-line">
+        <span className="dim">{k}</span>
+        <span>{v}</span>
+      </div>
+    ) : null;
+
+  return (
+    <Modal onClose={onClose} title="Approve item request">
+      <div className="ir-detail">
+        {line('Rep', r.salesPerson)}
+        {line('Date', day(r.requestedOn))}
+        {line('Product', `${r.productLine} · ${r.itemType}`)}
+        {line('Pattern', r.pattern)}
+        {line('Size', r.size)}
+        {line('Customer', r.customerName)}
+        {line('Note', r.note)}
+      </div>
+      {err && <Alert tone="danger">{err}</Alert>}
+      <label className="tiny dim">Note (needed to reject; the rep sees it)</label>
+      <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} disabled={busy} />
+      <div className="ir-actions">
+        <Button onClick={() => save(false)} disabled={busy}>
+          Reject
+        </Button>
+        <Button variant="primary" onClick={() => save(true)} loading={busy}>
+          Approve → accountant
+        </Button>
+      </div>
     </Modal>
   );
 }

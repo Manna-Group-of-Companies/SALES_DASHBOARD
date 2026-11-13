@@ -20,6 +20,7 @@ import 'package:manna_field_sales/screens/manager/manager_customers_screen.dart'
 import 'package:manna_field_sales/screens/manager/manager_orders_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_targets_screen.dart';
 import 'package:manna_field_sales/screens/orders/pick_list_screen.dart';
+import 'package:manna_field_sales/screens/requests/item_request_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 class ManagerDashboardScreen extends StatefulWidget {
@@ -31,6 +32,7 @@ class ManagerDashboardScreen extends StatefulWidget {
 class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
   late Future<int> _orders;
   late Future<int> _locations;
+  late Future<int> _itemRequests;
 
   /// What this manager may open — the same rule as the dashboard's sidebar
   /// (shared/fixtures/manager_scope.json).
@@ -46,7 +48,12 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
   void _refresh() => setState(() {
         _orders = _countOrders();
         _locations = _countLocations();
+        _itemRequests = _countItemRequests();
       });
+
+  /// Item requests this manager may approve now (the server's can_approve).
+  Future<int> _countItemRequests() async =>
+      (await Api.getItemRequests()).where((r) => r.canApprove).length;
 
   /// Orders waiting on a decision, whatever week they were raised in — Team
   /// Orders shows one week at a time, and an old one would otherwise hide.
@@ -120,6 +127,14 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                 'Pick Lists',
                 const Text('View only'),
                 const PickListsScreen()),
+          // A new product goes to the team's manager before the accountant
+          // makes it in SAP (12 Nov 2026).
+          _card(
+              Icons.add_box_outlined,
+              'Item Request Approvals',
+              _waitingSubtitle(_itemRequests, 'No item requests waiting',
+                  (n) => '$n request${n == 1 ? '' : 's'} waiting on you'),
+              const ItemRequestApprovalsScreen()),
           if (_can(ManagerScreen.regularizations))
             _card(
                 Icons.event_available,

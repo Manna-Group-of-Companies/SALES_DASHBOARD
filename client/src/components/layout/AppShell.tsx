@@ -162,6 +162,8 @@ export function AppShell() {
     // decision, and what their decisions set in motion (25 Sep 2026).
     { to: '/gm', label: 'Escalated to You', icon: 'inbox', roles: ['general_manager'], group: 'Overview' },
     { to: '/follow-up', label: 'Follow-up', icon: 'listChecks', roles: ['general_manager'], count: repAnswers, urgent: repAnswers > 0, group: 'Overview' },
+    // The GM approves item requests of reps with no team, and may any.
+    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['general_manager'], group: 'Overview' },
     // Every team's targets, read-only (5 Nov 2026).
     { to: '/targets', label: 'Team Targets', icon: 'chart', roles: ['general_manager'], group: 'Overview' },
     // Which products sell most (5 Nov 2026).
@@ -170,7 +172,6 @@ export function AppShell() {
     { to: '/rates', label: 'Rates & Dealer Prices', icon: 'rupee', roles: ['managing_director'], group: 'Overview' },
     // The accountant's one screen: every order at Hi-Tech with its real customer (8 Oct 2026).
     { to: '/manna-treads', label: 'Orders at Hi-Tech', icon: 'file', roles: ['accountant'], group: 'Accounts' },
-    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['accountant'], group: 'Accounts' },
     { to: '/customers', label: 'Customers', icon: 'users', roles: ['sales_manager'], screen: 'customers', group: 'Sales' },
     // Team Analysis is hidden until SAP's sales history is wired in — see the
     // note on its route in routes.tsx.
@@ -178,6 +179,8 @@ export function AppShell() {
     { to: '/orders', label: 'Team Orders', icon: 'clipboard', roles: ['sales_manager'], screen: 'orders', count: myOrders.length, group: 'Sales' },
     // What reps picked, view only.
     { to: '/pick-lists', label: 'Pick Lists', icon: 'listChecks', roles: ['sales_manager'], screen: 'orders', group: 'Sales' },
+    // The manager approves a new product before the accountant makes it (12 Nov 2026).
+    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['sales_manager'], group: 'Sales' },
     { to: '/locations', label: 'Location Checks', icon: 'pin', roles: ['sales_manager'], screen: 'locations', group: 'Sales' },
     { to: '/team/regularizations', label: 'Attendance Corrections', icon: 'clock', roles: ['sales_manager'], screen: 'regularizations', group: 'Sales' },
     // Monthly targets against SAP invoices, every team (3 Nov 2026).

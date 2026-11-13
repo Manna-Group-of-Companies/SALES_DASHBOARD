@@ -189,7 +189,9 @@ const HR: Role[] = ['hr'];
 // odometer check, trips and routes, and the two reports.
 const HR_SHARED: Role[] = ['hr', 'accounts_staff'];
 // The accountant answers; HR and accounts staff read them (10-11 Nov 2026).
-const ITEM_REQUESTS: Role[] = ['accountant', 'hr', 'accounts_staff'];
+// Managers and the GM approve new requests before the accountant sees them (12 Nov 2026).
+// Not the accountant since 12 Nov 2026 (the user): the accounts staff answer them now.
+const ITEM_REQUESTS: Role[] = ['hr', 'accounts_staff', 'sales_manager', 'general_manager'];
 
 export function AppRoutes() {
   const user = useAppSelector(selectUser);

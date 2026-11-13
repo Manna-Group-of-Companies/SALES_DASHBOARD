@@ -1488,7 +1488,8 @@ class Api {
   // -------- Item requests --------
   //
   // Through the `manna_item_request` Server Script (app/server/item_request.py):
-  // a rep submits and sees their own; the accountant answers on the dashboard.
+  // a rep submits and sees their own; their manager (or the GM) approves it on
+  // to the accountant (12 Nov 2026), who answers on the dashboard.
 
   static Future<List<ItemRequest>> getItemRequests() async {
     final r = await Session.I.dio.post('/api/method/manna_item_request', data: {'action': 'list'});
@@ -1505,6 +1506,18 @@ class Api {
     }
     final r = await Session.I.dio.post('/api/method/manna_item_request',
         data: {...fields, 'action': 'submit', 'photo': ?photo});
+    if (r.statusCode != 200) throw Exception(_frappeError(r));
+  }
+
+  /// The manager's decision: approve on to the accountant, or reject with
+  /// [note] (the server refuses a rejection without one).
+  static Future<void> approveItemRequest(String name, {required bool approve, String note = ''}) async {
+    final r = await Session.I.dio.post('/api/method/manna_item_request', data: {
+      'action': 'approve',
+      'name': name,
+      'decision': approve ? 'Approve' : 'Reject',
+      'note': note,
+    });
     if (r.statusCode != 200) throw Exception(_frappeError(r));
   }
 
