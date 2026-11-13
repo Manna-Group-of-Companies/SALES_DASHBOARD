@@ -10,5 +10,15 @@
     { "why": "A delivery date already passed stays open - the order is late, not locked.", "delivery_date": "2026-11-01", "today": "2026-11-13", "opens_on": "2026-10-30", "open": true },
     { "why": "Two days back crosses the month.", "delivery_date": "2026-12-01", "today": "2026-11-28", "opens_on": "2026-11-29", "open": false },
     { "why": "No delivery date: not held back.", "delivery_date": null, "today": "2026-11-13", "opens_on": null, "open": true }
+  ],
+  "since_about": "Which orders belong on the pick list at all (13 Nov 2026, the user: when the app goes live, pick lists start with the new orders and the old ones are never shown). since is Manna App Settings.pick_lists_since; order_date is the Sales Order's transaction_date. pickListIncludes in app/lib/core/pick_list.dart and manna_pick_list_submit both follow these.",
+  "since_cases": [
+    { "why": "No start date set: every order, as before.", "order_date": "2026-10-01", "since": null, "included": true },
+    { "why": "An order placed on the start date is new.", "order_date": "2026-11-14", "since": "2026-11-14", "included": true },
+    { "why": "An order placed after it is new.", "order_date": "2026-11-20", "since": "2026-11-14", "included": true },
+    { "why": "An order placed the day before is old and never shown.", "order_date": "2026-11-13", "since": "2026-11-14", "included": false },
+    { "why": "A datetime reads as its day.", "order_date": "2026-11-14 09:30:00", "since": "2026-11-14", "included": true },
+    { "why": "An order with no readable date is left off once a start date is set.", "order_date": null, "since": "2026-11-14", "included": false },
+    { "why": "ERPNext's 'null' is no start date.", "order_date": "2026-01-01", "since": "null", "included": true }
   ]
 }

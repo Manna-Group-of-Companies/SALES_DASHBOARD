@@ -419,6 +419,22 @@ class Api {
     }
   }
 
+  /// `Manna App Settings.pick_lists_since`: the first order date the pick list
+  /// shows (13 Nov 2026). '' when it is not set or cannot be read - the page
+  /// then shows every order, as before, and manna_pick_list_submit still
+  /// refuses an old one.
+  static Future<String> pickListsSince() async {
+    try {
+      final r = await Session.I.dio
+          .get('${_res('Manna App Settings')}/Manna App Settings');
+      final d = (r.data is Map) ? r.data['data'] : null;
+      final v = d is Map ? '${d['pick_lists_since'] ?? ''}'.trim() : '';
+      return v == 'null' ? '' : v;
+    } catch (_) {
+      return '';
+    }
+  }
+
   /// A read that falls back to the last sync when the network is down.
   ///
   /// For lists a rep needs to *look at* — what they visited, what they

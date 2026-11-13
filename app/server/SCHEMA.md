@@ -377,6 +377,12 @@ switch off is not a gate.
 Clearing `minimum_app_version` turns the gate off entirely. That is the intended
 escape hatch if a bad minimum ever locks the field team out.
 
+`pick_lists_since` (Date, 13 Nov 2026): the first order date the pick list
+takes. When the app goes live, orders placed before it never show on the
+phone's Pick List page and `manna_pick_list_submit` refuses them. Empty means
+every order, as before. A plain fieldname, not `custom_`: Manna App Settings
+is our own doctype.
+
 ## 8e. Leads order exactly as customers do — created
 
 `Lead Order Item` gained the same per-family fields `Sales Order Item` has:

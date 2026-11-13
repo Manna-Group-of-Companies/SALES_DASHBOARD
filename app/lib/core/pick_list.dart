@@ -42,6 +42,27 @@ bool pickIsOpen(Object? deliveryDate, DateTime today) {
   return !DateTime(today.year, today.month, today.day).isBefore(opens);
 }
 
+/// The first `yyyy-MM-dd` in [v], or '' - ERPNext sends dates, datetimes, null
+/// and the string 'null'.
+String _ymd(Object? v) {
+  final m = RegExp(r'^\d{4}-\d{2}-\d{2}').firstMatch('${v ?? ''}'.trim());
+  return m == null ? '' : m[0]!;
+}
+
+/// Whether an order placed on [orderDate] belongs on the pick list at all
+/// (13 Nov 2026, the user: when the app goes live, pick lists start with the
+/// new orders; the old ones are never shown). [since] is
+/// `Manna App Settings.pick_lists_since`. No date set means every order, as
+/// before. An order whose date cannot be read is left off once a date is set:
+/// it cannot be shown to be new. manna_pick_list_submit refuses the same
+/// orders; shared/fixtures/pick_list_window.json pins both.
+bool pickListIncludes(Object? orderDate, Object? since) {
+  final s = _ymd(since);
+  if (s.isEmpty) return true;
+  final d = _ymd(orderDate);
+  return d.isNotEmpty && d.compareTo(s) >= 0;
+}
+
 /// What was ordered on [line], in the unit Hi-Tech's stock is shown in:
 /// whole rolls for tread rubber, else the line's qty (kg, cans). Loose belts
 /// ride on qty as part of a roll and are not picked, so a belts-only line is 0.

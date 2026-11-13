@@ -12,6 +12,8 @@
 # Refused unless:
 #   - the order is approved by the manager (custom_po_status) and not cancelled;
 #   - it is no earlier than two days before the order's delivery date;
+#   - the order was placed on or after Manna App Settings.pick_lists_since,
+#     when that is set;
 #   - the caller is the order's rep, that rep's team manager, or System Manager;
 #   - every line is a line OF THIS ORDER — nothing from outside it;
 #   - each quantity is above zero and no more than what is still unpicked on
@@ -60,6 +62,19 @@ if so.custom_po_status != APPROVED:
 # delivery date is not held back. Pinned by shared/fixtures/pick_list_window.json,
 # and app/lib/core/pick_list.dart (pickIsOpen) is the phone's copy.
 PICK_OPENS_DAYS_BEFORE = 2
+
+# Pick lists start with the orders placed from Manna App Settings.
+# pick_lists_since (13 Nov 2026, the user: when the app goes live, the old
+# orders are never picked here). No date set: every order, as before. The
+# phone hides the same orders (pickListIncludes, app/lib/core/pick_list.dart);
+# shared/fixtures/pick_list_window.json pins both.
+since = frappe.db.get_value("Manna App Settings", "Manna App Settings", "pick_lists_since")
+if since:
+    since = frappe.utils.getdate(since)
+    if not so.transaction_date or frappe.utils.getdate(so.transaction_date) < since:
+        frappe.throw("Pick lists start with orders placed from %s; order %s is older."
+                     % (frappe.utils.formatdate(since, "dd MMM yyyy"), so_name))
+
 if so.delivery_date:
     opens_on = frappe.utils.getdate(frappe.utils.add_days(so.delivery_date, -PICK_OPENS_DAYS_BEFORE))
     if frappe.utils.getdate(frappe.utils.today()) < opens_on:
