@@ -300,6 +300,7 @@ class _HomeDashboardState extends State<HomeDashboard>
   Future<void> _punchIn() async {
     final rep = Session.I.salesPerson;
     if (rep == null) return _snack('No rep linked to this login.');
+    if (_attBusy) return;
     setState(() => _attBusy = true);
     _snack('Getting GPS…');
     try {
@@ -335,8 +336,28 @@ class _HomeDashboardState extends State<HomeDashboard>
 
   Future<void> _punchOut() async {
     final att = _att;
-    if (att == null) return;
+    if (att == null || _attBusy) return;
     final again = att['punch_out_time'] != null;
+    // Never on one tap (13 Nov 2026): see punchOutQuestion. Asked before
+    // anything else, so a stray tap costs the rep a "Not yet" and nothing more.
+    final sure = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text(again ? 'Punch out again?' : 'Punch out?'),
+        content: Text(punchOutQuestion(
+            '${att['punch_in_time'] ?? ''}', ServerClock.I.now())),
+        actions: [
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Not yet')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Punch out')),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
     setState(() => _attBusy = true);
     _snack('Getting GPS…');
     try {

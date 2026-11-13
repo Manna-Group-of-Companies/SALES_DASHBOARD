@@ -5996,6 +5996,20 @@ class Api {
           'and request a regularization for the earlier time.');
     }
     final stamp = _stamp(now);
+    // One record a day. A punch-in on a day that already has one — the home
+    // card had not loaded it yet, another phone, a reply that was lost — is
+    // that record, not a second one beside it (13 Nov 2026). Two records for
+    // a day left HR reading whichever came first, and a punch-out on the
+    // other one read as the rep's day ending early. The queued path did this
+    // already; now the direct one does too.
+    final existing = await _list('Attendance Log',
+        fields: '["name"]',
+        filters: jsonEncode([
+          ['sales_person', '=', salesPerson],
+          ['attendance_date', '=', stamp.substring(0, 10)],
+        ]),
+        limit: 1);
+    if (existing.isNotEmpty) return '${existing.first['name']}';
     final body = {
       'attendance_date': stamp.substring(0, 10),
       'sales_person': salesPerson,

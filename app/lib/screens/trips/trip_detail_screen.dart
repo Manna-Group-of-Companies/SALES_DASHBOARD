@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/expenses.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/trip_rules.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/map_service.dart';
@@ -233,6 +234,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     // Uploaded while the dialog is open — see widgets/odometer_photo_upload.dart.
     String? startUrl;
     var startUploading = false;
+    var startReady = false;
     bool isOdoMode(String m) =>
         m == 'Own Vehicle' ||
             m == 'Bike' ||
@@ -297,8 +299,10 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                           docname: widget.tripName,
                           filename: 'start_odo.jpg'),
                       onUrl: (u) => startUrl = u,
-                      onStatus: (s) => setL(() => startUploading =
-                          s == OdometerPhotoStatus.uploading),
+                      onStatus: (s) => setL(() {
+                        startUploading = s == OdometerPhotoStatus.uploading;
+                        startReady = s == OdometerPhotoStatus.uploaded;
+                      }),
                     ),
                   ),
                 ),
@@ -326,11 +330,14 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                   onPressed: () => Navigator.pop(ctx, false),
                   child: const Text('Cancel')),
               FilledButton(
-                  // Held only while a photo is on its way. Starting then would
-                  // save the leg a second before the url arrived.
-                  onPressed: startUploading
-                      ? null
-                      : () => Navigator.pop(ctx, true),
+                  // Held until the photo has gone (or is kept to go): see
+                  // canSaveOdometerLeg.
+                  onPressed: canSaveOdometerLeg(
+                          odometerLeg: odoMode,
+                          photoReady: startReady,
+                          uploading: startUploading)
+                      ? () => Navigator.pop(ctx, true)
+                      : null,
                   child: const Text('Start')),
             ],
           );
@@ -380,6 +387,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     // Uploaded while the dialog is open — see widgets/odometer_photo_upload.dart.
     String? endUrl;
     var endUploading = false;
+    var endReady = false;
+    final odoLeg = '${l['has_odometer']}' == '1' || l['has_odometer'] == true;
     // Per-km rate for this leg's mode, so the rep sees the claim as they type.
     double rate = 0;
     try {
@@ -416,8 +425,10 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                   docname: widget.tripName,
                   filename: 'end_odo.jpg'),
               onUrl: (u) => endUrl = u,
-              onStatus: (s) => setL(
-                  () => endUploading = s == OdometerPhotoStatus.uploading),
+              onStatus: (s) => setL(() {
+                endUploading = s == OdometerPhotoStatus.uploading;
+                endReady = s == OdometerPhotoStatus.uploaded;
+              }),
             ),
             const SizedBox(height: 12),
             Container(
@@ -451,7 +462,11 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                 onPressed: () => Navigator.pop(ctx, false),
                 child: const Text('Cancel')),
             FilledButton(
-                onPressed: valid && !endUploading
+                onPressed: valid &&
+                        canSaveOdometerLeg(
+                            odometerLeg: odoLeg,
+                            photoReady: endReady,
+                            uploading: endUploading)
                     ? () => Navigator.pop(ctx, true)
                     : null,
                 child: const Text('End leg')),
