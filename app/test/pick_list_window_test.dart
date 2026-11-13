@@ -28,6 +28,14 @@ void main() {
     }
   });
 
+  group('shared/fixtures/pick_list_window.json: which orders are on the pick list', () {
+    for (final c in (fixture['since_cases'] as List).cast<Map>()) {
+      test('${c['why']}', () {
+        expect(pickListIncludes(c['order_date'], c['since']), c['included']);
+      });
+    }
+  });
+
   test('the time of day does not matter: late on the day before opening is still locked', () {
     expect(pickIsOpen('2026-11-16', DateTime(2026, 11, 13, 23, 59)), isFalse);
     expect(pickIsOpen('2026-11-16', DateTime(2026, 11, 14, 0, 1)), isTrue);

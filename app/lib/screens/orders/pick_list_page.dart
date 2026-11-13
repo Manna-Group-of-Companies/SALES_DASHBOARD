@@ -183,13 +183,15 @@ class _PickListPageState extends State<PickListPage> {
   /// since, so a change of dates does not read them all again.
   List<Map<String, dynamic>>? _rows;
   List<PickList> _lists = const [];
+  String _since = '';
   final Map<String, Map<String, dynamic>> _docs = {};
 
   Future<List<_OrderBlock>> _load({bool refresh = true}) async {
     if (refresh || _rows == null) {
-      final results0 = await Future.wait([Api.getMyOrders(), Api.getPickLists()]);
+      final results0 = await Future.wait([Api.getMyOrders(), Api.getPickLists(), Api.pickListsSince()]);
       _rows = results0[0] as List<Map<String, dynamic>>;
       _lists = results0[1] as List<PickList>;
+      _since = results0[2] as String;
       _docs.clear();
     }
     final rows = _rows!;
@@ -219,7 +221,10 @@ class _PickListPageState extends State<PickListPage> {
 
     final names = [
       for (final r in rows)
-        if (r['is_combined'] != true &&
+        // Pick lists start with the orders placed from pick_lists_since (13 Nov
+        // 2026, the user): the orders from before the app went live never show.
+        if (pickListIncludes(r['transaction_date'], _since) &&
+            r['is_combined'] != true &&
             r['is_lead'] != true &&
             '${r['custom_po_status'] ?? ''}' == _kApproved &&
             '${r['docstatus'] ?? 0}' != '2' &&
