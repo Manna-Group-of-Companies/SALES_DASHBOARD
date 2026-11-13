@@ -11,7 +11,8 @@
 # ACHIEVED MEANS INVOICED. A line counts when SAP has raised the A/R invoice
 # that carried it — `Sales Order Item.custom_sap_invoice`, written by the SAP
 # order sync (sap-order-sync/README.md, PASS B) — and that invoice is dated in
-# the target's month. An approved order that has not been invoiced counts for
+# the target's month. For a Manna Treads first order it is Manna Treads'
+# invoice to the customer instead (custom_mt_invoice, PASS I; 12 Nov 2026). An approved order that has not been invoiced counts for
 # nothing; the month an order was placed in does not matter. Money is the
 # line's `amount` (before GST); tonnes are `custom_total_weight` / 1000.
 # A cancelled order (docstatus 2) never counts. Lead Orders are not read:
@@ -118,8 +119,23 @@ if reps:
     ):
         targets[t.sales_person] = t
 
+# MANNA TREADS FIRST (12 Nov 2026, the user): when Manna Treads sells and
+# Hi-Tech makes (the order carries custom_mt_sales_order), the sale is Manna
+# Treads' invoice TO THE CUSTOMER - `Sales Order Item.custom_mt_invoice`,
+# written by the order sync's PASS I - not Hi-Tech's invoice to Manna Treads
+# in custom_sap_invoice. Such an order counts by the former only, in the month
+# of that invoice; every other order by custom_sap_invoice, as before. A site
+# without the custom_mt_invoice fields (live until they are added) counts every
+# order by custom_sap_invoice, exactly as before.
+has_mt_inv = bool(frappe.db.exists("Custom Field", {"dt": "Sales Order Item", "fieldname": "custom_mt_invoice"}))
+has_mt_so = bool(frappe.db.exists("Custom Field", {"dt": "Sales Order", "fieldname": "custom_mt_sales_order"}))
+
 lines_by_rep = {}
 if reps:
+    item_fields = ["parent", "idx", "item_name", "amount", "custom_total_weight",
+                   "custom_sap_invoice", "custom_sap_invoice_date"]
+    if has_mt_inv:
+        item_fields = item_fields + ["custom_mt_invoice", "custom_mt_invoice_date"]
     items = frappe.get_all(
         "Sales Order Item",
         filters={
@@ -127,35 +143,56 @@ if reps:
             "custom_sap_invoice": ["is", "set"],
             "custom_sap_invoice_date": ["between", [first, last]],
         },
-        fields=["parent", "idx", "item_name", "amount", "custom_total_weight",
-                "custom_sap_invoice", "custom_sap_invoice_date"],
+        fields=item_fields,
         order_by="custom_sap_invoice_date asc, parent asc, idx asc",
         limit_page_length=0,
     )
-    parents = list({i.parent: 1 for i in items}.keys())
+    mt_items = []
+    if has_mt_inv:
+        mt_items = frappe.get_all(
+            "Sales Order Item",
+            filters={
+                "parenttype": "Sales Order",
+                "custom_mt_invoice": ["is", "set"],
+                "custom_mt_invoice_date": ["between", [first, last]],
+            },
+            fields=item_fields,
+            order_by="custom_mt_invoice_date asc, parent asc, idx asc",
+            limit_page_length=0,
+        )
+    parents = list({i.parent: 1 for i in items + mt_items}.keys())
     heads = {}
     if parents:
+        head_fields = ["name", "custom_sales_person", "customer_name"]
+        if has_mt_so:
+            head_fields = head_fields + ["custom_mt_sales_order"]
         for h in frappe.get_all(
             "Sales Order",
             filters={"name": ["in", parents], "docstatus": ["!=", 2],
                      "custom_sales_person": ["in", reps]},
-            fields=["name", "custom_sales_person", "customer_name"],
+            fields=head_fields,
             limit_page_length=0,
         ):
             heads[h.name] = h
-    for i in items:
-        h = heads.get(i.parent)
-        if not h:
-            continue
-        lines_by_rep.setdefault(h.custom_sales_person, []).append({
-            "order": i.parent,
-            "customer_name": h.customer_name or "",
-            "item_name": i.item_name or "",
-            "invoice": i.custom_sap_invoice,
-            "invoice_date": str(i.custom_sap_invoice_date),
-            "amount": frappe.utils.flt(i.amount),
-            "kg": frappe.utils.flt(i.custom_total_weight),
-        })
+    for pair in [[items, False], [mt_items, True]]:
+        for i in pair[0]:
+            h = heads.get(i.parent)
+            if not h:
+                continue
+            mt_first = has_mt_inv and bool(h.get("custom_mt_sales_order"))
+            # Each line counts once: by Manna Treads' invoice when the order is
+            # Manna Treads first, by Hi-Tech's otherwise.
+            if mt_first != pair[1]:
+                continue
+            lines_by_rep.setdefault(h.custom_sales_person, []).append({
+                "order": i.parent,
+                "customer_name": h.customer_name or "",
+                "item_name": i.item_name or "",
+                "invoice": i.custom_mt_invoice if pair[1] else i.custom_sap_invoice,
+                "invoice_date": str(i.custom_mt_invoice_date if pair[1] else i.custom_sap_invoice_date),
+                "amount": frappe.utils.flt(i.amount),
+                "kg": frappe.utils.flt(i.custom_total_weight),
+            })
 
 # What each rep's customers owe (3 Nov 2026): the SAP credit sync's total,
 # and the part overdue past the customer's payment terms. Summed over the

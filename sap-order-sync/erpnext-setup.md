@@ -178,3 +178,22 @@ The credit sync and this one must never log in to SAP in the same minute —
 the 5-minute offset above keeps the `-Force` triggers apart; check the credit
 sync's own schedule before finalising and adjust if they'd ever land in the
 same minute.
+
+## Manna Treads' customer invoice - PASS I (12 Nov 2026)
+
+Team Targets counts a Manna Treads first order (one with `custom_mt_sales_order`)
+by **Manna Treads' A/R invoice to the customer**, not Hi-Tech's invoice to
+Manna Treads (`app/server/sales_targets.py`). PASS I writes it; it is opt-in
+(`-Pass ...,I`), so add these four Custom Fields **before** a run asks for it:
+
+| Doctype | Fieldname | Type | Settings |
+|---|---|---|---|
+| Sales Order | `custom_mt_invoice` | Data | read only, allow on submit, no copy, after `custom_mt_purchase_order` |
+| Sales Order | `custom_mt_invoice_date` | Date | read only, allow on submit, no copy |
+| Sales Order Item | `custom_mt_invoice` | Data | read only, allow on submit, no copy, after `custom_sap_invoice_date` |
+| Sales Order Item | `custom_mt_invoice_date` | Date | read only, allow on submit, no copy |
+
+Until `Sales Order Item.custom_mt_invoice` exists, `manna_sales_targets` counts
+every order by `custom_sap_invoice`, as before. Once it does, a Manna Treads
+first order stops counting at Hi-Tech's invoice and counts at Manna Treads'.
+Tested offline by `Test-MtInvoices.ps1`.

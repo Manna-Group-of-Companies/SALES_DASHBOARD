@@ -240,6 +240,8 @@ $script:Result = [ordered]@{
     mfCreated         = 0
     mfAdopted         = 0
     mfRefused         = 0
+    miInScope         = 0
+    miLinked          = 0
     mpInScope         = 0
     mpAdopted         = 0
     mpRefused         = 0
@@ -292,6 +294,10 @@ $script:F_MT_SYNCED = 'custom_mt_synced_at'
 # manna_first (3 Nov 2026): Manna Treads' purchase order to Hi-Tech - B1if
 # makes it, PASS P writes it here. Its refusals share custom_mt_sync_error, prefixed, because one
 # order has one thing wrong with it at a time and the SO comes first.
+# Manna Treads' A/R invoice to the customer - PASS I (12 Nov 2026). On the order
+# (the one that completed it) and per line, as custom_sap_invoice is for Hi-Tech's.
+$script:F_MT_INV    = 'custom_mt_invoice'
+$script:F_MT_INV_DT = 'custom_mt_invoice_date'
 $script:F_MT_PO       = 'custom_mt_purchase_order'         # DocNum
 $script:F_MT_PO_ENTRY = 'custom_mt_purchase_order_entry'   # DocEntry
 
@@ -2927,6 +2933,53 @@ function Write-HtRefusal {
     }
 }
 
+function Get-MiList {
+    # PASS I's working set (12 Nov 2026): manna_first orders that have Manna
+    # Treads' sales order and no Manna Treads customer invoice recorded on the
+    # order yet - custom_mt_invoice is set on the order once EVERY line has one.
+    param([Parameter(Mandatory = $true)] $Flow)
+    $f = '[["custom_company","in",' + (ConvertTo-Json -InputObject @($Flow.Units) -Compress) + '],["creation",">=","' + $Flow.Since + ' 00:00:00"],["' + $script:F_MT_ENTRY + '","is","set"],["' + $script:F_MT_INV + '","in",["",null]],["docstatus","<",2]]'
+    return @(Get-ErpList -Filters $f -Fields @('name', $script:F_MT_SO, $script:F_MT_ENTRY) | Sort-Object { "$($_.name)" })
+}
+
+function Get-MtInvoiceLinks {
+    # PASS I: which Manna Treads A/R invoice each Manna Treads sales order line
+    # went on, from Manna Treads' deliveries and invoices. Pure.
+    #
+    # The same rule as PASS B uses for Hi-Tech: an invoice line is based on the
+    # sales order or on a delivery line that is (Resolve-InvoiceLineSoEntry);
+    # cancelled documents and their reversals do not count
+    # (Test-SapDocumentCounts); the EARLIEST invoice wins per line - the line
+    # went on that one. Lines join by item code, as PASS B's do.
+    #
+    # Returns @{ "<sales order DocEntry>|<ItemCode>" = <the invoice> }.
+    param($Deliveries, $Invoices)
+    $dnLineToSo = @{}
+    foreach ($dn in @($Deliveries)) {
+        if ($null -eq $dn -or -not (Test-SapDocumentCounts $dn)) { continue }
+        $dnEntry = "$(Get-JsonProp $dn 'DocEntry')".Trim()
+        foreach ($dl in @(Get-JsonProp $dn 'DocumentLines')) {
+            if ($null -eq $dl -or [int](ConvertTo-Number (Get-JsonProp $dl 'BaseType')) -ne 17) { continue }
+            $be  = "$(Get-JsonProp $dl 'BaseEntry')".Trim()
+            $dln = "$(Get-JsonProp $dl 'LineNum')".Trim()
+            if ($be -ne '' -and $dnEntry -ne '' -and $dln -ne '') { $dnLineToSo["$dnEntry|$dln"] = $be }
+        }
+    }
+    $links = @{}
+    $live = @(@($Invoices) | Where-Object { $null -ne $_ -and (Test-SapDocumentCounts $_) } |
+        Sort-Object @{ Expression = { "$(Get-JsonProp $_ 'DocDate')" } }, @{ Expression = { [int](ConvertTo-Number (Get-JsonProp $_ 'DocEntry')) } })
+    foreach ($inv in $live) {
+        foreach ($il in @(Get-JsonProp $inv 'DocumentLines')) {
+            if ($null -eq $il) { continue }
+            $soE = Resolve-InvoiceLineSoEntry -InvoiceLine $il -DnLineToSo $dnLineToSo
+            if ($soE -eq '') { continue }
+            $ii = "$(Get-JsonProp $il 'ItemCode')".Trim()
+            if ($ii -ne '' -and -not $links.ContainsKey("$soE|$ii")) { $links["$soE|$ii"] = $inv }
+        }
+    }
+    return $links
+}
+
 function Get-MpList {
     # PASS P's working set: PASS M's orders that have their Manna Treads sales
     # order and no purchase order yet, and no error recorded.
@@ -3220,7 +3273,7 @@ try {
     Assert-SapErpPairing -ErpSite $script:ErpBaseUrl -CompanyDbs @($companyDb, $mtDbForPairing)
     $runPass = @{}
     foreach ($p in @($Pass)) { foreach ($q in ("$p" -split ',')) { $t = $q.Trim().ToUpperInvariant(); if ($t -ne '') { $runPass[$t] = $true } } }
-    foreach ($k in @($runPass.Keys)) { if ($k -notin @('A', 'B', 'C', 'M', 'P', 'H', 'K')) { throw "-Pass takes A, B, C, M, P, H and K (got '$k')." } }
+    foreach ($k in @($runPass.Keys)) { if ($k -notin @('A', 'B', 'C', 'M', 'P', 'H', 'K', 'I')) { throw "-Pass takes A, B, C, M, P, H, K and I (got '$k')." } }
     if ($runPass.Count -eq 0) { foreach ($k in 'A', 'B', 'C', 'M', 'P', 'H', 'K') { $runPass[$k] = $true } }
 
     # ---- logging ----
@@ -3418,8 +3471,10 @@ try {
         # (A PASS C read failure is not "nothing to do": it falls through to the
         # summary so the run exits non-zero. Nothing logs in with empty lists.)
         # PASS K reads its own lists, so a run with it on is never "nothing to do" here.
+        # Nor is one with PASS I, which reads its own orders (12 Nov 2026).
         $pkOn = ($flow.Mode -eq 'manna_first' -and $runPass['K'] -and $flow.PickListsSince -ne '')
-        if (-not $pkOn -and $newList.Count -eq 0 -and $openList.Count -eq 0 -and $followList.Count -eq 0 -and $mtList.Count -eq 0 -and $mfList.Count -eq 0 -and $mpList.Count -eq 0 -and $htList.Count -eq 0 -and $script:Result.failures -eq 0) {
+        $miOn = ($flow.Mode -eq 'manna_first' -and $runPass['I'])
+        if (-not $pkOn -and -not $miOn -and $newList.Count -eq 0 -and $openList.Count -eq 0 -and $followList.Count -eq 0 -and $mtList.Count -eq 0 -and $mfList.Count -eq 0 -and $mpList.Count -eq 0 -and $htList.Count -eq 0 -and $script:Result.failures -eq 0) {
             Write-Log INFO "nothing to do."
             $script:Result.summary = "SUMMARY | company: $companyName | nothing to do (0 new, 0 open, 0 followed, 0 queued for Manna Treads, 0 new for manna_first)"
             $script:Result.exitCode = 0
@@ -4561,6 +4616,99 @@ try {
             }
         }
 
+        # ===== PASS I - Manna Treads' customer invoice, per order line (manna_first, 12 Nov 2026) =====
+        #
+        # Under manna_first the sale is Manna Treads' to the customer, so the
+        # invoice that counts - for targets (app/server/sales_targets.py) - is
+        # Manna Treads' A/R invoice, not Hi-Tech's to Manna Treads, which PASS B
+        # writes to custom_sap_invoice. Reads Manna Treads' deliveries and
+        # invoices dated since order_flow.since, links each invoice line to its
+        # sales order (Get-MtInvoiceLinks), and writes custom_mt_invoice and its
+        # date on each ERPNext line found, and on the order once every line has
+        # one - which takes the order out of PASS I. Reads SAP only.
+        #
+        # Opt-in (-Pass ...,I): not in the default passes, so a site whose
+        # Sales Order and Sales Order Item lack the two fields is never asked
+        # to write them (sap-order-sync/erpnext-setup.md).
+        if ($flow.Mode -eq 'manna_first' -and $runPass['I']) {
+            $miList = @()
+            try { $miList = @(Get-MiList -Flow $flow) }
+            catch {
+                Write-Log ERROR ("PASS I: could not read its orders - skipped this run: {0}" -f "$_")
+                $script:Result.failures++
+            }
+            $script:Result.miInScope = $miList.Count
+            Write-Log INFO ("ERPNext: {0} manna_first order(s) without Manna Treads' customer invoice recorded." -f $miList.Count)
+            if ($miList.Count -gt 0) {
+                $miSess = $null
+                try {
+                    $mi = Get-MtSettings -Config $config
+                    Assert-MtCompanyDb -CompanyDb $mi.CompanyDb -HitechCompanyDb $companyDb
+                    $miUser = $sapUser; $miPass = $sapPass
+                    if ($mi.Username) { $miUser = $mi.Username; $miPass = $mi.Password }
+                    try { [System.Net.ServicePointManager]::FindServicePoint([System.Uri]$sapUrl).Expect100Continue = $false } catch { }
+                    $miSess = New-SapWebSession -BaseUrl $sapUrl -Username $miUser -Password $miPass `
+                        -CompanyDb $mi.CompanyDb -CompanyName 'Manna Treads' -UseSkipCert $useSkip
+
+                    $miSince = $flow.Since
+                    $miDnRel = ("DeliveryNotes?`$filter=DocDate ge $miSince&`$select=DocEntry,Cancelled,CancelStatus,DocumentLines") -replace ' ', '%20'
+                    $miInvRel = ("Invoices?`$filter=DocDate ge $miSince&`$select=DocEntry,DocNum,DocDate,Cancelled,CancelStatus,DocumentLines") -replace ' ', '%20'
+                    $miDns = @(Invoke-SapGet -BaseUrl $sapUrl -Session $miSess -RelUrl $miDnRel -PageSize $pageSize -UseSkipCert $useSkip -Label 'Manna Treads deliveries since the flow began')
+                    $miInvs = @(Invoke-SapGet -BaseUrl $sapUrl -Session $miSess -RelUrl $miInvRel -PageSize $pageSize -UseSkipCert $useSkip -Label 'Manna Treads invoices since the flow began')
+                    $miLinks = Get-MtInvoiceLinks -Deliveries $miDns -Invoices $miInvs
+                    Write-Log INFO ("PASS I: {0} Manna Treads delivery(ies) and {1} invoice(s) since {2}; {3} order line(s) invoiced." -f $miDns.Count, $miInvs.Count, $miSince, $miLinks.Count)
+
+                    foreach ($row in $miList) {
+                        $name = "$($row.name)"
+                        try {
+                            $doc = Get-ErpSalesOrder -Name $name
+                            $entry = ConvertTo-CleanText (Get-JsonProp $doc $script:F_MT_ENTRY)
+                            $lines = @(Get-JsonProp $doc 'items' | Where-Object { $null -ne $_ })
+                            $used = New-Object System.Collections.ArrayList
+                            foreach ($l in $lines) {
+                                $item = ConvertTo-CleanText (Get-JsonProp $l 'item_code')
+                                if (-not $miLinks.ContainsKey("$entry|$item")) { continue }
+                                $inv = $miLinks["$entry|$item"]
+                                [void]$used.Add($inv)
+                                $num = "$(Get-JsonProp $inv 'DocNum')".Trim()
+                                $date = "$(Get-JsonProp $inv 'DocDate')".Trim()
+                                if ($date.Length -gt 10) { $date = $date.Substring(0, 10) }
+                                if ((ConvertTo-CleanText (Get-JsonProp $l $script:F_MT_INV)) -eq $num) { continue }
+                                if ($DryRun) {
+                                    Write-Log INFO ("PASS I {0}: line {1} WOULD get {2}={3} | {4}={5}" -f $name, $item, $script:F_MT_INV, $num, $script:F_MT_INV_DT, $date)
+                                } else {
+                                    Update-ErpOrderLine -RowName "$(Get-JsonProp $l 'name')" -Fields @{ $script:F_MT_INV = $num; $script:F_MT_INV_DT = $date }
+                                    Write-Log INFO ("PASS I {0}: line {1} - Manna Treads invoice {2} ({3})." -f $name, $item, $num, $date)
+                                }
+                                $script:Result.miLinked++; $script:Result.changed++
+                            }
+                            if ($lines.Count -gt 0 -and $used.Count -eq $lines.Count) {
+                                $best = Select-CompletingInvoice -Invoices $used
+                                $bNum = "$(Get-JsonProp $best 'DocNum')".Trim()
+                                $bDate = "$(Get-JsonProp $best 'DocDate')".Trim()
+                                if ($bDate.Length -gt 10) { $bDate = $bDate.Substring(0, 10) }
+                                if ($DryRun) { Write-Log INFO ("PASS I {0}: every line invoiced - WOULD write {1}={2} | {3}={4} on the order." -f $name, $script:F_MT_INV, $bNum, $script:F_MT_INV_DT, $bDate) }
+                                else {
+                                    Update-ErpSalesOrder -Name $name -Fields @{ $script:F_MT_INV = $bNum; $script:F_MT_INV_DT = $bDate }
+                                    Write-Log INFO ("PASS I {0}: every line invoiced - completed by Manna Treads invoice {1}; the order leaves PASS I." -f $name, $bNum)
+                                }
+                            } elseif ($used.Count -gt 0) {
+                                Write-Log INFO ("PASS I {0}: invoiced in part ({1} of {2} line(s))." -f $name, $used.Count, $lines.Count)
+                            }
+                        } catch {
+                            Write-Log ERROR ("PASS I {0}: FAILED - left for the next run: {1}" -f $name, "$_")
+                            $script:Result.failures++
+                        }
+                    }
+                } catch {
+                    Write-Log ERROR ("PASS I: Manna Treads session failed - {0} order(s) left for the next run: {1}" -f $miList.Count, "$_")
+                    $script:Result.failures++
+                } finally {
+                    Invoke-SapLogout -BaseUrl $sapUrl -Session $miSess -UseSkipCert $useSkip
+                }
+            }
+        }
+
         # ===== PASS K - pick lists to Hi-Tech's SAP, and what B1if makes from them (manna_first) =====
         #
         # Off until order_flow.pick_lists_since is set: only lists made on or
@@ -4658,8 +4806,17 @@ try {
                                         # SAP refusing THIS list (400: no stock to release, a closed
                                         # line) goes on the list; anything else is the run's problem.
                                         if ($res.Status -eq 400) {
+                                            # The Service Layer gives error.message as an object
+                                            # with .value (OData v3) or as the text itself (v4);
+                                            # reading only .value wrote an empty reason on the
+                                            # list (PICK-00490/00491, 12 Nov 2026). Keep the
+                                            # raw body when neither holds anything.
                                             $sapMsg = "$($res.Body)"
-                                            try { $sapMsg = "$((($res.Body | ConvertFrom-Json).error.message.value))" } catch { }
+                                            try {
+                                                $m = ($res.Body | ConvertFrom-Json).error.message
+                                                $txt = if ($m -is [string]) { $m } elseif ($null -ne $m -and $m.PSObject.Properties['value']) { "$($m.value)" } else { '' }
+                                                if ("$txt".Trim()) { $sapMsg = "$txt".Trim() }
+                                            } catch { }
                                             Write-PkRefusal -Name $pn -Message ("Hi-Tech SAP refused the pick list: {0}" -f $sapMsg) -When $pkNow -IsDryRun $false
                                         } else {
                                             Write-Log ERROR ("PASS K {0}: FAILED - left for the next run: {1}" -f $pn, $res.Text)
@@ -5079,7 +5236,7 @@ try {
             $modeWord, $companyName, $r.inScopeNew, $r.created, $r.adopted, $r.createFailed, $r.repUnmatched, $r.openPolled, $r.linesInvoiced, $r.ordersInvoiced, $r.linesWritten, $r.linesCorrected, $r.linesRemoved, $r.invoiceUnresolved, $r.writeErrors, $r.failures,
             $r.linesKgWritten, $r.mtRequested, $r.mtCreated, $r.mtAdopted, $r.mtRefused, $r.followPolled, $r.mtFailedWaiting)
         if ($flow.Mode -eq 'manna_first') {
-            $summary += (" | manna_first new: {0} | mf created: {1} | mf adopted: {2} | mf refused: {3} | po due: {4} | po linked: {5} | po waiting for b1if: {6} | po refused: {7} | hitech due: {8} | hitech linked: {9} | hitech waiting for b1if: {10} | hitech refused: {11}" -f $r.mfInScope, $r.mfCreated, $r.mfAdopted, $r.mfRefused, $r.mpInScope, $r.mpAdopted, $r.mpWaiting, $r.mpRefused, $r.htInScope, $r.htAdopted, $r.htWaiting, $r.htRefused)
+            $summary += (" | manna_first new: {0} | mf created: {1} | mf adopted: {2} | mf refused: {3} | po due: {4} | po linked: {5} | po waiting for b1if: {6} | po refused: {7} | hitech due: {8} | hitech linked: {9} | hitech waiting for b1if: {10} | hitech refused: {11} | mt invoice due: {12} | mt invoice lines linked: {13}" -f $r.mfInScope, $r.mfCreated, $r.mfAdopted, $r.mfRefused, $r.mpInScope, $r.mpAdopted, $r.mpWaiting, $r.mpRefused, $r.htInScope, $r.htAdopted, $r.htWaiting, $r.htRefused, $r.miInScope, $r.miLinked)
             if ($flow.PickListsSince -ne '') {
                 $summary += (" | pick lists due: {0} | pick lists sent: {1} | b1if docs due: {2} | b1if docs linked: {3} | pick waiting: {4} | pick refused: {5}" -f $r.pkInScope, $r.pkSent, $r.pkLinkDue, $r.pkLinked, $r.pkWaiting, $r.pkRefused)
             }
