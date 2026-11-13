@@ -68,6 +68,13 @@ bool isNetworkFailure(Object? e) {
       e.type == DioExceptionType.receiveTimeout;
 }
 
+/// What a rep is told when the network failed and there was nothing on the
+/// phone to answer with — a screen never opened with a signal. Says nothing
+/// about the network (the user, 13 Nov 2026: the app must not show that the
+/// net is gone); every write is kept and sent by itself, so this is only ever
+/// a read, and pulling to refresh is the whole remedy.
+const String kNotYet = 'Not loaded yet. Pull down to try again in a moment.';
+
 /// One sentence, fit to show a rep.
 String humanError(Object? e) {
   if (e == null) return 'Something went wrong.';
@@ -87,17 +94,15 @@ String humanError(Object? e) {
     case DioExceptionType.sendTimeout:
     case DioExceptionType.receiveTimeout:
     case DioExceptionType.transformTimeout:
-      return 'Server too slow. Check your signal and try again.';
+      return kNotYet;
     case DioExceptionType.connectionError:
-      return 'No connection. Try again with signal.';
+      return kNotYet;
     case DioExceptionType.badCertificate:
       return 'Could not verify the server. Try mobile data.';
     case DioExceptionType.cancel:
       return 'Cancelled.';
     case DioExceptionType.unknown:
-      if (isOffline(e)) {
-        return 'No connection. Try again with signal.';
-      }
+      if (isOffline(e)) return kNotYet;
       return 'Something went wrong. Try again.';
     case DioExceptionType.badResponse:
       return _fromResponse(e.response);

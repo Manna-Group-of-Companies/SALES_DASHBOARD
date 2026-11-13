@@ -54,7 +54,7 @@ class _UnsentItemsScreenState extends State<UnsentItemsScreen> {
     await _load();
     if (!mounted) return;
     if (r.stoppedOffline && r.sent == 0) {
-      _snack('Still no signal. Saved here.');
+      _snack('Saved. It goes by itself.');
     } else if (r.failed.isNotEmpty) {
       _snack('Sent ${r.sent}; ${r.failed.length} not sent.');
     } else if (r.sent > 0) {
@@ -141,7 +141,7 @@ class _UnsentItemsScreenState extends State<UnsentItemsScreen> {
             Text('Everything has been sent',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             SizedBox(height: 8),
-            Text('Work saved without signal waits here.',
+            Text('Nothing waiting to send.',
                 textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: Colors.black54)),
           ]),
         ),
@@ -158,7 +158,7 @@ class _UnsentItemsScreenState extends State<UnsentItemsScreen> {
           Icon(Icons.info_outline, size: 20, color: Color(0xFFB35309)),
           SizedBox(width: 10),
           Expanded(
-            child: Text('Not sent yet. They send by themselves when you have signal.',
+            child: Text('Sending… These go by themselves.',
                 style: TextStyle(fontSize: 12.5, height: 1.4)),
           ),
         ]),
@@ -183,7 +183,7 @@ class _UnsentItemsScreenState extends State<UnsentItemsScreen> {
             '${i.files.isNotEmpty ? '  ·  with photo' : ''}',
             style: const TextStyle(fontSize: 12.5, color: Colors.black54),
           ),
-          if (i.lastError != null) ...[
+          if (i.refused && i.lastError != null) ...[
             const SizedBox(height: 8),
             Container(
               width: double.infinity,

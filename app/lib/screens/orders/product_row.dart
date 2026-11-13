@@ -611,7 +611,7 @@ class _ProductRowState extends State<ProductRow> {
             : (sap != null
                 ? (widget.leadOrder ? sap.leadHint(unit) : sap.fixedHint(unit))
                 : (later
-                    ? 'No signal: the price is taken from SAP when it is sent.'
+                    ? 'Price from SAP when it is sent.'
                     : null)),
         helperMaxLines: 2,
         helperStyle: const TextStyle(fontSize: 11),

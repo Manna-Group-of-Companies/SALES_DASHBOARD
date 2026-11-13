@@ -156,6 +156,16 @@ generates it from the plugins in `pubspec.yaml`. Don't hand-write one.
 Reached over the REST resource API with token auth. `lib/services/api.dart` is
 the single gateway — roughly 3,700 lines, and everything goes through it.
 
+**The whole app works with no signal (13 Nov 2026).** Every GET is kept on
+the phone and answered from there when the server cannot be reached
+(`lib/services/net_cache.dart`) — a new read is covered without doing
+anything. **A new write is not.** Write it as `_somethingNow(...)`, add its
+sender to `_senders` and a public face that calls `writeOrQueue` (see "every
+write, with or without" in `api.dart`); a write that calls `dio.post` from a
+screen fails with no signal. Kept writes are sent by `sync_engine.dart` and
+re-run their rules on the server's figures; never rename a kind, phones hold
+them. Nothing on screen may say the network is gone — the user asked that.
+
 Custom doctypes worth knowing (all `custom = 1`, module `Selling` or `Custom`):
 
 | Doctype | What it holds |

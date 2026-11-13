@@ -48,6 +48,7 @@ import 'package:manna_field_sales/services/outbox.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/screens/home/unsent_items_screen.dart';
 import 'package:manna_field_sales/services/pending_punches.dart';
+import 'package:manna_field_sales/services/sync_engine.dart';
 import 'package:manna_field_sales/screens/home/unsent_punches_screen.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/trip_tracker.dart';
@@ -157,87 +158,18 @@ class _HomeDashboardState extends State<HomeDashboard>
     }
   }
 
-  /// Sends whatever punches are waiting, if there is a signal to send them on.
-  ///
-  /// An app opened with no signal first re-confirms who is signed in — see
-  /// Api.recoverAfterOfflineStart — and sends nothing until it has.
+  /// Sends whatever the phone is holding — punches, route points, orders and
+  /// the rest — through the app-wide sender (services/sync_engine.dart), then
+  /// re-reads what this screen shows. The sender says nothing unless the
+  /// server refuses something (13 Nov 2026: nothing says the network is gone).
   Future<void> _syncPunches() async {
-    if (Session.I.offlineStart) {
-      if (!await Api.recoverAfterOfflineStart()) return;
-      // Who this login is has just been re-read; the screen may change.
-      if (mounted) setState(() {});
-    }
-    // Route points too: the same signal, the same moment.
-    unawaited(TripTracker.I.flushPending());
-    // And orders and the rest of the field work kept on the phone (11 Nov
-    // 2026). Not awaited before the punches: a slow send must not hold a
-    // punch back.
-    unawaited(_syncOrders());
-    unawaited(_syncOutbox());
-    if (await PendingPunches.count() == 0) return;
-    final r = await PendingPunches.flush(Api.sendPendingPunch,
-        describe: humanError);
+    final wasOfflineStart = Session.I.offlineStart;
+    await SyncEngine.I.sendNow();
     if (!mounted) return;
+    // Who this login is may just have been re-read.
+    if (wasOfflineStart && !Session.I.offlineStart) setState(() {});
     await _loadUnsent();
-    if (r.sent > 0) {
-      await _loadAtt();
-      if (!mounted) return;
-      _snack(r.failed.isEmpty
-          ? 'Sent ${r.sent} saved punch${r.sent == 1 ? '' : 'es'} ✓'
-          : 'Sent ${r.sent}; ${r.failed.length} could not be sent — '
-              'see Unsent Punches.');
-    }
-  }
-
-  /// Sends the orders kept on the phone, by itself, once there is a signal
-  /// (11 Nov 2026). Refused ones are left for the rep on Unsent Orders.
-  Future<void> _syncOrders() async {
-    if (await PendingOrders.autoCount() == 0) return;
-    // Told once, when a draft is refused, not every minute after.
-    final refusedBefore = {
-      for (final d in await PendingOrders.all())
-        if (d.refused) d.id
-    };
-    final r = await PendingOrders.sendAll(Api.sendPendingOrder,
-        describe: humanError, auto: true);
-    if (!mounted) return;
-    await _loadUnsent();
-    if (!mounted) return;
-    final refused =
-        r.failed.where((d) => d.refused && !refusedBefore.contains(d.id)).length;
-    if (r.sent.isNotEmpty) {
-      _snack(refused == 0
-          ? 'Sent ${r.sent.length} saved order${r.sent.length == 1 ? '' : 's'} ✓'
-          : 'Sent ${r.sent.length}; $refused could not be sent — '
-              'see Unsent Orders.');
-    } else if (refused > 0) {
-      _snack('A saved order could not be sent — see Unsent Orders.');
-    }
-  }
-
-  /// Sends the rest of the field work kept on the phone (the outbox), by
-  /// itself, once there is a signal. Refused items are left for the rep.
-  Future<void> _syncOutbox() async {
-    if (await Outbox.autoCount() == 0) return;
-    // Told once, when an item is refused, not every minute after.
-    final refusedBefore = {
-      for (final i in await Outbox.all())
-        if (i.refused) i.id
-    };
-    final r = await Outbox.flush(Api.sendOutboxItem,
-        describe: humanError, auto: true);
-    if (!mounted) return;
-    await _loadUnsent();
-    if (!mounted) return;
-    final refused =
-        r.failed.where((i) => i.refused && !refusedBefore.contains(i.id)).length;
-    if (r.sent > 0) {
-      _snack(refused == 0
-          ? 'Sent ${r.sent} saved item${r.sent == 1 ? '' : 's'} ✓'
-          : 'Sent ${r.sent}; $refused could not be sent — see Waiting to Send.');
-    } else if (refused > 0) {
-      _snack('Something saved could not be sent — see Waiting to Send.');
-    }
+    await _loadAtt();
   }
 
   /// Offered once per launch. A rep who says "Later" is not asked again until
@@ -346,7 +278,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       duration: const Duration(seconds: 6),
-      content: Text('No signal. Punch saved at ${hhmm(at)}, sends by itself.'),
+      content: Text('Punch saved at ${hhmm(at)} ✓'),
     ));
   }
 
@@ -662,8 +594,7 @@ class _HomeDashboardState extends State<HomeDashboard>
           content: Text(
               '$what ${one ? 'has' : 'have'} not reached the office. Signing '
               'out deletes ${one ? 'it' : 'them'} from this phone.\n\nStay '
-              'signed in until you have signal and ${one ? 'it has' : 'they have'} '
-              'been sent.'),
+              'signed in until ${one ? 'it has' : 'they have'} been sent.'),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, true),

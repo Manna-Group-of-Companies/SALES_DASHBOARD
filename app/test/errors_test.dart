@@ -68,17 +68,19 @@ void main() {
   });
 
   group('Network failures', () {
-    test('offline says the work is not lost', () {
+    // The user, 13 Nov 2026: nothing in the app says the network is gone.
+    // Every write is kept and sent by itself, so this only reaches a read
+    // with nothing on the phone to answer it.
+    test('no signal is not put into words about the network', () {
       final s = humanError(_dio(DioExceptionType.connectionError));
-      expect(s, contains('No connection'));
-      expect(s, contains('No connection'));
+      expect(s, kNotYet);
+      expect(s.toLowerCase(), isNot(contains('signal')));
+      expect(s.toLowerCase(), isNot(contains('connection')));
     });
 
-    test('a timeout points at the signal rather than the app', () {
-      expect(humanError(_dio(DioExceptionType.receiveTimeout)),
-          contains('too slow'));
-      expect(humanError(_dio(DioExceptionType.connectionTimeout)),
-          contains('signal'));
+    test('a timeout reads the same as no signal', () {
+      expect(humanError(_dio(DioExceptionType.receiveTimeout)), kNotYet);
+      expect(humanError(_dio(DioExceptionType.connectionTimeout)), kNotYet);
     });
 
     test('a bad certificate suggests the thing that usually causes it', () {

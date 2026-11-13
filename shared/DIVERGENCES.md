@@ -1129,3 +1129,39 @@ rule into a fixture.
 
 The manager's rate decision on review (`rateEditable`) is a separate feature
 and is not touched by this.
+
+---
+
+## The phone works with no signal; the dashboard does not — **decided 13 November 2026**
+
+The user, 13 Nov 2026 (in Malayalam): everything on the phone must work the
+same with no signal, send by itself when the signal returns, and not show
+that the network has gone. The dashboard is a browser page used in an
+office and was not asked for this.
+
+**No rule differs.** A write made on the phone with no signal is kept, and
+sent later through the same function the phone uses with a signal, so the
+approval, credit and duplicate rules are checked again on the server's
+figures at that moment (`app/lib/services/outbox.dart`,
+`Api.writeOrQueue`). What differs is only *when* the check that counts is
+made. Where that matters for money, approval or stock:
+
+- **SAP price.** A kept order shows the last SAP price on the phone and goes
+  at SAP's price on the day it is sent. If that is different, the rep is told
+  old → new (`Api.sendPendingOrder`).
+- **Credit.** Judged at the counter on the last figures the phone has, and
+  again on the server's when sent. An order now over the limit with no
+  commitment is held on the phone with "Add commitment"
+  (`kNeedsCommitmentNow`).
+- **Approvals, including the push to SAP.** A manager's decision is kept and
+  sent later. The order is re-read and re-checked when it is sent; if
+  someone decided it meanwhile, the decision is refused on that item and
+  nothing is written over.
+- **Duplicates.** A lead's location whose duplicate check could not run is
+  checked when sent; a duplicate is refused on the item.
+- **Pick list window.** A kept pick list runs as of the moment it was made
+  (`ServerClock.at`), so a client-side window check judges that moment.
+  **Open:** `app/server/pick_list_submit.py` judges by the server's clock, so
+  a pick list made inside the window and sent after it closes would be
+  refused there. To close: pass the moment it was made and judge on that.
+

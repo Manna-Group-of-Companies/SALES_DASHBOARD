@@ -44,6 +44,13 @@ class OrderRefused implements Exception {
   String toString() => message;
 }
 
+/// Why a kept order was held when it was sent: the customer is over their
+/// credit limit as they stand now, and the order has no commitment. Unsent
+/// Orders offers to add one on a draft refused with exactly this sentence.
+const String kNeedsCommitmentNow =
+    "Now over the customer's credit limit. Add the customer's commitment, "
+    'then send it again.';
+
 class PendingOrder {
   /// Local id. Not an order number — this has never reached the server.
   final String id;
@@ -268,6 +275,42 @@ class PendingOrders {
       out.add(copy);
     }
     return out;
+  }
+
+  /// What the draft came to at the prices on the phone when it was taken, or
+  /// null when a line SAP prices had no price then — there is nothing to
+  /// compare SAP's price at sending against.
+  static double? pricedTotal(PendingOrder d) {
+    for (final item in d.items) {
+      final code = '${item['item_code'] ?? ''}';
+      if (!d.sapPending.containsKey(code)) continue;
+      if (((item['rate'] as num?)?.toDouble() ?? 0) <= 0) return null;
+    }
+    return totalOf(d.items);
+  }
+
+  /// Adds the customer's commitment to a held draft and lets it go again by
+  /// itself.
+  static Future<void> setCommitment(String id, String text, String? due) async {
+    final list = await _raw();
+    await _replaceAll([
+      for (final d in list)
+        d.id == id
+            ? PendingOrder(
+                id: d.id,
+                customer: d.customer,
+                customerName: d.customerName,
+                deliveryDate: d.deliveryDate,
+                items: d.items,
+                salesPerson: d.salesPerson,
+                savedAt: d.savedAt,
+                isLead: d.isLead,
+                commitment: text,
+                commitmentDue: due,
+                sapPending: d.sapPending,
+              )
+            : d
+    ]);
   }
 
   /// What [items] come to: quantity times line rate.

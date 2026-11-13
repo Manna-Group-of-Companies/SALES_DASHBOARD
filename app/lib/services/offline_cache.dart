@@ -7,22 +7,20 @@
 // minimum stock stood at the last sync. That is most of what a rep needs a
 // phone for at a counter, and it is safe because none of it changes the world.
 //
-// Writes are not queued, and that is a decision rather than an omission. An
-// order that draws on minimum stock is only real once the pool has been
-// decremented, and the pool lives on the server. Accepting an order offline
-// would mean telling a rep "saved" while another rep, in signal, takes the last
-// rolls out from under them — the customer is promised stock that was gone
-// before the promise was made. A refusal at the counter is recoverable; a
-// confirmation that silently turns into a shortage is not. Order drafts are
-// held locally instead (see `pending_orders.dart`) and marked plainly as not
-// sent, so nothing is lost and nothing is claimed.
+// Writes are queued too, since 13 Nov 2026 (`outbox.dart`, `sync_engine.dart`).
+// They were not, while an order decremented a minimum-stock pool on the server
+// and a kept order could promise rolls already gone. Nothing books stock on
+// the phone since 17 Sep 2026 — SAP commits it — and a kept write runs its
+// rules again on the server's figures when it is sent, so the user's "the app
+// must work exactly the same offline" no longer trades against that.
+
+// SAYS NOTHING ABOUT ITS AGE (13 Nov 2026)
 //
-// EVERY CACHED READ CARRIES ITS AGE
-//
-// A stale figure shown as though it were live is worse than no figure. So a
-// cached answer always arrives with when it was fetched, and screens say so.
-// A rep quoting a credit limit needs to know whether it is from this morning
-// or from Tuesday.
+// A cached answer used to arrive with "Offline — showing data from 3 hours
+// ago". The user asked for the app not to show that the network is gone, so
+// [Cached.ageLabel] is empty. Every HTTP read is also kept by
+// `net_cache.dart` now; this cache stays for the reads that were already
+// built on it.
 
 import 'dart:convert';
 
@@ -43,31 +41,25 @@ class Cached<T> {
 
   const Cached(this.value, {this.fetchedAt, this.stale = false});
 
-  /// How old the data is, in plain words, for a screen to show. Empty when
-  /// live — there is nothing worth saying about fresh data.
-  String get ageLabel {
-    if (!stale || fetchedAt == null) return '';
-    final mins = serverNow().difference(fetchedAt!).inMinutes;
-    if (mins < 1) return 'Offline — showing data from a moment ago';
-    if (mins < 60) return 'Offline — showing data from $mins min ago';
-    final hours = mins ~/ 60;
-    if (hours < 24) {
-      return 'Offline — showing data from $hours hour'
-          '${hours == 1 ? '' : 's'} ago';
-    }
-    final days = hours ~/ 24;
-    return 'Offline — showing data from $days day${days == 1 ? '' : 's'} ago';
-  }
+  /// What a screen says about the data's age: nothing (the user, 13 Nov
+  /// 2026: "The app must not show that the net is gone; it should just work
+  /// normally"). Kept as a getter so the screens that quote it need not
+  /// change, and so the decision is made once, here.
+  ///
+  /// This reverses the rule that stood here — that a stale figure shown as
+  /// live is worse than none. A kept order and a kept approval are checked
+  /// again on the server's figures when they are sent (`outbox.dart`,
+  /// `Api.sendPendingOrder`), which is what makes saying nothing safe.
+  String get ageLabel => '';
 }
 
 /// Read-through cache over the JSON the API returns.
 class OfflineCache {
   static const _prefix = 'cache:';
 
-  /// Cached copies older than this are not served even when offline. A price
-  /// list from last month is not a useful answer to "what does this cost" —
-  /// better to say the app does not know.
-  static const Duration maxAge = Duration(days: 7);
+  // No age limit since 13 Nov 2026: an old copy beats an error screen, which
+  // is what the user asked for. Anything that matters is checked again on the
+  // server's own figures when it is sent.
 
   static Future<SharedPreferences> get _prefs =>
       SharedPreferences.getInstance();
@@ -135,7 +127,6 @@ class OfflineCache {
 
       final at = DateTime.tryParse('${envelope['at'] ?? ''}');
       if (at == null) return null;
-      if (serverNow().difference(at) > maxAge) return null;
 
       return Cached(decode(envelope['data']), fetchedAt: at, stale: true);
     } catch (_) {

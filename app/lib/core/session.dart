@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:manna_field_sales/core/app_bus.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
+import 'package:manna_field_sales/services/net_cache.dart';
 
 class Session {
   static final Session I = Session._();
@@ -174,6 +175,9 @@ class Session {
         handler.next(response);
       },
     ));
+    // After auth, so what it keeps and answers is what a signed-in request
+    // got. See services/net_cache.dart.
+    dio.interceptors.add(NetCache.interceptor);
   }
 
   Future<bool> _needsReauth(Response response) async {

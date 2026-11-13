@@ -18,6 +18,7 @@ import 'package:manna_field_sales/screens/orders/min_stock_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
 import 'package:manna_field_sales/screens/orders/product_row.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart' show isLocalName;
 import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/widgets/sync_all_button.dart';
 
@@ -253,6 +254,14 @@ class _OrderScreenState extends State<OrderScreen> {
   /// Treads per-kg item is SAP's price or nothing.
   bool _typesRate(OrderLine line) =>
       !Session.I.isTreadsUnit || line.product.category.rateUnit != 'kg';
+
+  /// A line priced by SAP, whatever the phone had to show for it. A kept
+  /// order takes SAP's price on the day it is sent, not the copy on the phone
+  /// (the user, 13 Nov 2026), so every such line is re-priced then.
+  bool _takesSapPrice(OrderLine line) =>
+      !_typesRate(line) &&
+      !_approvedLines.contains(line.product.code) &&
+      (_sapRateFor(line) != null || _sapPriceLater(line));
 
   /// A line whose SAP price could not be read for want of a signal: kept on
   /// the phone with no price, and priced from SAP when the draft is sent.
@@ -588,38 +597,18 @@ class _OrderScreenState extends State<OrderScreen> {
     );
   }
 
-  /// Offers to hold an order that could not be sent for want of signal.
+  /// Keeps an order that could not be sent for want of signal, and carries
+  /// on exactly as if it had gone (the user, 13 Nov 2026: the app must not
+  /// show that the net is gone). It is sent by itself when it can be.
   ///
-  /// The wording is careful on purpose. No order number exists and no stock is
-  /// held — stock is committed in SAP, which this order has not reached — so
-  /// the rep must not walk away believing the customer is covered. Another rep
-  /// in signal can take the same rolls before this draft is ever sent.
+  /// No stock is held by it — stock is committed in SAP, which this order has
+  /// not reached — but that is as true of a sent order until SAP has it. What
+  /// is checked again when it is sent: SAP's price on every line that takes
+  /// one, and the customer's credit as they stand then.
   Future<void> _offerDraft(String deliveryDate,
       {({String text, String? due})? commitment}) async {
     if (!mounted) return;
     setState(() => _submitting = false);
-
-    final keep = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('No signal'),
-        content: Text(
-          'Not sent — no stock held.\n\nKeep it on the phone? It is sent by '
-          'itself when the signal is back.'
-          '${_picked.any(_sapPriceLater) ? '\n\nPrices are taken from SAP when it is sent.' : ''}',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Discard')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Keep it')),
-        ],
-      ),
-    );
-
-    if (keep != true) return;
 
     await PendingOrders.save(
       customer: widget.party.name,
@@ -631,7 +620,7 @@ class _OrderScreenState extends State<OrderScreen> {
       commitmentDue: commitment?.due,
       sapPending: {
         for (final l in _picked)
-          if (_sapPriceLater(l))
+          if (_takesSapPrice(l))
             l.product.code: {
               // Rate per kg -> line rate, as OrderLine.lineRate works it.
               'f': l.product.rollWeight > 0 ? l.product.rollWeight : 1.0,
@@ -640,7 +629,9 @@ class _OrderScreenState extends State<OrderScreen> {
       },
     );
     if (!mounted) return;
-    _snack('Saved on phone. It is sent when the signal is back.');
+    _snack(commitment != null
+        ? 'Order saved with your commitment ✓'
+        : 'Order saved — sending for approval ✓');
     await Future.delayed(const Duration(milliseconds: 600));
     if (mounted) Navigator.pop(context, true);
   }
@@ -726,6 +717,11 @@ class _OrderScreenState extends State<OrderScreen> {
         // page offering to print a proforma.
         await Future.delayed(const Duration(milliseconds: 400));
         if (mounted) Navigator.pop(context, true);
+        return;
+      } else if (isLocalName(widget.party.name)) {
+        // A lead or customer made with no signal and not on the server yet:
+        // the order waits behind it on the phone and goes with its real name.
+        await _offerDraft(dd, commitment: commitment);
         return;
       } else if (widget.party.isLead) {
         name = await Api.placeLeadOrder(
