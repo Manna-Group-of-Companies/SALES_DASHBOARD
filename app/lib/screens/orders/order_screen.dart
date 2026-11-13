@@ -279,12 +279,6 @@ class _OrderScreenState extends State<OrderScreen> {
     }
   }
 
-  /// Whether an item with a Manna Treads SAP rate is on the order. The banner
-  /// above the list speaks only then: while only the test items are priced,
-  /// every Treads customer has rates, and a banner on every order screen
-  /// would describe rows that are not there.
-  bool get _sapRateOnOrder => _picked.any((l) => _sapRateFor(l) != null);
-
   /// Minimum stock is shared with every other rep in the field, so what this
   /// screen showed when it opened goes stale the moment someone else commits.
   /// Re-reading on a timer is what keeps a row from offering rolls that are
@@ -951,24 +945,10 @@ class _OrderScreenState extends State<OrderScreen> {
               final onOrder = _onOrder;
               return ListView(
                 children: [
-                  if (_sapRateOnOrder)
-                    Container(
-                      width: double.infinity,
-                      color: const Color(0xFFE3F2FD),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      child: Text(
-                          [
-                            _sapRates.listOnly
-                                ? "Lead orders are taken at Manna Treads' list price: items that have one are priced and locked."
-                                : "Items with a Manna Treads SAP rate for this customer are priced from SAP and locked.",
-                            if (_sapRates.syncedAt.isNotEmpty)
-                              'Prices as read from SAP ${_sapRates.syncedAt}.',
-                            if (_sapRates.note.isNotEmpty) _sapRates.note,
-                          ].join(' '),
-                          style: TextStyle(
-                              fontSize: 12, color: Colors.blue.shade900)),
-                    ),
+                  // The blue note on SAP-priced items ("priced from SAP and
+                  // locked", the read time, a customer-code mismatch) was
+                  // removed on 12 Nov 2026 at the user's request: the locked
+                  // rate on each row already says it.
                   if (onOrder.isNotEmpty) ...[
                     Container(
                       width: double.infinity,
