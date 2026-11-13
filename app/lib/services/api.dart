@@ -3886,6 +3886,17 @@ class Api {
       getPickLists,
       if (s.salesPerson != null) () => getTodayAttendance(s.salesPerson!),
       if (s.salesPerson != null) () => getLeaveBalance(s.salesPerson!),
+      // This month's calendar and target (13 Nov 2026): opened for the first
+      // time in a dead zone, the calendar had nothing kept and showed every
+      // day red, and the home card said the target could not load.
+      // ServerClock, as the calendar and the home card use, so the month kept
+      // is the month they ask for.
+      if (s.salesPerson != null) ...[
+        () => getAttendanceForMonth(s.salesPerson!, ServerClock.I.now().year, ServerClock.I.now().month),
+        () => getRegularizationsForMonth(s.salesPerson!, ServerClock.I.now().year, ServerClock.I.now().month),
+        () => getLeavesForMonth(s.salesPerson!, ServerClock.I.now().year, ServerClock.I.now().month),
+      ],
+      () => getTargetMonth(kTargetMonths[ServerClock.I.now().month - 1], ServerClock.I.now().year),
       if (s.isManager) ...[
         getPendingLeadOrderApprovals,
         getPendingLeadOrderPOs,
