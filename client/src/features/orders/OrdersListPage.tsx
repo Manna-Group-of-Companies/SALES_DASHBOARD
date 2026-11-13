@@ -206,7 +206,11 @@ export function OrdersListPage() {
       bucket: orderBucket({ approved: leadOrderApproved(l.status), poStatus: l.status }),
     }));
 
-    return [...sales, ...leads].sort((a, b) => b.date.localeCompare(a.date));
+    // Orders waiting for the manager's decision come first, then the rest, each
+    // newest first (13 Nov 2026, the user: what is to approve on top, approved
+    // ones below). Only the order of the list changes, never which rows show.
+    const rank = (r: Row) => (r.bucket === 'to_approve' ? 0 : 1);
+    return [...sales, ...leads].sort((a, b) => rank(a) - rank(b) || b.date.localeCompare(a.date));
   }, [orders, leadOrders, week]);
 
   /*
