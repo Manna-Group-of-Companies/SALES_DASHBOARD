@@ -11,6 +11,7 @@
 #
 # Refused unless:
 #   - the order is approved by the manager (custom_po_status) and not cancelled;
+#   - it is no earlier than two days before the order's delivery date;
 #   - the caller is the order's rep, that rep's team manager, or System Manager;
 #   - every line is a line OF THIS ORDER — nothing from outside it;
 #   - each quantity is above zero and no more than what is still unpicked on
@@ -52,6 +53,19 @@ if so.docstatus == 2:
     frappe.throw("Order %s is cancelled." % so_name)
 if so.custom_po_status != APPROVED:
     frappe.throw("A pick list can only be made once the manager has approved the order.")
+
+# Picking opens two days before the delivery date (13 Nov 2026, the user) and
+# is locked every day before that. The phone shows the day and keeps the button
+# off; this refuses a list made early from anywhere else. An order with no
+# delivery date is not held back. Pinned by shared/fixtures/pick_list_window.json,
+# and app/lib/core/pick_list.dart (pickIsOpen) is the phone's copy.
+PICK_OPENS_DAYS_BEFORE = 2
+if so.delivery_date:
+    opens_on = frappe.utils.getdate(frappe.utils.add_days(so.delivery_date, -PICK_OPENS_DAYS_BEFORE))
+    if frappe.utils.getdate(frappe.utils.today()) < opens_on:
+        frappe.throw("The pick list for this order opens on %s, two days before its delivery date (%s)."
+                     % (frappe.utils.formatdate(opens_on, "dd MMM yyyy"),
+                        frappe.utils.formatdate(so.delivery_date, "dd MMM yyyy")))
 
 is_sys = user == "Administrator" or bool(frappe.get_all(
     "Has Role", filters={"parent": user, "parenttype": "User", "role": "System Manager"}, limit=1
@@ -175,4 +189,20 @@ doc = frappe.get_doc({
     "items": rows,
 })
 doc.insert(ignore_permissions=True)
+
+# Ask for the order sync, whose PASS K sends a submitted list to Hi-Tech's SAP
+# (12 Nov 2026, the user: "send to SAP automatically"). Nothing else asked for
+# it: an approved order raises this flag, a pick list did not, so a list sat
+# until somebody pressed Sync. The same flag manna_sap_order_request_sync
+# raises; the watcher on the SAP server (or the demo's) runs the sync. The list
+# is already saved and must stand whether or not the flag lands, so a failure
+# here is logged, not raised.
+try:
+    ctl = frappe.get_doc("SAP Order Sync Control")
+    ctl.sync_requested = 1
+    ctl.sync_requested_by = user
+    ctl.save(ignore_permissions=True)
+except Exception:
+    frappe.log_error(title="manna_pick_list_submit: could not ask for the order sync")
+
 frappe.response["message"] = {"name": doc.name}

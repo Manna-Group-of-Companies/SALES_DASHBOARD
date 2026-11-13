@@ -1,0 +1,14 @@
+{
+  "about": "When an order's pick list opens (13 Nov 2026, the user): only from two days before its delivery date (Sales Order.delivery_date); on every day before that the pick list is locked, and the phone says the day it opens. It stays open on and after the delivery date. An order with no delivery date is not held back. Implemented in app/lib/core/pick_list.dart (pickOpensOn, pickIsOpen) and enforced by the manna_pick_list_submit Server Script (app/server/pick_list_submit.py), which refuses a list made before that day. The web dashboard only shows pick lists, so it has no copy.",
+  "days_before": 2,
+  "cases": [
+    { "why": "Two days before the delivery date the list opens.", "delivery_date": "2026-11-15", "today": "2026-11-13", "opens_on": "2026-11-13", "open": true },
+    { "why": "Three days before, it is still locked.", "delivery_date": "2026-11-16", "today": "2026-11-13", "opens_on": "2026-11-14", "open": false },
+    { "why": "A week ahead is locked.", "delivery_date": "2026-11-20", "today": "2026-11-13", "opens_on": "2026-11-18", "open": false },
+    { "why": "The day before delivery is open.", "delivery_date": "2026-11-14", "today": "2026-11-13", "opens_on": "2026-11-12", "open": true },
+    { "why": "The delivery day itself is open.", "delivery_date": "2026-11-13", "today": "2026-11-13", "opens_on": "2026-11-11", "open": true },
+    { "why": "A delivery date already passed stays open - the order is late, not locked.", "delivery_date": "2026-11-01", "today": "2026-11-13", "opens_on": "2026-10-30", "open": true },
+    { "why": "Two days back crosses the month.", "delivery_date": "2026-12-01", "today": "2026-11-28", "opens_on": "2026-11-29", "open": false },
+    { "why": "No delivery date: not held back.", "delivery_date": null, "today": "2026-11-13", "opens_on": null, "open": true }
+  ]
+}
