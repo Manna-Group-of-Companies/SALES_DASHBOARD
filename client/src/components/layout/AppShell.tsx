@@ -35,7 +35,6 @@ import { initials } from '@/components/common/format';
 import { useTheme } from '@/app/theme';
 import { NotificationPanel } from '@/features/notifications/NotificationPanel';
 import { ToastHost } from '@/features/notifications/ToastHost';
-import { SyncAllButton } from './SyncAllButton';
 import { Api } from '@/api/client';
 import { COND_AWAITING } from '@/domain/creditCondition';
 import logoInk from '@/assets/manna-logo.png';
@@ -75,9 +74,6 @@ export function AppShell() {
 
   const [navOpen, setNavOpen] = useState(false);
   const [theme, toggleTheme] = useTheme();
-  // Bumped by the header's Sync button to remount the page, so it re-reads
-  // what SAP just wrote. See SyncAllButton for why that waits for a click.
-  const [pageKey, setPageKey] = useState(0);
 
   // HR works on an entirely different set of records — loading the product
   // catalogue and the order book for them would be pure waste.
@@ -341,19 +337,10 @@ export function AppShell() {
                 approval alone ends editing. */}
           </div>
 
-          {/* HR's records never come from SAP, so there is nothing to sync for them.
-              The MD's rates screen has its own "Sync from SAP", for prices. The
-              accountant's has its own order sync, and this one would reload the
-              order book and stock he does not load. */}
-          {!isHr && user.role !== 'managing_director' && !isAccountant && (
-            <SyncAllButton
-              onSettled={() => {
-                void dispatch(loadOrders(undefined));
-                void dispatch(refreshMinStock());
-              }}
-              onReload={() => setPageKey((k) => k + 1)}
-            />
-          )}
+          {/* The header's "Sync with SAP" button (SyncAllButton) was removed on
+              13 Nov 2026 at the user's request: SAP is meant to be followed by
+              the watchers, not by a press. An approved order still raises the
+              order flag by itself (decideOrder). */}
 
           <button
             className="bell"
@@ -393,7 +380,7 @@ export function AppShell() {
         )}
 
         <main className="content">
-          <Outlet key={pageKey} />
+          <Outlet />
         </main>
       </div>
 
