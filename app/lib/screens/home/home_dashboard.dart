@@ -694,6 +694,11 @@ class _HomeDashboardState extends State<HomeDashboard>
       if (Session.I.isGM)
         _Tile('GM Approvals', Icons.gavel,
                 () => _go(const GMApprovalsScreen())),
+      // A manager has it behind the Manager bar; a GM who is not one would
+      // have no way in, and the GM approves for reps with no team.
+      if (Session.I.isGM && !Session.I.isManager)
+        _Tile('Item Request Approvals', Icons.add_box_outlined,
+                () => _go(const ItemRequestApprovalsScreen())),
       if (isRep || Session.I.isManager || Session.I.isGM || Session.I.isHR)
         _Tile('Day Map', Icons.pin_drop, () => _go(const DayMapScreen())),
       // Sits above everything else a rep does: an order nobody has received is

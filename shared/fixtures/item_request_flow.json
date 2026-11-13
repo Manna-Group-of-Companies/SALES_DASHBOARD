@@ -1,0 +1,11 @@
+{
+  "about": "Item requests go to the rep's manager first, then the accountant (12 Nov 2026, the user). A rep's new request is 'Pending Manager': the rep's team manager, or the GM for a rep with no team, approves it on to the accountant ('Pending') or rejects it with a reason. Accounts answer only an approved request: Done with the new SAP item code, or Rejected - the accounts staff (User.custom_is_accounts_staff) from 12 Nov 2026, the accountant until then; 'With accountant' and accountant_answers mean accounts. Who may approve is decided by the manna_item_request Server Script (app/server/item_request.py), which hands each row a can_approve flag; these cases pin what both apps call each stage and when they offer the accountant an answer. An unknown or empty status reads as still with the manager - the safe direction, because it offers nobody an answer. Implemented in app/lib/core/item_request.dart and client/src/api/itemRequests.ts.",
+  "cases": [
+    { "why": "A new request waits for the rep's manager; the accountant cannot answer it yet.", "status": "Pending Manager", "label": "With manager", "accountant_answers": false },
+    { "why": "Approved by the manager: now the accountant's.", "status": "Pending", "label": "With accountant", "accountant_answers": true },
+    { "why": "The accountant made the item in SAP.", "status": "Done", "label": "Done", "accountant_answers": false },
+    { "why": "Rejected, by the manager or by the accountant; the reply says why.", "status": "Rejected", "label": "Rejected", "accountant_answers": false },
+    { "why": "An unknown status is treated as still with the manager, so nobody is offered an answer.", "status": "", "label": "With manager", "accountant_answers": false },
+    { "why": "So is a status this version does not know.", "status": "Something New", "label": "With manager", "accountant_answers": false }
+  ]
+}
