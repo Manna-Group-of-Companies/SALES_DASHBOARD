@@ -16,6 +16,32 @@
 double _num(Object? v) => v is num ? v.toDouble() : double.tryParse('$v') ?? 0;
 int _int(Object? v) => v is num ? v.toInt() : int.tryParse('$v') ?? 0;
 
+/// How many days before an order's delivery date its pick list opens
+/// (13 Nov 2026, the user: picking only in the last two days before delivery,
+/// locked on every day before that). Pinned by
+/// shared/fixtures/pick_list_window.json; manna_pick_list_submit refuses an
+/// early list with the same number.
+const int kPickOpensDaysBefore = 2;
+
+/// The day [deliveryDate] (`yyyy-MM-dd…`, as ERPNext sends it) opens for
+/// picking: two days before it. Null when there is no readable date - such an
+/// order is not held back, because a lock nobody can see the end of would
+/// strand it; every order the phone takes carries a delivery date.
+DateTime? pickOpensOn(Object? deliveryDate) {
+  final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch('${deliveryDate ?? ''}'.trim());
+  if (m == null) return null;
+  final d = DateTime(int.parse(m[1]!), int.parse(m[2]!), int.parse(m[3]!));
+  return DateTime(d.year, d.month, d.day - kPickOpensDaysBefore);
+}
+
+/// Whether an order delivering on [deliveryDate] may be picked on [today].
+/// Open from [pickOpensOn] onwards, and after the delivery date too.
+bool pickIsOpen(Object? deliveryDate, DateTime today) {
+  final opens = pickOpensOn(deliveryDate);
+  if (opens == null) return true;
+  return !DateTime(today.year, today.month, today.day).isBefore(opens);
+}
+
 /// What was ordered on [line], in the unit Hi-Tech's stock is shown in:
 /// whole rolls for tread rubber, else the line's qty (kg, cans). Loose belts
 /// ride on qty as part of a roll and are not picked, so a belts-only line is 0.

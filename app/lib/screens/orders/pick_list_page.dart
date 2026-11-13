@@ -11,6 +11,9 @@ import 'package:manna_field_sales/screens/orders/pick_list_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
 const String _kApproved = 'PO Approved - Ready for SAP';
+/// How long a finished (invoiced) order stays on the page after its last pick
+/// list, so the rep sees it turn "Picked" rather than disappear.
+const int _kKeepDays = 3;
 const Color _kOrange = Color(0xFFF46A21);
 const Color _kLine = Color(0xFFE5E7EB);
 
@@ -39,12 +42,28 @@ class _OrderBlock {
   List<Map<String, dynamic>> get items =>
       ((order['items'] as List?) ?? const []).whereType<Map>().map((m) => m.cast<String, dynamic>()).toList();
 
-  /// Something on this order is not on a pick list yet.
+  /// Something on this order is not on a pick list yet. A line SAP has already
+  /// invoiced is done, list or no list: an old order shown again under its
+  /// date must not be offered for picking.
   bool get anyLeft {
     final picked = pickedSoFar(lists);
-    return items.any((l) => remainingToPick(l, picked['${l['name']}'] ?? 0) > 0);
+    return items.any((l) =>
+        _text(l['custom_sap_invoice']).isEmpty && remainingToPick(l, picked['${l['name']}'] ?? 0) > 0);
   }
+
+  /// Hi-Tech's order exists: a pick list goes against it, so an order without
+  /// its number is shown (it was ordered) but cannot be picked yet.
+  bool get inSap => _text(order['custom_sap_sales_order']).isNotEmpty;
+
+  /// Picking opens two days before the delivery date (13 Nov 2026).
+  DateTime? get opensOn => pickOpensOn(order['delivery_date']);
+  bool get locked => !pickIsOpen(order['delivery_date'], DateTime.now());
+
+  /// Goes on the next pick list: in SAP, open, and something left to pick.
+  bool get pickable => inSap && !locked && anyLeft;
 }
+
+String _day(DateTime d) => '${d.day.toString().padLeft(2, '0')} ${_months[d.month - 1]} ${d.year}';
 
 class PickListPage extends StatefulWidget {
   const PickListPage({super.key});
@@ -88,8 +107,15 @@ class _PickListPageState extends State<PickListPage> {
         child: child!,
       ),
     );
-    if (r != null) setState(() => _range = r);
+    if (r != null) _setRange(r);
   }
+
+  /// A new date range reads that range's orders - finished ones too - from
+  /// what is already loaded, fetching only orders not opened yet.
+  void _setRange(DateTimeRange? r) => setState(() {
+        _range = r;
+        _future = _load(refresh: false);
+      });
 
   String get _rangeLabel {
     final r = _range;
@@ -145,7 +171,7 @@ class _PickListPageState extends State<PickListPage> {
             IconButton(
               tooltip: 'All dates',
               visualDensity: VisualDensity.compact,
-              onPressed: () => setState(() => _range = null),
+              onPressed: () => _setRange(null),
               icon: const Icon(Icons.close, size: 20),
             ),
         ],
@@ -153,35 +179,75 @@ class _PickListPageState extends State<PickListPage> {
     );
   }
 
-  Future<List<_OrderBlock>> _load() async {
-    final rows = await Api.getMyOrders();
+  /// The rep's order rows and pick lists as last read, and every order opened
+  /// since, so a change of dates does not read them all again.
+  List<Map<String, dynamic>>? _rows;
+  List<PickList> _lists = const [];
+  final Map<String, Map<String, dynamic>> _docs = {};
+
+  Future<List<_OrderBlock>> _load({bool refresh = true}) async {
+    if (refresh || _rows == null) {
+      final results0 = await Future.wait([Api.getMyOrders(), Api.getPickLists()]);
+      _rows = results0[0] as List<Map<String, dynamic>>;
+      _lists = results0[1] as List<PickList>;
+      _docs.clear();
+    }
+    final rows = _rows!;
+    final lists = _lists;
+    // An invoiced order is finished and used to leave this page at once. Since
+    // 12 Nov 2026 the sync marks it invoiced the moment SAP delivers its pick
+    // list, so its line vanished instead of turning "Picked" (the user: "not
+    // updating the status in pick list"). It now stays for _kKeepDays after its
+    // last pick list, showing Picked; an invoiced order never picked here
+    // leaves as before.
+    final recent = DateTime.now().subtract(const Duration(days: _kKeepDays));
+    bool pickedRecently(String order) => lists.any((l) {
+          if (l.salesOrder != order) return false;
+          final at = DateTime.tryParse(l.pickedOn.replaceFirst(' ', 'T'));
+          return at != null && at.isAfter(recent);
+        });
+    // With dates chosen, EVERY approved order placed on them is shown,
+    // finished or not (13 Nov 2026, the user: what was ordered that day must
+    // not disappear). Without dates, finished orders leave as above.
+    final r0 = _range;
+    bool inRange(Map r) {
+      final d = _text(r['transaction_date']);
+      if (r0 == null || d.length < 10) return false;
+      final day = d.substring(0, 10);
+      return day.compareTo(_iso(r0.start)) >= 0 && day.compareTo(_iso(r0.end)) <= 0;
+    }
+
     final names = [
       for (final r in rows)
         if (r['is_combined'] != true &&
             r['is_lead'] != true &&
             '${r['custom_po_status'] ?? ''}' == _kApproved &&
             '${r['docstatus'] ?? 0}' != '2' &&
-            _text(r['custom_sap_invoice']).isEmpty)
+            (r0 != null
+                ? inRange(r)
+                : (_text(r['custom_sap_invoice']).isEmpty || pickedRecently('${r['name']}'))))
           '${r['name']}',
     ];
-    final results = await Future.wait([Future.wait(names.map(Api.getOrder)), Api.getPickLists()]);
-    final orders = results[0] as List<Map<String, dynamic>>;
-    final lists = results[1] as List<PickList>;
+    final missing = names.where((n) => !_docs.containsKey(n)).toList();
+    final got = await Future.wait(missing.map(Api.getOrder));
+    for (var i = 0; i < missing.length; i++) {
+      _docs[missing[i]] = got[i];
+    }
     return [
-      for (final o in orders)
-        // Only orders already in SAP: a pick list goes against Hi-Tech's
-        // sales order, so one without its number could never be released.
-        if ('${o['custom_po_status'] ?? ''}' == _kApproved &&
-            _text(o['custom_sap_sales_order']).isNotEmpty)
-          _OrderBlock(o, lists.where((l) => l.salesOrder == o['name']).toList()),
+      for (final n in names)
+        // An order not in SAP yet is shown, marked as waiting; it cannot be
+        // picked, since a pick list goes against Hi-Tech's sales order.
+        if ('${_docs[n]?['custom_po_status'] ?? ''}' == _kApproved)
+          _OrderBlock(_docs[n]!, lists.where((l) => l.salesOrder == n).toList()),
     ];
   }
 
-  /// Every approved order with something still to pick, in one pick list screen.
+  /// Every open order with something still to pick, in one pick list screen.
+  /// A locked one (more than two days before delivery) stays off it.
   Future<void> _generate(List<_OrderBlock> blocks) async {
     final open = [
       for (final b in blocks)
-        if (b.anyLeft) b.order,
+        if (b.pickable) b.order,
     ];
     if (open.isEmpty) return;
     final done = await Navigator.push<bool>(
@@ -211,7 +277,20 @@ class _PickListPageState extends State<PickListPage> {
           }
           final all = snap.data!;
           final blocks = all.where(_shown).toList();
-          final anyLeft = blocks.any((b) => b.anyLeft);
+          final anyLeft = blocks.any((b) => b.pickable);
+          // Nothing open now: say when the first locked order opens.
+          final opens = [
+            for (final b in blocks)
+              if (b.inSap && b.anyLeft && b.locked && b.opensOn != null) b.opensOn!,
+          ]..sort();
+          final waitingSap = blocks.any((b) => !b.inSap && b.anyLeft);
+          final buttonText = anyLeft
+              ? 'Generate pick list'
+              : opens.isNotEmpty
+              ? 'Pick list opens on ${_day(opens.first)}'
+              : waitingSap
+              ? 'Waiting for the order in SAP'
+              : 'All items picked';
           return Column(
             children: [
               Expanded(
@@ -246,10 +325,10 @@ class _PickListPageState extends State<PickListPage> {
                       child: FilledButton.icon(
                         style: FilledButton.styleFrom(backgroundColor: _kOrange),
                         onPressed: anyLeft ? () => _generate(blocks) : null,
-                        icon: const Icon(Icons.playlist_add_check),
+                        icon: Icon(anyLeft || opens.isEmpty ? Icons.playlist_add_check : Icons.lock_clock),
                         label: Padding(
                           padding: const EdgeInsets.all(10),
-                          child: Text(anyLeft ? 'Generate pick list' : 'All items picked'),
+                          child: Text(buttonText),
                         ),
                       ),
                     ),
@@ -306,7 +385,9 @@ List<_Line> _lines(_OrderBlock b) {
         final d = delivered['${l['name']}'] ?? 0;
         final w = waiting['${l['name']}'] ?? 0;
         final unit = pickUnit(l);
-        final st = (ordered > 0 && d >= ordered - 1e-9)
+        // A line SAP has invoiced is gone, whether or not its list was made
+        // here - an old order seen again under its date reads as Picked.
+        final st = ((ordered > 0 && d >= ordered - 1e-9) || _text(l['custom_sap_invoice']).isNotEmpty)
             ? _LineState.picked
             : w > 0
             ? _LineState.onList
@@ -322,6 +403,15 @@ List<_Line> _lines(_OrderBlock b) {
         );
       }(),
   ];
+}
+
+/// Why an order with something left cannot be picked today, or null.
+(IconData, String)? _gate(_OrderBlock b) {
+  if (!b.anyLeft) return null;
+  if (!b.inSap) return (Icons.hourglass_top, "Waiting for Hi-Tech's order in SAP");
+  final opens = b.opensOn;
+  if (b.locked && opens != null) return (Icons.lock_clock, 'Pick list opens on ${_day(opens)}');
+  return null;
 }
 
 /// One order: customer and order number on top, then its products as a list.
@@ -357,9 +447,28 @@ class _OrderCard extends StatelessWidget {
         title: Text(_customer(o), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
         subtitle: Padding(
           padding: const EdgeInsets.only(top: 2),
-          child: Text(
-            'Order ${_orderNo(o)}  ·  ${_date(o['transaction_date'])}\n$summary',
-            style: const TextStyle(fontSize: 12.5, color: Colors.black54, height: 1.4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Order ${_orderNo(o)}  ·  ${_date(o['transaction_date'])}  ·  Delivery ${_date(o['delivery_date'])}\n$summary',
+                style: const TextStyle(fontSize: 12.5, color: Colors.black54, height: 1.4),
+              ),
+              if (_gate(block) case final g?)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(
+                    children: [
+                      Icon(g.$1, size: 15, color: _kOrange),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(g.$2,
+                            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: _kOrange)),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
           ),
         ),
         childrenPadding: const EdgeInsets.only(bottom: 6),
