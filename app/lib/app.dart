@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/screens/auth/login_screen.dart';
 import 'package:manna_field_sales/widgets/app_lock_gate.dart';
+import 'package:manna_field_sales/widgets/responsive_frame.dart';
 import 'package:manna_field_sales/widgets/sync_all_button.dart';
 
 class MannaApp extends StatelessWidget {
@@ -17,9 +18,11 @@ class MannaApp extends StatelessWidget {
       scaffoldMessengerKey: SapSyncAll.messengerKey,
       navigatorObservers: [SapSyncAll.observer],
       // The fingerprint / screen-lock gate goes outermost, so it covers the
-      // Sync button too.
+      // Sync button too. Inside it, the app is held to a readable width on a
+      // tablet (widgets/responsive_frame.dart), Sync button included.
       builder: (context, child) => AppLockGate(
-          child: SyncAllOverlay(child: child ?? const SizedBox.shrink())),
+          child: ResponsiveFrame(
+              child: SyncAllOverlay(child: child ?? const SizedBox.shrink()))),
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(

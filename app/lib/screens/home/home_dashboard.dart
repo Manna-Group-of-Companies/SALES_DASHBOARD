@@ -6,6 +6,7 @@ import 'package:manna_field_sales/core/app_bus.dart';
 import 'package:manna_field_sales/core/attendance_rules.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/responsive.dart';
 import 'package:manna_field_sales/core/sales_target.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
@@ -952,8 +953,10 @@ class _HomeDashboardState extends State<HomeDashboard>
             if (isRep) const SizedBox(height: 16),
             if (isRep) _myTargetCard(),
             const SizedBox(height: 16),
+            // Two tiles a row on a phone, three or four on a tablet
+            // (core/responsive.dart), from the width the app really has.
             GridView.count(
-              crossAxisCount: 2,
+              crossAxisCount: gridColumns(MediaQuery.of(context).size.width - 32),
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               mainAxisSpacing: 12,
