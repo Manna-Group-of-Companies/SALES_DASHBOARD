@@ -53,6 +53,7 @@ site gets written to). Unrecognised keys are logged as a `WARN` and ignored.
   },
   "write_mode":    "overwrite",   // required. "overwrite" = SAP is authoritative | "fill_blanks" = only set currently-empty limits
   "skip_codes":    [],            // optional. SAP CardCodes to never write
+  "skip_customer_prefixes": [],   // optional (12 Nov 2026). ERPNext customers whose name starts with one of these are left out, e.g. ["DEMO - "] on the local copy, where demo customers share their real twin's code. Live: none
   "log_dir":       "./logs",      // optional. Relative paths resolve against the script folder
   "sync_invoices":  true,         // optional, default true (5 Nov 2026). Mirror SAP A/R invoices into the SAP Invoice doctype
   "invoices_since": "2026-04-01", // optional, default 1 April of the current financial year. Open invoices are mirrored whatever their date

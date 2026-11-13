@@ -386,6 +386,9 @@ function Get-ErpCodedCustomers {
     foreach ($row in $data) {
         $code = "$(Get-JsonProp $row 'custom_bp_code')".Trim()
         if ($code -eq '') { continue }
+        $rowName = "$(Get-JsonProp $row 'name')"
+        $skipByName = @($script:SkipCustomerPrefixes | Where-Object { $rowName.StartsWith("$_", [System.StringComparison]::OrdinalIgnoreCase) })
+        if ($skipByName.Count -gt 0) { continue }
         if ($index.ContainsKey($code)) { $dupes.Add($code); continue }
         $index[$code] = [pscustomobject]@{
             Name       = "$(Get-JsonProp $row 'name')"
@@ -1181,6 +1184,17 @@ try {
         $skipCodes = @($scp.Value | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne '' })
     }
 
+    # ERPNext customers left out by the start of their name (12 Nov 2026), e.g.
+    # "DEMO - " on the local copy, where the demo customers carry their real
+    # twin's code so demo orders reach the TEST company - and two customers on
+    # one code would otherwise stop the whole run (Get-ErpCodedCustomers).
+    # Optional; live sets none.
+    $script:SkipCustomerPrefixes = @()
+    $scpp = $config.PSObject.Properties['skip_customer_prefixes']
+    if ($scpp -and $scpp.Value) {
+        $script:SkipCustomerPrefixes = @($scpp.Value | ForEach-Object { "$_" } | Where-Object { "$_".Trim() -ne '' })
+    }
+
     # New customers (11 Oct 2026). All three are optional.
     $createCustomers = Get-OptionalBool $config 'create_customers' $true
     $newCustomerMax  = 25
@@ -1220,7 +1234,7 @@ try {
 
     Write-UnknownKeyWarnings $config @('erpnext', 'sap', 'write_mode',
         'sync_credit_limit', 'sync_outstanding', 'ageing_basis', 'outstanding_total',
-        'skip_codes', 'log_dir', 'log_keep_days',
+        'skip_codes', 'skip_customer_prefixes', 'log_dir', 'log_keep_days',
         'create_customers', 'new_customer_max', 'rep_map_file',
         'sync_invoices', 'invoices_since') '(root)'
     if (-not [System.IO.Path]::IsPathRooted($repMapFile)) { $repMapFile = Join-Path $scriptRoot $repMapFile }
