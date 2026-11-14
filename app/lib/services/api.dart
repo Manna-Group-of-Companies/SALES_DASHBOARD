@@ -2352,6 +2352,19 @@ class Api {
   /// The two doctypes are mapped onto one shape here rather than in the widget:
   /// a Lead Order names its party in `lead_name` and its state in `status`,
   /// where a Sales Order uses `customer` and `custom_po_status`.
+  /// One customer's latest Sales Orders, whoever took them - for the
+  /// payment-due list (14 Nov 2026), where a manager sees the team's
+  /// customers. Cancelled orders are left out. Kept for no signal like
+  /// every read (services/net_cache.dart).
+  static Future<List<Map<String, dynamic>>> getCustomerOrders(String customer) =>
+      _list('Sales Order',
+          fields: '["name","customer","grand_total","transaction_date",'
+              '"delivery_date","custom_po_status","custom_sales_person",'
+              '"custom_sap_sales_order","custom_sap_invoice","docstatus"]',
+          filters: '[["customer","=",${jsonEncode(customer)}],["docstatus","!=",2]]',
+          orderBy: 'transaction_date desc',
+          limit: 20);
+
   static Future<List<Map<String, dynamic>>> getMyOrders() => _cachedRows(
         CacheKeys.orders,
         () async {

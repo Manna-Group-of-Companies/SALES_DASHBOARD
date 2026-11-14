@@ -30,7 +30,9 @@ import 'package:manna_field_sales/screens/manager/manager_targets_screen.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/screens/map/map_screen.dart';
 import 'package:manna_field_sales/screens/orders/min_stock_screen.dart';
+import 'package:manna_field_sales/core/credit.dart' show inr, overduePastTerms, paymentDueCustomers;
 import 'package:manna_field_sales/core/pick_list.dart' show kPickListsReleased;
+import 'package:manna_field_sales/screens/customers/payment_due_screen.dart';
 import 'package:manna_field_sales/screens/orders/pick_list_page.dart';
 import 'package:manna_field_sales/screens/requests/item_request_screen.dart';
 import 'package:manna_field_sales/screens/production/production_dashboard_screen.dart';
@@ -69,6 +71,9 @@ class _HomeDashboardState extends State<HomeDashboard>
   // new request on every setState, and its card dropped back to a loading
   // placeholder each time, which is part of what made this screen flicker.
   late Future<TargetMonth> _target;
+
+  /// Customers whose payment is due, for the home card (14 Nov 2026).
+  late Future<List<Map<String, dynamic>>> _due;
 
   /// Today's attendance as shown: the server's row with any punch still on the
   /// phone laid over it (see PendingPunches.attendanceView). [_attServer] is
@@ -128,6 +133,7 @@ class _HomeDashboardState extends State<HomeDashboard>
       _counts = _loadCounts();
       _activeTrip = _loadActiveTrip();
       _target = _loadTarget();
+      _due = _loadDue();
     });
     _loadAtt();
     _loadUnsent();
@@ -187,6 +193,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     _counts = _loadCounts();
     _activeTrip = _loadActiveTrip();
     _target = _loadTarget();
+    _due = _loadDue();
     _loadAtt();
     _loadUnsent();
     _offerUpdate();
@@ -577,6 +584,34 @@ class _HomeDashboardState extends State<HomeDashboard>
     );
   }
 
+  Future<List<Map<String, dynamic>>> _loadDue() async =>
+      paymentDueCustomers(await Api.getCustomers());
+
+  /// Payment due (14 Nov 2026, the user): how many of this login's customers
+  /// are overdue past their terms and by how much; tap for the list and
+  /// their orders. Says nothing at all while it loads or when it cannot, so
+  /// a slow customer list never holds the home screen up.
+  Widget _paymentDueCard() => FutureBuilder<List<Map<String, dynamic>>>(
+        future: _due,
+        builder: (context, snap) {
+          final due = snap.data;
+          if (due == null) return const SizedBox.shrink();
+          final total = due.fold(0.0, (s, c) => s + overduePastTerms(c));
+          return Card(
+            child: ListTile(
+              leading: Icon(Icons.request_quote,
+                  color: due.isEmpty ? Colors.grey : Colors.red.shade700),
+              title: const Text('Payment Due'),
+              subtitle: Text(due.isEmpty
+                  ? 'No customer is overdue past their terms'
+                  : '${due.length} customer${due.length == 1 ? '' : 's'}  ·  ${inr(total)} overdue'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _go(const PaymentDueScreen()),
+            ),
+          );
+        },
+      );
+
   Future<List<int>> _loadCounts() async {
     final t = today();
     final me = Session.I.salesPerson ?? '__none__';
@@ -905,6 +940,8 @@ class _HomeDashboardState extends State<HomeDashboard>
               ),
             if (isRep) const SizedBox(height: 16),
             if (isRep) _myTargetCard(),
+            if (isRep) const SizedBox(height: 12),
+            if (isRep) _paymentDueCard(),
             const SizedBox(height: 16),
             // Two tiles a row on a phone, three or four on a tablet
             // (core/responsive.dart), from the width the app really has.
