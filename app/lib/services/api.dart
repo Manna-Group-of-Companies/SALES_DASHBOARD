@@ -36,6 +36,7 @@ import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/models/sap_rates.dart';
+import 'package:manna_field_sales/services/local_captures.dart';
 import 'package:manna_field_sales/services/net_cache.dart';
 import 'package:manna_field_sales/services/offline_cache.dart';
 import 'package:manna_field_sales/services/outbox.dart';
@@ -480,9 +481,12 @@ class Api {
   /// Callers must still run the live read and replace this when it lands —
   /// and say the copy is being refreshed, so nobody quotes a balance off it
   /// thinking it is live.
-  static Future<Cached<List<Map<String, dynamic>>>?> peekCustomers() =>
-      OfflineCache.peek<List<Map<String, dynamic>>>(
-          CacheKeys.customers, decodeRows);
+  static Future<Cached<List<Map<String, dynamic>>>?> peekCustomers() async {
+    final c = await OfflineCache.peek<List<Map<String, dynamic>>>(
+        CacheKeys.customers, decodeRows);
+    if (c != null) await LocalCaptures.overlay('Customer', c.value);
+    return c;
+  }
 
   static Future<Cached<List<Map<String, dynamic>>>> getCustomersCached() {
     // `custom_assigned_reps` is a Link to Sales Person now, holding a bare
@@ -511,13 +515,19 @@ class Api {
             'custom_verified_latitude',
             'custom_verified_longitude',
             'custom_phone',
+            // Lets this phone's own captures stand until the server has
+            // them (services/local_captures.dart).
+            'modified',
             // Whose it is: a manager's list holds the team's customers too.
             kFieldCustomerOwner,
             ...kOutstandingFields,
           ]),
           orderBy: 'customer_name asc'),
       decode: decodeRows,
-    );
+    ).then((c) async {
+      await LocalCaptures.overlay('Customer', c.value);
+      return c;
+    });
   }
 
   /// Sets who a customer belongs to. UAE only (see `core/visibility.dart`) —
@@ -3261,7 +3271,8 @@ class Api {
             // the screen and came back — it read the absent status as "Not
             // Captured" and asked them to do it again.
             fields:
-                '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status","custom_location_status","custom_latitude","custom_longitude","custom_verified_latitude","custom_verified_longitude"]'));
+                '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status","custom_location_status","custom_latitude","custom_longitude","custom_verified_latitude","custom_verified_longitude","modified"]'))
+        .then((rows) => LocalCaptures.overlay('Lead', rows));
   }
 
   /// Sets who a lead belongs to. UAE only (see `core/visibility.dart`) —
@@ -4436,16 +4447,27 @@ class Api {
     bool recapture = false,
     double? existingLat,
     double? existingLng,
-  }) =>
-      writeOrQueue(kind: 'lead_location', label: 'Location of $lead', args: {
-        'lead': lead,
-        'sales_person': salesPerson,
-        'lat': lat,
-        'lng': lng,
-        'recapture': recapture,
-        'existing_lat': existingLat,
-        'existing_lng': existingLng,
-      });
+  }) async {
+    await writeOrQueue(kind: 'lead_location', label: 'Location of $lead', args: {
+      'lead': lead,
+      'sales_person': salesPerson,
+      'lat': lat,
+      'lng': lng,
+      'recapture': recapture,
+      'existing_lat': existingLat,
+      'existing_lng': existingLng,
+    });
+    // Sent or kept, the lists must show it captured from now on
+    // (services/local_captures.dart).
+    await LocalCaptures.record(
+        doctype: 'Lead',
+        name: lead,
+        status: _capturedStatus,
+        lat: lat,
+        lng: lng,
+        selfVerified: _selfVerifies,
+        recapture: recapture);
+  }
 
   static Future<void> approveLeadLocation(
           String name, bool approve, dynamic lat, dynamic lng) =>
