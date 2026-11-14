@@ -67,6 +67,13 @@ class _OrderScreenState extends State<OrderScreen> {
   /// Treads per-kg lines take SAP's price when it is sent.
   bool _ratesOffline = false;
 
+  /// True once a rates fetch for this party returned without an error
+  /// (13 Nov 2026). A failed fetch also leaves `_sapRates` at
+  /// `SapRates.none`, the same as an empty answer or no attempt, and
+  /// `_sapVisible` must not read a failure as "SAP prices nothing here" —
+  /// that hid every per-kg product whenever the server stumbled.
+  bool _sapRatesAnswered = false;
+
   String _company = '';
   String _q = '';
   DateTime? _deliveryDate;
@@ -230,10 +237,12 @@ class _OrderScreenState extends State<OrderScreen> {
     // kept out of the Future.wait below, so a failure here — no signal, not a
     // Treads party, no copy of SAP yet — cannot fail the whole screen; it just
     // means no rates are shown, and the rep types the rate as before.
+    var ratesFailed = false;
     final Future<SapRates>? sapRates =
         (Session.I.isTreadsUnit && widget.party.name.isNotEmpty)
             ? Api.getSapRates(widget.party.name, lead: widget.party.isLead)
                 .catchError((Object e) {
+                ratesFailed = true;
                 if (isNetworkFailure(e)) _ratesOffline = true;
                 return SapRates.none;
               })
@@ -253,7 +262,10 @@ class _OrderScreenState extends State<OrderScreen> {
       _startPolling();
     }
     if (_isEdit) _applyExistingOrder();
-    if (sapRates != null) _sapRates = await sapRates;
+    if (sapRates != null) {
+      _sapRates = await sapRates;
+      _sapRatesAnswered = !ratesFailed;
+    }
     _applySapRates();
   }
 
@@ -351,9 +363,22 @@ class _OrderScreenState extends State<OrderScreen> {
     ProductCategory.vulcanizingSolution,
   ];
 
+  /// Whether [line] belongs in the catalogue at all — see
+  /// [sapCatalogueVisible] for the rule and why each exception exists.
+  bool _sapVisible(OrderLine line) => sapCatalogueVisible(
+        isTreadsUnit: Session.I.isTreadsUnit,
+        rateUnit: line.product.category.rateUnit,
+        ratesAnswered: _sapRatesAnswered,
+        ratesOffline: _ratesOffline,
+        anySapRates: _sapRates.rates.isNotEmpty,
+        alreadyOnOrder: _openedWith.contains(line.product.code),
+        hasSapRate: _sapRates[line.product.code] != null,
+      );
+
   List<OrderLine> get _filtered {
     final qq = _q.trim().toLowerCase();
     return _lines.where((l) {
+      if (!_sapVisible(l)) return false;
       if (_categoryFilter != null && l.product.category != _categoryFilter) {
         return false;
       }
