@@ -719,8 +719,10 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             if ('${_order['delivery_date'] ?? ''}'.isNotEmpty &&
                 '${_order['delivery_date']}' != 'null')
               _statusRow('Required delivery', '${_order['delivery_date']}'),
+            if (transportModeOf(_order[kFieldTransportMode]) case final t?)
+              _statusRow('Mode of delivery', t),
             if (deliveryModeOf(_order[kFieldDeliveryMode]) case final m?)
-              _statusRow('Mode of delivery', deliveryModeLabel(m)),
+              _statusRow('Freight', deliveryModeLabel(m)),
             // Production can move the date, and the rep is the one who has to
             // tell the customer. Showing only the new date would hide that
             // anything happened.

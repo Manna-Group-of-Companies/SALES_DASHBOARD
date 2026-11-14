@@ -1199,6 +1199,8 @@ class Api {
       // Who pays the courier, as the rep agreed it on the lead order.
       if (deliveryModeOf(leadOrder[kFieldDeliveryMode]) case final m?)
         kFieldDeliveryMode: m,
+      if (transportModeOf(leadOrder[kFieldTransportMode]) case final m?)
+        kFieldTransportMode: m,
       // The date the customer actually asked for, carried across rather than
       // invented — the rep agreed it with them when the order was taken.
       'delivery_date': delivery.length >= 10
@@ -2577,6 +2579,7 @@ class Api {
     String? commitment,
     String? commitmentDue,
     String? deliveryMode,
+    String? transportMode,
   }) async {
     final ref = OrderRef(orderName, isLead: isLead);
 
@@ -2618,6 +2621,7 @@ class Api {
     };
     if (deliveryDate != null) body['delivery_date'] = deliveryDate;
     if (deliveryModeOf(deliveryMode) case final m?) body[kFieldDeliveryMode] = m;
+    if (transportModeOf(transportMode) case final m?) body[kFieldTransportMode] = m;
     // Correcting a rejected order is sending it again: it goes back to the
     // sales manager, as the dashboard's `saveOrderLines` does. Until 26 Sep
     // 2026 the phone left it at Rejected, where nobody would look at it.
@@ -3805,6 +3809,7 @@ class Api {
         deliveryDate: draft.deliveryDate,
         total: total,
         deliveryMode: draft.deliveryMode,
+        transportMode: draft.transportMode,
       );
     }
     final company = await getCompany();
@@ -3816,6 +3821,7 @@ class Api {
       commitment: draft.commitment,
       commitmentDue: draft.commitmentDue,
       deliveryMode: draft.deliveryMode,
+      transportMode: draft.transportMode,
     );
   }
 
@@ -4217,7 +4223,8 @@ class Api {
         isLead: a['is_lead'] == true,
         commitment: _sn(a['commitment']),
         commitmentDue: _sn(a['commitment_due']),
-        deliveryMode: _sn(a['delivery_mode'])),
+        deliveryMode: _sn(a['delivery_mode']),
+        transportMode: _sn(a['transport_mode'])),
     'credit_condition': (a, _) => _addCreditConditionNow(
         customer: '${a['customer']}',
         salesPerson: '${a['sales_person']}',
@@ -4515,6 +4522,7 @@ class Api {
     String? commitment,
     String? commitmentDue,
     String? deliveryMode,
+    String? transportMode,
   }) =>
       writeOrQueue(
           kind: 'order_lines',
@@ -4528,6 +4536,7 @@ class Api {
             'commitment': commitment,
             'commitment_due': commitmentDue,
             'delivery_mode': deliveryMode,
+            'transport_mode': transportMode,
           });
 
   static Future<String?> addCreditCondition({
@@ -5184,9 +5193,11 @@ class Api {
     String? commitment,
     String? commitmentDue,
     String? deliveryMode,
+    String? transportMode,
   }) async {
     final body = {
       if (deliveryModeOf(deliveryMode) case final m?) kFieldDeliveryMode: m,
+      if (transportModeOf(transportMode) case final m?) kFieldTransportMode: m,
       // What the customer promised, in the rep's words, when this order takes
       // them past their credit limit. The GM decides the order on it and the
       // approval turns it into the rep's condition — credit_commitment.json.
@@ -5261,6 +5272,7 @@ class Api {
     String? commitment,
     String? commitmentDue,
     String? deliveryMode,
+    String? transportMode,
   }) async {
     await _requireRoute('Customer', customer);
     final name = await createSalesOrder(
@@ -5270,7 +5282,8 @@ class Api {
         deliveryDate: deliveryDate,
         commitment: commitment,
         commitmentDue: commitmentDue,
-        deliveryMode: deliveryMode);
+        deliveryMode: deliveryMode,
+        transportMode: transportMode);
 
     // Best-effort — see refreshDuplicateFlag.
     await refreshDuplicateFlag(name);
@@ -5287,10 +5300,12 @@ class Api {
     required String deliveryDate,
     required double total,
     String? deliveryMode,
+    String? transportMode,
   }) async {
     await _requireRoute('Lead', lead);
     final body = {
       if (deliveryModeOf(deliveryMode) case final m?) kFieldDeliveryMode: m,
+      if (transportModeOf(transportMode) case final m?) kFieldTransportMode: m,
       'lead': lead,
       'sales_person': Session.I.salesPerson,
       'status': 'Pending Approval',

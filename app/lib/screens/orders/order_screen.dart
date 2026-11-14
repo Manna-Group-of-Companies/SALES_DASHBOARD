@@ -74,6 +74,7 @@ class _OrderScreenState extends State<OrderScreen> {
   /// Who pays the courier, Paid or To Pay (14 Nov 2026). Asked on every
   /// order; an order being edited starts from what it already says.
   String? _deliveryMode;
+  String? _transportMode;
   bool _submitting = false;
   bool _reloading = false;
   Timer? _poll;
@@ -90,6 +91,7 @@ class _OrderScreenState extends State<OrderScreen> {
       final d = existing['delivery_date'];
       if (d != null) _deliveryDate = DateTime.tryParse('$d');
       _deliveryMode = deliveryModeOf(existing[kFieldDeliveryMode]);
+      _transportMode = transportModeOf(existing[kFieldTransportMode]);
     }
     _init = _load();
     // The Sync button over every screen does not reload what is showing; this
@@ -413,9 +415,10 @@ class _OrderScreenState extends State<OrderScreen> {
   String? _validate() {
     if (_picked.isEmpty) return 'Add at least one product.';
     if (_deliveryDate == null) return 'Pick a required delivery date.';
-    if (_deliveryMode == null) {
-      return 'Choose the mode of delivery: courier Paid or To Pay.';
+    if (_transportMode == null) {
+      return 'Choose the mode of delivery: By Road, By KSRTC or By Railway.';
     }
+    if (_deliveryMode == null) return 'Choose the freight: Paid or To Pay.';
     final unpriced =
         _picked.where((l) => l.needsRate && !_sapPriceLater(l)).toList();
     if (unpriced.isNotEmpty) {
@@ -634,6 +637,7 @@ class _OrderScreenState extends State<OrderScreen> {
       commitment: commitment?.text,
       commitmentDue: commitment?.due,
       deliveryMode: _deliveryMode,
+      transportMode: _transportMode,
       sapPending: {
         for (final l in _picked)
           if (_takesSapPrice(l))
@@ -725,6 +729,7 @@ class _OrderScreenState extends State<OrderScreen> {
           commitment: commitment?.text,
           commitmentDue: commitment?.due,
           deliveryMode: _deliveryMode,
+          transportMode: _transportMode,
         );
         _snack(_wasApproved
             ? 'Order updated ✓ — sent back to your manager'
@@ -747,6 +752,7 @@ class _OrderScreenState extends State<OrderScreen> {
           deliveryDate: dd,
           total: _total,
           deliveryMode: _deliveryMode,
+          transportMode: _transportMode,
         );
         _snack('Order sent for approval ✓  $name');
         // A lead order has no proforma screen to go on to — it becomes a real
@@ -763,6 +769,7 @@ class _OrderScreenState extends State<OrderScreen> {
           commitment: commitment?.text,
           commitmentDue: commitment?.due,
           deliveryMode: _deliveryMode,
+          transportMode: _transportMode,
         );
         _snack(commitment != null
             ? 'Order sent with your commitment ✓  $name'
@@ -1034,40 +1041,51 @@ class _OrderScreenState extends State<OrderScreen> {
                 color: Colors.black54)),
       );
 
+  /// One row of choices, none picked until the rep picks one.
+  Widget _choice(String label, List<String> options, String? selected,
+          void Function(String?) set) =>
+      Row(children: [
+        SizedBox(
+          width: 84,
+          child: Text(label,
+              style: const TextStyle(fontSize: 12.5, color: Colors.black54)),
+        ),
+        Expanded(
+          child: SegmentedButton<String>(
+            showSelectedIcon: false,
+            emptySelectionAllowed: true,
+            segments: [
+              for (final o in options)
+                ButtonSegment(
+                    value: o,
+                    label: Text(o,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12.5))),
+            ],
+            selected: {?selected},
+            onSelectionChanged: _submitting
+                ? null
+                : (s) => setState(() => set(s.isEmpty ? null : s.first)),
+            style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+          ),
+        ),
+      ]);
+
   Widget _footer() {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Row(children: [
-            const Text('Mode of delivery',
-                style: TextStyle(fontSize: 13, color: Colors.black54)),
-            const SizedBox(width: 10),
-            Expanded(
-              child: SegmentedButton<String>(
-                showSelectedIcon: false,
-                emptySelectionAllowed: true,
-                segments: const [
-                  ButtonSegment(
-                      value: kDeliveryPaid,
-                      label: Text('Courier Paid'),
-                      icon: Icon(Icons.local_shipping_outlined, size: 16)),
-                  ButtonSegment(
-                      value: kDeliveryToPay,
-                      label: Text('Courier To Pay'),
-                      icon: Icon(Icons.payments_outlined, size: 16)),
-                ],
-                selected: {?_deliveryMode},
-                onSelectionChanged: _submitting
-                    ? null
-                    : (s) => setState(
-                        () => _deliveryMode = s.isEmpty ? null : s.first),
-                style: const ButtonStyle(
-                    visualDensity: VisualDensity.compact,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-              ),
-            ),
-          ]),
+          // Both asked on every order (14 Nov 2026, the user): how it travels,
+          // and who pays the freight.
+          _choice('Mode of delivery', kTransportModes, _transportMode,
+              (v) => _transportMode = v),
+          const SizedBox(height: 6),
+          _choice('Freight', kDeliveryModes, _deliveryMode,
+              (v) => _deliveryMode = v),
           const SizedBox(height: 8),
           InkWell(
             onTap: _submitting
