@@ -869,17 +869,29 @@ class _HomeDashboardState extends State<HomeDashboard>
                     future: _counts,
                     builder: (context, snap) {
                       final v = snap.data;
-                      Widget metric(String label, String value) => Column(
-                        children: [
-                          Text(value,
-                              style: const TextStyle(
-                                  color: Color(0xFFF7943E),
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.bold)),
-                          Text(label,
-                              style:
-                              const TextStyle(color: Colors.white70)),
-                        ],
+                      // Each figure opens the screen of the tile below that
+                      // shares its name. Until 14 Nov 2026 a tap on the
+                      // number did nothing, though it looks like a way in.
+                      Widget metric(String label, String value,
+                          VoidCallback onTap) => InkWell(
+                        onTap: onTap,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 4),
+                          child: Column(
+                            children: [
+                              Text(value,
+                                  style: const TextStyle(
+                                      color: Color(0xFFF7943E),
+                                      fontSize: 28,
+                                      fontWeight: FontWeight.bold)),
+                              Text(label,
+                                  style: const TextStyle(
+                                      color: Colors.white70)),
+                            ],
+                          ),
+                        ),
                       );
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -891,10 +903,15 @@ class _HomeDashboardState extends State<HomeDashboard>
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceAround,
                             children: [
-                              metric('Visits', v == null ? '—' : '${v[0]}'),
-                              metric('Orders', v == null ? '—' : '${v[1]}'),
+                              metric('Visits', v == null ? '—' : '${v[0]}',
+                                  () => _go(const MyVisitsScreen())),
+                              metric('Orders', v == null ? '—' : '${v[1]}',
+                                  () => _go(Session.I.company == kUnitRetreads
+                                      ? const RetreadOrdersScreen()
+                                      : const MyOrdersScreen())),
                               metric('Collections',
-                                  v == null ? '—' : '${v[2]}'),
+                                  v == null ? '—' : '${v[2]}',
+                                  () => _go(const MyCollectionsScreen())),
                             ],
                           ),
                         ],
