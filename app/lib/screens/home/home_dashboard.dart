@@ -30,6 +30,7 @@ import 'package:manna_field_sales/screens/manager/manager_targets_screen.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/screens/map/map_screen.dart';
 import 'package:manna_field_sales/screens/orders/min_stock_screen.dart';
+import 'package:manna_field_sales/core/pick_list.dart' show kPickListsReleased;
 import 'package:manna_field_sales/screens/orders/pick_list_page.dart';
 import 'package:manna_field_sales/screens/requests/item_request_screen.dart';
 import 'package:manna_field_sales/screens/production/production_dashboard_screen.dart';
@@ -677,7 +678,7 @@ class _HomeDashboardState extends State<HomeDashboard>
                 ? const RetreadOrdersScreen()
                 : const MyOrdersScreen())),
         // Reps make pick lists; a manager only views them (manager screens).
-        if (Session.I.company != kUnitRetreads && !Session.I.isManager)
+        if (kPickListsReleased && Session.I.company != kUnitRetreads && !Session.I.isManager)
           _Tile('Pick List', Icons.playlist_add_check,
               () => _go(const PickListPage())),
         _Tile('Item Request', Icons.add_box_outlined,

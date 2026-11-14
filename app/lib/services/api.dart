@@ -3885,7 +3885,7 @@ class Api {
       getItemRequests,
       getTripRates,
       myCreditConditions,
-      getPickLists,
+      if (kPickListsReleased) getPickLists,
       if (s.salesPerson != null) () => getTodayAttendance(s.salesPerson!),
       if (s.salesPerson != null) () => getLeaveBalance(s.salesPerson!),
       // This month's calendar and target (13 Nov 2026): opened for the first

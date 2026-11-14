@@ -13,6 +13,14 @@
 // Lists are not approved (7 Nov 2026): the sync sends each one to SAP as made,
 // and a product counts as picked once SAP's delivery for its list is back.
 
+/// Whether this build shows pick lists at all (14 Nov 2026, the user: the pick
+/// list is not released yet - hide it in the live app, which only takes sales
+/// orders for now). Off unless a build asks for it with
+/// `--dart-define=PICK_LISTS=true`, so a release built the usual way cannot
+/// let it out by accident. Releasing it is that flag, or flipping the default.
+/// The rules below and manna_pick_list_submit stay as they are.
+const bool kPickListsReleased = bool.fromEnvironment('PICK_LISTS', defaultValue: false);
+
 double _num(Object? v) => v is num ? v.toDouble() : double.tryParse('$v') ?? 0;
 int _int(Object? v) => v is num ? v.toInt() : int.tryParse('$v') ?? 0;
 
