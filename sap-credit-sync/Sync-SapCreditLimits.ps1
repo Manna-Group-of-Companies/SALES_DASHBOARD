@@ -749,6 +749,8 @@ function Get-SapCustomerData {
     $ar          = @{}   # code -> @{ B1;B2;B3;B4; n }
     $pastDue     = @{}   # code -> @{ Amt; Late }  open invoices past their SAP due date (11 Oct 2026)
     $termNames   = @{}   # PayTermsGrpCode -> PaymentTermsGroupName
+    $termDays    = @{}   # PayTermsGrpCode -> the terms' days (14 Nov 2026)
+    $custTermDays = @{}  # CardCode -> its terms' days
     $slpNames    = @{}   # SalesEmployeeCode -> SalesEmployeeName (11 Oct 2026, new customers)
     $slpOk       = $false
     $stateNames  = @{}   # India state code ('KL') -> name ('Kerala')
@@ -769,13 +771,36 @@ function Get-SapCustomerData {
 
         # ---- payment-term names (11 Oct 2026). A failure costs only the names. ----
         try {
-            $ptSel  = [uri]::EscapeDataString('GroupNumber,PaymentTermsGroupName')
+            $ptSel  = [uri]::EscapeDataString('GroupNumber,PaymentTermsGroupName,NumberOfAdditionalMonths,NumberOfAdditionalDays')
             $ptRows = Get-SapPagedValue -BaseUrl $BaseUrl -Session $sess -PageSize $PageSize -UseSkipCert $useSkip `
                 -Label "PaymentTermsTypes [$CompanyName]" `
                 -StartUrl "$BaseUrl/PaymentTermsTypes?`$select=$ptSel"
-            foreach ($t in $ptRows) { $termNames["$(Get-JsonProp $t 'GroupNumber')".Trim()] = "$(Get-JsonProp $t 'PaymentTermsGroupName')".Trim() }
+            foreach ($t in $ptRows) {
+                $g = "$(Get-JsonProp $t 'GroupNumber')".Trim()
+                $n = "$(Get-JsonProp $t 'PaymentTermsGroupName')".Trim()
+                $termNames[$g] = $n
+                # The terms' days (14 Nov 2026, the user: overdue is invoice date
+                # + terms days): the number in the name ("Net-15" 15, "Net - 3"
+                # 3), else SAP's own months and days. The name wins because
+                # Net - 3, Net-7 and Net-20 carry 0 additional days in SAP, which
+                # made their invoices fall due the day they were made. Same rule
+                # as sap-b1if/credit/credit.sql.
+                if ($n -match '\d+') { $termDays[$g] = [int]$Matches[0] }
+                else {
+                    $termDays[$g] = 30 * [int](ConvertTo-Number (Get-JsonProp $t 'NumberOfAdditionalMonths')) +
+                                    [int](ConvertTo-Number (Get-JsonProp $t 'NumberOfAdditionalDays'))
+                }
+            }
         } catch {
             Write-Log WARN ("SAP payment-term names could not be read - the terms field will be left as it is. Reason: {0}" -f $_.Exception.Message)
+        }
+
+        # Each customer's terms' days, for overdue past the terms. A customer
+        # whose terms could not be read counts 0 days, as SAP's due date did.
+        foreach ($bp in $bpRows) {
+            $c = "$(Get-JsonProp $bp 'CardCode')".Trim()
+            $g = "$(Get-JsonProp $bp 'PayTermsGrpCode')".Trim()
+            $custTermDays[$c] = if ($termDays.ContainsKey($g)) { $termDays[$g] } else { 0 }
         }
 
         # ---- sales employees and state names, for new customers (11 Oct 2026) ----
@@ -824,13 +849,15 @@ function Get-SapCustomerData {
                     $ar[$code][$k] += ($sign * $open)
                     $ar[$code].n++
 
-                    # Overdue past the payment terms (11 Oct 2026): an INVOICE still
-                    # open after its SAP due date, which SAP set from the terms.
+                    # Overdue past the payment terms: an INVOICE still open after
+                    # its date + the customer's terms' days (14 Nov 2026; SAP's
+                    # DocDueDate until then - see where $termDays is filled).
                     if ($sign -gt 0 -and $open -gt $script:MONEY_EPS) {
-                        $dueRaw = Get-JsonProp $d 'DocDueDate'
-                        if ($dueRaw) {
+                        $docRaw = Get-JsonProp $d 'DocDate'
+                        if ($docRaw) {
                             try {
-                                $dueDay = ([datetime]$dueRaw).Date
+                                $days = if ($custTermDays.ContainsKey($code)) { $custTermDays[$code] } else { 0 }
+                                $dueDay = ([datetime]$docRaw).Date.AddDays($days)
                                 if ($dueDay -lt $today) {
                                     $lateDays = [int][math]::Floor(($today - $dueDay).TotalDays)
                                     if (-not $pastDue.ContainsKey($code)) { $pastDue[$code] = @{ Amt = 0.0; Late = 0 } }
