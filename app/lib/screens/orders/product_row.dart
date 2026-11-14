@@ -76,6 +76,7 @@ class ProductRow extends StatefulWidget {
 
 class _ProductRowState extends State<ProductRow> {
   late final TextEditingController _rate;
+  late final TextEditingController _kilos;
   bool _saving = false;
 
   @override
@@ -83,6 +84,8 @@ class _ProductRowState extends State<ProductRow> {
     super.initState();
     _rate = TextEditingController(
         text: widget.line.rate > 0 ? trimQty(widget.line.rate) : '');
+    _kilos = TextEditingController(
+        text: widget.line.kilos > 0 ? trimQty(widget.line.kilos) : '');
   }
 
   /// Collects the packing figures this item was imported without, and writes
@@ -226,6 +229,7 @@ class _ProductRowState extends State<ProductRow> {
   @override
   void dispose() {
     _rate.dispose();
+    _kilos.dispose();
     super.dispose();
   }
 
@@ -431,6 +435,8 @@ class _ProductRowState extends State<ProductRow> {
       case ProductCategory.ctr:
         if (p.weightPerRoll > 0) {
           bits.add('${trimQty(p.weightPerRoll)} kg/roll exact');
+        } else {
+          bits.add('Sold by kg');
         }
         break;
       case ProductCategory.bondingGum:
@@ -508,6 +514,8 @@ class _ProductRowState extends State<ProductRow> {
   Widget _inputs() {
     switch (p.category) {
       // Rolls only (10 Nov 2026): loose belts are no longer taken on an order.
+      case ProductCategory.ctr when p.soldByKg:
+        return _kilosField();
       case ProductCategory.pctr:
       case ProductCategory.ctr:
         return _counter('Rolls', line.rolls, (v) {
@@ -540,6 +548,25 @@ class _ProductRowState extends State<ProductRow> {
         });
     }
   }
+
+  /// Hot rubber with no roll weight: the kilos, typed (14 Nov 2026).
+  Widget _kilosField() => TextField(
+        controller: _kilos,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: [
+          FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,3}'))
+        ],
+        decoration: const InputDecoration(
+          labelText: 'Kilos',
+          suffixText: 'kg',
+          border: OutlineInputBorder(),
+          isDense: true,
+        ),
+        onChanged: (v) {
+          line.kilos = double.tryParse(v) ?? 0;
+          widget.onChanged();
+        },
+      );
 
   Widget _counter(String label, int value, ValueChanged<int> onSet) {
     return InputDecorator(
@@ -671,8 +698,7 @@ class _ProductRowState extends State<ProductRow> {
   String get _missingLabel {
     final p = widget.line.product;
     final missing = <String>[
-      if (p.category == ProductCategory.pctr ||
-          p.category == ProductCategory.ctr)
+      if (p.category == ProductCategory.pctr)
         if (p.weightPerRoll <= 0) 'weight of one roll',
       if (p.category == ProductCategory.pctr)
         if (p.beltsPerRoll <= 0) 'belts per roll',

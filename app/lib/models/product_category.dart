@@ -197,6 +197,13 @@ class Product {
     return (perBelt > 0 && beltsPerRoll > 0) ? perBelt * beltsPerRoll : 0;
   }
 
+  /// Hot rubber with no roll weight on the item, ordered by typing the kilos
+  /// (14 Nov 2026, the user: do not ask the packing details for HOT - 503 of
+  /// 507 HOT items had none, and every one stopped the order on a prompt).
+  /// Priced kilos x rate per kg; the kilos are what SAP's order line takes.
+  /// A HOT item that does carry a roll weight is still counted in rolls.
+  bool get soldByKg => category == ProductCategory.ctr && weightPerRoll <= 0;
+
   /// Vulcanizing solution only: tin size in litres, 10 or 30.
   double get packLitres => _num(doc['custom_pack_litres']);
 
@@ -216,7 +223,9 @@ class Product {
   /// weight requirement — each derives the other given the belt count.
   bool get isMisconfigured => switch (category) {
         ProductCategory.pctr => weightPerRoll <= 0 || beltsPerRoll <= 0,
-        ProductCategory.ctr => weightPerRoll <= 0,
+        // Never for hot rubber (14 Nov 2026): one with no roll weight is
+        // ordered in kilos instead - see [soldByKg].
+        ProductCategory.ctr => false,
         ProductCategory.vulcanizingSolution => packLitres <= 0,
         _ => false,
       };
@@ -238,6 +247,9 @@ class OrderLine {
 
   /// Vulcanizing solution only.
   int cans;
+
+  /// Kilos, for hot rubber sold by weight ([Product.soldByKg]) only.
+  double kilos;
 
   /// Exactly what the rep typed: per kg for everything sold by weight, per tin
   /// for solution. Never taken from `standard_rate`.
@@ -265,6 +277,7 @@ class OrderLine {
     this.looseBelts = 0,
     this.boxes = 0,
     this.cans = 0,
+    this.kilos = 0,
     this.rate = 0,
     this.agedBatch,
   });
@@ -280,7 +293,7 @@ class OrderLine {
             : 0.0;
         return rolls + beltFraction;
       case ProductCategory.ctr:
-        return rolls.toDouble();
+        return product.soldByKg ? kilos : rolls.toDouble();
       case ProductCategory.bondingGum:
         return (boxes * kBgRollsPerBox + rolls) * kBgKgPerRoll;
       case ProductCategory.vulcanizingSolution:
@@ -298,7 +311,7 @@ class OrderLine {
         return rolls * product.weightPerRoll +
             looseBelts * product.weightPerBelt;
       case ProductCategory.ctr:
-        return rolls * product.weightPerRoll;
+        return product.soldByKg ? kilos : rolls * product.weightPerRoll;
       case ProductCategory.bondingGum:
         return qty;
       default:
@@ -312,8 +325,10 @@ class OrderLine {
   double get lineRate {
     switch (product.category) {
       case ProductCategory.pctr:
-      case ProductCategory.ctr:
         return rate * product.rollWeight;
+      case ProductCategory.ctr:
+        // By the kilo the quantity is already kilos, so the rate is per kg.
+        return product.soldByKg ? rate : rate * product.rollWeight;
       default:
         return rate;
     }
@@ -335,8 +350,9 @@ class OrderLine {
   double get reserveQty {
     switch (product.category) {
       case ProductCategory.pctr:
-      case ProductCategory.ctr:
         return rolls.toDouble();
+      case ProductCategory.ctr:
+        return product.soldByKg ? kilos : rolls.toDouble();
       default:
         return qty;
     }
@@ -359,6 +375,7 @@ class OrderLine {
         ];
         return '${parts.join(' + ')} · ${totalWeightKg.toStringAsFixed(2)} kg (avg)';
       case ProductCategory.ctr:
+        if (product.soldByKg) return '${_kg(kilos)} kg';
         return '$rolls roll${rolls == 1 ? '' : 's'} · '
             '${totalWeightKg.toStringAsFixed(2)} kg';
       case ProductCategory.bondingGum:
@@ -374,6 +391,11 @@ class OrderLine {
         return '$rolls ${product.uom}';
     }
   }
+
+  static String _kg(double v) => v
+      .toStringAsFixed(3)
+      .replaceFirst(RegExp(r'0+$'), '')
+      .replaceFirst(RegExp(r'\.$'), '');
 
   /// The Sales Order Item payload. `qty` and `rate` are what ERPNext prices
   /// off; the custom fields preserve what the rep actually counted and quoted,

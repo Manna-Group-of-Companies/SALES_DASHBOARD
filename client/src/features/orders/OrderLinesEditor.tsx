@@ -15,7 +15,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { ItemOption, MinStockLine, OrderDetail } from '@/domain/types';
-import { orderLineValues } from '@/domain/productRules';
+import { orderLineValues, soldByKg } from '@/domain/productRules';
 import { Api, type OrderLineWrite } from '@/api/client';
 import { Button, Card, Input } from '@/components/ui';
 import { money } from '@/components/common/format';
@@ -115,7 +115,7 @@ export function OrderLinesEditor({
         item,
         rolls: l.rolls,
         looseBelts: l.looseBelts,
-        kg: item.category === 'BG' ? l.totalWeight : 0,
+        kg: item.category === 'BG' || soldByKg(asProduct(item)) ? l.totalWeight : 0,
         tins: item.category === 'VS' ? l.qty : 0,
         ratePerKg: l.ratePerKg,
         fulfilmentMode: l.fulfilmentMode ?? '',
@@ -193,7 +193,10 @@ export function OrderLinesEditor({
       ...(cur ?? []),
       {
         item,
-        rolls: item.category === 'PCTR' || item.category === 'CTR' ? 1 : 0,
+        rolls:
+          item.category === 'PCTR' || (item.category === 'CTR' && !soldByKg(asProduct(item)))
+            ? 1
+            : 0,
         looseBelts: 0,
         kg: item.category === 'BG' ? 5 : 0,
         tins: item.category === 'VS' ? 1 : 0,
@@ -284,7 +287,8 @@ export function OrderLinesEditor({
                     </td>
                     <td>
                       <div className="line__qty">
-                        {(d.item.category === 'PCTR' || d.item.category === 'CTR') && (
+                        {(d.item.category === 'PCTR' ||
+                          (d.item.category === 'CTR' && !soldByKg(asProduct(d.item)))) && (
                           <>
                             <label htmlFor={`rolls-${i}`}>Rolls</label>
                             <Input
@@ -316,7 +320,7 @@ export function OrderLinesEditor({
                             />
                           </>
                         )}
-                        {d.item.category === 'BG' && (
+                        {(d.item.category === 'BG' || soldByKg(asProduct(d.item))) && (
                           <>
                             <label htmlFor={`kg-${i}`}>Kg</label>
                             <Input
@@ -325,7 +329,7 @@ export function OrderLinesEditor({
                               compact
                               type="number"
                               min={0}
-                              step={5}
+                              step={d.item.category === 'BG' ? 5 : 0.001}
                               disabled={d.removed}
                               value={d.kg}
                               onChange={(e) => patch(i, { kg: Number(e.target.value) || 0 })}

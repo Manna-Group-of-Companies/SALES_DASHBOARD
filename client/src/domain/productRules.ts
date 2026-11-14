@@ -65,6 +65,17 @@ export function rollWeight(product: Product): number {
   return perBelt > 0 && belts > 0 ? round3(perBelt * belts) : 0;
 }
 
+/**
+ * Hot rubber with no roll weight, ordered by typing the kilos (14 Nov 2026,
+ * the user: do not ask the packing details for HOT - 503 of 507 HOT items had
+ * no roll weight and every one was refused). Priced kilos x rate per kg; the
+ * kilos are SAP's quantity. A HOT item that has a roll weight stays in rolls.
+ * The phone's twin is `Product.soldByKg` in app/lib/models/product_category.dart.
+ */
+export function soldByKg(product: Product): boolean {
+  return product.category === 'CTR' && !(rollWeight(product) > 0);
+}
+
 /** PCTR only: the weight one loose belt carries (1.2). */
 export function beltWeight(product: Product): number {
   if (product.weightPerBelt && product.weightPerBelt > 0) return product.weightPerBelt;
@@ -93,9 +104,8 @@ export function isMisconfigured(product: Product): string | null {
       return null;
     }
     case 'CTR':
-      return rollWeight(product) > 0
-        ? null
-        : 'No roll weight on this item, so it would price at zero. Fix the item master before selling it.';
+      // Never: one with no roll weight is sold by the kilo (`soldByKg`).
+      return null;
     case 'VS':
       return product.tinSize ? null : 'No tin size on this item, so it cannot be priced.';
     case 'BG':
@@ -154,6 +164,10 @@ export function computeLine(product: Product, input: LineInput): ComputedLine {
     }
 
     case 'CTR': {
+      if (soldByKg(product)) {
+        const kg = round3(num(input.kg));
+        return { quantity: kg, uom, amount: round2(kg * rate), breakdown: kg ? `${kg} kg` : '—' };
+      }
       // Fixed-weight rolls, so the weight is exact and belts do not apply (1.3).
       const rolls = num(input.rolls);
       const perRoll = rollWeight(product);
@@ -240,6 +254,10 @@ export function validateLine(product: Product, input: LineInput): LineIssue[] {
     }
 
     case 'CTR': {
+      if (soldByKg(product)) {
+        if (!(num(input.kg) > 0)) issues.push({ field: 'kg', message: 'Enter the kilos.' });
+        break;
+      }
       const rolls = num(input.rolls);
       if (!Number.isInteger(rolls)) issues.push({ field: 'rolls', message: 'Rolls must be a whole number.' });
       if (rolls <= 0) issues.push({ field: 'rolls', message: 'Enter at least 1 roll.' });
@@ -363,6 +381,18 @@ export function orderLineValues(product: Product, edit: LineEdit): OrderLineValu
   const rate = num(edit.ratePerKg);
   const computed = computeLine(product, { ...edit, rate });
   const weight = computed.quantity;
+
+  // Hot rubber by the kilo: qty and weight are the same figure, as for gum,
+  // and the note reads as the phone writes it ("125.5 kg").
+  if (soldByKg(product)) {
+    return {
+      qty: weight,
+      rate: round2(rate),
+      amount: round2(weight * rate),
+      totalWeight: weight,
+      packingNote: `${weight} kg`,
+    };
+  }
 
   switch (product.category) {
     case 'PCTR':

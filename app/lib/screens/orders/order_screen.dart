@@ -200,6 +200,12 @@ class _OrderScreenState extends State<OrderScreen> {
       line.looseBelts = asInt(it['custom_loose_belts']);
       line.boxes = asInt(it['custom_boxes']);
       line.cans = asInt(it['custom_cans']);
+      // Hot rubber by the kilo: the kilos ordered are the line's weight.
+      if (line.product.soldByKg) {
+        final kg = it['custom_total_weight'] ?? it['qty'];
+        line.kilos =
+            kg is num ? kg.toDouble() : (double.tryParse('${kg ?? ''}') ?? 0);
+      }
       final perKg = it['custom_rate_per_kg'];
       line.rate = perKg is num
           ? perKg.toDouble()
