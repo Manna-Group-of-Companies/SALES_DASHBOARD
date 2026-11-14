@@ -37,7 +37,18 @@
  * SAP holds the dealer price as a FIXED special price ("Without Price List",
  * PriceListNum 0): a percentage cannot carry whole rupees, because SAP keeps it
  * to two decimals and recomputes the price from it.
+ *
+ * 14 NOV 2026: THE GROUPS ARE THE ROWS OF MANAGEMENT'S PRICE LIST ("PCTR MANNA
+ * DOUBLE BLUE (BP)" … "SOLUTION 10", properties 1-17 in Manna Treads), ticked on
+ * every new code; each row has one list price and each dealer one discount per
+ * row. And HI-TECH KEEPS NO PRICE LIST: B1iF makes Manna Treads' purchase order
+ * at Manna Treads' price less @MANNA_IC MARGIN, and Hi-Tech's sales order from
+ * that, so nothing here works out, files or checks a Hi-Tech price
+ * (HITECH_PRICE_LIST; the server's twin is in sap-b1if/erpnext/manna_sap_pricing.py).
  */
+
+/** Whether the screen keeps Hi-Tech's Price List 01 at Manna Treads' less the margin. Off since 14 Nov 2026. */
+export const HITECH_PRICE_LIST = false;
 
 // ------------------------------------------------------------ snapshot ---
 
@@ -64,6 +75,11 @@ export interface PricingSnapshot {
    * Since 11 Nov 2026; see sap-pricing/AutoGroups.ps1.
    */
   ungrouped?: UngroupedItem[];
+  /**
+   * Unticked HOT / PRECURED items with no twin in Hi-Tech - Manna Treads' own old
+   * codes, which no order can carry (14 Nov 2026). Counted, not listed.
+   */
+  ungroupedNoTwin?: number;
   /** Synced from test companies (neither *_LIVE): some list prices are stand-ins, not SAP's. */
   placeholderPrices?: boolean;
 }
@@ -415,8 +431,11 @@ export function buildPlan(
   // 3. Special prices with no rule behind them any more.
   const itemsByCode = new Map(snapshot.items.map((i) => [i.code, i]));
   const names = new Map(snapshot.customers.map((c) => [c.code, c.name]));
+  // Only on items the screen prices: a special price on an item outside every
+  // group (Manna Treads' old codes - 2,741 of them on 14 Nov 2026, the old
+  // percentage prices) is nothing a rule here could stand behind.
   const orphans = snapshot.special
-    .filter((s) => !ruled.has(`${s.card}|${s.item}`))
+    .filter((s) => !ruled.has(`${s.card}|${s.item}`) && itemsByCode.has(s.item))
     .map((s) => ({ special: s, item: itemsByCode.get(s.item), cardName: names.get(s.card) ?? s.card }));
 
   // 4. Hi-Tech's Price List 01: every twin at Manna Treads' price less the margin.
@@ -426,11 +445,15 @@ export function buildPlan(
   let hitechSkipped: string | null = null;
   const hitech = snapshot.hitech;
   if (!hitech) {
-    hitechSkipped = 'this copy of SAP has no Hi-Tech Pretreads prices in it - press Sync from SAP';
+    hitechSkipped = 'this copy of SAP has no Hi-Tech Pretreads prices in it - reload after the next SAP read';
   } else {
     const twins = new Map(hitech.items.map((h) => [h.code, h]));
     const marginSet = Number(margin) > 0;
-    if (!marginSet) hitechSkipped = 'the inter-company margin is not set (ERPNext: SAP Pricing Control)';
+    if (!marginSet) {
+      hitechSkipped = HITECH_PRICE_LIST
+        ? 'the inter-company margin is not set (ERPNext: SAP Pricing Control)'
+        : "Hi-Tech keeps no price list: B1if prices its sales order from Manna Treads' purchase order, Manna Treads' price less the margin in @MANNA_IC";
+    }
     for (const it of snapshot.items) {
       const tw = it.twin ? twins.get(it.twin) : undefined;
       if (!tw) {
@@ -815,7 +838,8 @@ export const KINDS: ItemKind[] = ['HOT', 'PCTR', 'BONDING GUM', 'OTHER'];
  */
 export function itemKind(i: Pick<SnapItem, 'type' | 'name'>): ItemKind {
   for (const t of [(i.type ?? '').toUpperCase(), (i.name ?? '').toUpperCase()]) {
-    if (/\bGUM\b/.test(t)) return 'BONDING GUM';
+    // "BG MANNA 220 04": the new codes' bonding gum (14 Nov 2026).
+    if (/\bGUM\b/.test(t) || /^\s*BG\b/.test(t)) return 'BONDING GUM';
     if (t.includes('PRECURED') || /\bPCTR\b/.test(t)) return 'PCTR';
     if (/\bHOT\b/.test(t)) return 'HOT';
   }

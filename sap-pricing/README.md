@@ -4,6 +4,25 @@ PowerShell, run on the SAP server, behind the Managing Director's rates screen
 in the dashboard (`client/src/features/rates/`). Reads SAP through the Service
 Layer. Writes to SAP only through DTW files that a person imports.
 
+## Since 14 November 2026
+
+- **The groups are the rows of management's price list** ("PRICE LIST AS ON
+  13.11.26.xlsx", sheet MRP): Manna Treads' item properties 1–17, named exactly
+  as the rows ("PCTR MANNA DOUBLE BLUE (BP)" … "SOLUTION 10"), ticked by DTW on
+  every new code (638), with Price List 01 at the row's price. Only a ticked
+  item is in a group; nothing is worked out from names any more.
+- **Each dealer gets rupees off per row** (sheet C.WISE MRP: the row's price
+  less the dealer's), kept as *SAP Dealer Rate Rule* in ERPNext. A dealer with
+  no discount on a row has no rule there and pays the list price.
+- **Hi-Tech keeps no price list.** B1if makes Manna Treads' purchase order at
+  Manna Treads' price less `@MANNA_IC` `MARGIN` and Hi-Tech's sales order from
+  it, so the screen makes, files and checks no Hi-Tech price
+  (`HITECH_PRICE_LIST` in `client/src/domain/dealerRates.ts` and
+  `sap-b1if/erpnext/manna_sap_pricing.py`). The Hi-Tech rule below is history.
+- **B1if writes the snapshot** every half hour (`Z.LIVEerpprice`, :29 and :59).
+  The office server's pricing task is retired, so the screen's button reloads
+  the latest read rather than asking for one.
+
 ## The rules
 
 Decided with the user on 25 September 2026.

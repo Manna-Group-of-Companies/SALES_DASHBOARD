@@ -12,13 +12,17 @@
 # (../pricing/*.sql say what each row kind holds) - and everything is decided here:
 #
 #   - "named" item properties are the price groups: any property whose name is
-#     not SAP's placeholder "Items Property <n>". An item is in the snapshot when
-#     it has at least one of them ticked (the query already asks for active items),
-#     or (11 Nov 2026) when it sits in item group HOT or PRECURED and its quality
-#     picks one: the item group gives the type, the name - else U_SubTypeA - the
-#     quality ("Hot - Black Pearl"). One that cannot be placed is listed under
-#     "ungrouped" with why. The port of sap-pricing/AutoGroups.ps1; both read
-#     shared/fixtures/price_groups.json.
+#     not SAP's placeholder "Items Property <n>". Since 14 Nov 2026 they are the
+#     rows of management's price list ("PCTR MANNA DOUBLE BLUE (BP)", ... 17 of
+#     them), and an item is in the snapshot ONLY when one is ticked on it - the
+#     ticks were imported on all of Manna Treads' new codes that day. The 11 Nov
+#     rule that put an unticked HOT / PRECURED item into a group worked out from
+#     "Type - Quality" names cannot read the new names, so it is no longer used
+#     (auto_group stays, pinned to shared/fixtures/price_groups.json with
+#     sap-pricing/AutoGroups.ps1, which the property sheet still suggests from).
+#   - "ungrouped" lists the unticked HOT / PRECURED items an order could carry:
+#     those with a twin in Hi-Tech (below). Manna Treads' own old codes have
+#     none - no order can reach SAP on them - and are only counted.
 #   - on test companies only (neither database *_LIVE), an item with no Price
 #     List 01 price gets its group's median (its type's when the group has none)
 #     as a stand-in, listPriceSource "placeholder", so the screen can be tried.
@@ -26,10 +30,16 @@
 #     same (case and spacing aside) and it is active; the roll figures are the twin's.
 #   - prices are stored as SAP holds them (GST-inclusive, no margin applied). A
 #     Manna price of 0 is 0; a Hi-Tech price of 0 is "none" - the script's own asymmetry.
-#   - serverCheck counts how many dealer and Hi-Tech prices agree with the dealer
-#     rules (SAP Dealer Rate Rule) and the inter-company margin; the dashboard
-#     compares it with its own count, so the rounding (half away from zero) and
-#     the "card|property|rupees" strings must match the script's.
+#   - serverCheck counts how many dealer prices agree with the dealer rules (SAP
+#     Dealer Rate Rule); the dashboard compares it with its own count, so the
+#     rounding (half away from zero) and the "card|property|rupees" strings must
+#     match the script's.
+#   - HI-TECH KEEPS NO PRICE LIST (the user, 14 Nov 2026). B1iF prices Hi-Tech's
+#     sales order to Manna Treads from Manna Treads' purchase order, which it
+#     makes at Manna Treads' price less @MANNA_IC MARGIN. So the Hi-Tech check
+#     is not run, whatever SAP Pricing Control's intercompany_margin holds
+#     (HITECH_PRICE_LIST, and its twin in client/src/domain/dealerRates.ts).
+#     Hi-Tech's rows are still read: a twin gives the roll figures.
 #
 # Not written: the run stamps (status, last_sync_at, ...) - the old poller owns
 # them while it still runs. An empty Manna result set writes nothing (the script
@@ -40,6 +50,7 @@
 CONTROL = "SAP Pricing Control"
 RULES = "SAP Dealer Rate Rule"
 PRICE_LIST = 1
+HITECH_PRICE_LIST = False
 COMPANY_NAME = {"mt": "Manna Treads", "ht": "Hi-Tech Pretreads"}
 KIND_LABEL = {"PCTR": "PRECURED", "HOT": "HOT", "BONDING GUM": "BONDING GUM"}
 
@@ -83,7 +94,8 @@ def words(name):
 
 def item_kind(name_upper):
 	w = words(name_upper)
-	if "GUM" in w:
+	# The new codes' bonding gum is named "BG MANNA 220 04" (14 Nov 2026).
+	if "GUM" in w or (w and w[0] == "BG"):
 		return "BONDING GUM"
 	if "PRECURED" in name_upper or "PCTR" in w:
 		return "PCTR"
@@ -193,20 +205,21 @@ def build(mt, ht, rules, margin, now):
 	items = []
 	twins = []
 	ungrouped = []
+	no_flow = 0
 	for r in sorted(rows_of(mt, "I"), key=lambda r: str(r[0])):
 		code = str(r[0])
 		name = str(r[1])
 		flags = str(r[13])
 		ticked = [n for n in named if n <= len(flags) and flags[n - 1] == "Y"]
 		source = "ticked"
-		if not ticked:
-			g = auto_group(name, r[8], r[3], props)
-			if g["no"] is None:
-				ungrouped.append({"code": code, "name": name, "groupName": r[3], "subType": r[8], "reason": g["why"]})
-				continue
-			ticked = [g["no"]]
-			source = "auto"
 		h = hitech.get(code.lower())
+		if not ticked:
+			if h and norm(h[1]) == norm(name) and h[2] == "Y":
+				ungrouped.append({"code": code, "name": name, "groupName": r[3], "subType": r[8],
+					"reason": "no price group is ticked on it in Manna Treads' SAP (Item Master Data, Properties)"})
+			else:
+				no_flow = no_flow + 1
+			continue
 		twin = None
 		note = None
 		belts = None
@@ -255,7 +268,7 @@ def build(mt, ht, rules, margin, now):
 		"priceList": {"no": int(num(pl_mt[0])), "name": pl_mt[1]}, "syncedAt": now, "properties": props, "items": items, "customers": customers,
 		"specialCols": ["card", "item", "price", "priceList", "autoUpdate", "discount", "valid", "currency"], "specialRows": special,
 		"hitech": {"company": db_ht, "companyName": COMPANY_NAME["ht"], "priceList": {"no": int(num(pl_ht[0])), "name": pl_ht[1]}, "items": twins},
-		"serverCheck": check(items, twins, special, rules, margin), "ungrouped": ungrouped, "placeholderPrices": stand_ins}
+		"serverCheck": check(items, twins, special, rules, margin), "ungrouped": ungrouped, "ungroupedNoTwin": no_flow, "placeholderPrices": stand_ins}
 	return snap
 
 
@@ -347,7 +360,7 @@ def run():
 		refused = "Hi-Tech's result set is empty - nothing changed"
 	rules = [{"card": r.card_code, "property": frappe.utils.cint(r.property_no), "rupees": num(r.rupees_off)}
 		for r in frappe.get_all(RULES, fields=["card_code", "property_no", "rupees_off"], limit_page_length=0)]
-	margin = num(frappe.db.get_single_value(CONTROL, "intercompany_margin"))
+	margin = num(frappe.db.get_single_value(CONTROL, "intercompany_margin")) if HITECH_PRICE_LIST else 0
 	snap = build(mt, ht, rules, margin, str(frappe.utils.now())[:19])
 	text = json.dumps(snap, separators=(",", ":"))
 	if not dry and not refused:
@@ -359,10 +372,10 @@ def run():
 		"auto_grouped": len([i for i in snap["items"] if i["groupSource"] == "auto"]),
 		"stand_ins": len([i for i in snap["items"] if i["listPriceSource"] == "placeholder"]), "twins": len(snap["hitech"]["items"]), "customers": len(snap["customers"]),
 		"special_prices": len(snap["specialRows"]), "kb": int(len(text) / 1024), "serverCheck": c,
-		"summary": "SAP prices read: %d groups, %d Manna Treads items (%d grouped by item group and quality, %d left out; %d with a Hi-Tech twin%s), %d customers, %d special prices. Check: %d dealer price(s) and %d Hi-Tech price(s) right, %d not." % (
-			len(snap["properties"]), len(snap["items"]), len([i for i in snap["items"] if i["groupSource"] == "auto"]), len(snap["ungrouped"]), len(snap["hitech"]["items"]),
+		"summary": "SAP prices read: %d groups, %d Manna Treads items (%d with a Hi-Tech twin%s); %d sellable item(s) with no group ticked, %d Manna-only item(s) left out; %d customers, %d special prices. Check: %d dealer price(s) right, %d not." % (
+			len(snap["properties"]), len(snap["items"]), len(snap["hitech"]["items"]),
 			("; %d with a stand-in price" % len([i for i in snap["items"] if i["listPriceSource"] == "placeholder"])) if snap["placeholderPrices"] else "",
-			len(snap["customers"]), len(snap["specialRows"]), c["dealer"]["OK"], c["hitech"]["OK"], wrong)}
+			len(snap["ungrouped"]), snap["ungroupedNoTwin"], len(snap["customers"]), len(snap["specialRows"]), c["dealer"]["OK"], wrong)}
 
 
 if not frappe.flags.get("manna_test"):

@@ -47,6 +47,7 @@
     { "why": "PCTR in the name is precured", "type": "", "name": "PCTR 240 MSP 133 MG", "kind": "PCTR" },
     { "why": "a hot tread, by its name", "type": "", "name": "TREAD RUBBER HOT BLACK PEARL 32*12", "kind": "HOT" },
     { "why": "bonding gum", "type": "", "name": "BONDING GUM -BLACK PEARL", "kind": "BONDING GUM" },
+    { "why": "the new codes' bonding gum is named BG (14 Nov 2026)", "type": "", "name": "BG MANNA 220 04", "kind": "BONDING GUM" },
     { "why": "a type that does not say falls back to the name", "type": "FINISHED", "name": "TREAD RUBBER PRECURED PLATINUM 150", "kind": "PCTR" },
     { "why": "anything else", "type": "", "name": "CUSHION COMPOUND", "kind": "OTHER" }
   ],

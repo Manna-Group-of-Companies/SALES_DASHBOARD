@@ -146,20 +146,31 @@ def tread(code, name, group, price, sub="", ticked=()):
 	return r
 
 
-def test_an_untagged_tread_joins_its_group_and_one_that_cannot_is_listed_with_why():
+def test_only_a_ticked_item_is_in_a_group_and_an_unticked_one_an_order_could_carry_is_listed():
+	# 14 Nov 2026: the groups are the price list's rows and every new code is ticked; nothing is worked out from names.
+	ht = TEST_HT + [hitem("A", "PCTR BLACK PEARL 205"), hitem("E", "SOMETHING ELSE")]
 	s = build(TEST_MT + [tread("A", "PCTR BLACK PEARL 205", "PRECURED", "200.000000"), tread("B", "HOT MANNA DOUBLE BLUE 35", "HOT", ""),
-		tread("C", "PATCH BLACK PEARL", "PATCHES", "10.000000"), tread("D", "HOT X", "HOT", "190.000000", ticked=(1,))], TEST_HT, [], 10, "now")
-	by = {i["code"]: i for i in s["items"]}
-	assert by["A"]["props"] == [6] and by["A"]["groupSource"] == "auto"
-	assert by["D"]["props"] == [1] and by["D"]["groupSource"] == "ticked"
-	assert sorted(u["code"] for u in s["ungrouped"]) == ["B", "C"]
-	assert [u["reason"] for u in s["ungrouped"] if u["code"] == "B"] == ["neither the name nor U_SubTypeA names a quality"]
+		tread("D", "HOT X", "HOT", "190.000000", ticked=(1,)), tread("E", "PCTR BLACK PEARL 9", "PRECURED", "200.000000")], ht, [], 10, "now")
+	assert [i["code"] for i in s["items"]] == ["D"] and s["items"][0]["groupSource"] == "ticked"
+	assert [u["code"] for u in s["ungrouped"]] == ["A"] and "no price group is ticked" in s["ungrouped"][0]["reason"]
+	# B has no Hi-Tech item, E's is another tread: Manna Treads' own codes, which no order can carry - counted only.
+	assert s["ungroupedNoTwin"] == 2
+
+
+def test_the_new_bonding_gum_names_read_as_bonding_gum():
+	assert item_kind("BG MANNA 220 04") == "BONDING GUM" and item_kind("BG EXPORT VERDO 230 02") == "BONDING GUM"
+	assert item_kind("PCTR MANNA DOUBLE BLUE ENDURA 115 82") == "PCTR" and item_kind("VULCANIZING SOLUTION MANNA 10") == "OTHER"
+
+
+def test_hitech_keeps_no_price_list():
+	# Its sales order is priced from Manna Treads' purchase order (B1iF, MARGIN): no Hi-Tech check, whatever the margin field says.
+	assert ns["HITECH_PRICE_LIST"] is False
 
 
 def test_a_test_company_gives_an_unpriced_item_its_groups_median_or_its_types():
-	mt = TEST_MT + [tread("A", "PCTR BLACK PEARL 1", "PRECURED", "200.000000"), tread("B", "PCTR BLACK PEARL 2", "PRECURED", "211.000000"),
-		tread("C", "PCTR BLACK PEARL 3", "PRECURED", ""), tread("Z", "PCTR BLACK PEARL 4", "PRECURED", "0.000000"),
-		tread("D", "PCTR DIAMOND 1", "PRECURED", "")]
+	mt = TEST_MT + [tread("A", "PCTR BLACK PEARL 1", "PRECURED", "200.000000", ticked=(6,)), tread("B", "PCTR BLACK PEARL 2", "PRECURED", "211.000000", ticked=(6,)),
+		tread("C", "PCTR BLACK PEARL 3", "PRECURED", "", ticked=(6,)), tread("Z", "PCTR BLACK PEARL 4", "PRECURED", "0.000000", ticked=(6,)),
+		tread("D", "PCTR DIAMOND 1", "PRECURED", "", ticked=(10,))]
 	s = build(mt, TEST_HT, [], 10, "now")
 	by = {i["code"]: (i["listPrice"], i["listPriceSource"]) for i in s["items"]}
 	assert s["placeholderPrices"] is True
@@ -168,5 +179,5 @@ def test_a_test_company_gives_an_unpriced_item_its_groups_median_or_its_types():
 
 
 def test_live_never_gets_a_stand_in():
-	s = build([r if r[0] != "D" else ["D", "MANNA_TREADS_LIVE"] for r in TEST_MT] + [tread("C", "PCTR BLACK PEARL 3", "PRECURED", "")], TEST_HT, [], 10, "now")
+	s = build([r if r[0] != "D" else ["D", "MANNA_TREADS_LIVE"] for r in TEST_MT] + [tread("C", "PCTR BLACK PEARL 3", "PRECURED", "", ticked=(6,))], TEST_HT, [], 10, "now")
 	assert s["placeholderPrices"] is False and s["items"][0]["listPrice"] is None and s["items"][0]["listPriceSource"] == "none"

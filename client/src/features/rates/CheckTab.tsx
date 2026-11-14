@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { Badge, Card, Segmented } from '@/components/ui';
 import {
   hitechByQuality,
+  HITECH_PRICE_LIST,
   type CheckDealer,
   type CheckStatus,
   type HitechStatus,
@@ -47,7 +48,7 @@ function ServerVerdict({ agreement }: { agreement: ServerAgreement }) {
     );
   if (agreement.state === 'stale')
     return (
-      <Badge tone="neutral" dot title={`Out of date (${agreement.why}). Sync from SAP to recheck.`}>
+      <Badge tone="neutral" dot title={`Out of date (${agreement.why}). Reload after the next SAP read (:29 / :59) to recheck.`}>
         Office server check out of date
       </Badge>
     );
@@ -230,6 +231,7 @@ export function CheckTab({
         )}
       </Card>
 
+      {HITECH_PRICE_LIST && (
       <Card
         title={`${hitechName} prices`}
         actions={
@@ -331,6 +333,7 @@ export function CheckTab({
           </div>
         )}
       </Card>
+      )}
     </>
   );
 }

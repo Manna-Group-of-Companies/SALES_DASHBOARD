@@ -19,7 +19,7 @@
  * imported — nothing here writes to SAP.
  *
  * KEPT PLAIN (the user, 26 Sep 2026): the heading, when SAP was last read and
- * Sync from SAP, then the tabs — no summary tiles, sub-headings or notes. A
+ * Reload, then the tabs — no summary tiles, sub-headings or notes. A
  * banner appears only when something needs the MD: an error, a sync that
  * failed or went unanswered, unconfirmed changes, files waiting for import,
  * or the office server's check disagreeing with this one.
@@ -28,11 +28,16 @@
  * opens onto its detail when clicked; long item lists inside are filterable
  * and shown 25 at a time.
  *
- * What SAP holds is read from `SAP Pricing Control.snapshot_json`, refreshed by
- * "Sync from SAP" through the office server — which also checks SAP itself with
- * the PowerShell twin of the rules; the screen says if the two checks disagree.
- * The margin is `SAP Pricing Control.intercompany_margin` (kept in ERPNext, not
- * in this public code).
+ * What SAP holds is read from `SAP Pricing Control.snapshot_json`. Since 14 Nov
+ * 2026 B1if writes it every half hour (:29 and :59, `manna_sap_pricing`), with
+ * its own check of SAP by the same rules; the screen says if the two checks
+ * disagree. The office server's pricing task is retired, so the header's button
+ * reloads that latest read instead of asking for one, and the time shown is the
+ * read's own.
+ *
+ * 14 Nov 2026: the groups are management's price list rows, and Hi-Tech keeps
+ * no price list (HITECH_PRICE_LIST in domain/dealerRates.ts): no Hi-Tech column,
+ * file or check, and `intercompany_margin` is not read.
  *
  * History lives in SAP itself: list prices in each item's Change Log (in each
  * company), dealer prices in Manna Treads' Special Prices for Business Partners.
@@ -50,6 +55,7 @@ import {
   checkCounts,
   compareServerCheck,
   diffRules,
+  HITECH_PRICE_LIST,
   staleRules,
   roundMoney,
   ruleKey,
@@ -61,7 +67,7 @@ import {
   type PricingSnapshot,
   type QualityChange,
 } from '@/domain/dealerRates';
-import { getPricingControl, listDealerRules, requestPricingSync, saveDealerRules, type PricingControl } from '@/api/pricing';
+import { getPricingControl, listDealerRules, saveDealerRules, type PricingControl } from '@/api/pricing';
 import { Alert, Button, Card, Empty, Tabs } from '@/components/ui';
 import { QualitiesTab } from './QualitiesTab';
 import { DealersTab } from './DealersTab';
@@ -73,8 +79,6 @@ import './rates.css';
 
 type Tab = 'qualities' | 'dealers' | 'preview' | 'check';
 
-const POLL_MS = 4_000;
-const GIVE_UP_MS = 4 * 60_000;
 
 export interface Targets {
   treads: DtwCompany;
@@ -90,7 +94,7 @@ export function RatesPage() {
   const [tab, setTab] = useState<Tab>('qualities');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState<'idle' | 'waiting' | 'stalled'>('idle');
+  const [syncing, setSyncing] = useState<'idle' | 'waiting'>('idle');
   /** Only what the header's time cannot say: a failure, a wait, cleared boxes. */
   const [syncNote, setSyncNote] = useState<{ tone: 'info' | 'warn' | 'danger'; text: string } | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -121,7 +125,7 @@ export function RatesPage() {
   }, [load]);
 
   const snapshot: PricingSnapshot | null = control?.snapshot ?? null;
-  const margin = control?.margin ?? null;
+  const margin = HITECH_PRICE_LIST ? (control?.margin ?? null) : null;
 
   const changes: QualityChange[] = useMemo(
     () =>
@@ -161,7 +165,10 @@ export function RatesPage() {
       snapshot
         ? {
             treads: { db: snapshot.company, name: snapshot.companyName, priceListNo: snapshot.priceList.no },
-            hitech: snapshot.hitech ? { db: snapshot.hitech.company, name: snapshot.hitech.companyName, priceListNo: snapshot.hitech.priceList.no } : null,
+            hitech:
+              HITECH_PRICE_LIST && snapshot.hitech
+                ? { db: snapshot.hitech.company, name: snapshot.hitech.companyName, priceListNo: snapshot.hitech.priceList.no }
+                : null,
           }
         : null,
     [snapshot],
@@ -169,50 +176,35 @@ export function RatesPage() {
 
   // ------------------------------------------------------------ sync ---
 
+  /**
+   * B1if reads SAP by itself every half hour (:29 and :59), so this only loads
+   * the latest read. The office server's on-request sync is retired (14 Nov
+   * 2026): asking it would wait for an answer that never comes.
+   */
   const syncFromSap = async () => {
     if (pollTimer.current) window.clearTimeout(pollTimer.current);
     setSyncing('waiting');
     setSyncNote(null);
     try {
-      const r = await requestPricingSync();
-      // Otherwise the spinning button says it; a cooldown is a wait worth naming.
-      if (r.afterCooldown) setSyncNote({ tone: 'info', text: r.message });
+      const c = await getPricingControl();
+      setControl(c);
+      // Files were made from the previous copy of SAP. This one may already
+      // hold them, so the list changes that went into them are cleared rather
+      // than applied a second time on top of the imported prices.
+      const fresh = Boolean(confirmedRef.current && c.snapshot && c.snapshot.syncedAt !== confirmedRef.current.syncedAt);
+      if (fresh) setChangeInput({});
+      setSyncNote(
+        fresh
+          ? { tone: 'info', text: 'List-price changes cleared after the new SAP read.' }
+          : confirmedRef.current
+            ? { tone: 'info', text: 'SAP has not been read since the files were made. It is read at :29 and :59; imported files show after that.' }
+            : null,
+      );
     } catch (e: unknown) {
+      setSyncNote({ tone: 'danger', text: e instanceof Error ? e.message : 'Could not load the latest SAP read.' });
+    } finally {
       setSyncing('idle');
-      setSyncNote({ tone: 'danger', text: e instanceof Error ? e.message : 'Could not ask the office server to read SAP.' });
-      return;
     }
-    const started = Date.now();
-    const tick = async () => {
-      try {
-        const c = await getPricingControl();
-        if (!c.syncRequested && c.status !== 'Running') {
-          setControl(c);
-          setSyncing('idle');
-          // Files were made from the previous copy of SAP. This one may already
-          // hold them, so the list changes that went into them are cleared
-          // rather than applied a second time on top of the imported prices.
-          const fresh = Boolean(confirmedRef.current && c.snapshot && c.snapshot.syncedAt !== confirmedRef.current.syncedAt);
-          if (fresh) setChangeInput({});
-          // A success shows as the new time in the header.
-          if (c.status !== 'Success') setSyncNote({ tone: 'danger', text: `SAP read failed: ${c.lastResultMessage}` });
-          else setSyncNote(fresh ? { tone: 'info', text: 'List-price changes cleared after the new SAP read.' } : null);
-          return;
-        }
-      } catch {
-        /* one dropped poll is not a failure */
-      }
-      if (Date.now() - started > GIVE_UP_MS) {
-        setSyncing('stalled');
-        setSyncNote({
-          tone: 'warn',
-          text: 'The office server has not responded. The sync stays queued; contact IT if this persists.',
-        });
-        return;
-      }
-      pollTimer.current = window.setTimeout(() => void tick(), POLL_MS);
-    };
-    pollTimer.current = window.setTimeout(() => void tick(), POLL_MS);
   };
 
   // ----------------------------------------------------------- rules ---
@@ -236,7 +228,7 @@ export function RatesPage() {
    * Files have been made from THIS copy of SAP and it has not been read again
    * since. Until it is, the plan still shows what went into the files as
    * pending — rightly, SAP does not have it yet — but confirming again would
-   * only make the same files over, so the screen says "import, then Sync".
+   * only make the same files over, so the screen says "import, then Reload".
    */
   const awaitingImport = Boolean(confirmed && snapshot && confirmed.syncedAt === snapshot.syncedAt);
   const stale = useMemo(() => (snapshot ? staleRules(snapshot, savedRules) : []), [snapshot, savedRules]);
@@ -310,8 +302,7 @@ export function RatesPage() {
     );
   }
 
-  const busy = control?.status === 'Running' || syncing === 'waiting';
-  const failed = !busy && control?.status === 'Failed';
+  const busy = syncing === 'waiting';
   const dealerBad = checkDealers.reduce((n, d) => n + d.bad, 0);
   const hitechBad = check ? check.hitech.filter((r) => r.status !== 'OK').length : 0;
   const pending = plan ? plan.counts.listChanges + plan.counts.add + plan.counts.update + plan.counts.hitech : 0;
@@ -322,12 +313,12 @@ export function RatesPage() {
       <div className="page-head rates__head">
         <div className="page-head__title grow">Rates &amp; Dealer Prices</div>
         <div className="rates__sync">
-          <div className={`rates__synced${failed ? ' rates__synced--failed' : ''}`} title={failed ? control?.lastResultMessage : undefined}>
-            <span className="rates__synced-label">{busy ? 'Reading SAP…' : failed ? 'Last SAP sync failed' : 'Last SAP sync'}</span>
-            <span className="rates__synced-at">{when(control?.lastSyncAt ?? snapshot?.syncedAt)}</span>
+          <div className="rates__synced" title="B1if reads SAP every half hour, at :29 and :59">
+            <span className="rates__synced-label">{busy ? 'Loading…' : 'SAP read'}</span>
+            <span className="rates__synced-at">{when(snapshot?.syncedAt ?? control?.lastSyncAt)}</span>
           </div>
           <Button variant="primary" loading={busy} onClick={() => void syncFromSap()}>
-            Sync from SAP
+            Reload
           </Button>
         </div>
       </div>
@@ -350,7 +341,7 @@ export function RatesPage() {
           write them into SAP. Never on live.
         </Alert>
       )}
-      {snapshot && !margin && (
+      {HITECH_PRICE_LIST && snapshot && !margin && (
         <Alert tone="warn" title="Inter-company margin not set">
           ERPNext: SAP Pricing Control → Hi-Tech Bills Manna Treads Less.
         </Alert>
@@ -362,7 +353,7 @@ export function RatesPage() {
       )}
 
       {!snapshot || !targets ? (
-        <Empty title="No SAP prices" action={<Button onClick={() => void syncFromSap()}>Sync from SAP</Button>} />
+        <Empty title="No SAP prices" action={<Button onClick={() => void syncFromSap()}>Reload</Button>} />
       ) : (
         <>
           {awaitingImport && confirmed && (
@@ -377,7 +368,7 @@ export function RatesPage() {
                 ) : undefined
               }
             >
-              Import them, then Sync from SAP.
+              Import them; SAP is read again at :29 and :59, then Reload.
             </Alert>
           )}
           {dirty && plan && !awaitingImport && (
@@ -415,6 +406,7 @@ export function RatesPage() {
               changeInput={changeInput}
               setChange={(no, value) => setChangeInput((p) => ({ ...p, [no]: value }))}
               ungrouped={snapshot.ungrouped}
+              ungroupedNoTwin={snapshot.ungroupedNoTwin}
             />
           )}
           {tab === 'dealers' && (
