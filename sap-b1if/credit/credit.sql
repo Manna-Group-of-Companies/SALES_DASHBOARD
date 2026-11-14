@@ -6,8 +6,14 @@
 --   b1..b4 = open invoices LESS open credit notes (DocTotal - PaidToDate, anything
 --            under half a paisa ignored), aged by POSTING date: <=30, 31-60, 61-90, 91+ days.
 --            A credit note sits in the bucket of its own date.
---   od_amt/od_days = open amount on INVOICES whose due date has passed (due today
---            is not overdue), and the days the oldest of them is past due
+--   od_amt/od_days = open amount on INVOICES past the customer's terms, and the
+--            days the oldest of them is past them. Past the terms = older than
+--            invoice date + the terms' days (14 Nov 2026, the user), NOT SAP's
+--            DocDueDate: Net - 3, Net-7 and Net-20 carry 0 additional days in
+--            OCTG, so their invoices fall due the day they are made. The days
+--            are the number in the term's name ("Net-15" 15, "Net - 3" 3),
+--            else OCTG's own months and days; Advance and Cash are 0. Due today
+--            is not overdue.
 SELECT
 	C.CardCode AS code,
 	CAST(ISNULL(C.CreditLine, 0) AS decimal(19, 6)) AS limit,
@@ -28,8 +34,18 @@ LEFT JOIN (
 		SUM(CASE WHEN D.sgn = 1 AND D.opn > 0.005 AND D.due < CAST(GETDATE() AS date) THEN D.opn ELSE 0 END) AS od_amt,
 		MAX(CASE WHEN D.sgn = 1 AND D.opn > 0.005 AND D.due < CAST(GETDATE() AS date) THEN DATEDIFF(day, D.due, CAST(GETDATE() AS date)) ELSE 0 END) AS od_days
 	FROM (
-		SELECT CardCode, 1 AS sgn, DocTotal - PaidToDate AS opn, DATEDIFF(day, DocDate, CAST(GETDATE() AS date)) AS age, CAST(DocDueDate AS date) AS due
-		FROM OINV WHERE DocStatus = 'O'
+		SELECT I.CardCode, 1 AS sgn, I.DocTotal - I.PaidToDate AS opn, DATEDIFF(day, I.DocDate, CAST(GETDATE() AS date)) AS age,
+			DATEADD(day, ISNULL(P.days, 0), CAST(I.DocDate AS date)) AS due
+		FROM OINV I
+		LEFT JOIN (
+			SELECT C2.CardCode,
+				CASE WHEN PATINDEX('%[0-9]%', T2.PymntGroup) > 0
+					THEN CAST(LEFT(SUBSTRING(T2.PymntGroup, PATINDEX('%[0-9]%', T2.PymntGroup), 4),
+						PATINDEX('%[^0-9]%', SUBSTRING(T2.PymntGroup, PATINDEX('%[0-9]%', T2.PymntGroup), 4) + 'x') - 1) AS int)
+					ELSE 30 * ISNULL(T2.ExtraMonth, 0) + ISNULL(T2.ExtraDays, 0) END AS days
+			FROM OCRD C2 LEFT JOIN OCTG T2 ON T2.GroupNum = C2.GroupNum
+		) P ON P.CardCode = I.CardCode
+		WHERE I.DocStatus = 'O'
 		UNION ALL
 		SELECT CardCode, -1, DocTotal - PaidToDate, DATEDIFF(day, DocDate, CAST(GETDATE() AS date)), CAST(DocDueDate AS date)
 		FROM ORIN WHERE DocStatus = 'O'

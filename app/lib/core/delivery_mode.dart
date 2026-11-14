@@ -1,12 +1,16 @@
-// Mode of delivery: who pays the courier (14 Nov 2026, the user: "mode of
-// delivery Paid / To Pay courier"). Paid - we pay the courier; To Pay - the
-// customer pays it on delivery. Chosen on every order the phone takes and
-// carried onto the Sales Order a lead order becomes.
+// Two choices on every order the phone takes (14 Nov 2026, the user), both
+// carried onto the Sales Order a lead order becomes:
 //
-// Held on Sales Order and Lead Order as `custom_delivery_mode`, a Select of
-// exactly these values. Until that field exists on a site, Frappe drops the
-// value on save without an error, so a build carrying this is safe to install
-// first.
+//   - Freight: Paid (we pay the carrier) or To Pay (the customer pays it on
+//     delivery). Held in `custom_delivery_mode` - the name it shipped under
+//     before the mode of delivery below was asked for; phones hold it, so it
+//     stays.
+//   - Mode of delivery: By Road, By KSRTC or By Railway. Held in
+//     `custom_transport_mode`.
+//
+// Both are Selects of exactly these values on Sales Order and Lead Order.
+// Until a field exists on a site, Frappe drops the value on save without an
+// error, so a build carrying this is safe to install first.
 
 const String kFieldDeliveryMode = 'custom_delivery_mode';
 
@@ -22,6 +26,18 @@ String? deliveryModeOf(Object? v) {
   return kDeliveryModes.contains(s) ? s : null;
 }
 
-/// How the choice reads on screen.
-String deliveryModeLabel(String mode) =>
-    mode == kDeliveryToPay ? 'Courier - To Pay' : 'Courier - Paid';
+/// How the freight choice reads on screen.
+String deliveryModeLabel(String mode) => mode;
+
+const String kFieldTransportMode = 'custom_transport_mode';
+
+const String kByRoad = 'By Road';
+const String kByKsrtc = 'By KSRTC';
+const String kByRailway = 'By Railway';
+const List<String> kTransportModes = [kByRoad, kByKsrtc, kByRailway];
+
+/// [v] as one of [kTransportModes], or null - asked again rather than guessed.
+String? transportModeOf(Object? v) {
+  final s = '${v ?? ''}'.trim();
+  return kTransportModes.contains(s) ? s : null;
+}

@@ -301,3 +301,11 @@ String inr(num v) {
   }
   return '${neg ? '-' : ''}₹$digits';
 }
+
+/// The customers whose payment is due: money overdue past their payment
+/// terms, as SAP's credit sync wrote it (14 Nov 2026, the user: show the
+/// payment-due customers on the dashboard). Most overdue first.
+List<Map<String, dynamic>> paymentDueCustomers(
+        Iterable<Map<String, dynamic>> customers) =>
+    customers.where((c) => overduePastTerms(c) >= kOverdueTolerance).toList()
+      ..sort((a, b) => overduePastTerms(b).compareTo(overduePastTerms(a)));

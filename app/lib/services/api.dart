@@ -36,6 +36,7 @@ import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/models/sap_rates.dart';
+import 'package:manna_field_sales/services/local_captures.dart';
 import 'package:manna_field_sales/services/net_cache.dart';
 import 'package:manna_field_sales/services/offline_cache.dart';
 import 'package:manna_field_sales/services/outbox.dart';
@@ -480,9 +481,12 @@ class Api {
   /// Callers must still run the live read and replace this when it lands —
   /// and say the copy is being refreshed, so nobody quotes a balance off it
   /// thinking it is live.
-  static Future<Cached<List<Map<String, dynamic>>>?> peekCustomers() =>
-      OfflineCache.peek<List<Map<String, dynamic>>>(
-          CacheKeys.customers, decodeRows);
+  static Future<Cached<List<Map<String, dynamic>>>?> peekCustomers() async {
+    final c = await OfflineCache.peek<List<Map<String, dynamic>>>(
+        CacheKeys.customers, decodeRows);
+    if (c != null) await LocalCaptures.overlay('Customer', c.value);
+    return c;
+  }
 
   static Future<Cached<List<Map<String, dynamic>>>> getCustomersCached() {
     // `custom_assigned_reps` is a Link to Sales Person now, holding a bare
@@ -511,13 +515,19 @@ class Api {
             'custom_verified_latitude',
             'custom_verified_longitude',
             'custom_phone',
+            // Lets this phone's own captures stand until the server has
+            // them (services/local_captures.dart).
+            'modified',
             // Whose it is: a manager's list holds the team's customers too.
             kFieldCustomerOwner,
             ...kOutstandingFields,
           ]),
           orderBy: 'customer_name asc'),
       decode: decodeRows,
-    );
+    ).then((c) async {
+      await LocalCaptures.overlay('Customer', c.value);
+      return c;
+    });
   }
 
   /// Sets who a customer belongs to. UAE only (see `core/visibility.dart`) —
@@ -1199,6 +1209,8 @@ class Api {
       // Who pays the courier, as the rep agreed it on the lead order.
       if (deliveryModeOf(leadOrder[kFieldDeliveryMode]) case final m?)
         kFieldDeliveryMode: m,
+      if (transportModeOf(leadOrder[kFieldTransportMode]) case final m?)
+        kFieldTransportMode: m,
       // The date the customer actually asked for, carried across rather than
       // invented — the rep agreed it with them when the order was taken.
       'delivery_date': delivery.length >= 10
@@ -2350,6 +2362,19 @@ class Api {
   /// The two doctypes are mapped onto one shape here rather than in the widget:
   /// a Lead Order names its party in `lead_name` and its state in `status`,
   /// where a Sales Order uses `customer` and `custom_po_status`.
+  /// One customer's latest Sales Orders, whoever took them - for the
+  /// payment-due list (14 Nov 2026), where a manager sees the team's
+  /// customers. Cancelled orders are left out. Kept for no signal like
+  /// every read (services/net_cache.dart).
+  static Future<List<Map<String, dynamic>>> getCustomerOrders(String customer) =>
+      _list('Sales Order',
+          fields: '["name","customer","grand_total","transaction_date",'
+              '"delivery_date","custom_po_status","custom_sales_person",'
+              '"custom_sap_sales_order","custom_sap_invoice","docstatus"]',
+          filters: '[["customer","=",${jsonEncode(customer)}],["docstatus","!=",2]]',
+          orderBy: 'transaction_date desc',
+          limit: 20);
+
   static Future<List<Map<String, dynamic>>> getMyOrders() => _cachedRows(
         CacheKeys.orders,
         () async {
@@ -2577,6 +2602,7 @@ class Api {
     String? commitment,
     String? commitmentDue,
     String? deliveryMode,
+    String? transportMode,
   }) async {
     final ref = OrderRef(orderName, isLead: isLead);
 
@@ -2618,6 +2644,7 @@ class Api {
     };
     if (deliveryDate != null) body['delivery_date'] = deliveryDate;
     if (deliveryModeOf(deliveryMode) case final m?) body[kFieldDeliveryMode] = m;
+    if (transportModeOf(transportMode) case final m?) body[kFieldTransportMode] = m;
     // Correcting a rejected order is sending it again: it goes back to the
     // sales manager, as the dashboard's `saveOrderLines` does. Until 26 Sep
     // 2026 the phone left it at Rejected, where nobody would look at it.
@@ -3244,7 +3271,8 @@ class Api {
             // the screen and came back — it read the absent status as "Not
             // Captured" and asked them to do it again.
             fields:
-                '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status","custom_location_status","custom_latitude","custom_longitude","custom_verified_latitude","custom_verified_longitude"]'));
+                '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status","custom_location_status","custom_latitude","custom_longitude","custom_verified_latitude","custom_verified_longitude","modified"]'))
+        .then((rows) => LocalCaptures.overlay('Lead', rows));
   }
 
   /// Sets who a lead belongs to. UAE only (see `core/visibility.dart`) —
@@ -3805,6 +3833,7 @@ class Api {
         deliveryDate: draft.deliveryDate,
         total: total,
         deliveryMode: draft.deliveryMode,
+        transportMode: draft.transportMode,
       );
     }
     final company = await getCompany();
@@ -3816,6 +3845,7 @@ class Api {
       commitment: draft.commitment,
       commitmentDue: draft.commitmentDue,
       deliveryMode: draft.deliveryMode,
+      transportMode: draft.transportMode,
     );
   }
 
@@ -4217,7 +4247,8 @@ class Api {
         isLead: a['is_lead'] == true,
         commitment: _sn(a['commitment']),
         commitmentDue: _sn(a['commitment_due']),
-        deliveryMode: _sn(a['delivery_mode'])),
+        deliveryMode: _sn(a['delivery_mode']),
+        transportMode: _sn(a['transport_mode'])),
     'credit_condition': (a, _) => _addCreditConditionNow(
         customer: '${a['customer']}',
         salesPerson: '${a['sales_person']}',
@@ -4416,16 +4447,27 @@ class Api {
     bool recapture = false,
     double? existingLat,
     double? existingLng,
-  }) =>
-      writeOrQueue(kind: 'lead_location', label: 'Location of $lead', args: {
-        'lead': lead,
-        'sales_person': salesPerson,
-        'lat': lat,
-        'lng': lng,
-        'recapture': recapture,
-        'existing_lat': existingLat,
-        'existing_lng': existingLng,
-      });
+  }) async {
+    await writeOrQueue(kind: 'lead_location', label: 'Location of $lead', args: {
+      'lead': lead,
+      'sales_person': salesPerson,
+      'lat': lat,
+      'lng': lng,
+      'recapture': recapture,
+      'existing_lat': existingLat,
+      'existing_lng': existingLng,
+    });
+    // Sent or kept, the lists must show it captured from now on
+    // (services/local_captures.dart).
+    await LocalCaptures.record(
+        doctype: 'Lead',
+        name: lead,
+        status: _capturedStatus,
+        lat: lat,
+        lng: lng,
+        selfVerified: _selfVerifies,
+        recapture: recapture);
+  }
 
   static Future<void> approveLeadLocation(
           String name, bool approve, dynamic lat, dynamic lng) =>
@@ -4515,6 +4557,7 @@ class Api {
     String? commitment,
     String? commitmentDue,
     String? deliveryMode,
+    String? transportMode,
   }) =>
       writeOrQueue(
           kind: 'order_lines',
@@ -4528,6 +4571,7 @@ class Api {
             'commitment': commitment,
             'commitment_due': commitmentDue,
             'delivery_mode': deliveryMode,
+            'transport_mode': transportMode,
           });
 
   static Future<String?> addCreditCondition({
@@ -5184,9 +5228,11 @@ class Api {
     String? commitment,
     String? commitmentDue,
     String? deliveryMode,
+    String? transportMode,
   }) async {
     final body = {
       if (deliveryModeOf(deliveryMode) case final m?) kFieldDeliveryMode: m,
+      if (transportModeOf(transportMode) case final m?) kFieldTransportMode: m,
       // What the customer promised, in the rep's words, when this order takes
       // them past their credit limit. The GM decides the order on it and the
       // approval turns it into the rep's condition — credit_commitment.json.
@@ -5261,6 +5307,7 @@ class Api {
     String? commitment,
     String? commitmentDue,
     String? deliveryMode,
+    String? transportMode,
   }) async {
     await _requireRoute('Customer', customer);
     final name = await createSalesOrder(
@@ -5270,7 +5317,8 @@ class Api {
         deliveryDate: deliveryDate,
         commitment: commitment,
         commitmentDue: commitmentDue,
-        deliveryMode: deliveryMode);
+        deliveryMode: deliveryMode,
+        transportMode: transportMode);
 
     // Best-effort — see refreshDuplicateFlag.
     await refreshDuplicateFlag(name);
@@ -5287,10 +5335,12 @@ class Api {
     required String deliveryDate,
     required double total,
     String? deliveryMode,
+    String? transportMode,
   }) async {
     await _requireRoute('Lead', lead);
     final body = {
       if (deliveryModeOf(deliveryMode) case final m?) kFieldDeliveryMode: m,
+      if (transportModeOf(transportMode) case final m?) kFieldTransportMode: m,
       'lead': lead,
       'sales_person': Session.I.salesPerson,
       'status': 'Pending Approval',

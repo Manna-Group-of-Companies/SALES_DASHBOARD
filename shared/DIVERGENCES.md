@@ -1165,3 +1165,19 @@ made. Where that matters for money, approval or stock:
   a pick list made inside the window and sent after it closes would be
   refused there. To close: pass the moment it was made and judge on that.
 
+
+## Only Manna Treads' SAP items on the order screen: phone only — **open, 14 November 2026**
+
+The user, 14 Nov 2026: show only the products in Manna Treads' SAP in the
+live app. The phone's order screen now hides a per-kg Manna Treads item that
+`manna_customer_rates` gives no price for (`sapCatalogueVisible` in
+`app/lib/core/order_rules.dart`), as `shared/fixtures/sap_catalogue_visibility.json`
+pins: quality ticked, a Price List 01 price, and a Hi-Tech twin. Every doubt
+falls towards showing - no signal, no answer, an empty answer, or a line
+already on the order being edited.
+
+The dashboard does not filter its item picker yet. That is the safe side of
+the same rule: its rate is typed (see "The order rate comes from SAP on the
+phone, is typed on the dashboard" above), so it cannot use a missing SAP rate
+as the test anyway. **To close:** read `manna_customer_rates` in the
+dashboard's order screen and hide by the same fixture.

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:image_picker/image_picker.dart' show XFile;
 
 import 'package:manna_field_sales/core/errors.dart';
@@ -16,8 +17,7 @@ import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
 import 'package:manna_field_sales/widgets/sites_section.dart';
 import 'package:manna_field_sales/services/location_service.dart';
-import 'package:manna_field_sales/services/map_service.dart' show openInGoogleMaps;
-import 'package:manna_field_sales/widgets/route_picker.dart';
+import 'package:manna_field_sales/services/map_service.dart' show navigateTo;
 import 'package:manna_field_sales/widgets/route_required_gate.dart';
 import 'package:manna_field_sales/widgets/proximity_gate.dart';
 import 'package:manna_field_sales/widgets/visit_punch_card.dart';
@@ -257,6 +257,81 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
         ),
       );
 
+  static String _text(Object? v) {
+    final s = '${v ?? ''}'.trim();
+    return s == 'null' ? '' : s;
+  }
+
+  /// The lead's particulars as the customer page shows a customer's (14 Nov
+  /// 2026, the user: the same style on leads): route, company, phone with a
+  /// call button, and the location with a way to navigate there in Google
+  /// Maps once it has been captured.
+  Widget _detailsCard(Map<String, dynamic> l) {
+    final route = _text(l['custom_sales_route']);
+    final phone = _text(l['mobile_no']);
+    final pos = partyLatLng(l);
+
+    Widget row(IconData ic, String label, String value, {Widget? action}) =>
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(children: [
+            Icon(ic, size: 18, color: Colors.black45),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label,
+                        style: const TextStyle(
+                            fontSize: 11, color: Colors.black45)),
+                    Text(value,
+                        style: TextStyle(
+                            fontSize: 14,
+                            // Shown even when unset, in orange: a lead that
+                            // converts with no route leaves production
+                            // unable to plan its first delivery.
+                            color: label == 'Route' && route.isEmpty
+                                ? Colors.orange.shade800
+                                : null)),
+                  ]),
+            ),
+            ?action,
+          ]),
+        );
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: Column(children: [
+          row(Icons.alt_route, 'Route', route.isEmpty ? 'Not set' : route),
+          if (_text(l['company_name']).isNotEmpty)
+            row(Icons.storefront_outlined, 'Company', _text(l['company_name'])),
+          row(Icons.phone, 'Phone', phone.isEmpty ? '—' : phone,
+              action: phone.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Call',
+                      icon: const Icon(Icons.call, color: Colors.green),
+                      onPressed: () =>
+                          launchUrl(Uri.parse('tel:$phone')))),
+          row(
+              Icons.location_on_outlined,
+              'Location',
+              pos == null
+                  ? 'Not captured'
+                  : '${pos.lat.toStringAsFixed(5)}, ${pos.lng.toStringAsFixed(5)}',
+              action: pos == null
+                  ? null
+                  : IconButton(
+                      tooltip: 'Open in Google Maps',
+                      icon: const Icon(Icons.directions, color: Colors.blue),
+                      onPressed: () => navigateTo(pos.lat, pos.lng))),
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final l = _l;
@@ -280,14 +355,13 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
             Text(l['lead_name'] ?? l['name'],
                 style:
                 const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            Text([l['company_name'], l['mobile_no']]
-                .where((x) => x != null && '$x'.isNotEmpty)
-                .join(' · ')),
-            const SizedBox(height: 4),
-            // Shown even when unset. A lead that converts with no route leaves
-            // production unable to plan its first delivery.
-            RouteChip(route: '${l['custom_sales_route'] ?? ''}'),
+            if (_text(l['company_name']).isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(_text(l['company_name']),
+                  style: const TextStyle(fontSize: 15, color: Colors.black54)),
+            ],
+            const SizedBox(height: 12),
+            _detailsCard(l),
             // UAE only (see core/visibility.dart) — everywhere else a lead
             // has always belonged to one rep and reassignment is not
             // offered.
@@ -365,27 +439,6 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                                 style: const TextStyle(
                                     fontWeight: FontWeight.w600))),
                       ]),
-                      if (partyLatLng(l) case final p?) ...[
-                        const SizedBox(height: 6),
-                        InkWell(
-                          onTap: () => openInGoogleMaps(p.lat, p.lng),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            child: Row(children: [
-                              const Icon(Icons.map_outlined,
-                                  size: 18, color: Color(0xFF1A56A8)),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                    '${p.lat.toStringAsFixed(5)}, ${p.lng.toStringAsFixed(5)}  ·  Open in Google Maps',
-                                    style: const TextStyle(
-                                        color: Color(0xFF1A56A8),
-                                        decoration: TextDecoration.underline)),
-                              ),
-                            ]),
-                          ),
-                        ),
-                      ],
                       const SizedBox(height: 8),
                       SizedBox(
                         width: double.infinity,

@@ -67,6 +67,13 @@ class _OrderScreenState extends State<OrderScreen> {
   /// Treads per-kg lines take SAP's price when it is sent.
   bool _ratesOffline = false;
 
+  /// True once a rates fetch for this party returned without an error
+  /// (13 Nov 2026). A failed fetch also leaves `_sapRates` at
+  /// `SapRates.none`, the same as an empty answer or no attempt, and
+  /// `_sapVisible` must not read a failure as "SAP prices nothing here" —
+  /// that hid every per-kg product whenever the server stumbled.
+  bool _sapRatesAnswered = false;
+
   String _company = '';
   String _q = '';
   DateTime? _deliveryDate;
@@ -74,6 +81,7 @@ class _OrderScreenState extends State<OrderScreen> {
   /// Who pays the courier, Paid or To Pay (14 Nov 2026). Asked on every
   /// order; an order being edited starts from what it already says.
   String? _deliveryMode;
+  String? _transportMode;
   bool _submitting = false;
   bool _reloading = false;
   Timer? _poll;
@@ -90,6 +98,7 @@ class _OrderScreenState extends State<OrderScreen> {
       final d = existing['delivery_date'];
       if (d != null) _deliveryDate = DateTime.tryParse('$d');
       _deliveryMode = deliveryModeOf(existing[kFieldDeliveryMode]);
+      _transportMode = transportModeOf(existing[kFieldTransportMode]);
     }
     _init = _load();
     // The Sync button over every screen does not reload what is showing; this
@@ -228,10 +237,12 @@ class _OrderScreenState extends State<OrderScreen> {
     // kept out of the Future.wait below, so a failure here — no signal, not a
     // Treads party, no copy of SAP yet — cannot fail the whole screen; it just
     // means no rates are shown, and the rep types the rate as before.
+    var ratesFailed = false;
     final Future<SapRates>? sapRates =
         (Session.I.isTreadsUnit && widget.party.name.isNotEmpty)
             ? Api.getSapRates(widget.party.name, lead: widget.party.isLead)
                 .catchError((Object e) {
+                ratesFailed = true;
                 if (isNetworkFailure(e)) _ratesOffline = true;
                 return SapRates.none;
               })
@@ -251,7 +262,10 @@ class _OrderScreenState extends State<OrderScreen> {
       _startPolling();
     }
     if (_isEdit) _applyExistingOrder();
-    if (sapRates != null) _sapRates = await sapRates;
+    if (sapRates != null) {
+      _sapRates = await sapRates;
+      _sapRatesAnswered = !ratesFailed;
+    }
     _applySapRates();
   }
 
@@ -349,9 +363,22 @@ class _OrderScreenState extends State<OrderScreen> {
     ProductCategory.vulcanizingSolution,
   ];
 
+  /// Whether [line] belongs in the catalogue at all — see
+  /// [sapCatalogueVisible] for the rule and why each exception exists.
+  bool _sapVisible(OrderLine line) => sapCatalogueVisible(
+        isTreadsUnit: Session.I.isTreadsUnit,
+        rateUnit: line.product.category.rateUnit,
+        ratesAnswered: _sapRatesAnswered,
+        ratesOffline: _ratesOffline,
+        anySapRates: _sapRates.rates.isNotEmpty,
+        alreadyOnOrder: _openedWith.contains(line.product.code),
+        hasSapRate: _sapRates[line.product.code] != null,
+      );
+
   List<OrderLine> get _filtered {
     final qq = _q.trim().toLowerCase();
     return _lines.where((l) {
+      if (!_sapVisible(l)) return false;
       if (_categoryFilter != null && l.product.category != _categoryFilter) {
         return false;
       }
@@ -413,9 +440,10 @@ class _OrderScreenState extends State<OrderScreen> {
   String? _validate() {
     if (_picked.isEmpty) return 'Add at least one product.';
     if (_deliveryDate == null) return 'Pick a required delivery date.';
-    if (_deliveryMode == null) {
-      return 'Choose the mode of delivery: courier Paid or To Pay.';
+    if (_transportMode == null) {
+      return 'Choose the mode of delivery: By Road, By KSRTC or By Railway.';
     }
+    if (_deliveryMode == null) return 'Choose the freight: Paid or To Pay.';
     final unpriced =
         _picked.where((l) => l.needsRate && !_sapPriceLater(l)).toList();
     if (unpriced.isNotEmpty) {
@@ -634,6 +662,7 @@ class _OrderScreenState extends State<OrderScreen> {
       commitment: commitment?.text,
       commitmentDue: commitment?.due,
       deliveryMode: _deliveryMode,
+      transportMode: _transportMode,
       sapPending: {
         for (final l in _picked)
           if (_takesSapPrice(l))
@@ -725,6 +754,7 @@ class _OrderScreenState extends State<OrderScreen> {
           commitment: commitment?.text,
           commitmentDue: commitment?.due,
           deliveryMode: _deliveryMode,
+          transportMode: _transportMode,
         );
         _snack(_wasApproved
             ? 'Order updated ✓ — sent back to your manager'
@@ -747,6 +777,7 @@ class _OrderScreenState extends State<OrderScreen> {
           deliveryDate: dd,
           total: _total,
           deliveryMode: _deliveryMode,
+          transportMode: _transportMode,
         );
         _snack('Order sent for approval ✓  $name');
         // A lead order has no proforma screen to go on to — it becomes a real
@@ -763,6 +794,7 @@ class _OrderScreenState extends State<OrderScreen> {
           commitment: commitment?.text,
           commitmentDue: commitment?.due,
           deliveryMode: _deliveryMode,
+          transportMode: _transportMode,
         );
         _snack(commitment != null
             ? 'Order sent with your commitment ✓  $name'
@@ -1034,40 +1066,51 @@ class _OrderScreenState extends State<OrderScreen> {
                 color: Colors.black54)),
       );
 
+  /// One row of choices, none picked until the rep picks one.
+  Widget _choice(String label, List<String> options, String? selected,
+          void Function(String?) set) =>
+      Row(children: [
+        SizedBox(
+          width: 84,
+          child: Text(label,
+              style: const TextStyle(fontSize: 12.5, color: Colors.black54)),
+        ),
+        Expanded(
+          child: SegmentedButton<String>(
+            showSelectedIcon: false,
+            emptySelectionAllowed: true,
+            segments: [
+              for (final o in options)
+                ButtonSegment(
+                    value: o,
+                    label: Text(o,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12.5))),
+            ],
+            selected: {?selected},
+            onSelectionChanged: _submitting
+                ? null
+                : (s) => setState(() => set(s.isEmpty ? null : s.first)),
+            style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+          ),
+        ),
+      ]);
+
   Widget _footer() {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Row(children: [
-            const Text('Mode of delivery',
-                style: TextStyle(fontSize: 13, color: Colors.black54)),
-            const SizedBox(width: 10),
-            Expanded(
-              child: SegmentedButton<String>(
-                showSelectedIcon: false,
-                emptySelectionAllowed: true,
-                segments: const [
-                  ButtonSegment(
-                      value: kDeliveryPaid,
-                      label: Text('Courier Paid'),
-                      icon: Icon(Icons.local_shipping_outlined, size: 16)),
-                  ButtonSegment(
-                      value: kDeliveryToPay,
-                      label: Text('Courier To Pay'),
-                      icon: Icon(Icons.payments_outlined, size: 16)),
-                ],
-                selected: {?_deliveryMode},
-                onSelectionChanged: _submitting
-                    ? null
-                    : (s) => setState(
-                        () => _deliveryMode = s.isEmpty ? null : s.first),
-                style: const ButtonStyle(
-                    visualDensity: VisualDensity.compact,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-              ),
-            ),
-          ]),
+          // Both asked on every order (14 Nov 2026, the user): how it travels,
+          // and who pays the freight.
+          _choice('Mode of delivery', kTransportModes, _transportMode,
+              (v) => _transportMode = v),
+          const SizedBox(height: 6),
+          _choice('Freight', kDeliveryModes, _deliveryMode,
+              (v) => _deliveryMode = v),
           const SizedBox(height: 8),
           InkWell(
             onTap: _submitting

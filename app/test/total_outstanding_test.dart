@@ -41,4 +41,17 @@ void main() {
       expect(inr(-47144), '-₹47,144');
     });
   });
+
+  group('payment-due customers on the home card (14 Nov 2026)', () {
+    test('only those overdue past their terms, most overdue first', () {
+      final due = paymentDueCustomers([
+        {'name': 'A', kFieldOverduePastTerms: 530},
+        {'name': 'B', kFieldOverduePastTerms: 0, kFieldOutstandingTotal: 47144},
+        {'name': 'C', kFieldOverduePastTerms: 149382},
+        {'name': 'D', kFieldOverduePastTerms: 0.4},
+      ]);
+      expect(due.map((c) => c['name']), ['C', 'A'],
+          reason: 'owing within terms is not due; under a rupee is rounding');
+    });
+  });
 }

@@ -15,9 +15,21 @@ void main() {
       }
     });
 
-    test('both choices read as courier on screen', () {
-      expect(deliveryModeLabel(kDeliveryPaid), 'Courier - Paid');
-      expect(deliveryModeLabel(kDeliveryToPay), 'Courier - To Pay');
+    test('the freight reads as chosen', () {
+      expect(deliveryModeLabel(kDeliveryPaid), 'Paid');
+      expect(deliveryModeLabel(kDeliveryToPay), 'To Pay');
+    });
+
+    test('mode of delivery is By Road, By KSRTC or By Railway', () {
+      expect(kTransportModes, ['By Road', 'By KSRTC', 'By Railway']);
+      expect(transportModeOf('By KSRTC'), kByKsrtc);
+      expect(transportModeOf(' By Railway '), kByRailway);
+    });
+
+    test('an unknown mode of delivery asks again rather than guess', () {
+      for (final v in [null, '', 'null', 'by road', 'Courier', 'Paid']) {
+        expect(transportModeOf(v), isNull, reason: '$v');
+      }
     });
   });
 

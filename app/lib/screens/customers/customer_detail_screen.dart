@@ -15,6 +15,7 @@ import 'package:manna_field_sales/screens/customers/customer_edit_screen.dart';
 import 'package:manna_field_sales/screens/complaints/complaint_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
+import 'package:manna_field_sales/services/local_captures.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/outbox.dart';
 import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
@@ -119,6 +120,17 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         files: {if (img != null) 'photo': img.path},
       );
       final selfVerified = !Api.locationPhotoRequired;
+      // Sent or kept, the customer list must show it captured from now on,
+      // or the next visit to this page asks again (local_captures.dart).
+      await LocalCaptures.record(
+          doctype: 'Customer',
+          name: '${c['name']}',
+          status: selfVerified ? 'Verified' : 'Pending Verification',
+          lat: pos.latitude,
+          lng: pos.longitude,
+          selfVerified: selfVerified,
+          recapture: recapture);
+      if (!mounted) return;
       setState(() {
         c['custom_location_status'] =
             selfVerified ? 'Verified' : 'Pending Verification';
