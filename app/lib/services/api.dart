@@ -1881,8 +1881,10 @@ class Api {
   /// ([SapRates.listOnly]): lead orders are taken at the list price.
   /// The script answers only the party's own rep (or a manager), only for
   /// Manna Treads, for every item in the snapshot (11 Nov 2026; only item
-  /// group ZZ - Test before). Not cached: a stale rate is worse than none, and
-  /// without signal the screen simply shows no rates.
+  /// group ZZ - Test before). Kept on the phone like every read (net_cache),
+  /// and read ahead for every customer and lead (_prewarmDetails, 14 Nov
+  /// 2026), so a dead zone still shows the price; a kept order is re-priced
+  /// from SAP the day it is sent, so the copy is never what is charged.
   static Future<SapRates> getSapRates(String party, {bool lead = false}) async {
     final r = await Session.I.dio.get('/api/method/manna_customer_rates',
         queryParameters: {lead ? 'lead' : 'customer': party});
@@ -3923,6 +3925,87 @@ class Api {
         await read();
       } catch (_) {}
     }
+    await _prewarmDetails();
+  }
+
+  /// How many of the newest orders and trips are kept whole on the phone.
+  static const int kPrewarmOrders = 60;
+  static const int kPrewarmTrips = 20;
+
+  /// SAP prices are read for every customer and lead at most this often: one
+  /// call per party, so a rep with 150 shops is 150 calls - fine twice a day,
+  /// not every half hour.
+  static const Duration _ratesGap = Duration(hours: 6);
+  static DateTime? _lastRatesPrewarm;
+
+  /// The pages a list only links to, kept before a dead zone (14 Nov 2026).
+  ///
+  /// The lists were kept, but an order, a trip or a party's SAP prices was
+  /// kept only once it had been opened with signal - so in a dead zone an
+  /// order the rep had not opened that day said "Not loaded yet", a trip
+  /// "Could not load trip", and a lead's order screen showed no price at all
+  /// ("Price from SAP when it is sent"). Each is read here exactly as its
+  /// screen reads it, so the kept copy is found under the same key.
+  static Future<void> _prewarmDetails() async {
+    Future<void> each(Iterable<Future<Object?> Function()> reads) async {
+      for (final read in reads) {
+        if (NetState.knownOffline) return;
+        try {
+          await read();
+        } catch (_) {}
+      }
+    }
+
+    List<Map<String, dynamic>> orders = const [];
+    try {
+      orders = await getMyOrders();
+    } catch (_) {}
+    final orderNames = [
+      for (final r in orders)
+        if (r['is_lead'] != true && r['is_combined'] != true && '${r['name'] ?? ''}'.isNotEmpty) '${r['name']}',
+    ].take(kPrewarmOrders).toList();
+    final customers = {for (final r in orders) '${r['customer'] ?? ''}'}..removeWhere((c) => c.isEmpty || c == 'null');
+    await each([
+      for (final n in orderNames) ...[
+        () => getOrder(n),
+        () => conditionsForOrder(n),
+        () => creditComments([n]),
+      ],
+      for (final c in customers) () => getCustomerDoc(c),
+    ]);
+
+    List<Map<String, dynamic>> trips = const [];
+    try {
+      trips = await getMyTrips();
+    } catch (_) {}
+    await each([
+      for (final t in trips.take(kPrewarmTrips)) ...[
+        () => getTrip('${t['name']}'),
+        () => getVisitsForTrip('${t['name']}'),
+      ],
+    ]);
+
+    final now = DateTime.now();
+    if (!Session.I.isTreadsUnit ||
+        (_lastRatesPrewarm != null && now.difference(_lastRatesPrewarm!) < _ratesGap)) {
+      return;
+    }
+    List<Map<String, dynamic>> shops = const [];
+    List<Map<String, dynamic>> leads = const [];
+    try {
+      shops = await getCustomers();
+    } catch (_) {}
+    try {
+      leads = await getLeads();
+    } catch (_) {}
+    if (NetState.knownOffline) return;
+    await each([
+      for (final c in shops)
+        if ('${c['name'] ?? ''}'.isNotEmpty) () => getSapRates('${c['name']}'),
+      for (final l in leads)
+        if ('${l['name'] ?? ''}'.isNotEmpty) () => getSapRates('${l['name']}', lead: true),
+    ]);
+    if (!NetState.knownOffline) _lastRatesPrewarm = now;
   }
 
   /// Sends [kind] now, or keeps it on the phone. [result] is what the write
