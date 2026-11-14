@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/delivery_mode.dart';
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/credit_condition.dart';
 import 'package:manna_field_sales/core/errors.dart';
@@ -718,6 +719,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             if ('${_order['delivery_date'] ?? ''}'.isNotEmpty &&
                 '${_order['delivery_date']}' != 'null')
               _statusRow('Required delivery', '${_order['delivery_date']}'),
+            if (deliveryModeOf(_order[kFieldDeliveryMode]) case final m?)
+              _statusRow('Mode of delivery', deliveryModeLabel(m)),
             // Production can move the date, and the rep is the one who has to
             // tell the customer. Showing only the new date would hide that
             // anything happened.

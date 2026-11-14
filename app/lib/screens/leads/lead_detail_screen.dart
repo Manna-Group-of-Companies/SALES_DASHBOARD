@@ -16,6 +16,7 @@ import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/photo_source_sheet.dart';
 import 'package:manna_field_sales/widgets/sites_section.dart';
 import 'package:manna_field_sales/services/location_service.dart';
+import 'package:manna_field_sales/services/map_service.dart' show openInGoogleMaps;
 import 'package:manna_field_sales/widgets/route_picker.dart';
 import 'package:manna_field_sales/widgets/route_required_gate.dart';
 import 'package:manna_field_sales/widgets/proximity_gate.dart';
@@ -364,6 +365,27 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> {
                                 style: const TextStyle(
                                     fontWeight: FontWeight.w600))),
                       ]),
+                      if (partyLatLng(l) case final p?) ...[
+                        const SizedBox(height: 6),
+                        InkWell(
+                          onTap: () => openInGoogleMaps(p.lat, p.lng),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(children: [
+                              const Icon(Icons.map_outlined,
+                                  size: 18, color: Color(0xFF1A56A8)),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                    '${p.lat.toStringAsFixed(5)}, ${p.lng.toStringAsFixed(5)}  ·  Open in Google Maps',
+                                    style: const TextStyle(
+                                        color: Color(0xFF1A56A8),
+                                        decoration: TextDecoration.underline)),
+                              ),
+                            ]),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 8),
                       SizedBox(
                         width: double.infinity,

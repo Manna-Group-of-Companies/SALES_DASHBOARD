@@ -44,6 +44,21 @@ class Session {
   /// say who owns each row.
   bool get sharesUnit => unitPeers.length > 1;
 
+  /// Whose customers, leads and routes this login's own lists show:
+  /// [unitPeers], and for a manager their whole team as well (14 Nov 2026,
+  /// the user: a manager taking orders saw only their own customers, not the
+  /// team's). Only widens what is seen, never who owns it - an order taken
+  /// here is still this login's. Empty when this login is no rep, which
+  /// callers read as "show nothing".
+  List<String> get visibleOwners {
+    if (unitPeers.isEmpty) return const [];
+    if (!isManager || teamReps.isEmpty) return unitPeers;
+    return {...unitPeers, ...teamReps}.toList();
+  }
+
+  /// True when lists show other reps' records, so each row has to say whose.
+  bool get seesOthers => visibleOwners.length > 1;
+
   /// True while the app is running on the identity saved from the last
   /// sign-in, because it was opened with no signal. Cleared by
   /// `Api.recoverAfterOfflineStart` once the server has confirmed it again;

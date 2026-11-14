@@ -16,6 +16,7 @@ import 'package:manna_field_sales/core/expenses.dart';
 import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/party_location.dart';
+import 'package:manna_field_sales/core/delivery_mode.dart';
 import 'package:manna_field_sales/core/duplicate_order.dart';
 import 'package:manna_field_sales/core/errors.dart' show isNetworkFailure;
 import 'package:manna_field_sales/core/leave_balance.dart';
@@ -510,6 +511,8 @@ class Api {
             'custom_verified_latitude',
             'custom_verified_longitude',
             'custom_phone',
+            // Whose it is: a manager's list holds the team's customers too.
+            kFieldCustomerOwner,
             ...kOutstandingFields,
           ]),
           orderBy: 'customer_name asc'),
@@ -627,7 +630,7 @@ class Api {
   /// place (it is named `<Rep> - <Place>`, one owner by construction), unlike
   /// a customer or lead. See [_visibleRows] for that case.
   static String? _visibleFilter(String field) {
-    final peers = Session.I.unitPeers;
+    final peers = Session.I.visibleOwners;
     if (peers.isEmpty) return null;
     return peers.length == 1
         ? '["$field","=","${peers.first}"]'
@@ -679,7 +682,7 @@ class Api {
     required String fields,
     String orderBy = 'creation desc',
   }) async {
-    final peers = Session.I.unitPeers;
+    final peers = Session.I.visibleOwners;
     if (peers.isEmpty) return const [];
 
     final ownedFuture = _list(doctype,
@@ -960,7 +963,8 @@ class Api {
     return _list('Lead',
         fields: '["name","lead_name","company_name","$kFieldLeadOwner",'
             '"custom_sales_route","city","mobile_no","custom_location_status",'
-            '"customer"]',
+            '"customer","custom_latitude","custom_longitude",'
+            '"custom_verified_latitude","custom_verified_longitude"]',
         filters: '[["$kFieldLeadOwner","in",${_inList(team)}]]',
         orderBy: 'modified desc',
         limit: 500);
@@ -1192,6 +1196,9 @@ class Api {
       'company': company,
       'custom_sales_person': leadOrder['sales_person'] ?? Session.I.salesPerson,
       if (unit != null && unit.isNotEmpty) 'custom_company': unit,
+      // Who pays the courier, as the rep agreed it on the lead order.
+      if (deliveryModeOf(leadOrder[kFieldDeliveryMode]) case final m?)
+        kFieldDeliveryMode: m,
       // The date the customer actually asked for, carried across rather than
       // invented — the rep agreed it with them when the order was taken.
       'delivery_date': delivery.length >= 10
@@ -2569,6 +2576,7 @@ class Api {
     bool isLead = false,
     String? commitment,
     String? commitmentDue,
+    String? deliveryMode,
   }) async {
     final ref = OrderRef(orderName, isLead: isLead);
 
@@ -2609,6 +2617,7 @@ class Api {
       'items': items,
     };
     if (deliveryDate != null) body['delivery_date'] = deliveryDate;
+    if (deliveryModeOf(deliveryMode) case final m?) body[kFieldDeliveryMode] = m;
     // Correcting a rejected order is sending it again: it goes back to the
     // sales manager, as the dashboard's `saveOrderLines` does. Until 26 Sep
     // 2026 the phone left it at Rejected, where nobody would look at it.
@@ -3795,6 +3804,7 @@ class Api {
         items: items,
         deliveryDate: draft.deliveryDate,
         total: total,
+        deliveryMode: draft.deliveryMode,
       );
     }
     final company = await getCompany();
@@ -3805,6 +3815,7 @@ class Api {
       deliveryDate: draft.deliveryDate,
       commitment: draft.commitment,
       commitmentDue: draft.commitmentDue,
+      deliveryMode: draft.deliveryMode,
     );
   }
 
@@ -4205,7 +4216,8 @@ class Api {
         deliveryDate: _sn(a['delivery_date']),
         isLead: a['is_lead'] == true,
         commitment: _sn(a['commitment']),
-        commitmentDue: _sn(a['commitment_due'])),
+        commitmentDue: _sn(a['commitment_due']),
+        deliveryMode: _sn(a['delivery_mode'])),
     'credit_condition': (a, _) => _addCreditConditionNow(
         customer: '${a['customer']}',
         salesPerson: '${a['sales_person']}',
@@ -4502,6 +4514,7 @@ class Api {
     bool isLead = false,
     String? commitment,
     String? commitmentDue,
+    String? deliveryMode,
   }) =>
       writeOrQueue(
           kind: 'order_lines',
@@ -4514,6 +4527,7 @@ class Api {
             'is_lead': isLead,
             'commitment': commitment,
             'commitment_due': commitmentDue,
+            'delivery_mode': deliveryMode,
           });
 
   static Future<String?> addCreditCondition({
@@ -5169,8 +5183,10 @@ class Api {
     String? deliveryDate,
     String? commitment,
     String? commitmentDue,
+    String? deliveryMode,
   }) async {
     final body = {
+      if (deliveryModeOf(deliveryMode) case final m?) kFieldDeliveryMode: m,
       // What the customer promised, in the rep's words, when this order takes
       // them past their credit limit. The GM decides the order on it and the
       // approval turns it into the rep's condition — credit_commitment.json.
@@ -5244,6 +5260,7 @@ class Api {
     required String deliveryDate,
     String? commitment,
     String? commitmentDue,
+    String? deliveryMode,
   }) async {
     await _requireRoute('Customer', customer);
     final name = await createSalesOrder(
@@ -5252,7 +5269,8 @@ class Api {
         items: items,
         deliveryDate: deliveryDate,
         commitment: commitment,
-        commitmentDue: commitmentDue);
+        commitmentDue: commitmentDue,
+        deliveryMode: deliveryMode);
 
     // Best-effort — see refreshDuplicateFlag.
     await refreshDuplicateFlag(name);
@@ -5268,9 +5286,11 @@ class Api {
     required List<Map<String, dynamic>> items,
     required String deliveryDate,
     required double total,
+    String? deliveryMode,
   }) async {
     await _requireRoute('Lead', lead);
     final body = {
+      if (deliveryModeOf(deliveryMode) case final m?) kFieldDeliveryMode: m,
       'lead': lead,
       'sales_person': Session.I.salesPerson,
       'status': 'Pending Approval',

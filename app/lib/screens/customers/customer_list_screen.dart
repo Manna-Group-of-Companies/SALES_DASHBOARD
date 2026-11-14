@@ -461,7 +461,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
      */
     final owner = '${c[kFieldCustomerOwner] ?? ''}';
     final covering =
-        Session.I.sharesUnit && owner.isNotEmpty && owner != Session.I.salesPerson;
+        Session.I.seesOthers && owner.isNotEmpty && owner != Session.I.salesPerson;
     final unassigned = Session.I.sharesUnit && owner.isEmpty;
 
     final punchedIn = _punchedInAt != null && '${c['name']}' == _punchedInAt;

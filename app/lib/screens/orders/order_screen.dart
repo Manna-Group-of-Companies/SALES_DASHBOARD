@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/credit_commitment.dart';
+import 'package:manna_field_sales/core/delivery_mode.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/session.dart';
@@ -69,6 +70,10 @@ class _OrderScreenState extends State<OrderScreen> {
   String _company = '';
   String _q = '';
   DateTime? _deliveryDate;
+
+  /// Who pays the courier, Paid or To Pay (14 Nov 2026). Asked on every
+  /// order; an order being edited starts from what it already says.
+  String? _deliveryMode;
   bool _submitting = false;
   bool _reloading = false;
   Timer? _poll;
@@ -84,6 +89,7 @@ class _OrderScreenState extends State<OrderScreen> {
     if (existing != null) {
       final d = existing['delivery_date'];
       if (d != null) _deliveryDate = DateTime.tryParse('$d');
+      _deliveryMode = deliveryModeOf(existing[kFieldDeliveryMode]);
     }
     _init = _load();
     // The Sync button over every screen does not reload what is showing; this
@@ -401,6 +407,9 @@ class _OrderScreenState extends State<OrderScreen> {
   String? _validate() {
     if (_picked.isEmpty) return 'Add at least one product.';
     if (_deliveryDate == null) return 'Pick a required delivery date.';
+    if (_deliveryMode == null) {
+      return 'Choose the mode of delivery: courier Paid or To Pay.';
+    }
     final unpriced =
         _picked.where((l) => l.needsRate && !_sapPriceLater(l)).toList();
     if (unpriced.isNotEmpty) {
@@ -618,6 +627,7 @@ class _OrderScreenState extends State<OrderScreen> {
       isLead: widget.party.isLead,
       commitment: commitment?.text,
       commitmentDue: commitment?.due,
+      deliveryMode: _deliveryMode,
       sapPending: {
         for (final l in _picked)
           if (_takesSapPrice(l))
@@ -708,6 +718,7 @@ class _OrderScreenState extends State<OrderScreen> {
           isLead: widget.party.isLead,
           commitment: commitment?.text,
           commitmentDue: commitment?.due,
+          deliveryMode: _deliveryMode,
         );
         _snack(_wasApproved
             ? 'Order updated ✓ — sent back to your manager'
@@ -729,6 +740,7 @@ class _OrderScreenState extends State<OrderScreen> {
           items: [for (final l in _picked) l.toSalesOrderItem()],
           deliveryDate: dd,
           total: _total,
+          deliveryMode: _deliveryMode,
         );
         _snack('Order sent for approval ✓  $name');
         // A lead order has no proforma screen to go on to — it becomes a real
@@ -744,6 +756,7 @@ class _OrderScreenState extends State<OrderScreen> {
           deliveryDate: dd,
           commitment: commitment?.text,
           commitmentDue: commitment?.due,
+          deliveryMode: _deliveryMode,
         );
         _snack(commitment != null
             ? 'Order sent with your commitment ✓  $name'
@@ -1020,6 +1033,36 @@ class _OrderScreenState extends State<OrderScreen> {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Row(children: [
+            const Text('Mode of delivery',
+                style: TextStyle(fontSize: 13, color: Colors.black54)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: SegmentedButton<String>(
+                showSelectedIcon: false,
+                emptySelectionAllowed: true,
+                segments: const [
+                  ButtonSegment(
+                      value: kDeliveryPaid,
+                      label: Text('Courier Paid'),
+                      icon: Icon(Icons.local_shipping_outlined, size: 16)),
+                  ButtonSegment(
+                      value: kDeliveryToPay,
+                      label: Text('Courier To Pay'),
+                      icon: Icon(Icons.payments_outlined, size: 16)),
+                ],
+                selected: {?_deliveryMode},
+                onSelectionChanged: _submitting
+                    ? null
+                    : (s) => setState(
+                        () => _deliveryMode = s.isEmpty ? null : s.first),
+                style: const ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
           InkWell(
             onTap: _submitting
                 ? null

@@ -74,6 +74,9 @@ class PendingOrder {
   final String? commitment;
   final String? commitmentDue;
 
+  /// Who pays the courier, Paid or To Pay (core/delivery_mode.dart).
+  final String? deliveryMode;
+
   /// Lines saved with no signal that take SAP's price when sent, by item code:
   /// `{'f': rate per kg -> line rate factor, 'n': product name}`.
   final Map<String, Map<String, dynamic>> sapPending;
@@ -94,6 +97,7 @@ class PendingOrder {
     this.lastError,
     this.commitment,
     this.commitmentDue,
+    this.deliveryMode,
     this.sapPending = const {},
     this.refused = false,
   });
@@ -118,6 +122,7 @@ class PendingOrder {
         if (lastError != null) 'last_error': lastError,
         if (commitment != null) 'commitment': commitment,
         if (commitmentDue != null) 'commitment_due': commitmentDue,
+        if (deliveryMode != null) 'delivery_mode': deliveryMode,
         if (sapPending.isNotEmpty) 'sap_pending': sapPending,
         if (refused) 'refused': true,
       };
@@ -138,6 +143,7 @@ class PendingOrder {
       lastError: json['last_error'] as String?,
       commitment: json['commitment'] as String?,
       commitmentDue: json['commitment_due'] as String?,
+      deliveryMode: json['delivery_mode'] as String?,
       sapPending: {
         if (json['sap_pending'] is Map)
           for (final e in (json['sap_pending'] as Map).entries)
@@ -159,6 +165,7 @@ class PendingOrder {
         lastError: error,
         commitment: commitment,
         commitmentDue: commitmentDue,
+        deliveryMode: deliveryMode,
         sapPending: sapPending,
         refused: refused,
       );
@@ -219,6 +226,7 @@ class PendingOrders {
     bool isLead = false,
     String? commitment,
     String? commitmentDue,
+    String? deliveryMode,
     Map<String, Map<String, dynamic>> sapPending = const {},
   }) async {
     final now = serverNow();
@@ -244,6 +252,7 @@ class PendingOrders {
       isLead: isLead,
       commitment: commitment,
       commitmentDue: commitmentDue,
+      deliveryMode: deliveryMode,
       sapPending: sapPending,
     );
     await _replaceAll([...existing, draft]);
@@ -307,6 +316,7 @@ class PendingOrders {
                 isLead: d.isLead,
                 commitment: text,
                 commitmentDue: due,
+                deliveryMode: d.deliveryMode,
                 sapPending: d.sapPending,
               )
             : d
