@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/customer_search.dart';
 import 'package:manna_field_sales/core/party_location.dart';
 import 'package:manna_field_sales/core/session.dart';
@@ -327,7 +328,9 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
     final mappable = pos != null && isMappableLatLng(lat, lng);
     final phone = '${c['custom_phone'] ?? ''}'.trim();
     final route = '${c['custom_sales_route'] ?? ''}';
-    final bal = _num(c['custom_outstanding_balance']);
+    // As the customer's own page counts it: SAP's total, or its buckets
+    // when only those arrived.
+    final bal = agingOf(c).total;
     final lim = _num(c['custom_credit_limit']);
 
     Widget row(String label, String value, {Color? color}) => Padding(
@@ -372,7 +375,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
                         ? '—'
                         : '${c['customer_group']}'),
                 row('Phone', phone.isEmpty ? '—' : phone),
-                row('Outstanding', '₹${bal.toStringAsFixed(0)}',
+                row('Outstanding', inr(bal),
                     color: bal > 0 ? Colors.red : null),
                 row('Credit limit', lim > 0 ? '₹${lim.toStringAsFixed(0)}' : '—'),
                 row('Location', badge.label, color: badge.color),
@@ -446,7 +449,9 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
     final pos = partyLatLng(c);
     final lat = pos?.lat ?? 0, lng = pos?.lng ?? 0;
     final mappable = pos != null && isMappableLatLng(lat, lng);
-    final bal = _num(c['custom_outstanding_balance']);
+    // As the customer's own page counts it: SAP's total, or its buckets
+    // when only those arrived.
+    final bal = agingOf(c).total;
     final sub = [c['customer_group'], c['custom_sales_route']]
         .where((x) => x != null && '$x'.isNotEmpty)
         .join(' · ');
@@ -526,7 +531,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
       isThreeLine: sub.isNotEmpty,
       trailing: Row(mainAxisSize: MainAxisSize.min, children: [
         if (bal > 0)
-          Text('₹${bal.toStringAsFixed(0)}',
+          Text(inr(bal),
               style: const TextStyle(
                   color: Colors.red, fontWeight: FontWeight.bold)),
         IconButton(
@@ -621,11 +626,21 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Text(
-                  _route == _allRoutes
-                      ? '$shown customers'
-                      : '$shown on $_route',
-                  style: const TextStyle(fontSize: 12, color: Colors.black54)),
+              child: Text.rich(TextSpan(
+                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                  children: [
+                    TextSpan(
+                        text: _route == _allRoutes
+                            ? '$shown customers'
+                            : '$shown on $_route'),
+                    // What the customers on screen owe, as filtered: the
+                    // route's total when a route is picked (14 Nov 2026).
+                    const TextSpan(text: '  ·  Total outstanding '),
+                    TextSpan(
+                        text: inr(totalOutstanding(customers)),
+                        style: const TextStyle(
+                            color: Colors.red, fontWeight: FontWeight.bold)),
+                  ])),
             ),
           ),
         Expanded(child: _list(customers)),
