@@ -149,6 +149,8 @@ $script:Result           = [ordered]@{
     invoicesCreated  = 0
     invoicesUpdated  = 0
     invoicesDeleted  = 0
+    termPushes       = 0
+    termPushFailures = 0
     failures         = 0
     summary          = $null
     error            = $null
@@ -737,7 +739,10 @@ function Get-SapCustomerData {
         [int]    $PageSize,
         [string] $AgeingBasis,   # 'posting_date' | 'due_date'
         [bool]   $SyncOutstanding,
-        [string] $InvoicesSince = ''   # yyyy-MM-dd: read the invoice mirror's rows too. '' = don't (5 Nov 2026)
+        [string] $InvoicesSince = '',  # yyyy-MM-dd: read the invoice mirror's rows too. '' = don't (5 Nov 2026)
+        [object[]] $TermPushes = @(),  # credit-period requests 'Sending to SAP' (16 Nov 2026)
+        [bool]   $PushTerms = $false,  # config push_payment_terms
+        [bool]   $IsDryRun = $false
     )
 
     $useSkip     = ($script:SapSkipCert -and $PSVersionTable.PSVersion.Major -ge 6)
@@ -751,6 +756,8 @@ function Get-SapCustomerData {
     $termNames   = @{}   # PayTermsGrpCode -> PaymentTermsGroupName
     $termDays    = @{}   # PayTermsGrpCode -> the terms' days (14 Nov 2026)
     $custTermDays = @{}  # CardCode -> its terms' days
+    $termList    = New-Object System.Collections.Generic.List[object]  # @{ code; name; days } (16 Nov 2026)
+    $pushResult  = @{ Done = 0; Failed = 0 }
     $slpNames    = @{}   # SalesEmployeeCode -> SalesEmployeeName (11 Oct 2026, new customers)
     $slpOk       = $false
     $stateNames  = @{}   # India state code ('KL') -> name ('Kerala')
@@ -761,15 +768,11 @@ function Get-SapCustomerData {
         $sess = New-SapWebSession -BaseUrl $BaseUrl -Username $Username -Password $Password `
             -CompanyDb $CompanyDb -CompanyName $CompanyName -UseSkipCert $useSkip
 
-        # ---- customers ----
-        # SalesPersonCode .. BPAddresses: what a NEW customer is created from (11 Oct 2026).
-        $bpSel = [uri]::EscapeDataString('CardCode,CardName,CreditLimit,CurrentAccountBalance,PayTermsGrpCode,SalesPersonCode,Valid,Frozen,Phone1,Cellular,BPAddresses')
-        $bpFlt = [uri]::EscapeDataString("CardType eq 'cCustomer'")
-        $bpRows = Get-SapPagedValue -BaseUrl $BaseUrl -Session $sess -PageSize $PageSize -UseSkipCert $useSkip `
-            -Label "BusinessPartners [$CompanyName]" `
-            -StartUrl "$BaseUrl/BusinessPartners?`$select=$bpSel&`$filter=$bpFlt"
-
         # ---- payment-term names (11 Oct 2026). A failure costs only the names. ----
+        # Read before the customers since 16 Nov 2026: the credit-period
+        # pushes below need them, and a pushed term must be in the customer
+        # read that follows.
+        $termsRead = $false
         try {
             $ptSel  = [uri]::EscapeDataString('GroupNumber,PaymentTermsGroupName,NumberOfAdditionalMonths,NumberOfAdditionalDays')
             $ptRows = Get-SapPagedValue -BaseUrl $BaseUrl -Session $sess -PageSize $PageSize -UseSkipCert $useSkip `
@@ -779,21 +782,33 @@ function Get-SapCustomerData {
                 $g = "$(Get-JsonProp $t 'GroupNumber')".Trim()
                 $n = "$(Get-JsonProp $t 'PaymentTermsGroupName')".Trim()
                 $termNames[$g] = $n
-                # The terms' days (14 Nov 2026, the user: overdue is invoice date
-                # + terms days): the number in the name ("Net-15" 15, "Net - 3"
-                # 3), else SAP's own months and days. The name wins because
-                # Net - 3, Net-7 and Net-20 carry 0 additional days in SAP, which
-                # made their invoices fall due the day they were made. Same rule
-                # as sap-b1if/credit/credit.sql.
-                if ($n -match '\d+') { $termDays[$g] = [int]$Matches[0] }
-                else {
-                    $termDays[$g] = 30 * [int](ConvertTo-Number (Get-JsonProp $t 'NumberOfAdditionalMonths')) +
-                                    [int](ConvertTo-Number (Get-JsonProp $t 'NumberOfAdditionalDays'))
-                }
+                # The terms' days (14 Nov 2026, the user: overdue is invoice
+                # date + terms days): Get-SapTermDays.
+                $termDays[$g] = Get-SapTermDays -Name $n -Months (Get-JsonProp $t 'NumberOfAdditionalMonths') -Days (Get-JsonProp $t 'NumberOfAdditionalDays')
+                $termList.Add([pscustomobject]@{ code = [int]$g; name = $n; days = $termDays[$g] })
             }
+            $termsRead = $true
         } catch {
             Write-Log WARN ("SAP payment-term names could not be read - the terms field will be left as it is. Reason: {0}" -f $_.Exception.Message)
         }
+
+        # ---- credit-period pushes (16 Nov 2026), before the customers are read ----
+        if (@($TermPushes).Count -gt 0) {
+            if ($termsRead) {
+                $pushResult = Invoke-TermPushes -BaseUrl $BaseUrl -Session $sess -UseSkipCert $useSkip -Requests $TermPushes `
+                    -Terms $termList.ToArray() -CompanyName $CompanyName -CompanyDb $CompanyDb -Enabled $PushTerms -IsDryRun $IsDryRun
+            } else {
+                Write-Log WARN ("{0} credit-period request(s) not pushed: SAP's payment terms could not be read. They stay 'Sending to SAP' for the next run." -f @($TermPushes).Count)
+            }
+        }
+
+        # ---- customers ----
+        # SalesPersonCode .. BPAddresses: what a NEW customer is created from (11 Oct 2026).
+        $bpSel = [uri]::EscapeDataString('CardCode,CardName,CreditLimit,CurrentAccountBalance,PayTermsGrpCode,SalesPersonCode,Valid,Frozen,Phone1,Cellular,BPAddresses')
+        $bpFlt = [uri]::EscapeDataString("CardType eq 'cCustomer'")
+        $bpRows = Get-SapPagedValue -BaseUrl $BaseUrl -Session $sess -PageSize $PageSize -UseSkipCert $useSkip `
+            -Label "BusinessPartners [$CompanyName]" `
+            -StartUrl "$BaseUrl/BusinessPartners?`$select=$bpSel&`$filter=$bpFlt"
 
         # Each customer's terms' days, for overdue past the terms. A customer
         # whose terms could not be read counts 0 days, as SAP's due date did.
@@ -982,7 +997,168 @@ function Get-SapCustomerData {
             OverdueDays    = $odDays
         }
     }
-    return @{ ByCode = $byCode; ArAvailable = $arAvailable; SalesEmployeesRead = $slpOk; InvoiceRows = $invRowsAll; InvoicesRead = $invRead }
+    return @{ ByCode = $byCode; ArAvailable = $arAvailable; SalesEmployeesRead = $slpOk; InvoiceRows = $invRowsAll; InvoicesRead = $invRead
+              Terms = $(if ($termsRead) { $termList.ToArray() } else { $null }); Pushes = $pushResult }
+}
+
+# --------------------------------------------------------------------------------
+# Credit-period requests (16 Nov 2026)
+# --------------------------------------------------------------------------------
+# A manager (up to 30 days) or the GM (31 to 40) approves a customer's new
+# payment term in ERPNext and pushes it: the request becomes 'Sending to SAP'
+# and the flag that starts this sync goes up. This sync changes the business
+# partner's PayTermsGrpCode (OCRD.GroupNum) in its one company - Manna Treads -
+# BEFORE it reads the customers, so the new term reaches ERPNext in the same
+# run, then reports each request back through the manna_credit_period_request
+# Server Script: 'In SAP', or back to 'Approved' with SAP's error. The payment
+# term only, never the credit limit. Off unless config push_payment_terms is
+# true. shared/fixtures/credit_period_request.json (sap_push) pins the checks.
+
+$script:CPR_DOCTYPE = 'Manna Credit Period Request'
+
+function Get-SapTermDays {
+    # A term's days: the number in its name ("Net-15" 15, "Net - 3" 3), else
+    # SAP's months x 30 + days. The name wins because Net - 3, Net-7 and
+    # Net-20 carry 0 additional days in SAP (14 Nov 2026). Same rule as
+    # sap-b1if/credit/credit.sql.
+    param([string] $Name, $Months, $Days)
+    if ("$Name" -match '\d+') { return [int]$Matches[0] }
+    return 30 * [int](ConvertTo-Number $Months) + [int](ConvertTo-Number $Days)
+}
+
+function Get-TermPushPlan {
+    # What to do with one request: patch | already | refuse | skip, and why.
+    # Pure. $Terms: @{ code; name; days } rows as SAP holds them now.
+    # The checks repeat the approval rule rather than trust the status: a
+    # status is one field a System Manager can type, and this writes to SAP.
+    param($Request, [object[]] $Terms, $CurrentCode)
+    $status = "$(Get-JsonProp $Request 'status')".Trim()
+    if ($status -ne 'Sending to SAP') { return @{ Action = 'skip'; Reason = "status is '$status'" } }
+    $bp = "$(Get-JsonProp $Request 'bp_code')".Trim()
+    if ($bp -eq '' -or $bp -eq 'null') { return @{ Action = 'refuse'; Reason = 'the customer has no SAP code' } }
+    $days = [int](ConvertTo-Number (Get-JsonProp $Request 'requested_days'))
+    $role = "$(Get-JsonProp $Request 'approver_role')".Trim()
+    if ($days -lt 0 -or $days -gt 40) { return @{ Action = 'refuse'; Reason = "$days days is over 40 - never pushed" } }
+    if ($days -gt 30 -and $role -ne 'gm') { return @{ Action = 'refuse'; Reason = "$days days needs the GM's approval (decided as '$role')" } }
+    if ($role -ne 'manager' -and $role -ne 'gm') { return @{ Action = 'refuse'; Reason = 'no approval recorded' } }
+    $code = [int](ConvertTo-Number (Get-JsonProp $Request 'requested_term_code'))
+    $want = "$(Get-JsonProp $Request 'requested_term')".Trim()
+    $term = $null
+    foreach ($t in @($Terms)) { if ([int]$t.code -eq $code) { $term = $t } }
+    if ($null -eq $term) { return @{ Action = 'refuse'; Reason = "payment term $code ($want) is not in SAP" } }
+    if ("$($term.name)".Trim() -ne $want) { return @{ Action = 'refuse'; Reason = "SAP's term $code is now '$($term.name)', not '$want'" } }
+    if ([int]$term.days -ne $days) { return @{ Action = 'refuse'; Reason = "SAP's '$want' is $($term.days) days, not the $days approved" } }
+    if ($null -ne $CurrentCode -and "$CurrentCode" -ne '' -and [int]$CurrentCode -eq $code) {
+        return @{ Action = 'already'; Reason = "$bp is already on '$want'" }
+    }
+    return @{ Action = 'patch'; Reason = "$bp -> '$want' ($days days)" }
+}
+
+function Get-ErpTermPushes {
+    # Requests waiting for SAP. $null when the doctype is not on the site yet.
+    $fields  = '["name","status","customer","bp_code","requested_term","requested_term_code","requested_days","approver_role"]'
+    $filters = '[["status","=","Sending to SAP"]]'
+    $query   = 'fields=' + [uri]::EscapeDataString($fields) + '&filters=' + [uri]::EscapeDataString($filters) + '&limit_page_length=0'
+    try {
+        $resp = Invoke-ErpApi -Method 'GET' -Path ('/api/resource/' + [uri]::EscapeDataString($script:CPR_DOCTYPE)) -Query $query
+    } catch {
+        return $null
+    }
+    if ($null -eq $resp -or -not $resp.PSObject.Properties['data']) { return $null }
+    return , @($resp.data)
+}
+
+function Send-ErpTermPushResult {
+    # The request's answer, through the Server Script so its status rule holds.
+    param([string] $Name, [bool] $Ok, [string] $ErrorText = '', [string] $PreviousTerm = '', [string] $Company = '')
+    $body = @{ action = 'sap_result'; name = $Name; ok = $(if ($Ok) { 1 } else { 0 }); error = $ErrorText; previous_term = $PreviousTerm; company = $Company }
+    $null = Invoke-ErpApi -Method 'POST' -Path '/api/method/manna_credit_period_request' -Body $body
+}
+
+function Invoke-TermPushes {
+    # Inside the sync's own SAP session. Returns @{ Done; Failed } counts.
+    param(
+        [string]   $BaseUrl,
+        $Session,
+        [bool]     $UseSkipCert,
+        [object[]] $Requests,
+        [object[]] $Terms,
+        [string]   $CompanyName,
+        [string]   $CompanyDb,
+        [bool]     $Enabled,
+        [bool]     $IsDryRun
+    )
+    $done = 0; $failed = 0
+    foreach ($r in @($Requests)) {
+        $name = "$(Get-JsonProp $r 'name')"
+        $bp   = "$(Get-JsonProp $r 'bp_code')".Trim()
+        $termNameByCode = @{}
+        foreach ($t in @($Terms)) { $termNameByCode["$($t.code)"] = "$($t.name)" }
+        try {
+            $current = $null
+            if ($bp -ne '' -and $bp -ne 'null') {
+                $key = [uri]::EscapeDataString(($bp -replace "'", "''"))
+                $g = @{ Method = 'Get'; Uri = "$BaseUrl/BusinessPartners('$key')?`$select=CardCode,PayTermsGrpCode"; WebSession = $Session; ErrorAction = 'Stop'; TimeoutSec = 60 }
+                if ($UseSkipCert) { $g.SkipCertificateCheck = $true }
+                try { $bpNow = Invoke-RestMethod @g } catch { throw (Format-HttpError $_ "SAP read BusinessPartner $bp") }
+                $current = Get-JsonProp $bpNow 'PayTermsGrpCode'
+            }
+            $plan = Get-TermPushPlan -Request $r -Terms $Terms -CurrentCode $current
+            $before = if ($termNameByCode.ContainsKey("$current")) { $termNameByCode["$current"] } else { "$current" }
+            if ($plan.Action -eq 'skip') { continue }
+            if (-not $Enabled -or $IsDryRun) {
+                Write-Log INFO ("credit period {0}: would {1} - {2} (was '{3}') [{4}]" -f $name, $plan.Action, $plan.Reason, $before,
+                    $(if ($IsDryRun) { 'DryRun' } else { 'push_payment_terms is off' }))
+                continue
+            }
+            if ($plan.Action -eq 'refuse') {
+                Write-Log WARN ("credit period {0}: refused - {1}" -f $name, $plan.Reason)
+                Send-ErpTermPushResult -Name $name -Ok $false -ErrorText ("Not sent to SAP: " + $plan.Reason)
+                $failed++
+                continue
+            }
+            if ($plan.Action -eq 'patch') {
+                $code = [int](ConvertTo-Number (Get-JsonProp $r 'requested_term_code'))
+                $p = @{ Method = 'Patch'; Uri = "$BaseUrl/BusinessPartners('$key')"; WebSession = $Session; ErrorAction = 'Stop'; TimeoutSec = 60
+                        Body = (@{ PayTermsGrpCode = $code } | ConvertTo-Json -Compress); ContentType = 'application/json' }
+                if ($UseSkipCert) { $p.SkipCertificateCheck = $true }
+                try { $null = Invoke-RestMethod @p } catch { throw (Format-HttpError $_ "SAP change payment term of $bp") }
+                # Read it back: an answer of 204 is SAP's word, the field is the proof.
+                try { $bpAfter = Invoke-RestMethod @g } catch { throw (Format-HttpError $_ "SAP re-read BusinessPartner $bp") }
+                $after = [int](ConvertTo-Number (Get-JsonProp $bpAfter 'PayTermsGrpCode'))
+                if ($after -ne $code) { throw "SAP accepted the change but $bp still reads payment term $after, not $code." }
+            }
+            Write-Log INFO ("credit period {0}: {1} in {2} - {3} (was '{4}')" -f $name, $(if ($plan.Action -eq 'patch') { 'changed' } else { 'already' }), $CompanyDb, $plan.Reason, $before)
+            Send-ErpTermPushResult -Name $name -Ok $true -PreviousTerm $before -Company $CompanyDb
+            $done++
+        } catch {
+            $msg = $_.Exception.Message
+            Write-Log ERROR ("credit period {0}: {1}" -f $name, $msg)
+            $failed++
+            # SAP's error goes on the request; a failure to say so leaves it
+            # 'Sending to SAP', and the next run tries again (a term already
+            # set is 'already', so a repeat never writes twice).
+            if ($Enabled -and -not $IsDryRun) {
+                try { Send-ErpTermPushResult -Name $name -Ok $false -ErrorText $msg } catch { Write-Log ERROR ("credit period {0}: could not report the failure: {1}" -f $name, $_.Exception.Message) }
+            }
+        }
+    }
+    return @{ Done = $done; Failed = $failed }
+}
+
+function Save-ErpTermList {
+    # SAP's terms onto SAP Sync Control.payment_terms_json, for the apps to
+    # offer. Only when they changed. A failure costs only the list.
+    param([object[]] $Terms)
+    $json = (@($Terms | Sort-Object { [int]$_.code } | ForEach-Object { [ordered]@{ code = [int]$_.code; name = "$($_.name)"; days = [int]$_.days } }) | ConvertTo-Json -Compress -Depth 3)
+    if (@($Terms).Count -eq 1) { $json = "[$json]" }
+    $path = '/api/resource/' + [uri]::EscapeDataString('SAP Sync Control') + '/' + [uri]::EscapeDataString('SAP Sync Control')
+    $ctl = Invoke-ErpApi -Method 'GET' -Path $path
+    $now = "$(Get-JsonProp (Get-JsonProp $ctl 'data') 'payment_terms_json')"
+    if ($now -eq $json) { return 'unchanged' }
+    $resp = Invoke-ErpApi -Method 'PUT' -Path $path -Body @{ payment_terms_json = $json }
+    if (-not (Get-JsonProp $resp 'data').PSObject.Properties['payment_terms_json']) { return 'no field' }
+    return 'written'
 }
 
 # --------------------------------------------------------------------------------
@@ -1231,6 +1407,11 @@ try {
     $rmf = $config.PSObject.Properties['rep_map_file']
     if ($rmf -and "$($rmf.Value)".Trim()) { $repMapFile = "$($rmf.Value)".Trim() }
 
+    # Credit-period requests (16 Nov 2026): change the payment term in SAP
+    # for requests pushed from ERPNext. Off unless set - copying this script
+    # to a server writes nothing to SAP until somebody turns it on there.
+    $pushTerms = Get-OptionalBool $config 'push_payment_terms' $false
+
     # The SAP Invoice mirror (5 Nov 2026). Both optional.
     $syncInvoices  = Get-OptionalBool $config 'sync_invoices' $true
     $invoicesSince = Get-FyStart (Get-Date)
@@ -1263,7 +1444,7 @@ try {
         'sync_credit_limit', 'sync_outstanding', 'ageing_basis', 'outstanding_total',
         'skip_codes', 'skip_customer_prefixes', 'log_dir', 'log_keep_days',
         'create_customers', 'new_customer_max', 'rep_map_file',
-        'sync_invoices', 'invoices_since') '(root)'
+        'sync_invoices', 'invoices_since', 'push_payment_terms') '(root)'
     if (-not [System.IO.Path]::IsPathRooted($repMapFile)) { $repMapFile = Join-Path $scriptRoot $repMapFile }
 
     Write-Log INFO ("==== run start ==== company='{0}' db='{1}' DryRun={2} Limit={3} writeMode={4} syncLimit={5} syncOutstanding={6} ageing={7} total={8} PS={9}" -f `
@@ -1317,13 +1498,40 @@ try {
             else { Write-Log WARN ("SAP Invoice mirror: the '{0}' doctype is not on ERPNext yet (app/server/sap_invoice_doctypes.json) - skipped this run." -f $script:INV_DOCTYPE) }
         }
 
+        # Credit-period requests waiting for SAP (16 Nov 2026).
+        $termPushes = Get-ErpTermPushes
+        if ($null -eq $termPushes) {
+            Write-Log INFO ("credit periods: the '{0}' doctype is not on ERPNext yet - nothing to push." -f $script:CPR_DOCTYPE)
+            $termPushes = @()
+        } else {
+            Write-Log INFO ("credit periods: {0} request(s) waiting for SAP; push_payment_terms={1}" -f @($termPushes).Count, $pushTerms)
+        }
+
         # ---- 2. SAP read (one session: customers + open AR) ----
         # If this throws we go straight to the fatal handler: non-zero exit and
-        # NOTHING written, because the write phase is below this point.
+        # NOTHING written to the customers, because their write phase is below
+        # this point. Credit-period pushes happen inside it, before the read,
+        # and each is reported to ERPNext as it is made.
         $sapData     = Get-SapCustomerData -BaseUrl $sapUrl -Username $sapUser -Password $sapPass `
             -CompanyDb $companyDb -CompanyName $companyName -PageSize $pageSize `
             -AgeingBasis $ageingBasis -SyncOutstanding $syncOutstanding `
-            -InvoicesSince $(if ($mirrorOn) { $invoicesSince } else { '' })
+            -InvoicesSince $(if ($mirrorOn) { $invoicesSince } else { '' }) `
+            -TermPushes $termPushes -PushTerms $pushTerms -IsDryRun ([bool]$DryRun)
+
+        # SAP's payment terms, for the apps to offer in a credit-period request.
+        if ($null -ne $sapData.Terms) {
+            if ($DryRun) {
+                Write-Log INFO ("SAP payment terms: {0} read; DryRun - SAP Sync Control.payment_terms_json not written." -f @($sapData.Terms).Count)
+            } else {
+                try {
+                    $tl = Save-ErpTermList -Terms $sapData.Terms
+                    if ($tl -eq 'no field') { Write-Log WARN "SAP payment terms: SAP Sync Control has no payment_terms_json field yet (app/server/credit_period_request_doctypes.json) - not kept." }
+                    else { Write-Log INFO ("SAP payment terms: {0} term(s), {1}." -f @($sapData.Terms).Count, $tl) }
+                } catch {
+                    Write-Log WARN ("SAP payment terms could not be written to SAP Sync Control: {0}" -f $_.Exception.Message)
+                }
+            }
+        }
         $sapByCode   = $sapData.ByCode
         $arAvailable = $sapData.ArAvailable
         $writeBuckets = ($syncOutstanding -and $arAvailable)
@@ -1708,6 +1916,13 @@ try {
         } elseif ($syncInvoices) {
             $summaryLine += ' | SAP invoices: skipped'
         }
+        if (@($termPushes).Count -gt 0) {
+            $summaryLine += (" | credit periods pushed/failed: {0}/{1}{2}" -f $sapData.Pushes.Done, $sapData.Pushes.Failed,
+                $(if ($DryRun) { ' (DryRun)' } elseif (-not $pushTerms) { ' (push_payment_terms off)' } else { '' }))
+        }
+        $script:Result.termPushes       = $sapData.Pushes.Done
+        $script:Result.termPushFailures = $sapData.Pushes.Failed
+        if ($sapData.Pushes.Failed -gt 0) { $writeFailures += $sapData.Pushes.Failed }
         Write-Log INFO $summaryLine
 
         $script:Result.company          = $companyName

@@ -213,7 +213,8 @@ class NetCache {
     if (m != 'POST') return false;
     if (o.path.endsWith('_get_status')) return true;
     final d = o.data;
-    return d is Map && d['action'] == 'list';
+    // 'terms': manna_credit_period_request's list of SAP payment terms (16 Nov 2026).
+    return d is Map && (d['action'] == 'list' || d['action'] == 'terms');
   }
 
   /// The key a request is kept under: its method, path, query and (for a

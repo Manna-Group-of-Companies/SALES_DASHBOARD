@@ -16,6 +16,7 @@ ERPNext-side "Treads customers" filter and the script does not invent one.
 | `Invoke-SapSyncPoller.ps1` | Run by the `SAP-Watch-Credit` flag watcher when someone presses Sync; claims a run and starts the sync. |
 | `poller.config.example.json` | Template for the poller's `poller.config.json` (bot key, paths). Keep out of git. |
 | `rep-map.json`             | SAP sales employee -> ERPNext Sales Person, for the new-customer step. Read on every run. |
+| `Test-CreditPeriodPush.ps1` | Offline. The credit-period push (16 Nov 2026) against `shared/fixtures/credit_period_request.json` and a stand-in Service Layer. |
 | `.gitignore`               | Keeps `config.json` / `poller.config.json` / `login.json` / logs out of git. |
 
 ## Where it runs
@@ -57,7 +58,8 @@ site gets written to). Unrecognised keys are logged as a `WARN` and ignored.
   "log_dir":       "./logs",      // optional. Relative paths resolve against the script folder
   "sync_invoices":  true,         // optional, default true (5 Nov 2026). Mirror SAP A/R invoices into the SAP Invoice doctype
   "invoices_since": "2026-04-01", // optional, default 1 April of the current financial year. Open invoices are mirrored whatever their date
-  "log_keep_days": 30             // optional, default 30. Older dated logs deleted at start of each run
+  "log_keep_days": 30,            // optional, default 30. Older dated logs deleted at start of each run
+  "push_payment_terms": false     // optional, default false (16 Nov 2026). true = change the payment term in SAP for credit-period requests pushed from ERPNext
 }
 ```
 
@@ -88,6 +90,42 @@ only mode, and stamping written customers is unconditional — so the script log
   order-blocking credit control).
 - Timestamp uses the **machine's** local time. Run the schedule on a host whose
   timezone matches the Frappe site (IST) so the value reads correctly.
+
+## Credit-period requests (16 Nov 2026)
+
+A manager (up to 30 days) or the GM (31 to 40) approves a customer's new
+payment term in ERPNext and presses **Push to SAP**. That marks the
+`Manna Credit Period Request` **Sending to SAP** and raises this sync's flag.
+The sync then, inside its one SAP session and **before** it reads the
+customers:
+
+1. reads SAP's payment terms (`PaymentTermsTypes`);
+2. for each request **Sending to SAP**, reads the business partner, checks the
+   request again (`Get-TermPushPlan`: an approval of the right rank for the
+   days, the term still in SAP under the same name and days, 40 days at most),
+   `PATCH`es `BusinessPartners('<code>')` with `PayTermsGrpCode` only, and
+   reads it back;
+3. reports each one through the `manna_credit_period_request` Server Script:
+   **In SAP** (with the term before), or back to **Approved** with SAP's error.
+
+Because the push comes before the customer read, the new term reaches
+ERPNext's `custom_payment_terms` in the same run. A request whose answer could
+not be sent stays **Sending to SAP** and is tried again; a term SAP already
+holds is reported without writing, so a repeat never writes twice.
+
+It writes **the payment term only**, never the credit limit, and only in this
+sync's one company. **Nothing is written unless `push_payment_terms` is
+`true`**: with it off (the default) the run logs what it would do and leaves
+the requests waiting. `-DryRun` likewise writes nothing, to SAP or ERPNext.
+
+Every run also copies SAP's payment terms, as `[{code, name, days}]`, to
+`SAP Sync Control.payment_terms_json`, which is the list both apps offer.
+The field is in `app/server/credit_period_request_doctypes.json`; until it
+exists the run logs a WARN.
+
+The login the sync uses must be able to change business partners in SAP, and
+in ERPNext needs the `SAP Sync Bot` role (read on the doctype; the Server
+Script accepts its answers) or System Manager.
 
 ## SAP Invoice mirror (5 Nov 2026)
 

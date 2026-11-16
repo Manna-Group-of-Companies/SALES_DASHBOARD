@@ -678,3 +678,30 @@ appeared to nobody and could be corrected by no one. The phone now offers
 "Location wrong? Re-capture" on the customer and lead screens and inside the
 "too far to punch in" dialog; it clears the stale verified pair, without which
 the correction would change nothing.
+
+## Credit-period requests (16 Nov 2026)
+
+A customer asks, through their rep, for a different credit period: the SAP
+payment term on their Manna Treads account (`OCRD.GroupNum`). The rep asks
+on the customer's screen on the phone; the decision is on both the phone and
+the dashboard (`/credit-periods`).
+
+- **Up to 30 days:** the rep's team manager approves or rejects it, then
+  pushes it to SAP. No GM.
+- **31 to 40 days:** the manager may only escalate it to the GM (or reject
+  it). The GM approves or rejects it, and pushes it.
+- **Over 40 days:** not offered, and refused by the server.
+- The GM may decide any open request and is the manager of a rep with no team.
+
+"Push" marks the request `Sending to SAP` and raises the credit sync's flag;
+the sync changes the term in SAP and the request becomes `In SAP` by itself,
+or goes back to `Approved` with SAP's error. The payment term only, never the
+credit limit. The terms offered are SAP's own, copied by the credit sync.
+
+Enforced by the `manna_credit_period_request` Server Script
+(`app/server/credit_period_request.py`); pinned by
+`shared/fixtures/credit_period_request.json`, implemented for the buttons in
+`app/lib/core/credit_period_request.dart` and
+`client/src/domain/creditPeriodRequest.ts`. **Change the fixture and every
+implementation together** — the script, both apps and the sync's
+`Get-TermPushPlan` all test against it.

@@ -160,6 +160,8 @@ export function AppShell() {
     { to: '/follow-up', label: 'Follow-up', icon: 'listChecks', roles: ['general_manager'], count: repAnswers, urgent: repAnswers > 0, group: 'Overview' },
     // The GM approves item requests of reps with no team, and may any.
     { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['general_manager'], group: 'Overview' },
+    // 31-40 days come to the GM; the GM decides for reps with no team (16 Nov 2026).
+    { to: '/credit-periods', label: 'Credit Periods', icon: 'clock', roles: ['general_manager'], group: 'Overview' },
     // Every team's targets, read-only (5 Nov 2026).
     { to: '/targets', label: 'Team Targets', icon: 'chart', roles: ['general_manager'], group: 'Overview' },
     // Which products sell most (5 Nov 2026).
@@ -177,6 +179,8 @@ export function AppShell() {
     { to: '/pick-lists', label: 'Pick Lists', icon: 'listChecks', roles: ['sales_manager'], screen: 'orders', group: 'Sales' },
     // The manager approves a new product before the accountant makes it (12 Nov 2026).
     { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['sales_manager'], group: 'Sales' },
+    // A customer's new payment term: up to 30 days the manager decides and pushes it to SAP (16 Nov 2026).
+    { to: '/credit-periods', label: 'Credit Periods', icon: 'clock', roles: ['sales_manager'], screen: 'credit', group: 'Sales' },
     { to: '/locations', label: 'Location Checks', icon: 'pin', roles: ['sales_manager'], screen: 'locations', group: 'Sales' },
     { to: '/team/regularizations', label: 'Attendance Corrections', icon: 'clock', roles: ['sales_manager'], screen: 'regularizations', group: 'Sales' },
     // Monthly targets against SAP invoices, every team (3 Nov 2026).

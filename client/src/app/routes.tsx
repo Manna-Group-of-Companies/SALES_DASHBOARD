@@ -31,6 +31,7 @@ import { RatesPage } from '@/features/rates/RatesPage';
 import { GmFollowUpOrderPage } from '@/features/orders/GmFollowUpOrderPage';
 import { MannaTreadsOrdersPage } from '@/features/accounts/MannaTreadsOrdersPage';
 import { ItemRequestsPage } from '@/features/accounts/ItemRequestsPage';
+import { CreditPeriodRequestsPage } from '@/features/credit/CreditPeriodRequestsPage';
 import { LocationVerificationPage } from '@/features/approvals/LocationVerificationPage';
 import { TeamRegularizationsPage } from '@/features/approvals/TeamRegularizationsPage';
 import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
@@ -107,6 +108,19 @@ function TargetsRoute({ children }: { children: ReactElement }) {
   const user = useAppSelector(selectUser);
   if (!user) return <Navigate to="/login" replace />;
   if (user.role !== 'general_manager' && !canOpenAs(user.role, user.managedTeam, 'targets')) {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
+
+/**
+ * Credit-period requests (16 Nov 2026): a team's manager (manager scope
+ * 'credit'), or the GM, who decides 31-40 days and has no team screens.
+ */
+function CreditRoute({ children }: { children: ReactElement }) {
+  const user = useAppSelector(selectUser);
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== 'general_manager' && !canOpenAs(user.role, user.managedTeam, 'credit')) {
     return <Navigate to="/" replace />;
   }
   return children;
@@ -392,6 +406,14 @@ export function AppRoutes() {
             <RoleRoute allow={ACCOUNTANT}>
               <MannaTreadsOrdersPage />
             </RoleRoute>
+          }
+        />
+        <Route
+          path="credit-periods"
+          element={
+            <CreditRoute>
+              <CreditPeriodRequestsPage />
+            </CreditRoute>
           }
         />
         <Route

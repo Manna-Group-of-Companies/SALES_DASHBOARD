@@ -1,0 +1,190 @@
+{
+  "about": "A customer's request for a longer (or shorter) credit period - the SAP payment term on their Manna Treads account (OCRD.GroupNum, PayTermsGrpCode in the Service Layer). Asked for 16 Nov 2026 by the user. Up to 30 days the rep's manager decides it and pushes it to SAP; 31 to 40 days the manager may only escalate it (or reject it) and the GM decides and pushes it; over 40 days is never requested through the apps. Four implementations read this file in their tests: the manna_credit_period_request Server Script (app/server/credit_period_request.py, the one that is enforced), the phone (app/lib/core/credit_period_request.dart), the dashboard (client/src/domain/creditPeriodRequest.ts) and the credit sync's push (sap-credit-sync/Sync-SapCreditLimits.ps1, Get-TermPushPlan).",
+
+  "doctype": "Manna Credit Period Request",
+
+  "limits": { "manager_max_days": 30, "gm_max_days": 40 },
+
+  "rules": {
+    "who_asks": "A rep (anyone with a Sales Person), for a customer that has a SAP code (custom_bp_code). One open request per customer: a second is refused until the first is In SAP or Rejected.",
+    "who_decides": "The rep's team manager (Sales Person.custom_team_manager), or the GM. A rep with no team waits for the GM. The GM may decide any open request, at either stage - the user agreed on 16 Nov 2026 that the GM may decide one waiting for a manager, as with item requests.",
+    "rejecting": "Needs a note; the rep sees it. A manager may reject a 31-40 day request rather than escalate it.",
+    "pushing": "Only the person who could approve it: the manager or the GM up to 30 days, the GM alone from 31 to 40. Pushing marks it 'Sending to SAP' and raises the credit sync's flag; the sync changes the payment term in Manna Treads and marks it 'In SAP' by itself, or puts it back to 'Approved' with SAP's error.",
+    "what_is_written": "The payment term only. Never the credit limit.",
+    "which_terms": "The SAP payment terms the credit sync copies to SAP Sync Control.payment_terms_json, of 40 days or fewer, never '- Cash Basic -' (code -1, SAP's 'no term'), and not the customer's current one.",
+    "term_days": "A term's days are the number in its name ('Net-15' 15, 'Net - 3' 3), else SAP's months x 30 + days - the credit sync's rule since 14 Nov 2026, because Net - 3, Net-7 and Net-20 carry 0 additional days in SAP.",
+    "unknown_status": "Reads as 'With Manager' on screen, but offers nobody any action: every action below is refused on a status this file does not list."
+  },
+
+  "statuses": ["With Manager", "With GM", "Approved", "Sending to SAP", "In SAP", "Rejected"],
+
+  "labels": [
+    { "status": "With Manager", "label": "With Manager" },
+    { "status": "With GM", "label": "With GM" },
+    { "status": "Approved", "label": "Approved" },
+    { "status": "Sending to SAP", "label": "Sending to SAP" },
+    { "status": "In SAP", "label": "In SAP" },
+    { "status": "Rejected", "label": "Rejected" },
+    { "status": "", "label": "With Manager" },
+    { "status": "Something New", "label": "With Manager" }
+  ],
+
+  "bands": [
+    { "why": "no credit at all is a manager's call", "days": 0, "band": "manager" },
+    { "why": "the top of the manager's band", "days": 30, "band": "manager" },
+    { "why": "one day over is the GM's", "days": 31, "band": "gm" },
+    { "why": "the top of the GM's band", "days": 40, "band": "gm" },
+    { "why": "over 40 days is not requested through the apps", "days": 41, "band": "refused" },
+    { "why": "a negative period is nonsense", "days": -1, "band": "refused" }
+  ],
+
+  "term_days": [
+    { "why": "the number in the name", "name": "Net-30", "months": 0, "extra_days": 30, "days": 30 },
+    { "why": "the name wins over SAP's 0 additional days", "name": "Net - 3", "months": 0, "extra_days": 0, "days": 3 },
+    { "why": "a new term made for the GM's band", "name": "Net-35", "months": 0, "extra_days": 35, "days": 35 },
+    { "why": "no number in the name: SAP's own months and days", "name": "Advance", "months": 0, "extra_days": 0, "days": 0 },
+    { "why": "months count 30 days", "name": "One Month Plus", "months": 1, "extra_days": 5, "days": 35 }
+  ],
+
+  "offered": {
+    "why": "what a rep may choose for a customer on Net-30: every term of 40 days or fewer except Cash Basic and the one they are on, shortest first",
+    "current_code": 1,
+    "terms": [
+      { "code": 1, "name": "Net-30", "days": 30 },
+      { "code": 4, "name": "Net-15", "days": 15 },
+      { "code": 5, "name": "Net - 3", "days": 3 },
+      { "code": 7, "name": "Advance", "days": 0 },
+      { "code": 10, "name": "Net-35", "days": 35 },
+      { "code": 11, "name": "Net-40", "days": 40 },
+      { "code": 12, "name": "Net-45", "days": 45 },
+      { "code": -1, "name": "- Cash Basic -", "days": 0 }
+    ],
+    "expect_codes": [7, 5, 4, 10, 11]
+  },
+
+  "submit": [
+    { "why": "up to 30 days goes to the manager", "days": 30, "expect": "With Manager" },
+    { "why": "31 to 40 days goes to the manager first too - they review it and escalate it", "days": 35, "expect": "With Manager" },
+    { "why": "over 40 days is refused", "days": 45, "expect": "REFUSED" }
+  ],
+
+  "transitions": [
+    { "why": "Scenario A: the manager approves up to 30 days", "action": "approve", "from": "With Manager", "days": 30, "actor": "manager", "expect": "Approved" },
+    { "why": "Scenario A: the manager rejects", "action": "reject", "from": "With Manager", "days": 30, "actor": "manager", "expect": "Rejected" },
+    { "why": "up to 30 days is the manager's to decide, not to pass up", "action": "escalate", "from": "With Manager", "days": 30, "actor": "manager", "expect": "REFUSED" },
+    { "why": "Scenario B: the manager cannot approve 31 to 40 days", "action": "approve", "from": "With Manager", "days": 35, "actor": "manager", "expect": "REFUSED" },
+    { "why": "Scenario B: the manager escalates to the GM", "action": "escalate", "from": "With Manager", "days": 35, "actor": "manager", "expect": "With GM" },
+    { "why": "the manager may reject 31 to 40 days rather than escalate it", "action": "reject", "from": "With Manager", "days": 40, "actor": "manager", "expect": "Rejected" },
+    { "why": "Scenario B: the GM approves an escalated request", "action": "approve", "from": "With GM", "days": 35, "actor": "gm", "expect": "Approved" },
+    { "why": "Scenario B: the GM rejects", "action": "reject", "from": "With GM", "days": 40, "actor": "gm", "expect": "Rejected" },
+    { "why": "once escalated it is the GM's alone", "action": "approve", "from": "With GM", "days": 35, "actor": "manager", "expect": "REFUSED" },
+    { "why": "nor may the manager reject it after passing it up", "action": "reject", "from": "With GM", "days": 35, "actor": "manager", "expect": "REFUSED" },
+    { "why": "the GM may decide a request still waiting for a manager - and is the manager of a rep with no team", "action": "approve", "from": "With Manager", "days": 38, "actor": "gm", "expect": "Approved" },
+    { "why": "the GM may decide a short one too", "action": "approve", "from": "With Manager", "days": 15, "actor": "gm", "expect": "Approved" },
+    { "why": "the GM has nobody to escalate to", "action": "escalate", "from": "With Manager", "days": 35, "actor": "gm", "expect": "REFUSED" },
+    { "why": "another team's manager decides nothing", "action": "approve", "from": "With Manager", "days": 20, "actor": "other_manager", "expect": "REFUSED" },
+    { "why": "a rep never decides their own request", "action": "approve", "from": "With Manager", "days": 20, "actor": "rep", "expect": "REFUSED" },
+    { "why": "a rep cannot escalate either", "action": "escalate", "from": "With Manager", "days": 35, "actor": "rep", "expect": "REFUSED" },
+
+    { "why": "Scenario A: the manager pushes what they approved", "action": "push", "from": "Approved", "days": 30, "actor": "manager", "expect": "Sending to SAP" },
+    { "why": "the GM may push one up to 30 days too", "action": "push", "from": "Approved", "days": 30, "actor": "gm", "expect": "Sending to SAP" },
+    { "why": "Scenario B: the manager cannot push 31 to 40 days, even approved", "action": "push", "from": "Approved", "days": 35, "actor": "manager", "expect": "REFUSED" },
+    { "why": "Scenario B: the GM pushes directly", "action": "push", "from": "Approved", "days": 35, "actor": "gm", "expect": "Sending to SAP" },
+    { "why": "nothing is pushed before it is approved", "action": "push", "from": "With Manager", "days": 20, "actor": "manager", "expect": "REFUSED" },
+    { "why": "nor while it waits for the GM", "action": "push", "from": "With GM", "days": 35, "actor": "gm", "expect": "REFUSED" },
+    { "why": "a rep never pushes", "action": "push", "from": "Approved", "days": 20, "actor": "rep", "expect": "REFUSED" },
+    { "why": "another team's manager never pushes", "action": "push", "from": "Approved", "days": 20, "actor": "other_manager", "expect": "REFUSED" },
+    { "why": "pushing twice while the first is on its way changes nothing", "action": "push", "from": "Sending to SAP", "days": 20, "actor": "manager", "expect": "REFUSED" },
+
+    { "why": "the status updates by itself once SAP has it", "action": "sap_done", "from": "Sending to SAP", "days": 35, "actor": "sap_sync", "expect": "In SAP" },
+    { "why": "SAP refused: back to Approved, to be pushed again", "action": "sap_failed", "from": "Sending to SAP", "days": 35, "actor": "sap_sync", "expect": "Approved" },
+    { "why": "only the sync says SAP has it", "action": "sap_done", "from": "Sending to SAP", "days": 20, "actor": "gm", "expect": "REFUSED" },
+    { "why": "the sync touches only what was sent", "action": "sap_done", "from": "Approved", "days": 20, "actor": "sap_sync", "expect": "REFUSED" },
+
+    { "why": "a request in SAP is finished", "action": "approve", "from": "In SAP", "days": 20, "actor": "gm", "expect": "REFUSED" },
+    { "why": "a rejected request is finished; the rep asks again", "action": "approve", "from": "Rejected", "days": 20, "actor": "gm", "expect": "REFUSED" },
+    { "why": "an unknown status offers nobody anything", "action": "approve", "from": "Something New", "days": 20, "actor": "gm", "expect": "REFUSED" },
+    { "why": "nor a push", "action": "push", "from": "Something New", "days": 20, "actor": "gm", "expect": "REFUSED" },
+    { "why": "a request over 40 days that somehow exists is decided by nobody", "action": "approve", "from": "With Manager", "days": 45, "actor": "gm", "expect": "REFUSED" }
+  ],
+
+  "sap_push": [
+    {
+      "why": "approved by the manager, 30 days, the term exists in SAP under the same name: change it",
+      "request": { "status": "Sending to SAP", "bp_code": "C-1001", "requested_term_code": 1, "requested_term": "Net-30", "requested_days": 30, "approver_role": "manager" },
+      "sap_terms": [{ "code": 1, "name": "Net-30", "days": 30 }],
+      "sap_current_code": 4,
+      "expect": "patch"
+    },
+    {
+      "why": "approved by the GM, 35 days: change it",
+      "request": { "status": "Sending to SAP", "bp_code": "C-1001", "requested_term_code": 10, "requested_term": "Net-35", "requested_days": 35, "approver_role": "gm" },
+      "sap_terms": [{ "code": 10, "name": "Net-35", "days": 35 }],
+      "sap_current_code": 1,
+      "expect": "patch"
+    },
+    {
+      "why": "SAP already has that term (a run that changed it and then failed to say so): mark it In SAP without writing",
+      "request": { "status": "Sending to SAP", "bp_code": "C-1001", "requested_term_code": 10, "requested_term": "Net-35", "requested_days": 35, "approver_role": "gm" },
+      "sap_terms": [{ "code": 10, "name": "Net-35", "days": 35 }],
+      "sap_current_code": 10,
+      "expect": "already"
+    },
+    {
+      "why": "31 to 40 days approved by a manager is not an approval - refuse whatever the status says",
+      "request": { "status": "Sending to SAP", "bp_code": "C-1001", "requested_term_code": 10, "requested_term": "Net-35", "requested_days": 35, "approver_role": "manager" },
+      "sap_terms": [{ "code": 10, "name": "Net-35", "days": 35 }],
+      "sap_current_code": 1,
+      "expect": "refuse"
+    },
+    {
+      "why": "no approval recorded at all",
+      "request": { "status": "Sending to SAP", "bp_code": "C-1001", "requested_term_code": 1, "requested_term": "Net-30", "requested_days": 30, "approver_role": "" },
+      "sap_terms": [{ "code": 1, "name": "Net-30", "days": 30 }],
+      "sap_current_code": 4,
+      "expect": "refuse"
+    },
+    {
+      "why": "the code now names a different term in SAP: the approval was for the name, so refuse",
+      "request": { "status": "Sending to SAP", "bp_code": "C-1001", "requested_term_code": 10, "requested_term": "Net-35", "requested_days": 35, "approver_role": "gm" },
+      "sap_terms": [{ "code": 10, "name": "Net-60", "days": 60 }],
+      "sap_current_code": 1,
+      "expect": "refuse"
+    },
+    {
+      "why": "the term is gone from SAP",
+      "request": { "status": "Sending to SAP", "bp_code": "C-1001", "requested_term_code": 10, "requested_term": "Net-35", "requested_days": 35, "approver_role": "gm" },
+      "sap_terms": [{ "code": 1, "name": "Net-30", "days": 30 }],
+      "sap_current_code": 1,
+      "expect": "refuse"
+    },
+    {
+      "why": "a term over 40 days is never written, whoever approved it",
+      "request": { "status": "Sending to SAP", "bp_code": "C-1001", "requested_term_code": 12, "requested_term": "Net-45", "requested_days": 45, "approver_role": "gm" },
+      "sap_terms": [{ "code": 12, "name": "Net-45", "days": 45 }],
+      "sap_current_code": 1,
+      "expect": "refuse"
+    },
+    {
+      "why": "SAP's days for the term disagree with what was approved",
+      "request": { "status": "Sending to SAP", "bp_code": "C-1001", "requested_term_code": 1, "requested_term": "Net-30", "requested_days": 25, "approver_role": "manager" },
+      "sap_terms": [{ "code": 1, "name": "Net-30", "days": 30 }],
+      "sap_current_code": 4,
+      "expect": "refuse"
+    },
+    {
+      "why": "no SAP code on the customer",
+      "request": { "status": "Sending to SAP", "bp_code": "", "requested_term_code": 1, "requested_term": "Net-30", "requested_days": 30, "approver_role": "manager" },
+      "sap_terms": [{ "code": 1, "name": "Net-30", "days": 30 }],
+      "sap_current_code": 4,
+      "expect": "refuse"
+    },
+    {
+      "why": "anything not 'Sending to SAP' is not the sync's to touch",
+      "request": { "status": "Approved", "bp_code": "C-1001", "requested_term_code": 1, "requested_term": "Net-30", "requested_days": 30, "approver_role": "manager" },
+      "sap_terms": [{ "code": 1, "name": "Net-30", "days": 30 }],
+      "sap_current_code": 4,
+      "expect": "skip"
+    }
+  ]
+}

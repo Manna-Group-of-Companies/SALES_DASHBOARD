@@ -23,6 +23,7 @@ import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/core/trip_totals.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/item_request.dart';
+import 'package:manna_field_sales/core/credit_period_request.dart';
 import 'package:manna_field_sales/core/pick_list.dart';
 import 'package:manna_field_sales/core/proximity.dart';
 import 'package:manna_field_sales/core/sales_target.dart';
@@ -1557,6 +1558,85 @@ class Api {
       'decision': approve ? 'Approve' : 'Reject',
       'note': note,
     });
+    if (r.statusCode != 200) throw Exception(_frappeError(r));
+  }
+
+  // -------- Credit-period requests (16 Nov 2026) --------
+  //
+  // Through the `manna_credit_period_request` Server Script
+  // (app/server/credit_period_request.py): a rep asks for a customer's new
+  // SAP payment term; the manager decides up to 30 days and pushes it to SAP,
+  // the GM from 31 to 40. See core/credit_period_request.dart.
+
+  /// The requests this login may see: a rep's own, a manager's team's, all
+  /// for the GM. [customer] narrows to one customer.
+  static Future<List<CreditPeriodRequest>> getCreditPeriodRequests({String? customer}) async {
+    final r = await Session.I.dio.post('/api/method/manna_credit_period_request',
+        data: {'action': 'list', 'customer': ?customer});
+    final m = r.data is Map ? r.data['message'] : null;
+    if (r.statusCode != 200 || m is! List) throw Exception(_frappeError(r));
+    return m.whereType<Map>().map(CreditPeriodRequest.fromJson).toList();
+  }
+
+  /// SAP's payment terms, as the credit sync last copied them.
+  static Future<List<SapPaymentTerm>> getSapPaymentTerms() async {
+    final r = await Session.I.dio.post('/api/method/manna_credit_period_request', data: {'action': 'terms'});
+    final m = r.data is Map ? r.data['message'] : null;
+    if (r.statusCode != 200 || m is! List) throw Exception(_frappeError(r));
+    return m.whereType<Map>().map(SapPaymentTerm.fromJson).toList();
+  }
+
+  /// A rep's request. Kept on the phone with no signal; the server judges
+  /// it when it is sent (one open request per customer, 40 days at most).
+  static Future<bool> submitCreditPeriodRequest({
+    required String customer,
+    required String customerName,
+    required SapPaymentTerm term,
+    String reason = '',
+  }) =>
+      sendOrQueue(
+        kind: 'credit_period_request',
+        label: 'Credit period — $customerName: ${term.name}',
+        args: {'customer': customer, 'term_code': term.code, 'reason': reason},
+      );
+
+  static Future<void> _submitCreditPeriodRequestNow(Map<String, dynamic> a) async {
+    final r = await Session.I.dio.post('/api/method/manna_credit_period_request',
+        data: {'action': 'submit', 'customer': a['customer'], 'term_code': a['term_code'], 'reason': a['reason'] ?? ''});
+    if (r.statusCode != 200) throw Exception(_frappeError(r));
+  }
+
+  /// A manager's or the GM's step on a request: decide (approve / reject),
+  /// escalate, or push to SAP. The server re-checks it when it arrives.
+  static Future<bool> creditPeriodAction(
+    String name,
+    String action, {
+    String note = '',
+    String customerName = '',
+  }) {
+    final what = switch (action) {
+      'approve' => 'approved',
+      'reject' => 'rejected',
+      'escalate' => 'sent to the GM',
+      _ => 'pushed to SAP',
+    };
+    return sendOrQueue(
+      kind: 'credit_period_action',
+      label: 'Credit period $name${customerName.isEmpty ? '' : ' ($customerName)'} $what',
+      args: {'name': name, 'action': action, 'note': note},
+    );
+  }
+
+  static Future<void> _creditPeriodActionNow(Map<String, dynamic> a) async {
+    final action = '${a['action']}';
+    final data = <String, dynamic>{'name': a['name'], 'note': a['note'] ?? ''};
+    if (action == 'approve' || action == 'reject') {
+      data['action'] = 'decide';
+      data['decision'] = action == 'approve' ? 'Approve' : 'Reject';
+    } else {
+      data['action'] = action;
+    }
+    final r = await Session.I.dio.post('/api/method/manna_credit_period_request', data: data);
     if (r.statusCode != 200) throw Exception(_frappeError(r));
   }
 
@@ -3924,6 +4004,8 @@ class Api {
       getMySalesRoutes,
       getMinimumStock,
       getItemRequests,
+      getCreditPeriodRequests,
+      getSapPaymentTerms,
       getTripRates,
       myCreditConditions,
       if (kPickListsReleased) getPickLists,
@@ -4180,6 +4262,8 @@ class Api {
   /// The senders of every kind added on 13 Nov 2026, by kind.
   static final Map<String, Future<dynamic> Function(Map<String, dynamic> a, OutboxItem i)>
       _senders = {
+    'credit_period_request': (a, _) => _submitCreditPeriodRequestNow(a),
+    'credit_period_action': (a, _) => _creditPeriodActionNow(a),
     'assign_customer_owner': (a, _) =>
         _assignCustomerOwnerNow('${a['customer']}', '${a['rep']}'),
     'undo_order_rejection': (a, _) => _undoOrderRejectionNow('${a['name']}'),

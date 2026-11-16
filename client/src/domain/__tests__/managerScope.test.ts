@@ -11,8 +11,9 @@ import { describe, expect, it } from 'vitest';
 import { canOpen, canOpenAs, screensFor, screensForUser, type ManagerScreen } from '../sales';
 import fixture from '../../../../shared/fixtures/manager_scope.json';
 
-// Every team sets its own monthly targets (3 Nov 2026).
-const PARTY: ManagerScreen[] = ['customers', 'leads', 'locations', 'regularizations', 'targets'];
+// Every team sets its own monthly targets (3 Nov 2026) and decides its
+// credit-period requests (16 Nov 2026).
+const PARTY: ManagerScreen[] = ['customers', 'leads', 'locations', 'regularizations', 'targets', 'credit'];
 // 'approvals' and 'combined' were dropped on 11 October 2026 — see the note
 // on `ManagerScreen`. Sites are verified in Location Checks, which is a party
 // screen, so no team gained anything the reduced set did not already allow.
