@@ -251,15 +251,17 @@ Check 'step3_sql_ht_takes_waiting_lists_in_turn_so_a_refused_one_cannot_block_th
 Check 'step3_sql_ht_always_returns_the_settings_row' ($st -match "FROM \(\s*SELECT\s+MAX\(CASE WHEN Code = 'ENABLED'" -and $st -match 'LEFT JOIN \(\s*SELECT W\.AbsEntry')
 Check 'step3_sql_ht_starts_with_select_for_the_call_sql_atom' ($st.TrimStart().StartsWith('SELECT'))
 Check 'step3_sql_ht_waits_until_the_store_confirms_the_pick_list_in_sap' ($st -match "ISNULL\(K\.U_Confirmed, 'N'\) = 'Y'")
-Check 'step3_sql_ht_invoices_the_picked_kilos_when_the_store_entered_any' ($st -match 'CASE WHEN PQ\.AnyPicked = 1 THEN L\.PickQtty ELSE L\.RelQtty END AS Kg')
-Check 'step3_sql_ht_leaves_off_a_line_picked_as_zero' ($st -match 'LEFT JOIN PKL1 L ON L\.AbsEntry = P\.AbsEntry AND \(PQ\.AnyPicked = 0 OR L\.PickQtty > 0\)')
+Check 'step3_sql_ht_invoices_the_actual_kg_first_then_the_picked_kilos_then_the_released' ($st -match 'CASE WHEN ISNULL\(L\.U_ActualKg, 0\) > 0 THEN L\.U_ActualKg WHEN PQ\.AnyPicked = 1 THEN L\.PickQtty ELSE L\.RelQtty END AS Kg')
+Check 'step3_sql_ht_counts_an_actual_kg_as_the_store_having_weighed_the_list' ($st -match 'Z\.PickQtty > 0 OR ISNULL\(Z\.U_ActualKg, 0\) > 0')
+Check 'step3_sql_ht_leaves_off_a_line_with_neither_actual_kg_nor_picked' ($st -match 'LEFT JOIN PKL1 L ON L\.AbsEntry = P\.AbsEntry AND \(PQ\.AnyPicked = 0 OR L\.PickQtty > 0 OR ISNULL\(L\.U_ActualKg, 0\) > 0\)')
+Check 'step3_sql_ht_sends_the_released_kilos_and_the_over_weight_limit' ($st -match 'L\.RelQtty AS Released' -and $st -match "Code = 'OVER_PCT'\s+THEN U_Value END\) AS OverPct")
 
 function PkRow { param([hashtable] $Over = @{})
 	$r = [ordered]@{
-		PickEntry = '7'; PickName = 'PICK-00012'; Waiting = '1'; PickLine = '0'; BaseObject = '17'; OrderEntry = '3040'; OrderLine = '1'; Kg = '31.400000'
+		PickEntry = '7'; PickName = 'PICK-00012'; Waiting = '1'; PickLine = '0'; BaseObject = '17'; OrderEntry = '3040'; OrderLine = '1'; Kg = '31.400000'; Released = '31.400000'
 		SoNum = '555'; SoCancelled = 'N'; SoCard = '10118'; MtPo = '2023'; OrderName = 'SAL-ORD-2026-00167'
 		ItemCode = 'PMB00101502'; SoLineStatus = 'O'; WhsCode = '07'; Batch = 'Y'
-		Enabled = 'Y'; Customer = '10118'; InvSeries = ''; Today = '2026-11-05'
+		Enabled = 'Y'; Customer = '10118'; InvSeries = ''; OverPct = ''; Today = '2026-11-05'
 	}
 	foreach ($k in $Over.Keys) { $r[$k] = $Over[$k] }
 	return $r
@@ -303,7 +305,7 @@ Check 'step3_sql_mt_without_a_purchase_order_still_reads_the_settings_the_vendor
 function Step3 { param([object[]] $Pk, [object[]] $Bt, [object[]] $Mt)
 	return Invoke-Xsl 'step3-pick\final.xsl' (Msg @((Event '7' '156'), (Rows 'atom2' $Pk), (Rows 'atom4' $Bt), (Rows 'atom6' $Mt))) 'atom7'
 }
-$two = @((PkRow @{ PickLine = '0'; OrderLine = '0'; ItemCode = 'PMB00101002'; Batch = 'N'; Kg = '48.6' }), (PkRow))
+$two = @((PkRow @{ PickLine = '0'; OrderLine = '0'; ItemCode = 'PMB00101002'; Batch = 'N'; Kg = '48.6'; Released = '48.6' }), (PkRow))
 $bts = @((BtRow 'OLD-01' '20'), (BtRow 'NEW-02' '100'))
 $o = Step3 $two $bts (MtRows)
 Check 'step3_makes_all_three_for_a_list_from_erpnext' ((XS $o '//Decision/Make') -eq 'Y') (XS $o '//Decision/Reason')
@@ -325,6 +327,18 @@ Check 'step3_goods_receipt_is_from_hitech_on_the_branch' ((XS $o '//Grpo//Docume
 $dl = $o.SelectNodes('//Dn//Document_Lines/row')
 Check 'step3_delivery_lines_are_based_on_manna_treads_sales_order_lines' ($dl.Count -eq 2 -and $dl[0].BaseType -eq '17' -and $dl[0].BaseEntry -eq '6915' -and $dl[1].BaseLine -eq '1' -and $dl[1].Quantity -eq '31.4')
 Check 'step3_delivery_is_to_the_customer_in_its_own_series' ((XS $o '//Dn//Documents/row/CardCode') -eq 'C-1687' -and (XS $o '//Dn//Documents/row/Series') -eq '211' -and (XS $o '//Dn//Documents/row/BPL_IDAssignedToInvoice') -eq '1')
+# Actual kg (16 Nov 2026): a heavier roll is invoiced, received and delivered at its weight, within OVER_PCT.
+$o1 = Step3 @((PkRow @{ Kg = '35.2' })) @((BtRow 'OLD-01' '50')) (MtRows)
+Check 'step3_a_line_weighed_over_released_but_within_the_limit_is_made_at_its_weight' ((XS $o1 '//Decision/Make') -eq 'Y' -and (XS $o1 '//Inv//Document_Lines/row/Quantity') -eq '35.2' -and (XS $o1 '//Grpo//Document_Lines/row/Quantity') -eq '35.2' -and (XS $o1 '//Dn//Document_Lines/row/Quantity') -eq '35.2' -and (XS $o1 '//Inv//BatchNumbers/row/Quantity') -eq '35.2') (XS $o1 '//Decision/Reason')
+$o1 = Step3 @((PkRow @{ Kg = '314' })) @((BtRow 'OLD-01' '500')) (MtRows)
+Check 'step3_a_line_weighed_more_than_15_percent_over_is_refused_as_a_typing_slip' ((XS $o1 '//Decision/Make') -eq 'N' -and (XS $o1 '//Decision/Reason') -match '^more than 15% over the released kilos - check the Actual kg on the pick list: PMB00101502 \(314 kg for 31\.4 released\)') (XS $o1 '//Decision/Reason')
+Check 'step3_a_refused_over_weight_writes_nothing' ((XS $o1 '//Decision/Inv/CallMethod') -eq 'Synchronous Retrieval')
+$o1 = Step3 @((PkRow @{ Kg = '35.2'; OverPct = '5' })) @((BtRow 'OLD-01' '50')) (MtRows)
+Check 'step3_the_over_weight_limit_is_hitechs_over_pct_setting' ((XS $o1 '//Decision/Make') -eq 'N' -and (XS $o1 '//Decision/Reason') -match '^more than 5% over') (XS $o1 '//Decision/Reason')
+$o1 = Step3 @((PkRow @{ Kg = '36.11' })) @((BtRow 'OLD-01' '50')) (MtRows)
+Check 'step3_exactly_15_percent_over_is_still_allowed' ((XS $o1 '//Decision/Make') -eq 'Y') (XS $o1 '//Decision/Reason')
+$o1 = Step3 @((PkRow @{ Kg = '20.5' })) @((BtRow 'OLD-01' '50')) (MtRows)
+Check 'step3_a_line_weighed_under_released_is_made_at_its_weight' ((XS $o1 '//Decision/Make') -eq 'Y' -and (XS $o1 '//Inv//Document_Lines/row/Quantity') -eq '20.5')
 $o1 = Step3 @((PkRow @{ ItemCode = 'PMB00101002'; OrderLine = '0'; Batch = 'N' })) @() (MtRows)
 Check 'step3_a_product_left_off_the_list_is_on_none_of_the_three' ($o1.SelectNodes('//Inv//Document_Lines/row').Count -eq 1 -and $o1.SelectNodes('//Grpo//Document_Lines/row').Count -eq 1 -and $o1.SelectNodes('//Dn//Document_Lines/row').Count -eq 1 -and (XS $o1 '//Dn//Document_Lines/row/BaseLine') -eq '0')
 
