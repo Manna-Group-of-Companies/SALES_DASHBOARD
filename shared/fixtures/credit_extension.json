@@ -1,0 +1,117 @@
+{
+  "about": "Temporary credit extension with a payment commitment (16 Nov 2026, the user's strict instruction): a separate workflow beside - never instead of - order approval (credit_commitment.json), credit periods (credit_period_request.json), credit conditions (credit_condition.json) and the credit sync. A rep (or the team's manager) asks for one on an order that takes a customer past their SAP credit limit. The manager may approve a temporary additional credit amount, within the manager's configured authority, with a payment commitment of at most 10 calendar days, and push it to SAP in the same step; the GM is not needed for that. The SAP job raises the customer's SAP CreditLimit by the amount, watches confirmed SAP payments from the approval date to the commitment date, and puts the original limit back when the commitment is paid or the date has passed. Unpaid by the date: 'Payment Commitment Overdue', with the GM, who approves a new extension (and pushes it) or rejects. Implemented by the manna_credit_extension Server Script (app/server/credit_extension.py, enforced), the phone (app/lib/core/credit_extension.dart), the dashboard (client/src/domain/creditExtension.ts) and the SAP job (sap-credit-sync/Sync-CreditExtensions.ps1); all four test against this file.",
+
+  "doctype": "Manna Credit Extension",
+  "limits": { "manager_max_days": 10 },
+
+  "rules": {
+    "eligible": "An order still waiting for approval whose customer's outstanding plus the order total goes past a credit limit that is set - credit.json's over-limit test. The excess is outstanding + order - limit.",
+    "routing": "A new request goes to the Manager, unless the customer has ever missed a commitment, or already has an extension that is not finished - then to the GM. No unlimited manager extensions.",
+    "manager_approval": "Amount > 0, at most the manager's authority (Manna Credit Extension Settings.manager_max_amount; 0 or unset means the manager has none and must send it to the GM), commitment date from the approval day to 10 calendar days after it, reason and remarks both required. Approving pushes to SAP in the same step.",
+    "gm_approval": "Amount > 0, a commitment date from today on, remarks required. From 'Payment Commitment Overdue' the GM's approval makes a NEW extension record linked to the overdue one, which becomes 'Renewed by GM'; no record is ever overwritten.",
+    "reject": "Remarks required. A rejected request is never sent to SAP.",
+    "sap_raise": "Reads the SAP limit; the original is the one saved at the first push, else SAP's now. Refused if SAP's limit is 0 (no figure), if another extension of the customer is still raised in SAP, or if SAP's limit is neither the original nor original + amount (somebody changed it). Original + amount already = already done.",
+    "commitment_limit": "SAP refuses a credit limit above the customer's commitment limit (MaxCommitment, OCRD.DebtLine: 'Commitment limit must be greater than credit limit', TEST_MANNA_TREADS 16 Nov 2026), and every customer with a limit there has the two equal. So the raise lifts the commitment limit to at least the new credit limit in the same write, and the restore puts both back - the user's choice, 16 Nov 2026. Its original is saved and checked like the credit limit's: a commitment limit somebody changed is never overwritten.",
+    "payments": "Incoming payments in SAP for the customer, dated from the approval date to the commitment date, not cancelled, not a draft (Proforma): CashSum + TransferSum + cheques + cards + bills of exchange. Each counted once, by DocEntry.",
+    "outcome": "Paid when payments reach the amount, at any time up to the commitment date. Unpaid or partly paid after the commitment date: 'Payment Commitment Overdue', escalated to the GM once, the manager and GM notified once.",
+    "sap_restore": "After Paid or Overdue: SAP's limit and commitment limit back to their originals - only if SAP still holds what the raise wrote. Both already the originals: restored. Anything else: 'Needs Review', never overwritten."
+  },
+
+  "statuses": ["Pending Manager", "Pending GM", "Sending to SAP", "SAP Push Failed", "Active", "Paid", "Payment Commitment Overdue", "Renewed by GM", "Rejected", "Rejected by GM"],
+
+  "routing": [
+    { "why": "a first request goes to the manager", "missed_before": 0, "open_extension": false, "expect": "Pending Manager" },
+    { "why": "a customer who missed a commitment goes to the GM", "missed_before": 1, "open_extension": false, "expect": "Pending GM" },
+    { "why": "one extension at a time from the manager: a second goes to the GM", "missed_before": 0, "open_extension": true, "expect": "Pending GM" }
+  ],
+
+  "manager_approval": [
+    { "why": "within authority, 10 days", "amount": 200000, "authority": 300000, "approved_on": "2026-11-16", "commitment": "2026-11-26", "reason": "Festival stock", "remarks": "Known payer", "expect": null },
+    { "why": "the commitment date may be the approval day itself", "amount": 1, "authority": 300000, "approved_on": "2026-11-16", "commitment": "2026-11-16", "reason": "Small", "remarks": "OK", "expect": null },
+    { "why": "11 days is past the manager's 10", "amount": 200000, "authority": 300000, "approved_on": "2026-11-16", "commitment": "2026-11-27", "reason": "Festival stock", "remarks": "Known payer", "expect": "too_long" },
+    { "why": "a date already gone by", "amount": 200000, "authority": 300000, "approved_on": "2026-11-16", "commitment": "2026-11-15", "reason": "Festival stock", "remarks": "Known payer", "expect": "date_past" },
+    { "why": "the amount must be more than zero", "amount": 0, "authority": 300000, "approved_on": "2026-11-16", "commitment": "2026-11-20", "reason": "Festival stock", "remarks": "Known payer", "expect": "amount" },
+    { "why": "above the manager's authority", "amount": 300001, "authority": 300000, "approved_on": "2026-11-16", "commitment": "2026-11-20", "reason": "Festival stock", "remarks": "Known payer", "expect": "authority" },
+    { "why": "no authority configured is no authority", "amount": 1000, "authority": 0, "approved_on": "2026-11-16", "commitment": "2026-11-20", "reason": "Festival stock", "remarks": "Known payer", "expect": "authority" },
+    { "why": "the reason is required", "amount": 1000, "authority": 300000, "approved_on": "2026-11-16", "commitment": "2026-11-20", "reason": "  ", "remarks": "Known payer", "expect": "reason" },
+    { "why": "the remarks are required", "amount": 1000, "authority": 300000, "approved_on": "2026-11-16", "commitment": "2026-11-20", "reason": "Festival stock", "remarks": "", "expect": "remarks" }
+  ],
+
+  "gm_approval": [
+    { "why": "the GM is not held to 10 days or an authority", "amount": 900000, "today": "2026-11-16", "commitment": "2026-12-15", "remarks": "Last chance", "expect": null },
+    { "why": "the GM's date may not be in the past", "amount": 900000, "today": "2026-11-16", "commitment": "2026-11-15", "remarks": "Last chance", "expect": "date_past" },
+    { "why": "the GM's remarks are required", "amount": 900000, "today": "2026-11-16", "commitment": "2026-11-20", "remarks": "", "expect": "remarks" },
+    { "why": "the GM's amount must be more than zero", "amount": 0, "today": "2026-11-16", "commitment": "2026-11-20", "remarks": "x", "expect": "amount" }
+  ],
+
+  "transitions": [
+    { "why": "the manager approves and pushes in one step", "action": "approve", "from": "Pending Manager", "actor": "manager", "expect": "Sending to SAP" },
+    { "why": "the manager rejects", "action": "reject", "from": "Pending Manager", "actor": "manager", "expect": "Rejected" },
+    { "why": "past the manager's authority, the manager sends it to the GM", "action": "escalate", "from": "Pending Manager", "actor": "manager", "expect": "Pending GM" },
+    { "why": "once with the GM the manager decides nothing", "action": "approve", "from": "Pending GM", "actor": "manager", "expect": "REFUSED" },
+    { "why": "nor rejects", "action": "reject", "from": "Pending GM", "actor": "manager", "expect": "REFUSED" },
+    { "why": "the GM approves and pushes", "action": "approve", "from": "Pending GM", "actor": "gm", "expect": "Sending to SAP" },
+    { "why": "the GM may decide one still with the manager", "action": "approve", "from": "Pending Manager", "actor": "gm", "expect": "Sending to SAP" },
+    { "why": "the GM rejects", "action": "reject", "from": "Pending GM", "actor": "gm", "expect": "Rejected by GM" },
+    { "why": "a GM rejection reads as the GM's even before escalation", "action": "reject", "from": "Pending Manager", "actor": "gm", "expect": "Rejected by GM" },
+    { "why": "the GM has nobody to escalate to", "action": "escalate", "from": "Pending Manager", "actor": "gm", "expect": "REFUSED" },
+    { "why": "an overdue commitment is the GM's: a new extension", "action": "approve", "from": "Payment Commitment Overdue", "actor": "gm", "expect": "Renewed by GM" },
+    { "why": "or the GM rejects it", "action": "reject", "from": "Payment Commitment Overdue", "actor": "gm", "expect": "Rejected by GM" },
+    { "why": "the manager cannot renew an overdue one", "action": "approve", "from": "Payment Commitment Overdue", "actor": "manager", "expect": "REFUSED" },
+    { "why": "a rep never decides", "action": "approve", "from": "Pending Manager", "actor": "rep", "expect": "REFUSED" },
+    { "why": "another team's manager decides nothing", "action": "approve", "from": "Pending Manager", "actor": "other_manager", "expect": "REFUSED" },
+    { "why": "a failed push may be sent again by whoever approved it", "action": "retry", "from": "SAP Push Failed", "actor": "approver", "expect": "Sending to SAP" },
+    { "why": "but not by anyone else", "action": "retry", "from": "SAP Push Failed", "actor": "rep", "expect": "REFUSED" },
+    { "why": "a rejected request is never sent to SAP", "action": "retry", "from": "Rejected by GM", "actor": "gm", "expect": "REFUSED" },
+    { "why": "nor approved after it", "action": "approve", "from": "Rejected", "actor": "gm", "expect": "REFUSED" },
+    { "why": "pushing twice while the first is on its way is refused", "action": "approve", "from": "Sending to SAP", "actor": "gm", "expect": "REFUSED" },
+    { "why": "SAP raised the limit", "action": "sap_raised", "from": "Sending to SAP", "actor": "sap_job", "expect": "Active" },
+    { "why": "SAP refused the raise", "action": "sap_failed", "from": "Sending to SAP", "actor": "sap_job", "expect": "SAP Push Failed" },
+    { "why": "payments reached the amount", "action": "sap_paid", "from": "Active", "actor": "sap_job", "expect": "Paid" },
+    { "why": "the date passed without enough paid", "action": "sap_overdue", "from": "Active", "actor": "sap_job", "expect": "Payment Commitment Overdue" },
+    { "why": "only the SAP job reports SAP", "action": "sap_paid", "from": "Active", "actor": "gm", "expect": "REFUSED" },
+    { "why": "an overdue one is escalated once, not again", "action": "sap_overdue", "from": "Payment Commitment Overdue", "actor": "sap_job", "expect": "REFUSED" },
+    { "why": "an unknown status offers nobody anything", "action": "approve", "from": "Something New", "actor": "gm", "expect": "REFUSED" }
+  ],
+
+  "payment_status": [
+    { "why": "the spec's example: 2,50,000 against 2,00,000", "amount": 200000, "paid": 250000, "expect": "Paid", "remaining": 0 },
+    { "why": "exactly the amount is paid", "amount": 200000, "paid": 200000, "expect": "Paid", "remaining": 0 },
+    { "why": "1,00,000 is partly paid", "amount": 200000, "paid": 100000, "expect": "Partially Paid", "remaining": 100000 },
+    { "why": "nothing paid", "amount": 200000, "paid": 0, "expect": "Not Paid", "remaining": 200000 }
+  ],
+
+  "outcome": [
+    { "why": "paid before the date: Paid at once", "amount": 200000, "paid": 200000, "today": "2026-11-20", "commitment": "2026-11-26", "expect": "paid" },
+    { "why": "part paid, date not yet passed: still running", "amount": 200000, "paid": 100000, "today": "2026-11-26", "commitment": "2026-11-26", "expect": "running" },
+    { "why": "part paid, date passed: overdue", "amount": 200000, "paid": 100000, "today": "2026-11-27", "commitment": "2026-11-26", "expect": "overdue" },
+    { "why": "nothing paid, date passed: overdue", "amount": 200000, "paid": 0, "today": "2026-11-27", "commitment": "2026-11-26", "expect": "overdue" }
+  ],
+
+  "payments": [
+    { "why": "cash, transfer, cheques, cards and bills all count", "payment": { "DocEntry": 1, "DocDate": "2026-11-18", "Cancelled": "tNO", "Proforma": "tNO", "CashSum": 1000, "TransferSum": 50000, "BillOfExchangeAmount": 0, "PaymentChecks": [{ "CheckSum": 20000 }], "PaymentCreditCards": [{ "CreditSum": 500 }] }, "approved_on": "2026-11-16", "commitment": "2026-11-26", "expect": 71500 },
+    { "why": "a cancelled payment is not money received", "payment": { "DocEntry": 2, "DocDate": "2026-11-18", "Cancelled": "tYES", "Proforma": "tNO", "TransferSum": 50000 }, "approved_on": "2026-11-16", "commitment": "2026-11-26", "expect": 0 },
+    { "why": "a draft (Proforma) is not confirmed", "payment": { "DocEntry": 3, "DocDate": "2026-11-18", "Cancelled": "tNO", "Proforma": "tYES", "TransferSum": 50000 }, "approved_on": "2026-11-16", "commitment": "2026-11-26", "expect": 0 },
+    { "why": "before the approval it does not count", "payment": { "DocEntry": 4, "DocDate": "2026-11-15", "Cancelled": "tNO", "Proforma": "tNO", "TransferSum": 50000 }, "approved_on": "2026-11-16", "commitment": "2026-11-26", "expect": 0 },
+    { "why": "on the commitment date it counts", "payment": { "DocEntry": 5, "DocDate": "2026-11-26T00:00:00Z", "Cancelled": "tNO", "Proforma": "tNO", "TransferSum": 50000 }, "approved_on": "2026-11-16", "commitment": "2026-11-26", "expect": 50000 },
+    { "why": "after the commitment date it does not", "payment": { "DocEntry": 6, "DocDate": "2026-11-27", "Cancelled": "tNO", "Proforma": "tNO", "TransferSum": 50000 }, "approved_on": "2026-11-16", "commitment": "2026-11-26", "expect": 0 }
+  ],
+
+  "sap_raise": [
+    {"why": "first push: SAP's limit is the original; the commitment limit, equal to it, goes up with it", "status": "Sending to SAP", "saved_original": null, "saved_commitment": null, "sap_limit": 500000, "sap_commitment": 500000, "amount": 200000, "other_raised": false, "expect": "patch", "original": 500000, "target": 700000, "original_commitment": 500000, "commitment_target": 700000},
+    {"why": "a commitment limit already above the new limit is left where it is", "status": "Sending to SAP", "saved_original": null, "saved_commitment": null, "sap_limit": 500000, "sap_commitment": 900000, "amount": 200000, "other_raised": false, "expect": "patch", "original": 500000, "target": 700000, "original_commitment": 900000, "commitment_target": 900000},
+    {"why": "a retry after a raise that was not reported: already done", "status": "Sending to SAP", "saved_original": 500000, "saved_commitment": 500000, "sap_limit": 700000, "sap_commitment": 700000, "amount": 200000, "other_raised": false, "expect": "already", "original": 500000, "target": 700000, "original_commitment": 500000, "commitment_target": 700000},
+    {"why": "somebody changed the limit since the first attempt: never overwrite it", "status": "Sending to SAP", "saved_original": 500000, "saved_commitment": 500000, "sap_limit": 650000, "sap_commitment": 650000, "amount": 200000, "other_raised": false, "expect": "refuse"},
+    {"why": "somebody changed the commitment limit since the first attempt: never overwrite it", "status": "Sending to SAP", "saved_original": 500000, "saved_commitment": 500000, "sap_limit": 500000, "sap_commitment": 550000, "amount": 200000, "other_raised": false, "expect": "refuse"},
+    {"why": "SAP's limit is 0 (no figure): raising it would invent a limit", "status": "Sending to SAP", "saved_original": null, "saved_commitment": null, "sap_limit": 0, "sap_commitment": 0, "amount": 200000, "other_raised": false, "expect": "refuse"},
+    {"why": "another extension of the customer is still raised in SAP", "status": "Sending to SAP", "saved_original": null, "saved_commitment": null, "sap_limit": 500000, "sap_commitment": 500000, "amount": 200000, "other_raised": true, "expect": "refuse"},
+    {"why": "anything not 'Sending to SAP' is not the job's to raise", "status": "Rejected by GM", "saved_original": null, "saved_commitment": null, "sap_limit": 500000, "sap_commitment": 500000, "amount": 200000, "other_raised": false, "expect": "skip"}
+  ],
+
+  "sap_restore": [
+    {"why": "SAP still holds what the raise wrote: put both back", "original": 500000, "amount": 200000, "original_commitment": 500000, "raised_commitment": 700000, "sap_limit": 700000, "sap_commitment": 700000, "expect": "patch"},
+    {"why": "both already the originals", "original": 500000, "amount": 200000, "original_commitment": 500000, "raised_commitment": 700000, "sap_limit": 500000, "sap_commitment": 500000, "expect": "already"},
+    {"why": "somebody set a new limit since: leave it and say so", "original": 500000, "amount": 200000, "original_commitment": 500000, "raised_commitment": 700000, "sap_limit": 800000, "sap_commitment": 800000, "expect": "review"},
+    {"why": "somebody changed only the commitment limit since: leave both and say so", "original": 500000, "amount": 200000, "original_commitment": 500000, "raised_commitment": 700000, "sap_limit": 700000, "sap_commitment": 750000, "expect": "review"}
+  ]
+}

@@ -705,3 +705,18 @@ Enforced by the `manna_credit_period_request` Server Script
 `client/src/domain/creditPeriodRequest.ts`. **Change the fixture and every
 implementation together** — the script, both apps and the sync's
 `Get-TermPushPlan` all test against it.
+
+## Temporary credit extensions (16 Nov 2026)
+
+A separate workflow beside order approval, which is unchanged. On an order
+waiting for approval that takes its customer past the SAP credit limit, a rep
+or manager asks; the manager approves a temporary additional credit within
+their authority (Manna Credit Extension Settings) with a payment commitment of
+at most 10 days, which pushes it to SAP; SAP payments decide Paid or Payment
+Commitment Overdue, which goes to the GM. Dashboard `/credit-extensions`,
+phone "Temporary Credit". Enforced by `manna_credit_extension`
+(`app/server/credit_extension.py`); pinned by
+`shared/fixtures/credit_extension.json`; the SAP job is
+`sap-credit-sync/Sync-CreditExtensions.ps1`. Full account and report:
+`docs/TEMPORARY_CREDIT_EXTENSION.md`.
+

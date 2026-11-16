@@ -17,6 +17,9 @@ ERPNext-side "Treads customers" filter and the script does not invent one.
 | `poller.config.example.json` | Template for the poller's `poller.config.json` (bot key, paths). Keep out of git. |
 | `rep-map.json`             | SAP sales employee -> ERPNext Sales Person, for the new-customer step. Read on every run. |
 | `Test-CreditPeriodPush.ps1` | Offline. The credit-period push (16 Nov 2026) against `shared/fixtures/credit_period_request.json` and a stand-in Service Layer. |
+| `Sync-CreditExtensions.ps1` | Temporary credit extensions (16 Nov 2026): raises a customer's CreditLimit (and MaxCommitment with it) for an approved extension, counts SAP payments against the commitment, puts both back. A separate job; borrows this sync's functions without running or changing it. Writes nothing without `-Apply`. See `docs/TEMPORARY_CREDIT_EXTENSION.md` |
+| `Test-CreditExtensions.ps1` | Offline. That job's decisions against `shared/fixtures/credit_extension.json` |
+| `Register-CreditExtensionTask.ps1` | Registers `SAP-Credit-Extensions` (every 5 min, SYSTEM). Preview unless `-Apply`; run elevated |
 | `.gitignore`               | Keeps `config.json` / `poller.config.json` / `login.json` / logs out of git. |
 
 ## Where it runs

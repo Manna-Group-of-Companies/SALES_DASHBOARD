@@ -220,7 +220,13 @@ elif action == "submit":
     days = int(term.get("days") or 0)
     if days > 40:
         frappe.throw("A credit period over 40 days cannot be requested here. Speak to the GM.")
-    if not [t for t in offered_terms(terms, current_code) if t["code"] == want]:
+    # A loop, not a comprehension: before Python 3.12 a comprehension cannot
+    # see the script's names (want) inside safe_exec.
+    on_offer = False
+    for t in offered_terms(terms, current_code):
+        if t["code"] == want:
+            on_offer = True
+    if not on_offer:
         frappe.throw("The customer is already on " + (term.get("name") or "that term") + ".")
     status = submit_status(days)
     if not status:

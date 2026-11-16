@@ -87,6 +87,7 @@ class _UnsentItemsScreenState extends State<UnsentItemsScreen> {
         'regularization' => Icons.schedule,
         'item_request' => Icons.add_box_outlined,
         'credit_period_request' || 'credit_period_action' => Icons.event_repeat,
+        'credit_extension_request' || 'credit_extension_action' => Icons.add_card,
         'condition_answer' => Icons.reply,
         'customer_location' || 'customer_site' => Icons.place_outlined,
         _ => Icons.edit_outlined,

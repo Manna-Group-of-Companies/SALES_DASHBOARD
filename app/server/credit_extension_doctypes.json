@@ -1,0 +1,558 @@
+{
+  "about": "Temporary credit extension (16 Nov 2026): a separate workflow; nothing existing changes. Manna Credit Extension is one extension, never overwritten - a GM renewal after a missed commitment is a new record linked by parent_extension. Its three child tables keep the audit history (log), the SAP payments counted against the commitment, once each by DocEntry (payments), and every SAP request and response (sap_log). Manna Credit Extension Settings holds the manager's approval authority and the SAP job's flag. System Manager only, like the other request doctypes: every read and write goes through the manna_credit_extension Server Script (credit_extension.py). SAP Sync Bot reads, to find the work for Sync-CreditExtensions.ps1; it reports back through the script. Child tables are created first.",
+  "doctypes": [
+    {
+      "doctype": "DocType",
+      "name": "Manna Credit Extension Log",
+      "module": "Selling",
+      "custom": 1,
+      "istable": 1,
+      "fields": [
+        {
+          "fieldname": "action",
+          "label": "Action",
+          "fieldtype": "Data",
+          "in_list_view": 1
+        },
+        {
+          "fieldname": "actor_role",
+          "label": "Role",
+          "fieldtype": "Data",
+          "in_list_view": 1
+        },
+        {
+          "fieldname": "by_user",
+          "label": "By",
+          "fieldtype": "Link",
+          "options": "User",
+          "in_list_view": 1
+        },
+        {
+          "fieldname": "at",
+          "label": "At",
+          "fieldtype": "Datetime",
+          "in_list_view": 1
+        },
+        {
+          "fieldname": "amount",
+          "label": "Amount",
+          "fieldtype": "Currency"
+        },
+        {
+          "fieldname": "commitment_date",
+          "label": "Commitment Date",
+          "fieldtype": "Date"
+        },
+        {
+          "fieldname": "remarks",
+          "label": "Remarks",
+          "fieldtype": "Small Text"
+        }
+      ],
+      "permissions": []
+    },
+    {
+      "doctype": "DocType",
+      "name": "Manna Credit Extension Payment",
+      "module": "Selling",
+      "custom": 1,
+      "istable": 1,
+      "fields": [
+        {
+          "fieldname": "sap_doc_entry",
+          "label": "SAP DocEntry",
+          "fieldtype": "Data",
+          "in_list_view": 1,
+          "description": "Each SAP incoming payment counted once"
+        },
+        {
+          "fieldname": "doc_num",
+          "label": "SAP Payment No.",
+          "fieldtype": "Data",
+          "in_list_view": 1
+        },
+        {
+          "fieldname": "payment_date",
+          "label": "Payment Date",
+          "fieldtype": "Date",
+          "in_list_view": 1
+        },
+        {
+          "fieldname": "amount",
+          "label": "Amount",
+          "fieldtype": "Currency",
+          "in_list_view": 1
+        }
+      ],
+      "permissions": []
+    },
+    {
+      "doctype": "DocType",
+      "name": "Manna Credit Extension SAP Log",
+      "module": "Selling",
+      "custom": 1,
+      "istable": 1,
+      "fields": [
+        {
+          "fieldname": "at",
+          "label": "At",
+          "fieldtype": "Datetime",
+          "in_list_view": 1
+        },
+        {
+          "fieldname": "operation",
+          "label": "Operation",
+          "fieldtype": "Data",
+          "in_list_view": 1
+        },
+        {
+          "fieldname": "ok",
+          "label": "OK",
+          "fieldtype": "Check",
+          "in_list_view": 1
+        },
+        {
+          "fieldname": "request",
+          "label": "Request",
+          "fieldtype": "Long Text"
+        },
+        {
+          "fieldname": "response",
+          "label": "Response",
+          "fieldtype": "Long Text"
+        }
+      ],
+      "permissions": []
+    },
+    {
+      "doctype": "DocType",
+      "name": "Manna Credit Extension Settings",
+      "module": "Selling",
+      "custom": 1,
+      "issingle": 1,
+      "fields": [
+        {
+          "fieldname": "manager_max_amount",
+          "label": "Manager's Approval Authority",
+          "fieldtype": "Currency",
+          "description": "The most temporary additional credit a sales manager may approve on one extension. 0 or empty: managers approve none, and send every request to the GM."
+        },
+        {
+          "fieldname": "section_job",
+          "label": "SAP job",
+          "fieldtype": "Section Break"
+        },
+        {
+          "fieldname": "push_requested",
+          "label": "Push Requested",
+          "fieldtype": "Check",
+          "description": "Raised by an approval; Sync-CreditExtensions.ps1 runs at once when it sees it"
+        },
+        {
+          "fieldname": "push_requested_by",
+          "label": "Push Requested By",
+          "fieldtype": "Data",
+          "read_only": 1
+        },
+        {
+          "fieldname": "last_job_run",
+          "label": "Last Job Run",
+          "fieldtype": "Datetime",
+          "read_only": 1
+        },
+        {
+          "fieldname": "last_job_result",
+          "label": "Last Job Result",
+          "fieldtype": "Small Text",
+          "read_only": 1
+        }
+      ],
+      "permissions": [
+        {
+          "role": "System Manager",
+          "read": 1,
+          "write": 1
+        },
+        {
+          "role": "SAP Sync Bot",
+          "read": 1,
+          "write": 1
+        }
+      ]
+    },
+    {
+      "doctype": "DocType",
+      "name": "Manna Credit Extension",
+      "module": "Selling",
+      "custom": 1,
+      "autoname": "format:TCE-{#####}",
+      "sort_field": "creation",
+      "sort_order": "DESC",
+      "track_changes": 1,
+      "title_field": "customer_name",
+      "permissions": [
+        {
+          "role": "System Manager",
+          "read": 1,
+          "write": 1,
+          "create": 1,
+          "report": 1,
+          "export": 1
+        },
+        {
+          "role": "SAP Sync Bot",
+          "read": 1
+        }
+      ],
+      "fields": [
+        {
+          "fieldname": "status",
+          "label": "Status",
+          "fieldtype": "Select",
+          "options": "Pending Manager\nPending GM\nSending to SAP\nSAP Push Failed\nActive\nPaid\nPayment Commitment Overdue\nRenewed by GM\nRejected\nRejected by GM",
+          "default": "Pending Manager",
+          "in_list_view": 1,
+          "in_standard_filter": 1
+        },
+        {
+          "fieldname": "customer",
+          "label": "Customer",
+          "fieldtype": "Link",
+          "options": "Customer",
+          "reqd": 1,
+          "in_standard_filter": 1
+        },
+        {
+          "fieldname": "customer_name",
+          "label": "Customer Name",
+          "fieldtype": "Data",
+          "read_only": 1,
+          "in_list_view": 1
+        },
+        {
+          "fieldname": "bp_code",
+          "label": "SAP Code",
+          "fieldtype": "Data",
+          "read_only": 1
+        },
+        {
+          "fieldname": "sales_order",
+          "label": "Sales Order",
+          "fieldtype": "Link",
+          "options": "Sales Order",
+          "read_only": 1
+        },
+        {
+          "fieldname": "parent_extension",
+          "label": "Renewal Of",
+          "fieldtype": "Link",
+          "options": "Manna Credit Extension",
+          "read_only": 1
+        },
+        {
+          "fieldname": "column_break_a",
+          "fieldtype": "Column Break"
+        },
+        {
+          "fieldname": "sales_person",
+          "label": "Sales Person",
+          "fieldtype": "Link",
+          "options": "Sales Person",
+          "read_only": 1,
+          "in_standard_filter": 1
+        },
+        {
+          "fieldname": "team",
+          "label": "Team",
+          "fieldtype": "Data",
+          "read_only": 1,
+          "in_standard_filter": 1
+        },
+        {
+          "fieldname": "requested_by",
+          "label": "Requested By",
+          "fieldtype": "Link",
+          "options": "User",
+          "read_only": 1
+        },
+        {
+          "fieldname": "requested_on",
+          "label": "Requested On",
+          "fieldtype": "Datetime",
+          "read_only": 1
+        },
+        {
+          "fieldname": "request_reason",
+          "label": "Request Note",
+          "fieldtype": "Small Text",
+          "read_only": 1
+        },
+        {
+          "fieldname": "section_figures",
+          "label": "At the request",
+          "fieldtype": "Section Break"
+        },
+        {
+          "fieldname": "credit_limit_at_request",
+          "label": "SAP Credit Limit",
+          "fieldtype": "Currency",
+          "read_only": 1
+        },
+        {
+          "fieldname": "outstanding_at_request",
+          "label": "Outstanding",
+          "fieldtype": "Currency",
+          "read_only": 1
+        },
+        {
+          "fieldname": "overdue_at_request",
+          "label": "Overdue",
+          "fieldtype": "Currency",
+          "read_only": 1
+        },
+        {
+          "fieldname": "column_break_b",
+          "fieldtype": "Column Break"
+        },
+        {
+          "fieldname": "order_amount",
+          "label": "Order Amount",
+          "fieldtype": "Currency",
+          "read_only": 1
+        },
+        {
+          "fieldname": "excess_amount",
+          "label": "Excess Credit Amount",
+          "fieldtype": "Currency",
+          "read_only": 1
+        },
+        {
+          "fieldname": "section_approval",
+          "label": "Approval",
+          "fieldtype": "Section Break"
+        },
+        {
+          "fieldname": "amount",
+          "label": "Temporary Additional Credit",
+          "fieldtype": "Currency",
+          "read_only": 1,
+          "in_list_view": 1
+        },
+        {
+          "fieldname": "commitment_date",
+          "label": "Payment Commitment Date",
+          "fieldtype": "Date",
+          "read_only": 1,
+          "in_list_view": 1
+        },
+        {
+          "fieldname": "reason",
+          "label": "Reason for Extension",
+          "fieldtype": "Small Text",
+          "read_only": 1
+        },
+        {
+          "fieldname": "remarks",
+          "label": "Approval Remarks",
+          "fieldtype": "Small Text",
+          "read_only": 1
+        },
+        {
+          "fieldname": "column_break_c",
+          "fieldtype": "Column Break"
+        },
+        {
+          "fieldname": "approved_by",
+          "label": "Approved By",
+          "fieldtype": "Link",
+          "options": "User",
+          "read_only": 1
+        },
+        {
+          "fieldname": "approved_on",
+          "label": "Approved On",
+          "fieldtype": "Datetime",
+          "read_only": 1
+        },
+        {
+          "fieldname": "approver_role",
+          "label": "Approved As",
+          "fieldtype": "Select",
+          "options": "\nmanager\ngm",
+          "read_only": 1
+        },
+        {
+          "fieldname": "rejected_by",
+          "label": "Rejected By",
+          "fieldtype": "Link",
+          "options": "User",
+          "read_only": 1
+        },
+        {
+          "fieldname": "rejected_on",
+          "label": "Rejected On",
+          "fieldtype": "Datetime",
+          "read_only": 1
+        },
+        {
+          "fieldname": "rejection_remarks",
+          "label": "Rejection Remarks",
+          "fieldtype": "Small Text",
+          "read_only": 1
+        },
+        {
+          "fieldname": "escalated_on",
+          "label": "Escalated to GM On",
+          "fieldtype": "Datetime",
+          "read_only": 1
+        },
+        {
+          "fieldname": "escalation_reason",
+          "label": "Escalation Reason",
+          "fieldtype": "Small Text",
+          "read_only": 1
+        },
+        {
+          "fieldname": "section_sap",
+          "label": "SAP",
+          "fieldtype": "Section Break"
+        },
+        {
+          "fieldname": "original_limit",
+          "label": "Original Credit Limit",
+          "fieldtype": "Currency",
+          "read_only": 1
+        },
+        {
+          "fieldname": "raised_limit",
+          "label": "Raised Credit Limit",
+          "fieldtype": "Currency",
+          "read_only": 1
+        },
+        {
+          "fieldname": "original_commitment",
+          "label": "Original Commitment Limit",
+          "fieldtype": "Currency",
+          "read_only": 1,
+          "description": "SAP's MaxCommitment before the raise. SAP refuses a credit limit above it, so it is raised to at least the new credit limit and put back with it."
+        },
+        {
+          "fieldname": "raised_commitment",
+          "label": "Raised Commitment Limit",
+          "fieldtype": "Currency",
+          "read_only": 1
+        },
+        {
+          "fieldname": "sap_reference",
+          "label": "SAP Reference",
+          "fieldtype": "Data",
+          "read_only": 1
+        },
+        {
+          "fieldname": "sap_raised",
+          "label": "Raised in SAP",
+          "fieldtype": "Check",
+          "read_only": 1
+        },
+        {
+          "fieldname": "sap_raised_on",
+          "label": "Raised On",
+          "fieldtype": "Datetime",
+          "read_only": 1
+        },
+        {
+          "fieldname": "sap_error",
+          "label": "SAP Error",
+          "fieldtype": "Small Text",
+          "read_only": 1
+        },
+        {
+          "fieldname": "column_break_d",
+          "fieldtype": "Column Break"
+        },
+        {
+          "fieldname": "restore_status",
+          "label": "Restore",
+          "fieldtype": "Select",
+          "options": "\nPending\nRestored\nNeeds Review",
+          "read_only": 1,
+          "in_standard_filter": 1
+        },
+        {
+          "fieldname": "restored_on",
+          "label": "Restored On",
+          "fieldtype": "Datetime",
+          "read_only": 1
+        },
+        {
+          "fieldname": "restore_reference",
+          "label": "Restore Reference",
+          "fieldtype": "Data",
+          "read_only": 1
+        },
+        {
+          "fieldname": "section_pay",
+          "label": "Payment commitment",
+          "fieldtype": "Section Break"
+        },
+        {
+          "fieldname": "paid_amount",
+          "label": "Paid (SAP)",
+          "fieldtype": "Currency",
+          "read_only": 1
+        },
+        {
+          "fieldname": "remaining_amount",
+          "label": "Remaining",
+          "fieldtype": "Currency",
+          "read_only": 1
+        },
+        {
+          "fieldname": "payment_status",
+          "label": "Payment Status",
+          "fieldtype": "Select",
+          "options": "Not Paid\nPartially Paid\nPaid",
+          "read_only": 1
+        },
+        {
+          "fieldname": "last_payment_check",
+          "label": "Last Checked",
+          "fieldtype": "Datetime",
+          "read_only": 1
+        },
+        {
+          "fieldname": "missed",
+          "label": "Missed Commitment",
+          "fieldtype": "Check",
+          "read_only": 1
+        },
+        {
+          "fieldname": "payments",
+          "label": "Payments",
+          "fieldtype": "Table",
+          "options": "Manna Credit Extension Payment",
+          "read_only": 1
+        },
+        {
+          "fieldname": "section_audit",
+          "label": "History",
+          "fieldtype": "Section Break"
+        },
+        {
+          "fieldname": "log",
+          "label": "Audit History",
+          "fieldtype": "Table",
+          "options": "Manna Credit Extension Log",
+          "read_only": 1
+        },
+        {
+          "fieldname": "sap_log",
+          "label": "SAP Requests",
+          "fieldtype": "Table",
+          "options": "Manna Credit Extension SAP Log",
+          "read_only": 1
+        }
+      ]
+    }
+  ]
+}

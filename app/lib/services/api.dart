@@ -23,6 +23,7 @@ import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/core/trip_totals.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/item_request.dart';
+import 'package:manna_field_sales/core/credit_extension.dart';
 import 'package:manna_field_sales/core/credit_period_request.dart';
 import 'package:manna_field_sales/core/pick_list.dart';
 import 'package:manna_field_sales/core/proximity.dart';
@@ -1639,6 +1640,63 @@ class Api {
     final r = await Session.I.dio.post('/api/method/manna_credit_period_request', data: data);
     if (r.statusCode != 200) throw Exception(_frappeError(r));
   }
+
+  // -------- Temporary credit extensions (16 Nov 2026) --------
+  //
+  // Through the `manna_credit_extension` Server Script
+  // (app/server/credit_extension.py). A separate workflow from order approval:
+  // see core/credit_extension.dart.
+
+  static Future<dynamic> _xt(Map<String, dynamic> data) async {
+    final r = await Session.I.dio.post('/api/method/manna_credit_extension', data: data);
+    if (r.statusCode != 200) throw Exception(_frappeError(r));
+    return r.data is Map ? r.data['message'] : null;
+  }
+
+  /// Extensions this login may see: a rep's own, a manager's team's, all for the GM.
+  static Future<List<CreditExtension>> getCreditExtensions() async {
+    final m = await _xt({'action': 'list'});
+    if (m is! List) throw Exception('Could not read the temporary credit extensions.');
+    return m.whereType<Map>().map(CreditExtension.new).toList();
+  }
+
+  /// Orders waiting for approval that take their customer past the credit limit.
+  static Future<List<EligibleOrder>> getExtensionEligibleOrders() async {
+    final m = await _xt({'action': 'eligible'});
+    if (m is! List) throw Exception('Could not read the orders.');
+    return m.whereType<Map>().map(EligibleOrder.new).toList();
+  }
+
+  /// One extension with the customer's figures, payments, audit history and
+  /// the customer's whole extension history.
+  static Future<Map<String, dynamic>> getCreditExtensionDetail(String name) async {
+    final m = await _xt({'action': 'detail', 'name': name});
+    if (m is! Map) throw Exception('Could not read the extension.');
+    return m.cast<String, dynamic>();
+  }
+
+  static Future<bool> requestCreditExtension(String salesOrder, String customerName, String reason) => sendOrQueue(
+        kind: 'credit_extension_request',
+        label: 'Temporary credit — $customerName ($salesOrder)',
+        args: {'sales_order': salesOrder, 'reason': reason},
+      );
+
+  /// approve (and push to SAP) | reject | escalate | retry. The server
+  /// re-checks every rule when it arrives.
+  static Future<bool> creditExtensionAction(String name, String action,
+          {double? amount, String? commitmentDate, String reason = '', String remarks = '', String customerName = ''}) =>
+      sendOrQueue(
+        kind: 'credit_extension_action',
+        label: 'Temporary credit $name${customerName.isEmpty ? '' : ' ($customerName)'}: $action',
+        args: {
+          'name': name,
+          'action': action,
+          'amount': ?amount,
+          'commitment_date': ?commitmentDate,
+          'reason': reason,
+          'remarks': remarks,
+        },
+      );
 
   // -------- Pick lists --------
   //
@@ -4263,6 +4321,9 @@ class Api {
   static final Map<String, Future<dynamic> Function(Map<String, dynamic> a, OutboxItem i)>
       _senders = {
     'credit_period_request': (a, _) => _submitCreditPeriodRequestNow(a),
+    'credit_extension_request': (a, _) =>
+        _xt({'action': 'submit', 'sales_order': a['sales_order'], 'reason': a['reason'] ?? ''}),
+    'credit_extension_action': (a, _) => _xt({...a, 'action': a['action']}),
     'credit_period_action': (a, _) => _creditPeriodActionNow(a),
     'assign_customer_owner': (a, _) =>
         _assignCustomerOwnerNow('${a['customer']}', '${a['rep']}'),

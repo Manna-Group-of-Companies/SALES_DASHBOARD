@@ -32,6 +32,7 @@ import { GmFollowUpOrderPage } from '@/features/orders/GmFollowUpOrderPage';
 import { MannaTreadsOrdersPage } from '@/features/accounts/MannaTreadsOrdersPage';
 import { ItemRequestsPage } from '@/features/accounts/ItemRequestsPage';
 import { CreditPeriodRequestsPage } from '@/features/credit/CreditPeriodRequestsPage';
+import { CreditExtensionsPage } from '@/features/credit/CreditExtensionsPage';
 import { LocationVerificationPage } from '@/features/approvals/LocationVerificationPage';
 import { TeamRegularizationsPage } from '@/features/approvals/TeamRegularizationsPage';
 import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
@@ -206,6 +207,8 @@ const HR_SHARED: Role[] = ['hr', 'accounts_staff'];
 // Managers and the GM approve new requests before the accountant sees them (12 Nov 2026).
 // Not the accountant since 12 Nov 2026 (the user): the accounts staff answer them now.
 const ITEM_REQUESTS: Role[] = ['hr', 'accounts_staff', 'sales_manager', 'general_manager'];
+// Temporary credit extensions (16 Nov 2026): every manager and the GM; the server decides the rest.
+const CREDIT_EXTENSIONS: Role[] = ['sales_manager', 'general_manager'];
 
 export function AppRoutes() {
   const user = useAppSelector(selectUser);
@@ -414,6 +417,14 @@ export function AppRoutes() {
             <CreditRoute>
               <CreditPeriodRequestsPage />
             </CreditRoute>
+          }
+        />
+        <Route
+          path="credit-extensions"
+          element={
+            <RoleRoute allow={CREDIT_EXTENSIONS}>
+              <CreditExtensionsPage />
+            </RoleRoute>
           }
         />
         <Route

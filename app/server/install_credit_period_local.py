@@ -31,7 +31,14 @@ def main():
 	spec = json.load(open(os.path.join(HERE, "credit_period_request_doctypes.json"), encoding="utf-8"))
 	for dt in spec["doctypes"]:
 		if api("GET", "/api/resource/DocType?filters=" + q(json.dumps([["name", "=", dt["name"]]])))["data"]:
-			print("doctype ok", dt["name"])
+			doc = api("GET", "/api/resource/DocType/" + q(dt["name"]))["data"]
+			have = {f["fieldname"] for f in doc["fields"]}
+			add = [f for f in dt["fields"] if f["fieldname"] not in have]
+			if add:
+				api("PUT", "/api/resource/DocType/" + q(dt["name"]), {"fields": doc["fields"] + add})
+				print("doctype", dt["name"], "fields added", [f["fieldname"] for f in add])
+			else:
+				print("doctype ok", dt["name"])
 		else:
 			api("POST", "/api/resource/DocType", dt)
 			print("doctype created", dt["name"])
