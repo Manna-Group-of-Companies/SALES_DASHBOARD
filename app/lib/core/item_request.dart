@@ -24,8 +24,21 @@ String itemRequestLabel(String status) => switch (status) {
 /// Whether the accountant may answer it: only once the manager has approved.
 bool accountantAnswers(String status) => status == kItemRequestWithAccountant;
 
+/// The product lines a rep picks from: the new names on management's price
+/// list (14 Nov 2026), each with the old quality in brackets so a rep who
+/// still thinks in the old names finds it (17 Nov 2026, the user: "Manna
+/// Double Blue (Black Pearl)"). Precured or Hot is the separate Type.
+/// manna_item_request still accepts the old names too, for requests already
+/// queued on a phone (app/server/item_request.py LINES).
 const List<String> kItemRequestLines = [
-  'Black Pearl', 'Platinum', 'Silver', 'Polygold', 'Diamond', 'Hot', 'Bonding Gum', 'Solution', 'Other',
+  'Manna Double Blue (Black Pearl)',
+  'Manna Blue (Platinum)',
+  'Verdo (Polygold & Diamond)',
+  'Rox (Silver)',
+  'Surya (SF)',
+  'Bonding Gum',
+  'Solution',
+  'Other',
 ];
 const List<String> kItemRequestTypes = ['Precured', 'Hot', 'Bonding Gum', 'Solution', 'Other'];
 const List<String> kItemRequestUnits = ['Rolls', 'Kg', 'Nos', 'Litre'];

@@ -27,6 +27,15 @@
   delivered, and a line picked as 0 is left off all three - that product was
   not sent. When the store entered none, the released kilos (what ERPNext
   asked for), as before.
+
+  Actual kg (16 Nov 2026): a roll's weight is an average, and SAP will not
+  let Picked go above Released, so a heavier roll could not be invoiced at
+  its weight. The store types what it weighed into the line's Actual kg
+  (PKL1.U_ActualKg), over or under; where it is filled it is the line's Kg,
+  and a line with neither Actual kg nor Picked on a list that has some is
+  left off, as a line picked 0 is. Released goes out too, so the decision
+  can refuse a figure too far over it (OVER_PCT in @MANNA_IC). The company
+  needs the field before this query runs: it names it.
     which    one per run, in turn by the minute of the clock, so a list that
              is refused every time (no batch stock, say) cannot hold up the
              lists behind it.
@@ -66,18 +75,20 @@
 SELECT
 	ISNULL(CAST(P.AbsEntry AS nvarchar(11)), '') AS PickEntry, ISNULL(P.PickName, '') AS PickName, ISNULL(P.N, 0) AS Waiting,
 	L.PickEntry AS PickLine, L.BaseObject, L.OrderEntry, L.OrderLine,
-	CASE WHEN PQ.AnyPicked = 1 THEN L.PickQtty ELSE L.RelQtty END AS Kg,
+	CASE WHEN ISNULL(L.U_ActualKg, 0) &gt; 0 THEN L.U_ActualKg WHEN PQ.AnyPicked = 1 THEN L.PickQtty ELSE L.RelQtty END AS Kg,
+	L.RelQtty AS Released,
 	ISNULL(O.DocNum, 0) AS SoNum, ISNULL(O.CANCELED, '') AS SoCancelled, ISNULL(O.CardCode, '') AS SoCard,
 	ISNULL(O.U_MannaMtPo, '') AS MtPo, ISNULL(O.NumAtCard, '') AS OrderName,
 	ISNULL(R.ItemCode, '') AS ItemCode, ISNULL(R.LineStatus, '') AS SoLineStatus, ISNULL(R.WhsCode, '') AS WhsCode,
 	ISNULL(I.ManBtchNum, 'N') AS Batch,
-	S.Enabled, S.Customer, S.InvSeries,
+	S.Enabled, S.Customer, S.InvSeries, S.OverPct,
 	CONVERT(char(10), GETDATE(), 23) AS Today
 FROM (
 	SELECT
 		MAX(CASE WHEN Code = 'ENABLED'    THEN U_Value END) AS Enabled,
 		MAX(CASE WHEN Code = 'CUSTOMER'   THEN U_Value END) AS Customer,
-		MAX(CASE WHEN Code = 'INV_SERIES' THEN U_Value END) AS InvSeries
+		MAX(CASE WHEN Code = 'INV_SERIES' THEN U_Value END) AS InvSeries,
+		MAX(CASE WHEN Code = 'OVER_PCT'   THEN U_Value END) AS OverPct
 	FROM [@MANNA_IC]
 ) S
 LEFT JOIN (
@@ -96,8 +107,8 @@ LEFT JOIN (
 	) W
 	WHERE W.Rn = DATEDIFF(MINUTE, '20260101', GETDATE()) % W.N + 1
 ) P ON 1 = 1
-OUTER APPLY (SELECT CASE WHEN EXISTS (SELECT 1 FROM PKL1 Z WHERE Z.AbsEntry = P.AbsEntry AND Z.PickQtty &gt; 0) THEN 1 ELSE 0 END AS AnyPicked) PQ
-LEFT JOIN PKL1 L ON L.AbsEntry = P.AbsEntry AND (PQ.AnyPicked = 0 OR L.PickQtty &gt; 0)
+OUTER APPLY (SELECT CASE WHEN EXISTS (SELECT 1 FROM PKL1 Z WHERE Z.AbsEntry = P.AbsEntry AND (Z.PickQtty &gt; 0 OR ISNULL(Z.U_ActualKg, 0) &gt; 0)) THEN 1 ELSE 0 END AS AnyPicked) PQ
+LEFT JOIN PKL1 L ON L.AbsEntry = P.AbsEntry AND (PQ.AnyPicked = 0 OR L.PickQtty &gt; 0 OR ISNULL(L.U_ActualKg, 0) &gt; 0)
 LEFT JOIN ORDR O ON O.DocEntry = L.OrderEntry AND L.BaseObject = 17
 LEFT JOIN RDR1 R ON R.DocEntry = L.OrderEntry AND R.LineNum = L.OrderLine AND L.BaseObject = 17
 LEFT JOIN OITM I ON I.ItemCode = R.ItemCode

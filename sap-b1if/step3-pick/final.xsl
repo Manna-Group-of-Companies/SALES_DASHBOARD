@@ -27,6 +27,13 @@
   problem anywhere refuses all three, so Manna Treads is never billed for
   goods it never received.
 
+  Over-weight (16 Nov 2026): a line's Kg may be more than was released -
+  the store's Actual kg for a heavier roll - and SAP takes a document line
+  above its base line's open quantity and closes the base line. A line more
+  than OVER_PCT (Hi-Tech's @MANNA_IC, 15 when unset) over its released kilos
+  is refused rather than invoiced: 215 typed for 21.5 is a typing slip, and
+  an invoice is hard to take back.
+
   Dates: today by the SQL server's clock, due today too - left to SAP, the due
   date came from 10118's payment terms and fell outside the open periods
   ("Date deviates from permissible range", TEST, 5 Nov 2026).
@@ -94,6 +101,19 @@
 			</xsl:for-each>
 		</xsl:variable>
 
+		<xsl:variable name="overPct">
+			<xsl:choose>
+				<xsl:when test="number($h/*[local-name()='OverPct']) &gt;= 0"><xsl:value-of select="number($h/*[local-name()='OverPct'])"/></xsl:when>
+				<xsl:otherwise>15</xsl:otherwise>
+			</xsl:choose>
+		</xsl:variable>
+		<xsl:variable name="overWeight">
+			<xsl:for-each select="$pk">
+				<xsl:variable name="rel" select="number(*[local-name()='Released'])"/>
+				<xsl:if test="number(*[local-name()='Kg']) &gt; $rel * (1 + $overPct div 100) + 0.0005"><xsl:value-of select="concat(normalize-space(*[local-name()='ItemCode']), ' (', format-number(number(*[local-name()='Kg']), '0.###'), ' kg for ', format-number($rel, '0.###'), ' released) ')"/></xsl:if>
+			</xsl:for-each>
+		</xsl:variable>
+
 		<xsl:variable name="why">
 			<xsl:choose>
 				<xsl:when test="not($h)">Hi-Tech's query returned nothing</xsl:when>
@@ -109,6 +129,9 @@
 					<xsl:value-of select="concat(normalize-space($pk[normalize-space(*[local-name()='SoLineStatus']) != 'O'][1]/*[local-name()='ItemCode']), ' is closed on Hi-Tech sales order ', normalize-space($h/*[local-name()='SoNum']))"/>
 				</xsl:when>
 				<xsl:when test="$pk[not(number(*[local-name()='Kg']) &gt; 0)]">a pick list line has no kilos</xsl:when>
+				<xsl:when test="string($overWeight) != ''">
+					<xsl:value-of select="concat('more than ', $overPct, '% over the released kilos - check the Actual kg on the pick list: ', normalize-space($overWeight))"/>
+				</xsl:when>
 				<xsl:when test="normalize-space($h/*[local-name()='Customer']) = ''">Hi-Tech's @MANNA_IC has no CUSTOMER</xsl:when>
 				<xsl:when test="string($shortBatch) != ''">
 					<xsl:value-of select="concat('not enough in batches: ', normalize-space($shortBatch))"/>

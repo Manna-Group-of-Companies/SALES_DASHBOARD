@@ -10,6 +10,12 @@
 --                      - step 3's rule for what is sent - or has been delivered
 --                      or invoiced. A list only released is still "In SAP".
 --           In SAP     otherwise
+--   date  = the line's own Delivery Date (RDR1.ShipDate) while the line is open
+--           on an order that is not cancelled, else ''. Production moves it in
+--           SAP when the plan changes - for the whole order (SAP then offers to
+--           update the rows: answer Yes) or on single rows - and ERPNext's
+--           order follows it (13 Nov 2026). A closed line's date is history
+--           and is not sent.
 DECLARE @days int = 120;
 
 SELECT
@@ -20,7 +26,8 @@ SELECT
 		WHEN L.DelivrdQty > 0 OR P.Picked = 1 OR V.Invoiced = 1 THEN 'Picked'
 		WHEN L.LineStatus = 'C' THEN 'Cancelled'
 		ELSE 'In SAP'
-	END AS stage
+	END AS stage,
+	CASE WHEN H.CANCELED = 'N' AND L.LineStatus = 'O' THEN CONVERT(char(10), L.ShipDate, 23) ELSE '' END AS [date]
 FROM ORDR H
 JOIN RDR1 L ON L.DocEntry = H.DocEntry
 OUTER APPLY (
