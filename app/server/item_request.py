@@ -63,7 +63,11 @@ FIELDS = ["name", "status", "product_line", "item_type", "pattern", "size", "cus
           "note", "photo", "sales_person", "team", "requested_by", "requested_on",
           "approved_by", "approved_on", "manager_note", "item_code", "reply",
           "decided_by", "decided_on"]
-LINES = ["Black Pearl", "Platinum", "Silver", "Polygold", "Diamond", "Hot", "Bonding Gum", "Solution", "Other"]
+# The new price-list names with the old quality in brackets (17 Nov 2026), and
+# the old names still, for requests queued on a phone before it was updated.
+LINES = ["Manna Double Blue (Black Pearl)", "Manna Blue (Platinum)", "Verdo (Polygold & Diamond)", "Rox (Silver)",
+         "Surya (SF)", "Bonding Gum", "Solution", "Other",
+         "Black Pearl", "Platinum", "Silver", "Polygold", "Diamond", "Hot"]
 TYPES = ["Precured", "Hot", "Bonding Gum", "Solution", "Other"]
 UNITS = ["Rolls", "Kg", "Nos", "Litre"]
 
