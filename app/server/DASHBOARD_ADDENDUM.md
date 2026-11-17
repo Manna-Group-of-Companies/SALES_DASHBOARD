@@ -760,6 +760,18 @@ and `/payment-commitments` holds the history. Rule:
 `shared/fixtures/payment_commitment.json`. Full account:
 `docs/PAYMENT_COMMITMENT.md`.
 
+### Only the GM may decide it: straight to the GM (17 Nov 2026)
+
+An order whose route is `gm` (over the limit beyond the team Manager's
+authority, the Manager's cap of commitments reached, or a missed commitment
+not cleared) goes straight to 'Pending GM Approval' when it is raised. The
+Sales Order backstop does it, so both apps get it without a change of their
+own, and the Manager and the GM are notified ("Sent to GM: ..."). The
+Manager still sees the order, with the reason and the figures, and writes a
+**Note for GM** (a comment on the order's thread: the dashboard's own box
+under the alert, the phone's thread box relabelled). Orders already waiting
+on the Manager before this keep Send to GM.
+
 ### The GM may approve and push in one step (17 Nov 2026)
 
 The user changed the 24 Sep 2026 rule ("the GM approves, the sales manager

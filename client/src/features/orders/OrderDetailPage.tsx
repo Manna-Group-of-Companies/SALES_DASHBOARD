@@ -279,6 +279,32 @@ export function OrderDetailPage() {
 
   // ------------------------------------------------------------ actions ---
 
+  /**
+   * The Manager's note on an order already with the GM — sent there straight
+   * when raised, since only the GM may decide it (17 Nov 2026, the user). It
+   * lands on the order's thread, which the GM reads before deciding.
+   */
+  const sendGmNote = async () => {
+    if (!order || !gmNote.trim()) return;
+    setBusy('note');
+    setError(null);
+    try {
+      await Api.sales.addCreditComment({
+        salesOrder: order.id,
+        comment: gmNote,
+        role: user?.role,
+        author: user?.name || user?.id || 'Sales Manager',
+      });
+      setGmNote('');
+      setThreadKey((k) => k + 1);
+      setDone({ text: 'Note sent to the General Manager.', tone: 'ok' });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not send the note.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const decide = async (decision: 'approve' | 'reject' | 'escalate') => {
     if (!order) return;
     setBusy(decision);
@@ -481,6 +507,9 @@ export function OrderDetailPage() {
           {/* -------------------------------------------- Block 3 — credit --- */}
           <div style={{ marginBottom: 14 }}>
             <Alert
+              // Red on the facts - over the limit, or overdue more than 30 days -
+              // not on who decides: since 17 Nov 2026 the Manager may approve
+              // such an order with a commitment, and it is still not green.
               tone={overLimit ? 'danger' : customer?.creditLimit ? 'ok' : 'info'}
               title={
                 !customer
@@ -533,7 +562,13 @@ export function OrderDetailPage() {
             the counter; the sales manager reads it before sending the order
             on, and may add to it.
           */}
-          <CommitmentThread order={order} overLimit={overLimit} reloadKey={threadKey} />
+          {/* With the GM, the Manager writes in Note for GM below instead. */}
+          <CommitmentThread
+            order={order}
+            overLimit={overLimit}
+            reloadKey={threadKey}
+            allowAdd={!(withGm && !acts.approve)}
+          />
           <TemporaryCreditNote orderId={order.id} />
 
           {/*
@@ -960,7 +995,44 @@ export function OrderDetailPage() {
              * already escalated. They can still add what they know, above.
              */
             <div className="mt-16">
-              <Alert tone="info" title="With the General Manager for credit approval" />
+              <Alert tone="info" title="With the General Manager for credit approval">
+                {route?.route === 'gm' &&
+                  (() => {
+                    const why = route.gmLock
+                      ? ['the customer missed a payment commitment that is not cleared']
+                      : [
+                          route.needs.overLimit && !(route.authority > 0 && route.needs.excess <= route.authority)
+                            ? `over the credit limit by ${money(route.needs.excess, 0)}, more than your authority of ${money(route.authority, 0)}`
+                            : '',
+                          route.needs.overdue30 ? 'overdue more than 30 days past the payment terms' : '',
+                          route.cap.reached ? 'your limit of payment commitments for this customer is reached' : '',
+                        ].filter(Boolean);
+                    const s = why.join('; ');
+                    return `${s.charAt(0).toUpperCase()}${s.slice(1)}. Only the GM may decide it.`;
+                  })()}
+              </Alert>
+              {acts.comment && (
+                <Card title="Note for GM" className="mt-16">
+                  <Textarea
+                    rows={2}
+                    value={gmNote}
+                    onChange={(e) => setGmNote(e.target.value)}
+                    placeholder="Context for the General Manager"
+                    aria-label="Note for GM"
+                    disabled={!!busy}
+                  />
+                  <div className="decide__bar">
+                    <Button
+                      variant="primary"
+                      onClick={() => void sendGmNote()}
+                      loading={busy === 'note'}
+                      disabled={!!busy || !gmNote.trim()}
+                    >
+                      Send note to GM
+                    </Button>
+                  </div>
+                </Card>
+              )}
             </div>
           ) : (
             <Card title="Decision" className="mt-16">

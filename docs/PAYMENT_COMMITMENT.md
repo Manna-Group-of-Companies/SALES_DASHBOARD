@@ -21,9 +21,12 @@ They are enforced by three Server Scripts and tested in both apps.
 
 ## The flow
 
-1. **The order is raised.** If the customer has a missed commitment that is not
-   cleared yet, the order goes straight to *Pending GM Approval*, bypassing the
-   Manager. The Manager and the GM are notified.
+1. **The order is raised.** If only the GM may decide it (route GM in step 2:
+   a missed commitment not cleared, over the limit beyond the Manager's
+   authority, or the Manager's limit of commitments reached), the order goes
+   straight to *Pending GM Approval*, bypassing the Manager. The Manager and
+   the GM are notified. The Manager still sees the order, with the reason, and
+   may write a **Note for GM** on it, but may not decide it.
 2. **Where the order goes:**
    - Ordinary Manager approval: nothing needs a decision.
    - Manager, with a commitment: the customer is overdue more than 30 days past

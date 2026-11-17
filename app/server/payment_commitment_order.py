@@ -8,9 +8,11 @@
 # apps check it before they write; this is what a browser console cannot talk
 # around.
 #
-#   - A new order of a customer with a missed commitment not yet cleared goes
-#     straight to the GM ('Pending GM Approval'), bypassing the Manager, and
-#     the GM and the team's Manager are told.
+#   - A new order only the GM may decide goes straight to the GM ('Pending GM
+#     Approval'), bypassing the Manager, and the GM and the team's Manager are
+#     told: a customer with a missed commitment not yet cleared, an order over
+#     the limit beyond the team Manager's authority, or that Manager's cap of
+#     commitments reached (route 'gm').
 #   - An approval ('PO Approved - Ready for SAP' by the Manager, or 'Pending
 #     Final Approval' by the GM) of an order that needs a commitment is refused
 #     without one; the commitment entered with it (manna_payment_commitment,
@@ -89,19 +91,54 @@ if doc.docstatus < 2 and doc.customer and new != old:
                           fields=["name", "status", "cleared_on", "approver_role", "approved_on"], limit_page_length=0)
     lock = gm_lock_of(hist)
 
-    # 1. Raised (or sent back for approval) while the customer is with the GM.
-    if new in WAITING and lock and not is_sys and not is_gm:
-        doc.custom_po_status = GM_WAIT
-        who = doc.customer_name or doc.customer
+    # 1. Raised (or sent back for approval) when only the GM may decide it: the
+    #    customer is with the GM, or the order is over the limit beyond the
+    #    team Manager's authority, or that Manager's cap of commitments is
+    #    reached. It goes straight to the GM (the user, 17 Nov 2026: "go
+    #    directly to GM, but show the order in Manager, and Note for GM in
+    #    Manager"); the Manager still sees it and may add a note to its thread.
+    if new in WAITING and not is_sys and not is_gm:
         mgrs = []
         if team:
             mgrs = [u.name for u in frappe.get_all("User", filters={"custom_managed_team": team, "enabled": 1}, fields=["name"])]
-        gms = [u.name for u in frappe.get_all("User", filters={"custom_is_general_manager": 1, "enabled": 1}, fields=["name"])]
-        for u in mgrs + gms:
-            frappe.get_doc({"doctype": "Notification Log", "for_user": u, "type": "Alert",
-                            "subject": "Sent to GM: " + who + " missed a payment commitment that is not cleared"
-                                       + (" (" + doc.name + ")" if doc.name else ""),
-                            "document_type": "Sales Order", "document_name": doc.name or None}).insert(ignore_permissions=True)
+        why = ""
+        if lock:
+            why = "missed a payment commitment that is not cleared"
+        else:
+            c = frappe.db.get_value("Customer", doc.customer, ["custom_credit_limit", "custom_outstanding_balance",
+                                    "custom_outstanding_0_30", "custom_outstanding_30_60", "custom_outstanding_60_90",
+                                    "custom_outstanding_90_plus", "custom_overdue_past_terms", "custom_overdue_days"],
+                                    as_dict=True) or {}
+            n = needs_of(c, doc.total)
+            if n["needs"]:
+                # The team Manager's authority, as the route action reads it.
+                pct = frappe.db.get_single_value(XS, "manager_authority_percent")
+                pct = 10.0 if pct is None or str(pct) == "" else frappe.utils.flt(pct)
+                authority = round(frappe.utils.flt(doc.total) * pct / 100, 2)
+                for r in frappe.get_all("Manna Credit Extension Authority", filters={"parenttype": XS, "parent": XS},
+                                        fields=["manager", "max_amount"], limit_page_length=0):
+                    if mgrs and r.manager == mgrs[0]:
+                        authority = frappe.utils.flt(r.max_amount)
+                cap_count = frappe.utils.cint(frappe.db.get_single_value(XS, "manager_cap_count"))
+                cap_days = frappe.utils.cint(frappe.db.get_single_value(XS, "manager_cap_days")) or 90
+                used = 0
+                for h in hist:
+                    if h.approver_role == "manager" and h.approved_on and frappe.utils.date_diff(frappe.utils.today(), h.approved_on) < cap_days:
+                        used = used + 1
+                if route_of(n["needs"], n["over_limit"], n["excess"], authority, False, used >= cap_count) == "gm":
+                    if n["over_limit"] and not (authority > 0 and n["excess"] <= authority):
+                        why = ("is over the credit limit by Rs " + str(int(round(n["excess"])))
+                               + ", beyond the Manager's authority of Rs " + str(int(round(authority))))
+                    else:
+                        why = "has had the Manager's limit of payment commitments"
+        if why:
+            doc.custom_po_status = GM_WAIT
+            who = doc.customer_name or doc.customer
+            gms = [u.name for u in frappe.get_all("User", filters={"custom_is_general_manager": 1, "enabled": 1}, fields=["name"])]
+            for u in mgrs + gms:
+                frappe.get_doc({"doctype": "Notification Log", "for_user": u, "type": "Alert",
+                                "subject": "Sent to GM: " + who + " " + why + (" (" + doc.name + ")" if doc.name else ""),
+                                "document_type": "Sales Order", "document_name": doc.name or None}).insert(ignore_permissions=True)
 
     # 2. An approval.
     elif new in (APPROVED, FINAL) and not doc.is_new() and not is_sys and not (new == APPROVED and old == FINAL):

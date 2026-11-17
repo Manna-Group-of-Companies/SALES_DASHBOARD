@@ -1047,6 +1047,29 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
       // With the GM, the sales manager no longer decides it. Offering "Send to
       // GM" here used to re-escalate an order already escalated.
       final withGm = '${_order['custom_po_status']}' == 'Pending GM Approval';
+      // Why only the GM may decide it (it goes there straight when raised,
+      // 17 Nov 2026), and where the Manager's Note for GM goes.
+      final why = <String>[];
+      final r = _route;
+      if (withGm && r != null && '${r['route']}' == 'gm') {
+        final needs = (r['needs'] as Map?) ?? const {};
+        final excess = (needs['excess'] as num? ?? 0).toDouble();
+        final authority = (r['authority'] as num? ?? 0).toDouble();
+        if (r['gm_lock'] == true) {
+          why.add('The customer missed a payment commitment that is not cleared');
+        } else {
+          if (needs['over_limit'] == true && !(authority > 0 && excess <= authority)) {
+            why.add('Over the credit limit by Rs ${excess.round()}, more than '
+                'your authority of Rs ${authority.round()}');
+          }
+          if (needs['overdue30'] == true) {
+            why.add('overdue more than 30 days past the payment terms');
+          }
+          if (((r['cap'] as Map?) ?? const {})['reached'] == true) {
+            why.add('your limit of payment commitments for this customer is reached');
+          }
+        }
+      }
       return Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
@@ -1054,7 +1077,13 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
             borderRadius: BorderRadius.circular(8)),
         child: Text(
             withGm
-                ? 'With the General Manager for credit approval.'
+                ? [
+                    'With the General Manager for credit approval.',
+                    if (why.isNotEmpty)
+                      '${why.join('; ')[0].toUpperCase()}${why.join('; ').substring(1)}. '
+                          'Only the GM may decide it.',
+                    if (acts.comment) 'Write a Note for GM above.',
+                  ].join('\n')
                 : 'Nothing on this order is yours to decide.',
             style: const TextStyle(fontSize: 12.5)),
       );

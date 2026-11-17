@@ -101,6 +101,10 @@ class _CommitmentThreadState extends State<CommitmentThread> {
             poStatus: widget.order['custom_po_status'],
             overLimit: widget.overLimit)
         .comment;
+    // With the GM, the Manager's comment is their Note for GM — an order only
+    // the GM may decide goes there straight when raised (17 Nov 2026).
+    final noteForGm = role == 'sales_manager' &&
+        '${widget.order['custom_po_status'] ?? ''}'.trim() == 'Pending GM Approval';
     final rep = _s(widget.order['custom_sales_person']);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -170,10 +174,13 @@ class _CommitmentThreadState extends State<CommitmentThread> {
           textCapitalization: TextCapitalization.sentences,
           decoration: InputDecoration(
             isDense: true,
-            hintText: 'Add what you know — payment history, what to collect first…',
+            labelText: noteForGm ? 'Note for GM' : null,
+            hintText: noteForGm
+                ? 'Context for the General Manager'
+                : 'Add what you know — payment history, what to collect first…',
             border: const OutlineInputBorder(),
             suffixIcon: IconButton(
-              tooltip: 'Add comment',
+              tooltip: noteForGm ? 'Send note to GM' : 'Add comment',
               icon: _busy
                   ? const SizedBox(
                       width: 18,

@@ -23,6 +23,7 @@ export function CommitmentThread({
   order,
   overLimit,
   reloadKey,
+  allowAdd = true,
 }: {
   order: {
     id: string;
@@ -34,6 +35,8 @@ export function CommitmentThread({
   overLimit: boolean;
   /** Changes when the page posts a comment itself, e.g. a note sent with an escalation. */
   reloadKey?: unknown;
+  /** False where the page has its own box for the same comment (the Manager's Note for GM). */
+  allowAdd?: boolean;
 }) {
   const user = useAppSelector(selectUser);
   const [comments, setComments] = useState<CreditComment[]>([]);
@@ -125,7 +128,7 @@ export function CommitmentThread({
         </div>
       )}
 
-      {loaded && mayComment && (
+      {loaded && mayComment && allowAdd && (
         <div className="commit__add">
           <Textarea
             rows={2}
