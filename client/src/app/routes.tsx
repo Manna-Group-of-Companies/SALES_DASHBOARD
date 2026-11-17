@@ -32,7 +32,7 @@ import { GmFollowUpOrderPage } from '@/features/orders/GmFollowUpOrderPage';
 import { MannaTreadsOrdersPage } from '@/features/accounts/MannaTreadsOrdersPage';
 import { ItemRequestsPage } from '@/features/accounts/ItemRequestsPage';
 import { CreditPeriodRequestsPage } from '@/features/credit/CreditPeriodRequestsPage';
-import { CreditExtensionsPage } from '@/features/credit/CreditExtensionsPage';
+import { PaymentCommitmentsPage } from '@/features/credit/PaymentCommitmentsPage';
 import { LocationVerificationPage } from '@/features/approvals/LocationVerificationPage';
 import { TeamRegularizationsPage } from '@/features/approvals/TeamRegularizationsPage';
 import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
@@ -419,14 +419,17 @@ export function AppRoutes() {
             </CreditRoute>
           }
         />
+        {/* The temporary credit extension merged into the payment commitment
+            ladder (17 Nov 2026); its old address still lands there. */}
         <Route
-          path="credit-extensions"
+          path="payment-commitments"
           element={
             <RoleRoute allow={CREDIT_EXTENSIONS}>
-              <CreditExtensionsPage />
+              <PaymentCommitmentsPage />
             </RoleRoute>
           }
         />
+        <Route path="credit-extensions" element={<Navigate to="/payment-commitments" replace />} />
         <Route
           path="item-requests"
           element={

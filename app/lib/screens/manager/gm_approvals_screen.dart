@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/payment_commitment.dart';
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/credit_commitment.dart';
 import 'package:manna_field_sales/core/errors.dart';
@@ -113,6 +114,24 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
       if (a.kind == 'gm_so_po') {
         if (approve) {
           final t = terms!;
+          // An order needing a credit decision (over the limit, overdue more
+          // than 30 days past terms, or a missed commitment not cleared) is
+          // another 10-day payment commitment: the condition and its date
+          // (payment_commitment.json). Sent first, so the approval finds it.
+          final route = await Api.getOrderRoute(a.name);
+          final needs = (route['needs'] as Map?) ?? const {};
+          if (needs['needs'] == true || route['gm_lock'] == true) {
+            final d = DateTime.now();
+            final today =
+                '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+            final problem = pcCheckApproval(approvedOn: today, commitment: t.dueIso, remarks: t.condition);
+            if (problem != null) {
+              throw Exception(problem == 'remarks'
+                  ? 'Write the condition: it is the payment commitment for this order.'
+                  : '${kPcMessages[problem]} The due date is the payment commitment date.');
+            }
+            await Api.givePaymentCommitment(a.name, t.dueIso, t.condition, customerName: '${a.party}');
+          }
           conditionSaved = await Api.approveEscalatedOrder(a.name,
               condition: t.condition, dueDateIso: t.dueIso);
         } else {

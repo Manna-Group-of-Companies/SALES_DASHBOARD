@@ -39,6 +39,9 @@ import { recentWeeks, type Week } from '@/domain/weeks';
 import { serverNow } from '@/domain/serverClock';
 import { formatDate } from '@/domain/orderRules';
 import { Api } from '@/api/client';
+import { getOrdersCommitments } from '@/api/paymentCommitments';
+import { ORDER_STAGE, pcOrderStage } from '@/domain/paymentCommitment';
+import { agingOf } from '@/domain/credit';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import { Alert, Badge, Empty, Input, Select } from '@/components/ui';
@@ -70,7 +73,24 @@ interface Row {
   sapSalesOrderStatus?: string;
   /** Which of the four filter buckets this row is in. See `orderBucket`. */
   bucket: OrderBucket;
+  /** The customer, for their outstanding; empty on a lead. */
+  customer?: string;
 }
+
+/**
+ * The stage names the user asked for (17 Nov 2026), coloured the way the
+ * status pills are: what waits on somebody amber, the end of the road green,
+ * a refusal red.
+ */
+const STAGE_TONE: Record<string, 'warn' | 'ok' | 'danger' | 'accent'> = {
+  [ORDER_STAGE.manager]: 'warn',
+  [ORDER_STAGE.gm]: 'accent',
+  [ORDER_STAGE.gmApproved]: 'warn',
+  [ORDER_STAGE.rejected]: 'danger',
+  [ORDER_STAGE.paymentPending]: 'warn',
+  [ORDER_STAGE.pushed]: 'ok',
+  [ORDER_STAGE.approved]: 'ok',
+};
 
 export function OrdersListPage() {
   const user = useAppSelector(selectUser);
@@ -78,6 +98,12 @@ export function OrdersListPage() {
 
   const [orders, setOrders] = useState<TeamOrder[]>([]);
   const [leadOrders, setLeadOrders] = useState<LeadOrder[]>([]);
+  /** Each order's payment commitment and SAP state, and each customer's outstanding (17 Nov 2026). */
+  const [pc, setPc] = useState<{ orders: Record<string, { status: string }>; pushed: Set<string> }>({
+    orders: {},
+    pushed: new Set(),
+  });
+  const [owed, setOwed] = useState<Record<string, number>>({});
   const [people, setPeople] = useState<SalesPerson[]>([]);
   const [weeks, setWeeks] = useState<Week[]>([]);
   const [weekStart, setWeekStart] = useState('');
@@ -129,6 +155,27 @@ export function OrdersListPage() {
         if (!live) return;
         setOrders(so);
         setLeadOrders(lo);
+        // Extra columns only: a list that cannot read them still lists.
+        const [info, parties] = await Promise.all([
+          getOrdersCommitments(
+            so.map((o) => o.id),
+            [],
+          ).catch(() => null),
+          Api.sales.listCustomers().catch(() => []),
+        ]);
+        if (!live) return;
+        if (info) setPc({ orders: info.orders, pushed: info.pushed });
+        const out: Record<string, number> = {};
+        for (const c of parties) {
+          out[c.id] = agingOf({
+            custom_outstanding_balance: c.outstanding,
+            custom_outstanding_0_30: c.outstanding0_30,
+            custom_outstanding_30_60: c.outstanding30_60,
+            custom_outstanding_60_90: c.outstanding60_90,
+            custom_outstanding_90_plus: c.outstanding90Plus,
+          }).total;
+        }
+        setOwed(out);
       })
       .catch((e: unknown) => {
         if (live) setError(e instanceof Error ? e.message : 'Could not read orders.');
@@ -183,6 +230,7 @@ export function OrdersListPage() {
         undecided: awaitingManager(o.poStatus),
         sapSalesOrder: o.sapSalesOrder,
         sapSalesOrderStatus: o.sapSalesOrderStatus,
+        customer: o.customer,
         // The two doctypes disagree on what approved means, so each passes its
         // own answer — see `orderBucket`.
         bucket: orderBucket({
@@ -413,10 +461,22 @@ export function OrdersListPage() {
                     <span className="mono">{r.id}</span>
                   )}{' '}
                   · {r.rep || 'Unassigned'} · {formatDate(r.date)}
+                  {r.customer && owed[r.customer] != null && (
+                    <> · Outstanding {money(owed[r.customer], 0)}</>
+                  )}
                 </div>
 
                 <div className="ordrow__status">
                   <StatusPill status={r.status} sapStatus={r.sapSalesOrderStatus} />
+                  {r.kind === 'sales' &&
+                    (() => {
+                      const stage = pcOrderStage({
+                        poStatus: r.status,
+                        pushed: pc.pushed.has(r.id) || !!r.sapSalesOrder,
+                        commitment: pc.orders[r.id]?.status ?? '',
+                      });
+                      return <Badge tone={STAGE_TONE[stage] ?? 'accent'}>{stage}</Badge>;
+                    })()}
                   {/* Never a tick on a lead order: it is not a Sales Order yet
                       and has no production status, so an empty box would read
                       as "not finished" rather than "not applicable". */}

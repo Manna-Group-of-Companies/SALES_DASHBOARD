@@ -99,7 +99,7 @@ import { allItemsReady, firstStage, isTerminalStage } from '@/domain/processStag
 import { round2 } from '@/domain/productRules';
 
 import { frappeNow, noteServerDate, serverNow } from '@/domain/serverClock';
-import { OUTSTANDING_FIELD, creditEscalates } from '@/domain/credit';
+import { getOrderRoute } from './paymentCommitments';
 import {
   approvalConditionProblem,
   COMMENT_EMPTY,
@@ -3037,20 +3037,20 @@ async function decideSalesOrder(input: {
     input.decision !== 'reject' &&
     storedStatus !== PO_STATUS.finalApproval
   ) {
-    const customerId = str(doc[SALES_ORDER_FIELD.customer]);
-    const [party] = customerId
-      ? await listDocs<Record<string, unknown>>(DOCTYPE.customer, {
-          fields: Object.values(OUTSTANDING_FIELD),
-          filters: [['name', '=', customerId]],
-          limit: 1,
-        }).catch(() => [])
-      : [];
-    if (!party) {
+    /*
+     * Since 17 Nov 2026 the server decides where an order goes (the 10-day
+     * payment commitment ladder, payment_commitment.json): only its 'gm' route
+     * takes Approve away from the sales manager. An order that needs a
+     * commitment may be approved with one - manna_payment_commitment_order
+     * refuses the save without it. Unreadable: refused, never waved through.
+     */
+    const route = await getOrderRoute(input.id).catch(() => null);
+    if (!route) {
       throw new Error(
         "Could not read the customer's credit position, so this was not saved. Try again.",
       );
     }
-    overLimit = creditEscalates(party, Number(doc[SALES_ORDER_FIELD.total]) || 0);
+    overLimit = route.route === 'gm';
   }
   const allowed = orderActions(input.role, storedStatus, overLimit);
   if (!allowed[input.decision]) {

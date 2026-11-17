@@ -52,6 +52,7 @@ $flow = Get-FlowSettings -Config (Cfg '{"order_flow":{"mode":"manna_first","sinc
 Write-Host "`norder_flow settings" -ForegroundColor Cyan
 
 $none = Get-FlowSettings -Config (Cfg '{}')
+$flowAny = Get-FlowSettings -Config (Cfg '{"order_flow":{"mode":"manna_first","since":"2026-11-03","require_approval":false}}')
 Check 'no order_flow block is the old flow, hitech_direct' ($none.Mode -eq 'hitech_direct') $none.Mode
 Check 'manna_first without since is refused - it would send every old order' (Throws { Get-FlowSettings -Config (Cfg '{"order_flow":{"mode":"manna_first"}}') })
 Check 'since that is not yyyy-MM-dd is refused' (Throws { Get-FlowSettings -Config (Cfg '{"order_flow":{"mode":"manna_first","since":"03/11/2026"}}') })
@@ -81,7 +82,12 @@ $doc = { param([hashtable] $f)
                      custom_po_status = 'Pending Approval'; custom_mt_sales_order = $null; custom_mt_sync_error = $null }
     foreach ($k in $f.Keys) { $d[$k] = $f[$k] }
     [pscustomobject]$d }
-Check 'a new, unapproved order is taken - as soon as it is created' ((Get-MfSkipReason -Doc (& $doc @{}) -Flow $flow) -eq '') (Get-MfSkipReason -Doc (& $doc @{}) -Flow $flow)
+Check 'with require_approval off, a new unapproved order is taken - as soon as it is created' ((Get-MfSkipReason -Doc (& $doc @{}) -Flow $flowAny) -eq '') (Get-MfSkipReason -Doc (& $doc @{}) -Flow $flowAny)
+Check 'by default (17 Nov 2026) an unapproved order waits for approval' ((Get-MfSkipReason -Doc (& $doc @{}) -Flow $flow) -match 'waits for approval') (Get-MfSkipReason -Doc (& $doc @{}) -Flow $flow)
+Check 'an approved order is taken' ((Get-MfSkipReason -Doc (& $doc @{ custom_po_status = 'PO Approved - Ready for SAP' }) -Flow $flow) -eq '') (Get-MfSkipReason -Doc (& $doc @{ custom_po_status = 'PO Approved - Ready for SAP' }) -Flow $flow)
+Check 'a GM-approved order not yet pushed by the Manager waits' ((Get-MfSkipReason -Doc (& $doc @{ custom_po_status = 'Pending Final Approval' }) -Flow $flow) -match 'waits for approval')
+Check 'the commitment goes in the Comments line' ((Get-MfCommitmentText -Rows @([pscustomobject]@{ name = 'PC-00001'; commitment_date = '2026-11-27'; approver_role = 'manager' })) -eq 'payment commitment PC-00001: pays by 2026-11-27 (Manager)')
+Check 'no commitment, no line' ((Get-MfCommitmentText -Rows @()) -eq '')
 Check 'one that already has its Manna Treads order is skipped' ((Get-MfSkipReason -Doc (& $doc @{ custom_mt_sales_order = '561' }) -Flow $flow) -match '561')
 Check 'one with an error on it waits for somebody to clear it' ((Get-MfSkipReason -Doc (& $doc @{ custom_mt_sync_error = 'no code' }) -Flow $flow) -match 'custom_mt_sync_error')
 Check 'a cancelled order is skipped' ((Get-MfSkipReason -Doc (& $doc @{ docstatus = 2 }) -Flow $flow) -match 'cancelled')

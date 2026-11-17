@@ -2396,7 +2396,15 @@ function Get-FlowSettings {
         }
     }
 
+    # Only approved orders go to SAP (17 Nov 2026, the user: ERPNext is where
+    # orders are decided; SAP gets them once approved). order_flow
+    # require_approval: false restores sending an order as soon as it exists.
+    $requireApproval = $true
+    $rp = $b.PSObject.Properties['require_approval']
+    if ($rp -and $null -ne $rp.Value) { $requireApproval = [bool]$rp.Value }
+
     $out = @{
+        RequireApproval = $requireApproval
         PickListsSince = $pkSince
         B1ifWait      = [int]$wait
         Mode          = $mode
@@ -2449,7 +2457,18 @@ function Get-MfSkipReason {
     $st = ConvertTo-CleanText (Get-JsonProp $Doc 'custom_po_status')
     if (@($Flow.SkipStatuses) -contains $st) { return "approval status is '$st'" }
     if (-not (Test-MfOwns -Row $Doc -Flow $Flow)) { return ("not a {0} order created on or after {1}" -f (@($Flow.Units) -join '/'), $Flow.Since) }
+    if ($Flow.RequireApproval -and $st -ne 'PO Approved - Ready for SAP') { return "waits for approval (it is '$st')" }
     return ''
+}
+
+function Get-MfCommitmentText {
+    # The SAP Comments line for an order's payment commitment: the latest one.
+    # '' when it has none. Pure.
+    param([object[]] $Rows)
+    $r = @($Rows | Where-Object { $_ }) | Select-Object -Last 1
+    if (-not $r) { return '' }
+    $who = $(if ("$(Get-JsonProp $r 'approver_role')" -eq 'gm') { 'GM' } else { 'Manager' })
+    return ("payment commitment {0}: pays by {1} ({2})" -f (Get-JsonProp $r 'name'), (Get-JsonProp $r 'commitment_date'), $who)
 }
 
 function Get-MfTaxCode {
@@ -2668,10 +2687,14 @@ function New-MfSalesOrderBody {
         [Parameter(Mandatory = $true)] [string] $DocDate,
         [Parameter(Mandatory = $true)] [string] $DueDate,
         [string] $Rep = '',
-        [Parameter(Mandatory = $true)] $Settings
+        [Parameter(Mandatory = $true)] $Settings,
+        [string] $Commitment = ''
     )
     $comments = "From ERPNext $OrderName"
     if ("$Rep".Trim() -ne '') { $comments = "$comments - rep $("$Rep".Trim())" }
+    # The order's 10-day payment commitment, decided in ERPNext (17 Nov 2026):
+    # SAP is told, never asked.
+    if ("$Commitment".Trim() -ne '') { $comments = "$comments - $("$Commitment".Trim())" }
     if ($comments.Length -gt 254) { $comments = $comments.Substring(0, 251) + '...' }
 
     $lines = New-Object System.Collections.ArrayList
@@ -3425,6 +3448,7 @@ try {
                 $skipJson  = ConvertTo-Json -InputObject @($flow.SkipStatuses) -Compress
                 $mfFilter  = '[["custom_company","in",' + $unitsJson + '],["creation",">=","' + $flow.Since + ' 00:00:00"],["' + $script:F_MT_SO + '","in",["",null]],["' + $script:F_MT_ERR + '","in",["",null]],["docstatus","<",2]'
                 if (@($flow.SkipStatuses).Count -gt 0) { $mfFilter += ',["custom_po_status","not in",' + $skipJson + ']' }
+                if ($flow.RequireApproval) { $mfFilter += ',["custom_po_status","=","PO Approved - Ready for SAP"]' }
                 $mfFilter += ']'
                 $mfList = @(Get-ErpList -Filters $mfFilter -Fields @('name', 'customer', 'creation', 'custom_company') | Sort-Object { "$($_.name)" })
                 Write-Log INFO ("ERPNext: {0} new {1} order(s) since {2} without a Manna Treads order (manna_first)." -f $mfList.Count, (@($flow.Units) -join '/'), $flow.Since)
@@ -4312,9 +4336,21 @@ try {
                                 if ($why) { $null = Write-MfRefusal -Name $name -Message $why -When $mfNow -IsDryRun ([bool]$DryRun); continue }
 
                                 # (d) build and create
+                                $pcText = ''
+                                try {
+                                    $pcQ = 'fields=' + [uri]::EscapeDataString('["name","commitment_date","approver_role"]') +
+                                           '&filters=' + [uri]::EscapeDataString('[["sales_order","=","' + $name + '"],["status","in",["Running","Unchecked","Kept","Missed"]]]') +
+                                           '&order_by=' + [uri]::EscapeDataString('creation asc') + '&limit_page_length=0'
+                                    $pcRows = @((Invoke-ErpApi -Method 'GET' -Path '/api/resource/Manna%20Payment%20Commitment' -Query $pcQ).data)
+                                    $pcText = Get-MfCommitmentText -Rows $pcRows
+                                } catch {
+                                    # A site without the ladder's doctype, or a read that failed: the
+                                    # order still goes, without the line.
+                                    $pcText = ''
+                                }
                                 $body = New-MfSalesOrderBody -Plan $plan -CardCode $w.BpCode -OrderName $name -TaxCode $taxCode `
                                             -DocDate $mfToday -DueDate (Get-MfDueDate -DeliveryDate (Get-JsonProp $w.Doc 'delivery_date') -Today $mfToday) `
-                                            -Rep (ConvertTo-CleanText (Get-JsonProp $w.Doc 'custom_sales_person')) -Settings $mf
+                                            -Rep (ConvertTo-CleanText (Get-JsonProp $w.Doc 'custom_sales_person')) -Settings $mf -Commitment $pcText
                                 if ($DryRun) {
                                     Write-Log INFO ("PASS M {0}: WOULD POST /Orders to {1} ({2} line(s), {3} incl. GST, {4}):`n{5}" -f `
                                         $name, $mf.CompanyDb, $plan.Lines.Count, $plan.Total, $taxCode, ($body | ConvertTo-Json -Depth 8))

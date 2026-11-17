@@ -17,6 +17,7 @@ import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/outbox.dart';
+import 'package:manna_field_sales/screens/requests/payment_commitments_screen.dart';
 
 const Color _kOrange = Color(0xFFF46A21);
 const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -561,11 +562,10 @@ class _CreditExtensionDetailScreenState extends State<CreditExtensionDetailScree
   }
 }
 
-/// On an order's page: the temporary credit extensions asked on it (17 Nov
-/// 2026). The order's own approval is unchanged, so whoever reads the order
-/// would otherwise not know SAP's limit was raised for it, or that its
-/// commitment was missed. Nothing when there are none, or this login may not
-/// see them.
+/// On an order's page: its 10-day payment commitment, if it has one (17 Nov
+/// 2026), so whoever reads the order sees the promised date and whether it
+/// was kept. Nothing when there is none, or this login may not see it.
+/// (Named for the temporary credit extension it replaced; the two merged.)
 class TemporaryCreditStrip extends StatefulWidget {
   final String orderName;
   const TemporaryCreditStrip({super.key, required this.orderName});
@@ -574,41 +574,51 @@ class TemporaryCreditStrip extends StatefulWidget {
 }
 
 class _TemporaryCreditStripState extends State<TemporaryCreditStrip> {
-  List<CreditExtension> _rows = const [];
+  Map? _c;
 
   @override
   void initState() {
     super.initState();
-    Api.getCreditExtensions(salesOrder: widget.orderName).then((r) {
-      if (mounted) setState(() => _rows = r);
+    Api.getOrderRoute(widget.orderName).then((r) {
+      if (mounted) setState(() => _c = r['commitment'] as Map?);
     }).catchError((_) {});
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_rows.isEmpty) return const SizedBox.shrink();
-    return Column(children: [
-      for (final x in _rows)
-        InkWell(
-          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => CreditExtensionDetailScreen(name: x.name))),
-          child: Container(
-            margin: const EdgeInsets.symmetric(vertical: 6),
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: _color(x.status).withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8)),
-            child: Row(children: [
-              Icon(Icons.add_card, size: 18, color: _color(x.status)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Temporary credit ${x.name}: ${x.status}'
-                  '${x.amount > 0 ? '\n${_rs(x.amount)} until ${_date(x.commitmentDate)} · paid ${_rs(x.paid)}' : ''}',
-                  style: const TextStyle(fontSize: 12.5),
-                ),
-              ),
-              const Icon(Icons.chevron_right, size: 18),
-            ]),
+    final c = _c;
+    final st = '${c?['status'] ?? ''}';
+    if (c == null || st == 'Pending' || st == 'Cancelled' || st.isEmpty) return const SizedBox.shrink();
+    final color = st == 'Kept'
+        ? const Color(0xFF2E7D32)
+        : st == 'Missed'
+            ? Colors.red.shade700
+            : const Color(0xFFB26A00);
+    final what = switch (st) {
+      'Kept' => 'kept',
+      'Missed' => 'missed',
+      'Unchecked' => 'payment pending, not yet checked in SAP',
+      _ => 'payment pending',
+    };
+    return InkWell(
+      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PaymentCommitmentsScreen())),
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 6),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(color: color.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8)),
+        child: Row(children: [
+          Icon(Icons.add_card, size: 18, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Payment commitment to ${_date('${c['commitment_date'] ?? ''}')}: $what\n'
+              'Given by the ${'${c['approver_role']}' == 'gm' ? 'GM' : 'Manager'}',
+              style: const TextStyle(fontSize: 12.5),
+            ),
           ),
-        ),
-    ]);
+          const Icon(Icons.chevron_right, size: 18),
+        ]),
+      ),
+    );
   }
 }

@@ -273,6 +273,11 @@ void main() {
       server.routes['GET /api/resource/Customer/C-1'] = (_) => {
             'data': {'name': 'C-1'}
           };
+      // Since 17 Nov 2026 the server decides where an order goes (the
+      // payment commitment ladder): this one is an ordinary approval.
+      server.routes['POST /api/method/manna_payment_commitment'] = (_) => {
+            'message': {'route': 'manager', 'needs': {'needs': false}, 'gm_lock': false}
+          };
       server.routes['PUT /api/resource/Sales Order/SO-1'] = (o) => {
             'data': {'name': 'SO-1', ..._body(o)}
           };
@@ -467,7 +472,8 @@ void main() {
             }
           };
       server.routes['GET /api/resource/Customer/C-1'] = (_) => {
-            'data': {'name': 'C-1', kFieldOverduePastTerms: 50000}
+            // More than 30 days past terms needs a credit decision (17 Nov 2026).
+            'data': {'name': 'C-1', kFieldOverduePastTerms: 50000, kFieldOverdueDays: 45}
           };
 
       await expectLater(

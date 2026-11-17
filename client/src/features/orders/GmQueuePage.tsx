@@ -31,6 +31,8 @@ import { formatDate } from '@/domain/orderRules';
 import { daysBetween } from '@/domain/hrRules';
 import { frappeToday } from '@/domain/serverClock';
 import { Api } from '@/api/client';
+import { listCommitments, type CommitmentRow } from '@/api/paymentCommitments';
+import { PC } from '@/domain/paymentCommitment';
 import { useAppSelector } from '@/store/hooks';
 import { selectUser } from '@/store/selectors';
 import { Alert, Empty, Input } from '@/components/ui';
@@ -77,6 +79,8 @@ export function GmQueuePage() {
   const [awaitingPush, setAwaitingPush] = useState(0);
   const [answered, setAnswered] = useState(0);
   const [customers, setCustomers] = useState<SalesCustomer[]>([]);
+  /** Every payment commitment, for each customer's history on the card (17 Nov 2026). */
+  const [commitments, setCommitments] = useState<CommitmentRow[]>([]);
   const [query, setQuery] = useState('');
   const [tick, setTick] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -90,9 +94,11 @@ export function GmQueuePage() {
       Api.sales.listOrders(),
       Api.sales.listCustomers(),
       Api.sales.listCreditConditions().catch(() => []),
+      listCommitments().catch(() => [] as CommitmentRow[]),
     ])
-      .then(([o, c, conds]) => {
+      .then(([o, c, conds, pcs]) => {
         if (!live) return;
+        setCommitments(pcs);
         setOrders(o.filter((x) => x.poStatus === PO_STATUS.pendingGm));
         setAwaitingPush(o.filter((x) => x.poStatus === PO_STATUS.finalApproval).length);
         setAnswered(conds.filter((k) => k.status === COND_AWAITING).length);
@@ -110,6 +116,23 @@ export function GmQueuePage() {
   }, [tick]);
 
   const byId = useMemo(() => new Map(customers.map((c) => [c.id, c])), [customers]);
+  /** Per customer: commitments given, missed, days, and whether a miss is still open. */
+  const history = useMemo(() => {
+    const m = new Map<string, { given: number; missed: number; days: number; open: boolean; last?: CommitmentRow }>();
+    for (const r of commitments) {
+      if (r.status === PC.cancelled) continue;
+      const h = m.get(r.customer) ?? { given: 0, missed: 0, days: 0, open: false };
+      h.given += 1;
+      h.days += r.days;
+      if (r.status === PC.missed) {
+        h.missed += 1;
+        if (!r.clearedOn) h.open = true;
+      }
+      if (!h.last || r.approvedOn > h.last.approvedOn) h.last = r;
+      m.set(r.customer, h);
+    }
+    return m;
+  }, [commitments]);
   const today = frappeToday();
 
   /** Each order with its credit picture, read the way the review page reads it. */
@@ -256,6 +279,22 @@ export function GmQueuePage() {
               <div className="gmq__body">
                 <CreditBar picture={p} compact />
                 {pastTerms && <div className="gm__over">Overdue: {pastTerms}</div>}
+                {(() => {
+                  const h = history.get(o.customer);
+                  if (!h) return null;
+                  return (
+                    <>
+                      {h.open && (
+                        <div className="gm__over">Sent to you directly: missed a payment commitment not yet cleared</div>
+                      )}
+                      <div className="gmq__due">
+                        Commitments: {h.given} given · {h.missed} missed · {h.days} day{h.days === 1 ? '' : 's'}
+                        {h.last &&
+                          ` · last ${formatDate(h.last.commitmentDate)} by the ${h.last.approverRole === 'gm' ? 'GM' : 'Manager'}, ${h.last.status.toLowerCase()}`}
+                      </div>
+                    </>
+                  );
+                })()}
 
                 {aging.bucketsKnown && (
                   <div className="gmq__aging" aria-label="Outstanding by age">

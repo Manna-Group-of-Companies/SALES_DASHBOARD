@@ -194,7 +194,9 @@ export interface CreditEscalation {
 export function escalationOf(customer: CustomerRow, orderTotal: number): CreditEscalation {
   return {
     overLimit: overCreditLimit(customer, orderTotal),
-    pastTerms: overduePastTerms(customer) > OVERDUE_TOLERANCE,
+    // Since 17 Nov 2026 only MORE than 30 days past terms (the user's choice,
+    // payment_commitment.json); 1-30 days is an ordinary approval.
+    pastTerms: overduePastTerms(customer) > OVERDUE_TOLERANCE && overdueDaysOf(customer) > 30,
   };
 }
 

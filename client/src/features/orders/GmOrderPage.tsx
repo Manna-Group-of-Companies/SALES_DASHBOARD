@@ -45,12 +45,19 @@ import { RefreshButton } from '@/components/common/RefreshButton';
 import { AgingBoxes } from '@/components/common/AgingBoxes';
 import { StatusPill } from '@/components/common/StatusPill';
 import { CommitmentThread } from './CommitmentThread';
+import { getOrderRoute, giveCommitment, type OrderRoute } from '@/api/paymentCommitments';
+import { PC_MESSAGES, pcCheckApproval } from '@/domain/paymentCommitment';
 import { TemporaryCreditNote } from '@/features/credit/TemporaryCreditNote';
 import { CreditBar } from './CreditBar';
 import { OrderLinesEditor } from './OrderLinesEditor';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import './orders.css';
+
+const isoToday = () => {
+  const d = serverNow();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 function qty(q: Qty): string {
   const parts: string[] = [];
@@ -64,6 +71,8 @@ export function GmOrderPage() {
   const user = useAppSelector(selectUser);
 
   const [order, setOrder] = useState<OrderDetail | null>(null);
+  /** The server's word on the order (the 10-day commitment ladder, 17 Nov 2026). */
+  const [route, setRoute] = useState<OrderRoute | null>(null);
   const [customer, setCustomer] = useState<SalesCustomer | null>(null);
   const [pool, setPool] = useState<MinStockLine[]>([]);
   /** Conditions already made from this order — shown once it is approved. */
@@ -112,6 +121,8 @@ export function GmOrderPage() {
         setCustomer(parties.find((c) => c.id === o.customer) ?? null);
         setPool(stock);
         setConditions(made);
+        const r = await getOrderRoute(o.id).catch(() => null);
+        if (live) setRoute(r);
       })
       .catch((e: unknown) => {
         if (live) setError(e instanceof Error ? e.message : 'Could not read this order.');
@@ -187,6 +198,13 @@ export function GmOrderPage() {
     : false;
   const required = conditionRequiredOnApproval(order?.creditCommitment);
   const termsProblem = approvalConditionProblem(order?.creditCommitment, terms);
+  /**
+   * The GM's approval of an order that needs a credit decision - over the
+   * limit, overdue more than 30 days past terms, or a customer who missed a
+   * commitment - is another payment commitment of at most 10 days
+   * (payment_commitment.json): the condition's words and date are it.
+   */
+  const needsCommitment = !!route && (route.needs.needs || route.gmLock);
 
   // ------------------------------------------------------------ actions ---
 
@@ -201,6 +219,18 @@ export function GmOrderPage() {
     setBusy('approve');
     setError(null);
     try {
+      if (needsCommitment) {
+        const problem = pcCheckApproval({ approvedOn: due ? isoToday() : '', commitment: due, remarks: terms });
+        if (problem) {
+          setError(
+            problem === 'remarks'
+              ? 'Write the terms: they are the payment commitment for this order.'
+              : PC_MESSAGES[problem] + ' The due date is the payment commitment date.',
+          );
+          return;
+        }
+        await giveCommitment(order.id, due, terms.trim());
+      }
       if (smNote.trim()) {
         await Api.sales.addCreditComment({
           salesOrder: order.id,
@@ -643,8 +673,17 @@ export function GmOrderPage() {
             <Alert tone="danger" icon="✕" title="Rejected" />
           ) : (
             <Card title="Your Decision">
+              {needsCommitment && route && (
+                <Alert tone="warn" title="Payment commitment · up to 10 days">
+                  {route.gmLock
+                    ? 'The customer missed a payment commitment that is not cleared. '
+                    : ''}
+                  Approving gives another payment commitment: the condition is its terms and the due date its payment
+                  date, at most 10 days from today.
+                </Alert>
+              )}
               <Field
-                label={required ? 'Condition' : 'Condition (optional)'}
+                label={required || needsCommitment ? 'Condition' : 'Condition (optional)'}
                 error={terms !== (order.creditCommitment ?? '') ? (termsProblem ?? undefined) : undefined}
               >
                 <Textarea
@@ -655,11 +694,19 @@ export function GmOrderPage() {
                   disabled={!!busy || editing}
                 />
               </Field>
-              <Field label="Due date">
+              <Field label={needsCommitment ? 'Payment commitment date (up to 10 days)' : 'Due date'}>
                 <Input
                   type="date"
                   className="gmdecide__due"
                   value={due}
+                  max={
+                    needsCommitment
+                      ? (() => {
+                          const d = new Date(serverNow().getTime() + 10 * 86_400_000);
+                          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                        })()
+                      : undefined
+                  }
                   onChange={(e) => setDue(e.target.value)}
                   disabled={!!busy || editing}
                 />

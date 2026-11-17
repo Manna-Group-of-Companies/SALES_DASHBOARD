@@ -34,7 +34,7 @@ import 'package:manna_field_sales/core/credit.dart' show inr, overduePastTerms, 
 import 'package:manna_field_sales/core/pick_list.dart' show kPickListsReleased;
 import 'package:manna_field_sales/screens/customers/payment_due_screen.dart';
 import 'package:manna_field_sales/screens/orders/pick_list_page.dart';
-import 'package:manna_field_sales/screens/requests/credit_extension_screen.dart';
+import 'package:manna_field_sales/screens/requests/payment_commitments_screen.dart';
 import 'package:manna_field_sales/screens/requests/credit_period_screen.dart';
 import 'package:manna_field_sales/screens/requests/item_request_screen.dart';
 import 'package:manna_field_sales/screens/production/production_dashboard_screen.dart';
@@ -695,11 +695,11 @@ class _HomeDashboardState extends State<HomeDashboard>
       if (Session.I.isGM && !Session.I.isManager)
         _Tile('Credit Period Requests', Icons.event_repeat,
                 () => _go(const CreditPeriodRequestsScreen())),
-      // Temporary credit extensions (16 Nov 2026): missed commitments and
-      // repeat requests come to the GM.
+      // The 10-day payment commitments (17 Nov 2026; they replaced the
+      // temporary credit extensions): missed ones send orders to the GM.
       if (Session.I.isGM && !Session.I.isManager)
-        _Tile('Temporary Credit', Icons.add_card,
-                () => _go(const CreditExtensionsScreen())),
+        _Tile('Payment Commitments', Icons.add_card,
+                () => _go(const PaymentCommitmentsScreen())),
       if (isRep || Session.I.isManager || Session.I.isGM || Session.I.isHR)
         _Tile('Day Map', Icons.pin_drop, () => _go(const DayMapScreen())),
       // Sits above everything else a rep does: an order nobody has received is
@@ -734,9 +734,10 @@ class _HomeDashboardState extends State<HomeDashboard>
         // them (16 Nov 2026).
         _Tile('Credit Periods', Icons.event_repeat,
             () => _go(const CreditPeriodRequestsScreen())),
-        // Asked on an order over the credit limit (16 Nov 2026).
-        _Tile('Temporary Credit', Icons.add_card,
-            () => _go(const CreditExtensionsScreen())),
+        // The commitments given on this rep's orders, and whether they were
+        // kept (17 Nov 2026).
+        _Tile('Payment Commitments', Icons.add_card,
+            () => _go(const PaymentCommitmentsScreen())),
         // Beside Collections on purpose: both are money the rep owes somebody
         // an answer about, and a condition is usually discharged by collecting.
         _Tile('My Conditions', Icons.rule,

@@ -744,3 +744,18 @@ phone "Temporary Credit". Enforced by `manna_credit_extension`
   Notification Log, which neither app read.
 - **On the order.** The order page in both apps shows any extension asked on
   that order (`action: list, sales_order`).
+
+## Payment commitments: the 10-day ladder (17 Nov 2026)
+
+Overdue more than 30 days past terms, or over the credit limit, now needs a
+**payment commitment of up to 10 days** with the approval. The Manager gives it
+within their authority; otherwise the GM decides. Overdue 1–30 days is an
+ordinary approval. A missed commitment sends the customer's orders to the GM
+until the overdue is cleared. The server decides the route (`action: route`),
+and both apps pass `overLimit = route === 'gm'` to `orderActions`.
+`manna_payment_commitment_order` refuses an approval without its commitment.
+This replaces the temporary credit extension's request flow, and SAP credit
+limits are no longer changed. Team Orders shows the new stages in both apps,
+and `/payment-commitments` holds the history. Rule:
+`shared/fixtures/payment_commitment.json`. Full account:
+`docs/PAYMENT_COMMITMENT.md`.

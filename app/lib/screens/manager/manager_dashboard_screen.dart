@@ -21,7 +21,7 @@ import 'package:manna_field_sales/screens/manager/manager_orders_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_targets_screen.dart';
 import 'package:manna_field_sales/core/pick_list.dart' show kPickListsReleased;
 import 'package:manna_field_sales/screens/orders/pick_list_screen.dart';
-import 'package:manna_field_sales/screens/requests/credit_extension_screen.dart';
+import 'package:manna_field_sales/screens/requests/payment_commitments_screen.dart';
 import 'package:manna_field_sales/screens/requests/credit_period_screen.dart';
 import 'package:manna_field_sales/screens/requests/item_request_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -59,8 +59,10 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
       });
 
   /// Temporary credit extensions waiting on this manager (16 Nov 2026).
-  Future<int> _countCreditExtensions() async =>
-      (await Api.getCreditExtensions()).where((x) => x.waitingOnMe).length;
+  /// The team's commitments still waiting on the customer's payment.
+  Future<int> _countCreditExtensions() async => (await Api.getPaymentCommitments())
+      .where((r) => r['status'] == 'Running' || r['status'] == 'Unchecked')
+      .length;
 
   /// Credit-period requests waiting on this manager: to decide, escalate or push.
   Future<int> _countCreditPeriods() async =>
@@ -159,14 +161,14 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                 _waitingSubtitle(_creditPeriods, 'No credit periods waiting',
                     (n) => '$n request${n == 1 ? '' : 's'} waiting on you'),
                 const CreditPeriodRequestsScreen()),
-          // A separate workflow from order approval (16 Nov 2026): every
-          // manager decides their team's temporary credit within their authority.
+          // The 10-day payment commitments given on the team's orders (17 Nov
+          // 2026; they replaced the temporary credit extensions).
           _card(
               Icons.add_card,
-              'Temporary Credit',
-              _waitingSubtitle(_creditExtensions, 'No temporary credit waiting',
-                  (n) => '$n request${n == 1 ? '' : 's'} waiting on you'),
-              const CreditExtensionsScreen()),
+              'Payment Commitments',
+              _waitingSubtitle(_creditExtensions, 'No payment pending',
+                  (n) => '$n payment${n == 1 ? '' : 's'} pending'),
+              const PaymentCommitmentsScreen()),
           if (_can(ManagerScreen.regularizations))
             _card(
                 Icons.event_available,

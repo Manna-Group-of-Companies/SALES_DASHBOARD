@@ -1347,18 +1347,22 @@ class Api {
     // depend on the customer's figures, so they are not read.
     final gmApproved = '${order['custom_po_status'] ?? ''}' == kPoFinalApproval;
     if (role == 'sales_manager' && decision != 'reject' && !gmApproved) {
-      Map<String, dynamic>? customer;
+      // Since 17 Nov 2026 the server decides where an order goes (the 10-day
+      // payment commitment ladder, payment_commitment.json): only its 'gm'
+      // route takes Approve away. An order that needs a commitment may be
+      // approved with one; manna_payment_commitment_order refuses the save
+      // without it. Unreadable: refused, never guessed at.
+      Map<String, dynamic>? route;
       try {
-        customer = await getCustomerDoc('${order['customer']}');
+        route = await getOrderRoute('${order['name']}');
       } catch (_) {
-        // Refused below rather than guessed at.
+        // Refused below.
       }
-      if (customer == null) {
+      if (route == null) {
         throw Exception("Could not read the customer's credit position, so "
             'this was not saved. Try again.');
       }
-      // "Needs the GM": the limit, or overdue past the payment terms (11 Oct 2026).
-      overLimit = creditEscalates(customer, _toNum(order['grand_total']));
+      overLimit = '${route['route']}' == 'gm';
     }
     final acts = orderActions(
         role: role, poStatus: order['custom_po_status'], overLimit: overLimit);
@@ -1641,6 +1645,71 @@ class Api {
     if (r.statusCode != 200) throw Exception(_frappeError(r));
   }
 
+  // -------- The 10-day payment commitment ladder (17 Nov 2026) --------
+  //
+  // Through the `manna_payment_commitment` Server Script
+  // (app/server/payment_commitment.py); see core/payment_commitment.dart.
+
+  static Future<dynamic> _pc(Map<String, dynamic> data) async {
+    final r = await Session.I.dio.post('/api/method/manna_payment_commitment', data: data);
+    if (r.statusCode != 200) throw Exception(_frappeError(r));
+    return r.data is Map ? r.data['message'] : null;
+  }
+
+  /// What an order needs, where it goes (manager | manager_commitment | gm),
+  /// the GM lock, the authority and cap, and its commitment if any.
+  static Future<Map<String, dynamic>> getOrderRoute(String salesOrder) async {
+    final m = await _pc({'action': 'route', 'sales_order': salesOrder});
+    if (m is! Map) throw Exception('Could not read where this order goes.');
+    return m.cast<String, dynamic>();
+  }
+
+  /// Entered with the approval and sent just before it; it becomes Running
+  /// when the approval saves. Kept for later with no signal, ahead of the
+  /// approval it belongs to.
+  static Future<bool> givePaymentCommitment(String salesOrder, String commitmentDate, String remarks,
+          {String customerName = ''}) =>
+      sendOrQueue(
+        kind: 'payment_commitment',
+        label: 'Payment commitment${customerName.isEmpty ? '' : ' - $customerName'} ($salesOrder)',
+        args: {'sales_order': salesOrder, 'commitment_date': commitmentDate, 'remarks': remarks},
+      );
+
+  /// Every commitment this login may see, newest first.
+  static Future<List<Map<String, dynamic>>> getPaymentCommitments() async {
+    final m = await _pc({'action': 'list'});
+    if (m is! List) throw Exception('Could not read the payment commitments.');
+    return m.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
+  /// One customer's whole commitment history, with the counts.
+  static Future<Map<String, dynamic>> getCommitmentHistory(String customer) async {
+    final m = await _pc({'action': 'history', 'customer': customer});
+    if (m is! Map) throw Exception('Could not read the history.');
+    return m.cast<String, dynamic>();
+  }
+
+  /// Each order's live commitment and SAP state, for the manager's list.
+  static Future<Map<String, dynamic>> getOrdersCommitments(List<String> orders) async {
+    if (orders.isEmpty) return const {};
+    final m = await _pc({'action': 'orders', 'names': jsonEncode(orders), 'customers': '[]'});
+    return m is Map ? m.cast<String, dynamic>() : const {};
+  }
+
+  /// This login's notifications about commitments and orders sent to the GM.
+  static Future<List<Map<String, dynamic>>> getLadderAlerts() async {
+    final m = await _pc({'action': 'alerts'});
+    if (m is! List) return const [];
+    return m.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
+  /// Not kept for later with no signal: an alert shown unread again is harmless.
+  static Future<void> markLadderAlertsSeen() async {
+    try {
+      await _pc({'action': 'seen'});
+    } catch (_) {}
+  }
+
   // -------- Temporary credit extensions (16 Nov 2026) --------
   //
   // Through the `manna_credit_extension` Server Script
@@ -1848,6 +1917,20 @@ class Api {
 
   /// Every credit field of one customer (`kOutstandingFields`), as the rules in
   /// core/credit.dart read them. Empty when the customer is not found.
+  /// Each customer's outstanding, read the way the credit rule reads it, in
+  /// one call - for the manager's order list (17 Nov 2026).
+  static Future<Map<String, double>> getCustomersOutstanding(List<String> customers) async {
+    final names = customers.where((c) => c.isNotEmpty).toSet().toList();
+    if (names.isEmpty) return const {};
+    final l = await _list('Customer',
+        fields: jsonEncode(['name', ...kOutstandingFields]),
+        filters: jsonEncode([
+          ['name', 'in', names]
+        ]),
+        limit: names.length);
+    return {for (final r in l) '${r['name']}': agingOf(r).total};
+  }
+
   static Future<Map<String, dynamic>> getCustomerCreditRow(
       String customer) async {
     final l = await _list('Customer',
@@ -4348,6 +4431,7 @@ class Api {
     'credit_extension_request': (a, _) =>
         _xt({'action': 'submit', 'sales_order': a['sales_order'], 'reason': a['reason'] ?? ''}),
     'credit_extension_action': (a, _) => _xt({...a, 'action': a['action']}),
+    'payment_commitment': (a, _) => _pc({...a, 'action': 'approve'}),
     'credit_period_action': (a, _) => _creditPeriodActionNow(a),
     'assign_customer_owner': (a, _) =>
         _assignCustomerOwnerNow('${a['customer']}', '${a['rep']}'),

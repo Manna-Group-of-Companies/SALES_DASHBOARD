@@ -162,6 +162,13 @@
           "description": "The most temporary additional credit a sales manager may approve on one extension. 0 or empty: managers approve none, and send every request to the GM."
         },
         {
+          "fieldname": "manager_authority_percent",
+          "label": "Manager Authority (% of the order)",
+          "fieldtype": "Float",
+          "default": "10",
+          "description": "How far over the credit limit a Manager may approve with a payment commitment, as a share of the order. A Manager with a row below has that rupee figure instead."
+        },
+        {
           "fieldname": "authorities",
           "label": "Each Manager's Approval Authority",
           "fieldtype": "Table",

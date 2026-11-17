@@ -12,7 +12,7 @@
   "rules": {
     "when_required": "Exactly when the order will escalate to the GM: the customer's outstanding plus this order goes past a credit limit that is set. The same test as credit.json's 'escalates', so an order can never reach the GM without one - and a customer with no limit, or a lead, is never asked.",
     "min_length": 10,
-    "sales_manager": "Reads the commitment and may comment. May NOT approve an over-limit order: the only ways forward are Send to GM or Reject. Once the order is with the GM, the sales manager may still comment but no longer decides. When the GM has approved it, the sales manager's one move is Push to SAP - at the rates the GM approved.",
+    "sales_manager": "Reads the commitment and may comment. Since 17 Nov 2026 an order needing a credit decision follows payment_commitment.json: within the Manager's approval authority the Manager approves it WITH a 10-day payment commitment (the server's route, passed here as overLimit=false); beyond it, or for a customer with a missed commitment not cleared, the only ways forward are Send to GM or Reject (overLimit=true). Once the order is with the GM, the sales manager may still comment but no longer decides. When the GM has approved it, the sales manager's one move is Push to SAP - at the rates the GM approved.",
     "gm": "Reads the commitment and every comment, may edit the order, may comment, and approves or rejects. The GM's approval is a credit decision, NOT a push to SAP: it moves the order to 'Pending Final Approval' and back to the sales manager. Approving an order that carries a commitment always creates the credit condition - the GM may reword it and set the date, but may not drop it. Until the sales manager pushes, the GM may still reject it, which closes that condition.",
     "rep": "Writes the commitment and nothing else here. The rep's later say is the answer on the condition, under credit_condition.json.",
     "after_approval": "Once the sales manager has pushed it to SAP the thread is closed. What happens next is the condition's life, not the order's.",
@@ -59,12 +59,13 @@
       "expect": false
     },
     {
-      "why": "inside the limit, but invoices are overdue past the customer's payment terms - it escalates since 11 Oct 2026 (credit.json past_terms), so it needs the reason too",
+      "why": "inside the limit, but invoices are overdue past the customer's payment terms - more than 30 days late it needs a credit decision (credit.json past_terms, narrowed 17 Nov 2026), so it needs the reason too",
       "customer": {
         "custom_outstanding_balance": 10000,
         "custom_credit_limit": 100000,
         "custom_overdue_past_terms": 8000,
-        "custom_payment_terms": "Net-30"
+        "custom_payment_terms": "Net-30",
+        "custom_overdue_days": 45
       },
       "order_total": 5000,
       "expect": true

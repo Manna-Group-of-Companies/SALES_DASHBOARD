@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/credit_commitment.dart';
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/payment_commitment.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/session.dart';
@@ -57,6 +58,10 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   late Future<void> _init;
   Map<String, dynamic> _order = {};
   Map<String, dynamic> _customer = {};
+
+  /// The server's word on where this order goes (the 10-day payment
+  /// commitment ladder, 17 Nov 2026); null until read, or for a lead.
+  Map<String, dynamic>? _route;
   Map<String, MinStock> _stock = {};
   Map<String, Product> _products = {};
   bool _busy = false;
@@ -110,6 +115,14 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
     // A lead becomes a customer at approval and is invoiced straight after, so
     // it has to carry what an invoice needs before the manager can say yes.
     _missing = _isLead ? missingLeadDetails(_customer) : const [];
+    if (!_isLead) {
+      try {
+        _route = await Api.getOrderRoute(widget.orderName);
+      } catch (_) {
+        // Unreadable: the old reading below holds (needs the GM), never Approve.
+        _route = null;
+      }
+    }
   }
 
   void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(
@@ -171,7 +184,25 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   ///
   /// Since 11 Oct 2026 also when the customer has invoices overdue past their
   /// payment terms (credit.json `past_terms`), limit or no limit.
-  bool get _escalates => !_isLead && (_overLimit || _pastTerms);
+  ///
+  /// Since 17 Nov 2026 the server's route decides (payment_commitment.json):
+  /// only 'gm' needs the GM; an order that needs a commitment the manager
+  /// approves with one. Until the route is read, the old reading holds.
+  bool get _escalates =>
+      !_isLead && (_route != null ? '${_route!['route']}' == 'gm' : (_overLimit || _pastTerms));
+
+  /// The manager may approve, but only with a payment commitment of at most
+  /// 10 days.
+  bool get _needsCommitment =>
+      !_isLead && !_gmApproved && _route != null && '${_route!['route']}' == 'manager_commitment';
+
+  /// The GM's approval of an order needing a credit decision is another
+  /// 10-day commitment: their condition's words and date are it.
+  bool get _gmNeedsCommitment {
+    if (_isLead || _route == null) return false;
+    final needs = (_route!['needs'] as Map?) ?? const {};
+    return needs['needs'] == true || _route!['gm_lock'] == true;
+  }
 
   /// Overdue past the customer's SAP payment terms — the second reason an
   /// order goes to the GM. Read through core/credit.dart, like the limit.
@@ -263,9 +294,23 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
         commitment: _order['custom_credit_commitment'],
         commitmentDue: _order['custom_credit_commitment_due']);
     if (terms == null || !mounted) return;
+    if (_gmNeedsCommitment) {
+      final problem = pcCheckApproval(
+          approvedOn: _isoDay(DateTime.now()), commitment: terms.dueIso, remarks: terms.condition);
+      if (problem != null) {
+        _snack(problem == 'remarks'
+            ? 'Write the condition: it is the payment commitment for this order.'
+            : '${kPcMessages[problem]} The due date is the payment commitment date.');
+        return;
+      }
+    }
 
     setState(() => _busy = true);
     try {
+      if (_gmNeedsCommitment) {
+        await Api.givePaymentCommitment(widget.orderName, terms.dueIso, terms.condition,
+            customerName: '${_customer['customer_name'] ?? ''}');
+      }
       final saved = await Api.approveEscalatedOrder(widget.orderName,
           condition: terms.condition, dueDateIso: terms.dueIso);
       if (!mounted) return;
@@ -319,6 +364,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
     // Asked before anything is written. Kept to a line each: the screen
     // above already shows what the decision rests on.
     String gmNote = '';
+    ({String date, String remarks})? commitment;
     if (approve && _gmApproved) {
       final by = _s(_order['custom_gm_approved_by']);
       final ok = await _confirm('Push to SAP?',
@@ -328,6 +374,10 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
       final note = await _askGmNote();
       if (note == null) return;
       gmNote = note;
+    } else if (approve && _needsCommitment) {
+      final pc = await _askCommitment();
+      if (pc == null) return;
+      commitment = pc;
     } else if (approve) {
       final ok = await _confirm(
         _isLead ? 'Approve and convert?' : 'Approve this order?',
@@ -370,6 +420,12 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
         await Api.escalateSalesOrderPOToGM(widget.orderName);
         _snack('Sent to the GM.');
       } else {
+        if (commitment != null) {
+          // First, so the approval's save finds it (the server refuses an
+          // approval that needs one without it).
+          await Api.givePaymentCommitment(widget.orderName, commitment.date, commitment.remarks,
+              customerName: '${_customer['customer_name'] ?? ''}');
+        }
         await Api.approveSalesOrderPO(widget.orderName, approve);
         _snack(approve
             ? (_gmApproved ? 'Pushed to SAP.' : 'Approved.')
@@ -380,6 +436,78 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
       _snack(humanError(e));
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  static String _isoDay(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  /// The payment commitment the manager approves this order with: a date at
+  /// most 10 days away and remarks, both required (payment_commitment.json).
+  Future<({String date, String remarks})?> _askCommitment() async {
+    final needs = (_route?['needs'] as Map?) ?? const {};
+    final why = [
+      if (needs['overdue30'] == true) 'Overdue more than 30 days past the payment terms',
+      if (needs['over_limit'] == true) 'Over the credit limit by Rs ${(needs['excess'] as num? ?? 0).round()}',
+    ].join('; ');
+    final remarks = TextEditingController();
+    final today = DateTime.now();
+    final first = DateTime(today.year, today.month, today.day);
+    DateTime? picked;
+    String? error;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: const Text('Approve with a payment commitment'),
+          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (why.isNotEmpty) Text('$why.', style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.event),
+              label: Text(picked == null ? 'Payment date (up to 10 days)' : 'Pays by ${_isoDay(picked!)}'),
+              onPressed: () async {
+                final d = await showDatePicker(
+                    context: ctx,
+                    firstDate: first,
+                    lastDate: first.add(const Duration(days: kPcMaxDays)),
+                    initialDate: picked ?? first);
+                if (d != null) setD(() => picked = d);
+              },
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: remarks,
+              maxLines: 2,
+              decoration: const InputDecoration(labelText: 'Remarks (required)', border: OutlineInputBorder()),
+            ),
+            if (error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(error!, style: TextStyle(color: Colors.red.shade700, fontSize: 12.5)),
+              ),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () {
+                final problem = pcCheckApproval(
+                    approvedOn: _isoDay(today), commitment: picked == null ? '' : _isoDay(picked!), remarks: remarks.text);
+                if (problem != null) {
+                  setD(() => error = kPcMessages[problem]);
+                  return;
+                }
+                Navigator.pop(ctx, true);
+              },
+              child: const Text('Approve'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final text = remarks.text.trim();
+    remarks.dispose();
+    if (ok != true || picked == null) return null;
+    return (date: _isoDay(picked!), remarks: text);
   }
 
   Future<bool?> _confirm(String title, String body,

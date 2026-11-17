@@ -71,10 +71,16 @@ import { AgingBoxes } from '@/components/common/AgingBoxes';
 import { StatusPill } from '@/components/common/StatusPill';
 import { CommitmentThread } from './CommitmentThread';
 import { TemporaryCreditNote } from '@/features/credit/TemporaryCreditNote';
+import { getOrderRoute, giveCommitment, type OrderRoute } from '@/api/paymentCommitments';
+import { PC_MESSAGES, pcCheckApproval } from '@/domain/paymentCommitment';
+import { serverNow } from '@/domain/serverClock';
 import { OrderLinesEditor } from './OrderLinesEditor';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import './orders.css';
+
+const isoDay = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /** "4 rolls + 2 belts", or "—" when there is nothing. */
 function qty(q: Qty): string {
@@ -106,6 +112,10 @@ export function OrderDetailPage() {
   const [editing, setEditing] = useState(false);
   /** A note for the GM, sent as a comment on the rep's commitment with Send to GM. */
   const [gmNote, setGmNote] = useState('');
+  /** The server's word on where this order goes (the 10-day commitment ladder, 17 Nov 2026). */
+  const [route, setRoute] = useState<OrderRoute | null>(null);
+  const [pcDate, setPcDate] = useState('');
+  const [pcRemarks, setPcRemarks] = useState('');
   /** Bumped when this page posts a comment, so the thread re-reads. */
   const [threadKey, setThreadKey] = useState(0);
   const [tick, setTick] = useState(0);
@@ -178,6 +188,9 @@ export function OrderDetailPage() {
         if (!live) return;
         setCustomer(parties.find((c) => c.id === o.customer) ?? null);
         setPool(stock);
+        // Unreadable leaves the old reading below (needs the GM), never Approve.
+        const r = await getOrderRoute(o.id).catch(() => null);
+        if (live) setRoute(r);
       })
       .catch((e: unknown) => {
         if (live) setError(e instanceof Error ? e.message : 'Could not read this order.');
@@ -272,6 +285,20 @@ export function OrderDetailPage() {
     setError(null);
     try {
       /*
+       * An order that needs a payment commitment (overdue more than 30 days
+       * past terms, or over the limit within the Manager's authority) is
+       * approved only with one. It is entered first and becomes Running when
+       * the approval saves; without it the server refuses the approval.
+       */
+      if (decision === 'approve' && needsCommitment) {
+        const problem = pcCheckApproval({ approvedOn: isoDay(serverNow()), commitment: pcDate, remarks: pcRemarks });
+        if (problem) {
+          setError(PC_MESSAGES[problem]);
+          return;
+        }
+        await giveCommitment(order.id, pcDate, pcRemarks.trim());
+      }
+      /*
        * The note goes first. If it lands and the escalation does not, the
        * manager presses Send again and the note is already there; the other
        * way round would leave the GM deciding without it.
@@ -299,7 +326,11 @@ export function OrderDetailPage() {
       setDone(
         decision === 'approve'
           ? {
-              text: gmApproved ? 'Pushed to SAP. Rates are final.' : 'Approved. Rates are final.',
+              text: gmApproved
+                ? 'Pushed to SAP. Rates are final.'
+                : needsCommitment
+                  ? `Approved with a payment commitment to ${pcDate}. Rates are final.`
+                  : 'Approved. Rates are final.',
               tone: 'ok',
             }
           : decision === 'reject'
@@ -347,7 +378,9 @@ export function OrderDetailPage() {
   const owed = agingOf(customerRow).total;
   // "Over limit" here means "needs the GM": the limit, or overdue past the
   // payment terms (11 Oct 2026). The two reasons are told apart for display.
-  const overLimit = order ? creditEscalates(customerRow, order.total) : false;
+  // Since 17 Nov 2026 the server's route decides: only 'gm' takes Approve
+  // away; until it has answered, the old reading holds (needs the GM).
+  const overLimit = route ? route.route === 'gm' : order ? creditEscalates(customerRow, order.total) : false;
   const why = order ? escalationOf(customerRow, order.total) : { overLimit: false, pastTerms: false };
   const whyText = order ? escalationReason(customerRow, order.total) : '';
 
@@ -366,6 +399,8 @@ export function OrderDetailPage() {
    * move is Push to SAP, at the GM's figures.
    */
   const gmApproved = (order?.poStatus ?? '').trim() === PO_STATUS.finalApproval;
+  /** The Manager may approve, but only with a 10-day payment commitment. */
+  const needsCommitment = !gmApproved && route?.route === 'manager_commitment';
 
   return (
     <div>
@@ -929,10 +964,59 @@ export function OrderDetailPage() {
             </div>
           ) : (
             <Card title="Decision" className="mt-16">
+              {acts.approve && needsCommitment && route && (
+                <>
+                  <div className="decide__warn">
+                    <Alert
+                      tone="warn"
+                      title={`Payment commitment required · up to ${route.maxDays} days`}
+                    >
+                      {(() => {
+                        const why = [
+                          route.needs.overdue30 ? 'overdue more than 30 days past the payment terms' : '',
+                          route.needs.overLimit
+                            ? `over the credit limit by ${money(route.needs.excess, 0)} (your authority ${money(route.authority, 0)})`
+                            : '',
+                        ]
+                          .filter(Boolean)
+                          .join('; ');
+                        return why.charAt(0).toUpperCase() + why.slice(1);
+                      })()}
+                      . Approve with the customer&apos;s payment date, or reject it.
+                    </Alert>
+                  </div>
+                  <Field label="Payment commitment date (required)">
+                    <Input
+                      type="date"
+                      value={pcDate}
+                      min={isoDay(serverNow())}
+                      max={isoDay(new Date(serverNow().getTime() + route.maxDays * 86_400_000))}
+                      onChange={(e) => setPcDate(e.target.value)}
+                      disabled={!!busy || editing}
+                    />
+                  </Field>
+                  <Field label="Remarks (required)">
+                    <Textarea
+                      rows={2}
+                      value={pcRemarks}
+                      onChange={(e) => setPcRemarks(e.target.value)}
+                      placeholder="What the customer committed to"
+                      disabled={!!busy || editing}
+                    />
+                  </Field>
+                </>
+              )}
               {acts.escalate && (
                 <>
                   <div className="decide__warn">
-                    <Alert tone="warn" title="Over credit limit · GM approval required" />
+                    <Alert
+                      tone="warn"
+                      title={
+                        route?.gmLock
+                          ? 'Missed a payment commitment · GM approval required'
+                          : 'Over credit limit · GM approval required'
+                      }
+                    />
                   </div>
                   <Field label="Note for GM (optional)">
                     <Textarea
@@ -953,7 +1037,7 @@ export function OrderDetailPage() {
                     loading={busy === 'approve'}
                     disabled={!!busy || editing}
                   >
-                    Approve
+                    {needsCommitment ? 'Approve with commitment' : 'Approve'}
                   </Button>
                 )}
                 {acts.escalate && (

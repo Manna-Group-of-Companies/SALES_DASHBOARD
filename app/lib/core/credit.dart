@@ -229,7 +229,7 @@ class CreditEscalation {
 CreditEscalation escalationOf(Map<String, dynamic> customer, double orderTotal) =>
     CreditEscalation(
       overLimit: overCreditLimit(customer, orderTotal),
-      pastTerms: overduePastTerms(customer) > kOverdueTolerance,
+      pastTerms: overduePastTerms(customer) > kOverdueTolerance && overdueDaysOf(customer) > 30,
     );
 
 /// Whether an order needs the general manager's credit approval.
