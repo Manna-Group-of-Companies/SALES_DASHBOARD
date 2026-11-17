@@ -79,7 +79,8 @@ STATUS_HT_SQL = """SELECT
 		WHEN L.DelivrdQty &gt; 0 OR P.Picked = 1 OR V.Invoiced = 1 THEN 'Picked'
 		WHEN L.LineStatus = 'C' THEN 'Cancelled'
 		ELSE 'In SAP'
-	END AS stage
+	END AS stage,
+	CASE WHEN H.CANCELED = 'N' AND L.LineStatus = 'O' THEN CONVERT(char(10), L.ShipDate, 23) ELSE '' END AS [date]
 FROM ORDR H
 JOIN RDR1 L ON L.DocEntry = H.DocEntry
 OUTER APPLY (SELECT TOP 1 1 AS Picked FROM PKL1 K JOIN OPKL Q ON Q.AbsEntry = K.AbsEntry
@@ -126,8 +127,8 @@ PACKAGES = [
 	dict(pkg="Z.erpstock", step="Z.erpstockht", cron=(every(5, 0), "*"), sys=HITECH_TEST, obj=None, endpoint="manna_sap_stock", key="stock",
 		cols=["code", "qty"], sql=STOCK_SQL, keycol=None, extra='"kind":"stock",', desc="Hi-Tech 01 STORE available to promise -> ERPNext Finished Goods - MT (manna_sap_stock), timer"),
 	dict(pkg="Z.erpstatht", step="Z.erpstathtso", cron=(every(5, 1), "*"), sys=HITECH_TEST, obj=None, endpoint="manna_sap_status", key="lines",
-		cols=["order", "item", "stage"], sql=STATUS_HT_SQL, keycol=None, extra='"kind":"status","source":"hitech",',
-		desc="Hi-Tech SO lines (In SAP / Picked / Cancelled) -> ERPNext order status (manna_sap_status), timer"),
+		cols=["order", "item", "stage", "date"], sql=STATUS_HT_SQL, keycol=None, extra='"kind":"status","source":"hitech",',
+		desc="Hi-Tech SO lines (In SAP / Picked / Cancelled, and each open line's delivery date) -> ERPNext order status (manna_sap_status), timer"),
 	dict(pkg="Z.erpstatmt", step="Z.erpstatmtso", cron=(every(5, 2), "*"), sys=MANNA_TEST, obj=None, endpoint="manna_sap_status", key="lines",
 		cols=["order", "item", "stage"], sql=STATUS_MT_SQL, keycol=None, extra='"kind":"status","source":"manna",',
 		desc="Manna Treads invoiced SO lines (Dispatched) -> ERPNext order status (manna_sap_status), timer"),
