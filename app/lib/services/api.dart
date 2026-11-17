@@ -1654,10 +1654,34 @@ class Api {
   }
 
   /// Extensions this login may see: a rep's own, a manager's team's, all for the GM.
-  static Future<List<CreditExtension>> getCreditExtensions() async {
-    final m = await _xt({'action': 'list'});
+  static Future<List<CreditExtension>> getCreditExtensions({String? salesOrder}) async {
+    final m = await _xt({'action': 'list', 'sales_order': ?salesOrder});
     if (m is! List) throw Exception('Could not read the temporary credit extensions.');
     return m.whereType<Map>().map(CreditExtension.new).toList();
+  }
+
+  /// This login's notifications about extensions (17 Nov 2026): the Server
+  /// Script writes them to Frappe's Notification Log, which nothing read.
+  static Future<List<Map<String, dynamic>>> getExtensionAlerts() async {
+    final m = await _xt({'action': 'alerts'});
+    if (m is! List) return const [];
+    return m.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
+  /// Marks them read. Not kept for later with no signal: an alert shown
+  /// unread once more is harmless.
+  static Future<void> markExtensionAlertsSeen() async {
+    try {
+      await _xt({'action': 'seen'});
+    } catch (_) {}
+  }
+
+  /// The approval authority and the manager cap; the GM sets them on the
+  /// dashboard.
+  static Future<Map<String, dynamic>> getExtensionSettings() async {
+    final m = await _xt({'action': 'settings'});
+    if (m is! Map) throw Exception('Could not read the approval authority.');
+    return m.cast<String, dynamic>();
   }
 
   /// Orders waiting for approval that take their customer past the credit limit.

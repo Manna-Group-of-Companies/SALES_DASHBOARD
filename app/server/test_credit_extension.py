@@ -2,8 +2,10 @@
 
 Runs the text between the script's '# ---- rule' and '# ---- end rule ----'
 markers on every case of shared/fixtures/credit_extension.json that the
-server decides: routing, the manager's and the GM's approval checks, the
-status moves, the payment status and the commitment's outcome. The SAP job's
+server decides: routing and the manager cap, each manager's authority, the
+manager's and the GM's approval checks, the status moves, the payment status,
+the commitment's outcome, the late check of a watchdog escalation, and the
+morning watchdog (credit_extension_watch.py). The SAP job's
 cases (payments, sap_raise, sap_restore) are sap-credit-sync/Test-CreditExtensions.ps1's.
 
     python app/server/test_credit_extension.py
@@ -17,21 +19,45 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FX = json.load(open(os.path.join(HERE, "..", "..", "shared", "fixtures", "credit_extension.json"), encoding="utf-8"))
 
 
-def load_rule():
-    text = open(os.path.join(HERE, "credit_extension.py"), encoding="utf-8").read()
+def load_rule(script="credit_extension.py"):
+    text = open(os.path.join(HERE, script), encoding="utf-8").read()
     names = {}
-    exec(compile(text[text.index("# ---- rule:"):text.index("# ---- end rule ----")], "credit_extension.py", "exec"), names)
+    exec(compile(text[text.index("# ---- rule:"):text.index("# ---- end rule ----")], script, "exec"), names)
     return names
 
 
 R = load_rule()
+W = load_rule("credit_extension_watch.py")
 
 
 class CreditExtensionRule(unittest.TestCase):
     def test_routing(self):
         for c in FX["routing"]:
             with self.subTest(c["why"]):
-                self.assertEqual(R["route_status"](c["missed_before"], c["open_extension"]), c["expect"])
+                self.assertEqual(R["route_status"](c["missed_before"], c["open_extension"], c["manager_recent"], c["cap"]), c["expect"])
+
+    def test_manager_window(self):
+        for c in FX["manager_window"]:
+            with self.subTest(c["why"]):
+                self.assertEqual(R["manager_recent"](c["approvals"], c["today"], c["days"]), c["expect"])
+
+    def test_authority(self):
+        for c in FX["authority"]:
+            with self.subTest(c["why"]):
+                self.assertEqual(R["authority_for"](c["manager"], c["rows"], c["default"]), c["expect"])
+
+    def test_late_check(self):
+        for c in FX["late_check"]:
+            with self.subTest(c["why"]):
+                self.assertEqual(R["late_check"](c["status"], c["outcome"]), c["expect"])
+
+    def test_watchdog(self):
+        # manna_credit_extension_watch's own copy, and the main script's move.
+        for c in FX["watchdog"]:
+            with self.subTest(c["why"]):
+                self.assertEqual(W["watch_due"](c["status"], c["commitment"], c["today"]), c["expect"])
+                if c["expect"]:
+                    self.assertEqual(R["next_status"]("date_passed", c["status"], "watchdog"), "Payment Commitment Overdue")
 
     def test_manager_approval(self):
         for c in FX["manager_approval"]:

@@ -14,6 +14,9 @@
  */
 
 export const MANAGER_MAX_DAYS = 10;
+/** The settings' defaults for the manager cap (17 Nov 2026); the server sends the live figures. */
+export const MANAGER_CAP_COUNT = 2;
+export const MANAGER_CAP_DAYS = 90;
 
 export const XT = {
   pendingManager: 'Pending Manager',
@@ -39,13 +42,28 @@ export const XT_MESSAGES: Record<XtProblem, string> = {
   remarks: 'Enter your remarks.',
 };
 
-export const xtRouteStatus = (missedBefore: number, openExtension: boolean): string =>
-  missedBefore > 0 || openExtension ? XT.pendingGm : XT.pendingManager;
+/**
+ * Where a new request goes. The manager may give a customer at most [cap]
+ * extensions in the window (17 Nov 2026); past that, a missed commitment, or
+ * one still running, it is the GM's.
+ */
+export const xtRouteStatus = (missedBefore: number, openExtension: boolean, managerRecent: number, cap: number): string =>
+  missedBefore > 0 || openExtension || managerRecent >= cap ? XT.pendingGm : XT.pendingManager;
 
 const dayNo = (s: string): number | null => {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
   return m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 86_400_000 : null;
 };
+
+/** How many of [approvals] a manager gave in the [days] calendar days up to and including [today]. */
+export function xtManagerRecent(approvals: { role: string; on: string }[], today: string, days: number): number {
+  const t = dayNo(today);
+  if (t === null) return 0;
+  return approvals.filter((a) => {
+    const d = dayNo(a.on);
+    return a.role === 'manager' && d !== null && t - d >= 0 && t - d < days;
+  }).length;
+}
 
 export function xtCheckManager(a: {
   amount: number;
@@ -91,6 +109,9 @@ export function xtNextStatus(action: string, status: string, actor: string): str
       return status === XT.pendingManager && actor === 'manager' ? XT.pendingGm : null;
     case 'retry':
       return status === XT.pushFailed && actor === 'approver' ? XT.sending : null;
+    case 'date_passed':
+      // The morning watchdog's, never a person's.
+      return status === XT.active && actor === 'watchdog' ? XT.overdue : null;
   }
   if (actor !== 'sap_job') return null;
   if (action === 'sap_raised' && status === XT.sending) return XT.active;

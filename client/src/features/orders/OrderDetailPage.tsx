@@ -70,6 +70,7 @@ import { RefreshButton } from '@/components/common/RefreshButton';
 import { AgingBoxes } from '@/components/common/AgingBoxes';
 import { StatusPill } from '@/components/common/StatusPill';
 import { CommitmentThread } from './CommitmentThread';
+import { TemporaryCreditNote } from '@/features/credit/TemporaryCreditNote';
 import { OrderLinesEditor } from './OrderLinesEditor';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
@@ -498,6 +499,7 @@ export function OrderDetailPage() {
             on, and may add to it.
           */}
           <CommitmentThread order={order} overLimit={overLimit} reloadKey={threadKey} />
+          <TemporaryCreditNote orderId={order.id} />
 
           {/*
             What production moved since this browser last had the order open.

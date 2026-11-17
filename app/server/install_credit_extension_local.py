@@ -1,6 +1,7 @@
 # Temporary credit extensions (16 Nov 2026) on the LOCAL ERPNext (127.0.0.1:8000)
-# only: the Manna Credit Extension doctypes (child tables first) and the
-# manna_credit_extension Server Script.
+# only: the Manna Credit Extension doctypes (child tables first), the
+# manna_credit_extension Server Script and its morning watchdog
+# (manna_credit_extension_watch, 17 Nov 2026).
 #   python install_credit_extension_local.py
 # Reads the local API key from Manna_CMMS/server/.env (MANNA_CMMS_DIR) and
 # refuses any other host. The live site gets the same three things by hand,
@@ -39,6 +40,9 @@ def main():
 				print("doctype", dt["name"], "fields added", [f["fieldname"] for f in add])
 			else:
 				print("doctype ok", dt["name"])
+			if dt.get("track_changes") and not doc.get("track_changes"):
+				api("PUT", "/api/resource/DocType/" + q(dt["name"]), {"track_changes": 1})
+				print("doctype", dt["name"], "now tracks changes")
 		else:
 			api("POST", "/api/resource/DocType", dt)
 			print("doctype created", dt["name"])
@@ -56,14 +60,25 @@ def main():
 			print("fields added to", single["doctype"], [f["fieldname"] for f in add])
 		else:
 			print("fields ok", single["doctype"])
-	src = open(os.path.join(HERE, "credit_extension.py"), encoding="utf-8").read()
-	doc = {"script_type": "API", "api_method": NAME, "script": src, "disabled": 0}
-	if api("GET", "/api/resource/Server%20Script?filters=" + q(json.dumps([["name", "=", NAME]])))["data"]:
-		api("PUT", "/api/resource/Server%20Script/" + q(NAME), doc)
-		print("updated", NAME)
-	else:
-		api("POST", "/api/resource/Server%20Script", dict(doc, name=NAME, __newname=NAME))
-		print("created", NAME)
+	# A Single's unset Int reads 0, and a cap of 0 sends everything to the GM;
+	# a window of 0 days never happens once set, so it marks a first install.
+	sp = "/api/resource/" + q("Manna Credit Extension Settings") + "/" + q("Manna Credit Extension Settings")
+	if not int(api("GET", sp)["data"].get("manager_cap_days") or 0):
+		api("PUT", sp, {"manager_cap_count": 2, "manager_cap_days": 90})
+		print("settings: manager cap 2 in 90 days")
+	scripts = [
+		(NAME, {"script_type": "API", "api_method": NAME, "disabled": 0}, "credit_extension.py"),
+		(NAME + "_watch", {"script_type": "Scheduler Event", "event_frequency": "Cron", "cron_format": "0 9 * * *",
+		                   "disabled": 0}, "credit_extension_watch.py"),
+	]
+	for name, doc, path in scripts:
+		doc = dict(doc, script=open(os.path.join(HERE, path), encoding="utf-8").read())
+		if api("GET", "/api/resource/Server%20Script?filters=" + q(json.dumps([["name", "=", name]])))["data"]:
+			api("PUT", "/api/resource/Server%20Script/" + q(name), doc)
+			print("updated", name)
+		else:
+			api("POST", "/api/resource/Server%20Script", dict(doc, name=name, __newname=name))
+			print("created", name)
 
 
 if __name__ == "__main__":

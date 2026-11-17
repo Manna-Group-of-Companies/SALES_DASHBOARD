@@ -7,9 +7,12 @@
 import { describe, expect, it } from 'vitest';
 import fx from '../../../../shared/fixtures/credit_extension.json';
 import {
+  MANAGER_CAP_COUNT,
+  MANAGER_CAP_DAYS,
   MANAGER_MAX_DAYS,
   xtCheckGm,
   xtCheckManager,
+  xtManagerRecent,
   xtNextStatus,
   xtOutcome,
   xtPaymentStatus,
@@ -19,9 +22,19 @@ import { toCreditExtension } from '../../api/creditExtensions';
 
 describe('temporary credit extension (shared fixture)', () => {
   it("has the fixture's 10 days", () => expect(fx.limits.manager_max_days).toBe(MANAGER_MAX_DAYS));
+  it("has the fixture's default cap", () => {
+    expect(fx.limits.manager_cap_count).toBe(MANAGER_CAP_COUNT);
+    expect(fx.limits.manager_cap_days).toBe(MANAGER_CAP_DAYS);
+  });
 
   describe('routing', () => {
-    for (const c of fx.routing) it(c.why, () => expect(xtRouteStatus(c.missed_before, c.open_extension)).toBe(c.expect));
+    for (const c of fx.routing) {
+      it(c.why, () => expect(xtRouteStatus(c.missed_before, c.open_extension, c.manager_recent, c.cap)).toBe(c.expect));
+    }
+  });
+
+  describe('manager cap window', () => {
+    for (const c of fx.manager_window) it(c.why, () => expect(xtManagerRecent(c.approvals, c.today, c.days)).toBe(c.expect));
   });
 
   describe('manager approval', () => {

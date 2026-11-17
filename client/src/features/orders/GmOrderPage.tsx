@@ -45,6 +45,7 @@ import { RefreshButton } from '@/components/common/RefreshButton';
 import { AgingBoxes } from '@/components/common/AgingBoxes';
 import { StatusPill } from '@/components/common/StatusPill';
 import { CommitmentThread } from './CommitmentThread';
+import { TemporaryCreditNote } from '@/features/credit/TemporaryCreditNote';
 import { CreditBar } from './CreditBar';
 import { OrderLinesEditor } from './OrderLinesEditor';
 import '@/components/layout/layout.css';
@@ -473,6 +474,7 @@ export function GmOrderPage() {
           <div className="gmrev__main">
           {/* ------------------------------------------- 2. commitment --- */}
           <CommitmentThread order={order} overLimit={overLimit} reloadKey={threadKey} />
+          <TemporaryCreditNote orderId={order.id} />
 
           {/* ------------------------------------------------ 3. lines --- */}
           <Card title="Lines" flush>

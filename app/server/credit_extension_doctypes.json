@@ -1,6 +1,30 @@
 {
-  "about": "Temporary credit extension (16 Nov 2026): a separate workflow; nothing existing changes. Manna Credit Extension is one extension, never overwritten - a GM renewal after a missed commitment is a new record linked by parent_extension. Its three child tables keep the audit history (log), the SAP payments counted against the commitment, once each by DocEntry (payments), and every SAP request and response (sap_log). Manna Credit Extension Settings holds the manager's approval authority and the SAP job's flag. System Manager only, like the other request doctypes: every read and write goes through the manna_credit_extension Server Script (credit_extension.py). SAP Sync Bot reads, to find the work for Sync-CreditExtensions.ps1; it reports back through the script. Child tables are created first.",
+  "about": "Temporary credit extension (16 Nov 2026): a separate workflow; nothing existing changes. Manna Credit Extension is one extension, never overwritten - a GM renewal after a missed commitment is a new record linked by parent_extension. Its three child tables keep the audit history (log), the SAP payments counted against the commitment, once each by DocEntry (payments), and every SAP request and response (sap_log). Manna Credit Extension Settings holds the manager's approval authority and the SAP job's flag. System Manager only, like the other request doctypes: every read and write goes through the manna_credit_extension Server Script (credit_extension.py). SAP Sync Bot reads, to find the work for Sync-CreditExtensions.ps1; it reports back through the script. Child tables are created first. 17 Nov 2026: Manna Credit Extension Authority (each manager's own authority, a table in the Settings), the Settings' manager cap (manager_cap_count in manager_cap_days) and watchdog stamps, the Settings now track changes so every figure the GM sets is in its history, and overdue_unchecked on the extension (escalated by manna_credit_extension_watch before SAP's payments were counted).",
   "doctypes": [
+    {
+      "doctype": "DocType",
+      "name": "Manna Credit Extension Authority",
+      "module": "Selling",
+      "custom": 1,
+      "istable": 1,
+      "fields": [
+        {
+          "fieldname": "manager",
+          "label": "Manager",
+          "fieldtype": "Link",
+          "options": "User",
+          "in_list_view": 1,
+          "reqd": 1
+        },
+        {
+          "fieldname": "max_amount",
+          "label": "Approval Authority",
+          "fieldtype": "Currency",
+          "in_list_view": 1,
+          "description": "The most extra credit this manager may approve on one extension. 0: none - it goes to the GM."
+        }
+      ]
+    },
     {
       "doctype": "DocType",
       "name": "Manna Credit Extension Log",
@@ -138,6 +162,26 @@
           "description": "The most temporary additional credit a sales manager may approve on one extension. 0 or empty: managers approve none, and send every request to the GM."
         },
         {
+          "fieldname": "authorities",
+          "label": "Each Manager's Approval Authority",
+          "fieldtype": "Table",
+          "options": "Manna Credit Extension Authority",
+          "description": "A manager with a row here has that figure; every other manager has the one above."
+        },
+        {
+          "fieldname": "manager_cap_count",
+          "label": "Manager Extensions per Customer",
+          "fieldtype": "Int",
+          "default": "2",
+          "description": "How many extensions a manager may approve for one customer in the window below before the GM must. 0: every request goes to the GM."
+        },
+        {
+          "fieldname": "manager_cap_days",
+          "label": "Window (days)",
+          "fieldtype": "Int",
+          "default": "90"
+        },
+        {
           "fieldname": "section_job",
           "label": "SAP job",
           "fieldtype": "Section Break"
@@ -165,6 +209,18 @@
           "label": "Last Job Result",
           "fieldtype": "Small Text",
           "read_only": 1
+        },
+        {
+          "fieldname": "last_watch_run",
+          "label": "Last Watchdog Run",
+          "fieldtype": "Datetime",
+          "read_only": 1
+        },
+        {
+          "fieldname": "last_watch_result",
+          "label": "Last Watchdog Result",
+          "fieldtype": "Small Text",
+          "read_only": 1
         }
       ],
       "permissions": [
@@ -178,7 +234,8 @@
           "read": 1,
           "write": 1
         }
-      ]
+      ],
+      "track_changes": 1
     },
     {
       "doctype": "DocType",
@@ -525,6 +582,12 @@
           "label": "Missed Commitment",
           "fieldtype": "Check",
           "read_only": 1
+        },
+        {
+          "fieldname": "overdue_unchecked",
+          "label": "Overdue, not yet checked against SAP",
+          "fieldtype": "Check",
+          "description": "Escalated by the morning watchdog before the SAP job counted the payments. The job's next count settles it."
         },
         {
           "fieldname": "payments",

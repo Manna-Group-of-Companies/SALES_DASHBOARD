@@ -199,3 +199,50 @@ ERPNext; that was a test step, not part of the feature.
 - Release: the dashboard deploy and a phone build.
 - Not run on a phone or in a browser for this feature: the screens are
   analysed and typechecked, and their rules tested.
+
+## 17 November 2026: the gaps against the spec, closed
+
+The user approved these defaults on 17 Nov 2026. The rules are in the same
+fixture; each item says where it is enforced.
+
+| Gap | What changed | Where |
+|---|---|---|
+| Unlimited manager extensions for a customer who always pays | At most **2 manager-approved extensions per customer in any 90 days**; the next goes to the GM. Checked when asked **and** when approved. GM approvals do not count. 0 sends everything to the GM | Server Script; fixture `routing`, `manager_window`; both apps show "n of 2 in 90 days" |
+| "Configured approval authority" was one figure for everyone, set to 0 | **Each manager may have their own figure** (Settings → `authorities`), else the shared default. 0 means none. The GM sets both on the dashboard (*Approval authority* on `/credit-extensions`); the Settings track changes | Server Script `settings`; fixture `authority` |
+| Escalation only happened when the office-server job ran | **`manna_credit_extension_watch`**, a Scheduler Server Script at 09:00, escalates any `Active` extension past its date, marked *not yet checked against SAP* (`overdue_unchecked`), and sets the SAP restore pending. It never marks a miss itself: the job's next payment count does (*Paid in time after all*, or *missed*). It also tells the GM when the job has not run for six hours while extensions wait | `app/server/credit_extension_watch.py`; fixture `watchdog`, `late_check`; the job now counts unchecked ones too |
+| Notifications reached nobody | Both apps list this login's extension notifications (`alerts`, `seen`) — *Alerts* on the dashboard page, the top of the phone's list | Server Script; both apps |
+| The order's own page said nothing | The order page in both apps shows any extension asked on it | `TemporaryCreditNote.tsx`, `TemporaryCreditStrip` |
+
+Unchanged on purpose (the user's defaults): the over-credit order approval
+(`credit_commitment.json`); Manna Treads only; the SAP reference is
+company/BP/old → new/SAP's update stamp, since a limit change has no SAP
+document number.
+
+### Live install, when the user says so
+1. The new child doctype **Manna Credit Extension Authority**, then the new
+   fields on Manna Credit Extension Settings (`authorities`,
+   `manager_cap_count`, `manager_cap_days`, `last_watch_run`,
+   `last_watch_result`, and *Track Changes* on) and on Manna Credit Extension
+   (`overdue_unchecked`) — `credit_extension_doctypes.json`.
+2. Settings: **cap 2 in 90 days** (an unset Int reads 0, which would send
+   every request to the GM), and the managers' authority.
+3. Server Scripts: `manna_credit_extension` updated,
+   `manna_credit_extension_watch` new (Scheduler Event, Cron `0 9 * * *`).
+4. The office server's `Sync-CreditExtensions.ps1` replaced.
+
+### Tests (17 Nov 2026)
+- Fixture suites: Server Script 11/11, phone 65, dashboard 66, SAP job 19.
+- Whole suites: Flutter 1,245 pass; dashboard 940 pass, typecheck clean.
+- Local ERPNext, through the real Server Scripts as the demo rep, manager
+  and GM, in one transaction rolled back after: **42/42** — the settings
+  (who may read and set them, version history), each manager's own
+  authority, 10 days, the watchdog (escalates once, leaves the commitment
+  day to the customer, notifies both), the late count (paid after all;
+  missed under a GM rejection), the cap (the third to the GM; asked before
+  the cap filled and approved after is refused), a GM rejection never
+  reaching SAP, the job-stale alert, alerts read and marked seen, the
+  order's extension found from the order.
+- Dashboard in the browser against the local copy, as the demo GM: alerts,
+  the review with the "not yet checked" note and the cap line, the
+  authority settings saved, the note on the order page.
+- Phone: analysed and tested; not run on a device.

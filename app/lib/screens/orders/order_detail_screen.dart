@@ -15,6 +15,7 @@ import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/pdf/proforma_pdf.dart';
 import 'package:manna_field_sales/screens/conditions/my_conditions_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
+import 'package:manna_field_sales/screens/requests/credit_extension_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -715,6 +716,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               _statusRow('Approval',
                   orderApprovalLabel(po, SapOrderState.fromOrder(_order))),
             _followUpCard(),
+            TemporaryCreditStrip(orderName: widget.orderName),
             if (ratesLocked(_order)) _statusRow('Rates', 'Locked by manager'),
             if ('${_order['delivery_date'] ?? ''}'.isNotEmpty &&
                 '${_order['delivery_date']}' != 'null')

@@ -14,6 +14,11 @@
 
 const int kExtensionManagerMaxDays = 10;
 
+/// The settings' defaults for the manager cap (17 Nov 2026); the server sends
+/// the live figures with each review.
+const int kExtensionManagerCapCount = 2;
+const int kExtensionManagerCapDays = 90;
+
 const String kXtPendingManager = 'Pending Manager';
 const String kXtPendingGm = 'Pending GM';
 const String kXtSending = 'Sending to SAP';
@@ -25,12 +30,28 @@ const String kXtRenewed = 'Renewed by GM';
 const String kXtRejected = 'Rejected';
 const String kXtRejectedByGm = 'Rejected by GM';
 
-String xtRouteStatus(int missedBefore, bool openExtension) =>
-    missedBefore > 0 || openExtension ? kXtPendingGm : kXtPendingManager;
+/// Where a new request goes. The manager may give a customer at most [cap]
+/// extensions in the window (17 Nov 2026); past that, a missed commitment, or
+/// one still running, it is the GM's.
+String xtRouteStatus(int missedBefore, bool openExtension, int managerRecent, int cap) =>
+    missedBefore > 0 || openExtension || managerRecent >= cap ? kXtPendingGm : kXtPendingManager;
 
 DateTime? _day(String s) {
   final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch(s);
   return m == null ? null : DateTime.utc(int.parse(m[1]!), int.parse(m[2]!), int.parse(m[3]!));
+}
+
+/// How many of [approvals] ({role, on}) a manager gave in the [days] calendar
+/// days up to and including [today].
+int xtManagerRecent(List<Map> approvals, String today, int days) {
+  final t = _day(today);
+  if (t == null) return 0;
+  return approvals.where((a) {
+    final d = _day('${a['on'] ?? ''}');
+    if ('${a['role'] ?? ''}' != 'manager' || d == null) return false;
+    final gap = t.difference(d).inDays;
+    return gap >= 0 && gap < days;
+  }).length;
 }
 
 /// null when a manager's approval is allowed, else what is wrong:
@@ -88,6 +109,9 @@ String? xtNextStatus(String action, String status, String actor) {
       return status == kXtPendingManager && actor == 'manager' ? kXtPendingGm : null;
     case 'retry':
       return status == kXtPushFailed && actor == 'approver' ? kXtSending : null;
+    case 'date_passed':
+      // The morning watchdog's, never a person's.
+      return status == kXtActive && actor == 'watchdog' ? kXtOverdue : null;
   }
   if (actor != 'sap_job') return null;
   if (action == 'sap_raised' && status == kXtSending) return kXtActive;
@@ -156,6 +180,9 @@ class CreditExtension {
   double get originalLimit => _d(raw['original_limit']);
   double get raisedLimit => _d(raw['raised_limit']);
   bool get missed => _b(raw['missed']);
+
+  /// Escalated by the morning watchdog before SAP's payments were counted.
+  bool get overdueUnchecked => _b(raw['overdue_unchecked']);
   String get actor => _s(raw['actor']);
 
   bool _may(String key, String action, String actorForRule) =>

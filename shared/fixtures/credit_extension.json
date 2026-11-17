@@ -1,12 +1,16 @@
 {
-  "about": "Temporary credit extension with a payment commitment (16 Nov 2026, the user's strict instruction): a separate workflow beside - never instead of - order approval (credit_commitment.json), credit periods (credit_period_request.json), credit conditions (credit_condition.json) and the credit sync. A rep (or the team's manager) asks for one on an order that takes a customer past their SAP credit limit. The manager may approve a temporary additional credit amount, within the manager's configured authority, with a payment commitment of at most 10 calendar days, and push it to SAP in the same step; the GM is not needed for that. The SAP job raises the customer's SAP CreditLimit by the amount, watches confirmed SAP payments from the approval date to the commitment date, and puts the original limit back when the commitment is paid or the date has passed. Unpaid by the date: 'Payment Commitment Overdue', with the GM, who approves a new extension (and pushes it) or rejects. Implemented by the manna_credit_extension Server Script (app/server/credit_extension.py, enforced), the phone (app/lib/core/credit_extension.dart), the dashboard (client/src/domain/creditExtension.ts) and the SAP job (sap-credit-sync/Sync-CreditExtensions.ps1); all four test against this file.",
+  "about": "Temporary credit extension with a payment commitment (16 Nov 2026, the user's strict instruction): a separate workflow beside - never instead of - order approval (credit_commitment.json), credit periods (credit_period_request.json), credit conditions (credit_condition.json) and the credit sync. A rep (or the team's manager) asks for one on an order that takes a customer past their SAP credit limit. The manager may approve a temporary additional credit amount, within the manager's configured authority, with a payment commitment of at most 10 calendar days, and push it to SAP in the same step; the GM is not needed for that. The SAP job raises the customer's SAP CreditLimit by the amount, watches confirmed SAP payments from the approval date to the commitment date, and puts the original limit back when the commitment is paid or the date has passed. Unpaid by the date: 'Payment Commitment Overdue', with the GM, who approves a new extension (and pushes it) or rejects. Implemented by the manna_credit_extension Server Script (app/server/credit_extension.py, enforced), the phone (app/lib/core/credit_extension.dart), the dashboard (client/src/domain/creditExtension.ts) and the SAP job (sap-credit-sync/Sync-CreditExtensions.ps1); all four test against this file. 17 Nov 2026 added the manager cap (routing, manager_window: server and both apps), per-manager authority (authority: the server, which sends the apps the figure), and the daily watchdog with its late check (watchdog, late_check: the manna_credit_extension_watch Server Script and the main script, app/server/credit_extension_watch.py).",
 
   "doctype": "Manna Credit Extension",
-  "limits": { "manager_max_days": 10 },
+  "limits": { "manager_max_days": 10, "manager_cap_count": 2, "manager_cap_days": 90 },
 
   "rules": {
     "eligible": "An order still waiting for approval whose customer's outstanding plus the order total goes past a credit limit that is set - credit.json's over-limit test. The excess is outstanding + order - limit.",
-    "routing": "A new request goes to the Manager, unless the customer has ever missed a commitment, or already has an extension that is not finished - then to the GM. No unlimited manager extensions.",
+    "routing": "A new request goes to the Manager, unless the customer has ever missed a commitment, already has an extension that is not finished, or has had the manager's cap of extensions in the window - then to the GM. No unlimited manager extensions.",
+    "manager_cap": "17 Nov 2026, the user's default: at most manager_cap_count manager-approved extensions per customer in any manager_cap_days calendar days (Manna Credit Extension Settings, default 2 in 90). An extension counts from the day the manager approved it, whatever became of it after - paid, overdue, renewed. GM approvals do not count. A cap of 0 sends every request to the GM. Checked when the request is made AND when the manager approves, so a request made before the cap filled cannot slip past it.",
+    "authority": "17 Nov 2026: the manager's authority is their own row in Manna Credit Extension Settings.authorities (manager, max_amount), else the settings' manager_max_amount for every manager. A row of 0 means that manager has none, even when the default is set. Decided by the Server Script; the apps show the figure it sends.",
+    "watchdog": "17 Nov 2026: the escalation must not depend on the office server's SAP job running. A daily Server Script (manna_credit_extension_watch) takes every 'Active' extension whose commitment date is before today to 'Payment Commitment Overdue', escalates it to the GM and notifies the manager and the GM, marked 'not yet checked against SAP' (overdue_unchecked) and with the SAP restore pending. It does NOT mark the commitment missed: only SAP's payments can say that. The commitment day itself belongs to the customer. Errs toward escalating: a GM who looks at one that turns out paid has lost a minute; a missed commitment nobody escalated is the failure the user named.",
+    "late_check": "When the SAP job later counts the payments of an unchecked overdue extension: paid in full by the commitment date -> 'Paid' if it is still waiting on the GM (the GM and manager are told), or left as the GM decided if the GM already renewed or rejected it; not paid -> the commitment is missed, and the status stays. Either way it is now checked. The escalation's notifications were sent when it was escalated and are not sent again.",
     "manager_approval": "Amount > 0, at most the manager's authority (Manna Credit Extension Settings.manager_max_amount; 0 or unset means the manager has none and must send it to the GM), commitment date from the approval day to 10 calendar days after it, reason and remarks both required. Approving pushes to SAP in the same step.",
     "gm_approval": "Amount > 0, a commitment date from today on, remarks required. From 'Payment Commitment Overdue' the GM's approval makes a NEW extension record linked to the overdue one, which becomes 'Renewed by GM'; no record is ever overwritten.",
     "reject": "Remarks required. A rejected request is never sent to SAP.",
@@ -20,9 +24,42 @@
   "statuses": ["Pending Manager", "Pending GM", "Sending to SAP", "SAP Push Failed", "Active", "Paid", "Payment Commitment Overdue", "Renewed by GM", "Rejected", "Rejected by GM"],
 
   "routing": [
-    { "why": "a first request goes to the manager", "missed_before": 0, "open_extension": false, "expect": "Pending Manager" },
-    { "why": "a customer who missed a commitment goes to the GM", "missed_before": 1, "open_extension": false, "expect": "Pending GM" },
-    { "why": "one extension at a time from the manager: a second goes to the GM", "missed_before": 0, "open_extension": true, "expect": "Pending GM" }
+    { "why": "a first request goes to the manager", "missed_before": 0, "open_extension": false, "manager_recent": 0, "cap": 2, "expect": "Pending Manager" },
+    { "why": "a customer who missed a commitment goes to the GM", "missed_before": 1, "open_extension": false, "manager_recent": 0, "cap": 2, "expect": "Pending GM" },
+    { "why": "one extension at a time from the manager: a second goes to the GM", "missed_before": 0, "open_extension": true, "manager_recent": 0, "cap": 2, "expect": "Pending GM" },
+    { "why": "one manager extension in the window: the manager may give a second", "missed_before": 0, "open_extension": false, "manager_recent": 1, "cap": 2, "expect": "Pending Manager" },
+    { "why": "the cap reached: the third in the window goes to the GM", "missed_before": 0, "open_extension": false, "manager_recent": 2, "cap": 2, "expect": "Pending GM" },
+    { "why": "a cap of 0 sends every request to the GM", "missed_before": 0, "open_extension": false, "manager_recent": 0, "cap": 0, "expect": "Pending GM" }
+  ],
+
+  "manager_window": [
+    { "why": "two manager approvals inside 90 days both count", "today": "2026-11-17", "days": 90, "approvals": [{ "role": "manager", "on": "2026-11-01 10:00:00" }, { "role": "manager", "on": "2026-09-01" }], "expect": 2 },
+    { "why": "the GM's approvals are not the manager's", "today": "2026-11-17", "days": 90, "approvals": [{ "role": "gm", "on": "2026-11-01" }, { "role": "manager", "on": "2026-11-10" }], "expect": 1 },
+    { "why": "89 days ago is inside 90, 90 days ago is not", "today": "2026-11-17", "days": 90, "approvals": [{ "role": "manager", "on": "2026-08-20" }, { "role": "manager", "on": "2026-08-19" }], "expect": 1 },
+    { "why": "approved today counts", "today": "2026-11-17", "days": 90, "approvals": [{ "role": "manager", "on": "2026-11-17 09:30:00" }], "expect": 1 },
+    { "why": "a request never approved does not count", "today": "2026-11-17", "days": 90, "approvals": [{ "role": "", "on": "" }, { "role": "manager", "on": "" }], "expect": 0 }
+  ],
+
+  "authority": [
+    { "why": "a manager's own figure wins over the default", "manager": "m1@x", "rows": [{ "manager": "m1@x", "max_amount": 500000 }], "default": 200000, "expect": 500000 },
+    { "why": "a manager with no row has the default", "manager": "m2@x", "rows": [{ "manager": "m1@x", "max_amount": 500000 }], "default": 200000, "expect": 200000 },
+    { "why": "a row of 0 means none, even with a default", "manager": "m1@x", "rows": [{ "manager": "m1@x", "max_amount": 0 }], "default": 200000, "expect": 0 },
+    { "why": "no row and no default: none", "manager": "m3@x", "rows": [], "default": 0, "expect": 0 }
+  ],
+
+  "watchdog": [
+    { "why": "the commitment day has passed and it is still Active: escalate", "status": "Active", "commitment": "2026-11-16", "today": "2026-11-17", "expect": true },
+    { "why": "the commitment day itself is the customer's", "status": "Active", "commitment": "2026-11-17", "today": "2026-11-17", "expect": false },
+    { "why": "the job already decided it", "status": "Payment Commitment Overdue", "commitment": "2026-11-10", "today": "2026-11-17", "expect": false },
+    { "why": "paid is paid", "status": "Paid", "commitment": "2026-11-10", "today": "2026-11-17", "expect": false },
+    { "why": "never raised in SAP: nothing was extended to escalate", "status": "SAP Push Failed", "commitment": "2026-11-10", "today": "2026-11-17", "expect": false }
+  ],
+
+  "late_check": [
+    { "why": "checked late and paid in time: Paid", "status": "Payment Commitment Overdue", "outcome": "paid", "expect": { "status": "Paid", "missed": 0 } },
+    { "why": "checked late and unpaid: missed, still with the GM", "status": "Payment Commitment Overdue", "outcome": "overdue", "expect": { "status": "Payment Commitment Overdue", "missed": 1 } },
+    { "why": "the GM renewed it before the check: the GM's decision stands, not missed", "status": "Renewed by GM", "outcome": "paid", "expect": { "status": "Renewed by GM", "missed": 0 } },
+    { "why": "the GM rejected it before the check: it stands, and it is missed", "status": "Rejected by GM", "outcome": "overdue", "expect": { "status": "Rejected by GM", "missed": 1 } }
   ],
 
   "manager_approval": [
@@ -71,6 +108,9 @@
     { "why": "the date passed without enough paid", "action": "sap_overdue", "from": "Active", "actor": "sap_job", "expect": "Payment Commitment Overdue" },
     { "why": "only the SAP job reports SAP", "action": "sap_paid", "from": "Active", "actor": "gm", "expect": "REFUSED" },
     { "why": "an overdue one is escalated once, not again", "action": "sap_overdue", "from": "Payment Commitment Overdue", "actor": "sap_job", "expect": "REFUSED" },
+    { "why": "the daily watchdog escalates an Active one past its date", "action": "date_passed", "from": "Active", "actor": "watchdog", "expect": "Payment Commitment Overdue" },
+    { "why": "the watchdog touches nothing else", "action": "date_passed", "from": "Sending to SAP", "actor": "watchdog", "expect": "REFUSED" },
+    { "why": "only the watchdog escalates by date", "action": "date_passed", "from": "Active", "actor": "gm", "expect": "REFUSED" },
     { "why": "an unknown status offers nobody anything", "action": "approve", "from": "Something New", "actor": "gm", "expect": "REFUSED" }
   ],
 

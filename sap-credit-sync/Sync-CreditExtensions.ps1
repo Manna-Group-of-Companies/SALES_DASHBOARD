@@ -26,7 +26,9 @@
                 it. Refused while another extension of the customer is still
                 raised, if SAP's limit is 0 (no figure), or if SAP's limit
                 moved since the first attempt. Read back after writing.
-    3. PAYMENTS every 'Active' extension: SAP incoming payments for the
+    3. PAYMENTS every 'Active' extension, and every one the morning watchdog
+                escalated before its payments were counted (overdue_unchecked,
+                17 Nov 2026): SAP incoming payments for the
                 customer dated from the approval to the commitment date, not
                 cancelled, not drafts, each counted once by DocEntry. The
                 Server Script decides Paid / still running / Payment
@@ -297,10 +299,15 @@ try {
     $active  = Get-ErpExtensions '[["status","=","Active"]]'
     $raisedNow = Get-ErpExtensions '[["sap_raised","=",1],["restore_status","!=","Restored"]]'
     $today = (Get-Date).ToString('yyyy-MM-dd')
+    # Escalated by the morning watchdog (manna_credit_extension_watch) while
+    # this job was not running: their payments were never counted. Counted on
+    # the next run, whatever their status now - the Server Script settles them
+    # (Paid after all, or the commitment missed) without escalating again.
+    $unchecked = Get-ErpExtensions '[["overdue_unchecked","=",1]]'
     $dueChecks = @($active | Where-Object {
         $asked -or ((Get-IsoDay $_.commitment_date) -le $today) -or -not $_.last_payment_check -or
-        (((Get-Date) - [datetime]"$($_.last_payment_check)").TotalMinutes -ge $PaymentCheckMinutes) })
-    Write-Log INFO ("to restore {0}, to raise {1}, payments to check {2} of {3} active" -f $restore.Count, $raise.Count, $dueChecks.Count, $active.Count)
+        (((Get-Date) - [datetime]"$($_.last_payment_check)").TotalMinutes -ge $PaymentCheckMinutes) }) + @($unchecked)
+    Write-Log INFO ("to restore {0}, to raise {1}, payments to check {2} of {3} active and {4} escalated unchecked" -f $restore.Count, $raise.Count, $dueChecks.Count, $active.Count, $unchecked.Count)
     if ($restore.Count + $raise.Count + $dueChecks.Count -eq 0) {
         $summary = 'nothing to do'
     } else {

@@ -3,6 +3,12 @@
 // and approves an extra amount (pushing it to SAP) or sends it to the GM; a
 // missed payment commitment comes to the GM by itself. See
 // core/credit_extension.dart.
+//
+// 17 Nov 2026: the notifications the Server Script raises are shown at the
+// top of the list (they went to Frappe's Notification Log, which nothing
+// read); a manager sees their authority and the cap; an extension the morning
+// watchdog escalated before SAP's payments were counted says so. The GM sets
+// the authority and the cap on the dashboard, not here.
 
 import 'package:flutter/material.dart';
 
@@ -47,8 +53,81 @@ class CreditExtensionsScreen extends StatefulWidget {
 
 class _CreditExtensionsScreenState extends State<CreditExtensionsScreen> {
   late Future<List<CreditExtension>> _future = Api.getCreditExtensions();
+  List<Map<String, dynamic>> _alerts = const [];
 
-  void _reload() => setState(() => _future = Api.getCreditExtensions());
+  @override
+  void initState() {
+    super.initState();
+    _loadAlerts();
+  }
+
+  // An alert that fails to load must not hide the requests.
+  Future<void> _loadAlerts() async {
+    try {
+      final a = await Api.getExtensionAlerts();
+      if (mounted) setState(() => _alerts = a);
+    } catch (_) {}
+  }
+
+  void _reload() {
+    setState(() => _future = Api.getCreditExtensions());
+    _loadAlerts();
+  }
+
+  Future<void> _seen() async {
+    await Api.markExtensionAlertsSeen();
+    _loadAlerts();
+  }
+
+  Future<void> _authority() async {
+    try {
+      final s = await Api.getExtensionSettings();
+      if (!mounted) return;
+      final mine = s['my_authority'];
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Approval authority'),
+          content: Text([
+            if (mine is num) 'Your authority: ${_rs(mine)} per extension.',
+            'A manager may give a commitment of at most ${s['max_days'] ?? kExtensionManagerMaxDays} days, and at most '
+                '${s['manager_cap_count']} extension(s) for one customer in ${s['manager_cap_days']} days. '
+                'Anything past that goes to the GM.',
+            if (s['can_edit'] == 1) 'You set these on the web dashboard, under Temporary Credit.',
+          ].join('\n\n')),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+        ),
+      );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(humanError(e))));
+    }
+  }
+
+  Widget _alertsCard() {
+    final unread = _alerts.where((a) => a['read'] != 1).toList();
+    if (unread.isEmpty) return const SizedBox.shrink();
+    return Card(
+      color: const Color(0xFFFFF4E5),
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: Text('Alerts (${unread.length})', style: const TextStyle(fontWeight: FontWeight.bold))),
+            TextButton(onPressed: _seen, child: const Text('Mark read')),
+          ]),
+          for (final a in unread.take(10))
+            InkWell(
+              onTap: '${a['extension'] ?? ''}'.isEmpty ? null : () => _open(CreditExtensionDetailScreen(name: '${a['extension']}')),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text('${_date('${a['at']}')}  ·  ${a['subject']}', style: const TextStyle(fontSize: 13)),
+              ),
+            ),
+        ]),
+      ),
+    );
+  }
 
   Future<void> _open(Widget screen) async {
     await Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
@@ -78,6 +157,8 @@ class _CreditExtensionsScreenState extends State<CreditExtensionsScreen> {
               const SizedBox(height: 2),
               Text([x.name, if (x.salesPerson.isNotEmpty) x.salesPerson, _date(x.requestedOn)].join('  ·  '),
                   style: const TextStyle(fontSize: 12.5, color: Colors.black54)),
+              if (x.overdueUnchecked)
+                const Text('Payment not yet checked in SAP', style: TextStyle(fontSize: 12.5, color: Colors.black54)),
             ]),
           ),
         ),
@@ -87,7 +168,10 @@ class _CreditExtensionsScreenState extends State<CreditExtensionsScreen> {
   Widget build(BuildContext context) {
     final canAsk = Session.I.salesPerson != null || Session.I.isManager || Session.I.isGM;
     return Scaffold(
-      appBar: AppBar(title: const Text('Temporary Credit')),
+      appBar: AppBar(title: const Text('Temporary Credit'), actions: [
+        if (Session.I.isManager || Session.I.isGM)
+          IconButton(tooltip: 'Approval authority', icon: const Icon(Icons.info_outline), onPressed: _authority),
+      ]),
       floatingActionButton: canAsk
           ? FloatingActionButton.extended(
               backgroundColor: _kOrange,
@@ -110,6 +194,7 @@ class _CreditExtensionsScreenState extends State<CreditExtensionsScreen> {
           return RefreshIndicator(
             onRefresh: () async => _reload(),
             child: ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 90), children: [
+              _alertsCard(),
               if (all.isEmpty)
                 const Padding(padding: EdgeInsets.all(24), child: Text('No temporary credit requests.', textAlign: TextAlign.center)),
               if (waiting.isNotEmpty) ...[
@@ -328,6 +413,10 @@ class _CreditExtensionDetailScreenState extends State<CreditExtensionDetailScree
           final c = (d['customer'] as Map? ?? {}).cast<String, dynamic>();
           final h = (d['history'] as Map? ?? {}).cast<String, dynamic>();
           final authority = (d['manager_authority'] as num?)?.toDouble() ?? 0;
+          final cap = (d['manager_cap'] as Map? ?? {}).cast<String, dynamic>();
+          final capUsed = (cap['used'] as num?)?.toInt() ?? 0;
+          final capCount = (cap['count'] as num?)?.toInt() ?? kExtensionManagerCapCount;
+          final capDays = (cap['days'] as num?)?.toInt() ?? kExtensionManagerCapDays;
           final deciding = x.canApprove || x.canReject || x.canEscalate;
           if (_reason.text.isEmpty && x.requestReason.isNotEmpty && !x.requestReason.startsWith('Renewal of')) {
             _reason.text = x.requestReason;
@@ -340,6 +429,15 @@ class _CreditExtensionDetailScreenState extends State<CreditExtensionDetailScree
                 _badge(x.status, _color(x.status)),
               ]),
               const SizedBox(height: 8),
+              if (x.overdueUnchecked)
+                const Card(
+                  color: Color(0xFFFFF4E5),
+                  child: Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text('Escalated by the morning check because the payment date passed before SAP\'s payments were '
+                        'counted. The next SAP check will say whether the customer paid in time.'),
+                  ),
+                ),
               _section('Customer', [
                 _row('Customer', '${x.customerName} (${x.bpCode})'),
                 _row('SAP credit limit', _rs((c['credit_limit'] as num?) ?? x.creditLimit)),
@@ -371,6 +469,7 @@ class _CreditExtensionDetailScreenState extends State<CreditExtensionDetailScree
                 _row('GM escalations', '${h['gm_escalations'] ?? 0}'),
                 _row('Approved credit', _rs((h['total_additional_credit'] as num?) ?? 0)),
                 _row('Paid against them', _rs((h['total_paid_against_commitments'] as num?) ?? 0)),
+                _row('Manager extensions', '$capUsed of $capCount in the last $capDays days'),
                 for (final e in ((h['extensions'] as List?) ?? const []).cast<Map>())
                   if ('${e['name']}' != x.name)
                     _row('${e['name']}', '${e['status']} · ${_rs((e['amount'] as num?) ?? 0)}${e['missed'] == 1 ? ' · missed' : ''}'),
@@ -390,6 +489,10 @@ class _CreditExtensionDetailScreenState extends State<CreditExtensionDetailScree
               ]),
               if (deciding) ...[
                 const SizedBox(height: 8),
+                if (x.actor == 'manager' && x.canApprove && capUsed >= capCount)
+                  Text('This customer has had $capUsed manager extension(s) in $capDays days, the most a manager may give. '
+                      'Send it to the GM.',
+                      style: TextStyle(color: Colors.red.shade700)),
                 if (x.canApprove) ...[
                   TextField(
                     controller: _amount,
@@ -455,5 +558,57 @@ class _CreditExtensionDetailScreenState extends State<CreditExtensionDetailScree
         },
       ),
     );
+  }
+}
+
+/// On an order's page: the temporary credit extensions asked on it (17 Nov
+/// 2026). The order's own approval is unchanged, so whoever reads the order
+/// would otherwise not know SAP's limit was raised for it, or that its
+/// commitment was missed. Nothing when there are none, or this login may not
+/// see them.
+class TemporaryCreditStrip extends StatefulWidget {
+  final String orderName;
+  const TemporaryCreditStrip({super.key, required this.orderName});
+  @override
+  State<TemporaryCreditStrip> createState() => _TemporaryCreditStripState();
+}
+
+class _TemporaryCreditStripState extends State<TemporaryCreditStrip> {
+  List<CreditExtension> _rows = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    Api.getCreditExtensions(salesOrder: widget.orderName).then((r) {
+      if (mounted) setState(() => _rows = r);
+    }).catchError((_) {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_rows.isEmpty) return const SizedBox.shrink();
+    return Column(children: [
+      for (final x in _rows)
+        InkWell(
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => CreditExtensionDetailScreen(name: x.name))),
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 6),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: _color(x.status).withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8)),
+            child: Row(children: [
+              Icon(Icons.add_card, size: 18, color: _color(x.status)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Temporary credit ${x.name}: ${x.status}'
+                  '${x.amount > 0 ? '\n${_rs(x.amount)} until ${_date(x.commitmentDate)} · paid ${_rs(x.paid)}' : ''}',
+                  style: const TextStyle(fontSize: 12.5),
+                ),
+              ),
+              const Icon(Icons.chevron_right, size: 18),
+            ]),
+          ),
+        ),
+    ]);
   }
 }

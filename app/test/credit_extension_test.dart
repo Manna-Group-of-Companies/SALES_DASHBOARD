@@ -14,11 +14,22 @@ void main() {
 
   test('the manager\'s limit is the fixture\'s', () {
     expect((fx['limits'] as Map)['manager_max_days'], kExtensionManagerMaxDays);
+    expect((fx['limits'] as Map)['manager_cap_count'], kExtensionManagerCapCount);
+    expect((fx['limits'] as Map)['manager_cap_days'], kExtensionManagerCapDays);
   });
 
   group('routing', () {
     for (final c in cases('routing')) {
-      test('${c['why']}', () => expect(xtRouteStatus(c['missed_before'] as int, c['open_extension'] as bool), c['expect']));
+      test('${c['why']}', () => expect(
+          xtRouteStatus(c['missed_before'] as int, c['open_extension'] as bool, c['manager_recent'] as int, c['cap'] as int),
+          c['expect']));
+    }
+  });
+
+  group('manager cap window', () {
+    for (final c in cases('manager_window')) {
+      test('${c['why']}', () => expect(
+          xtManagerRecent((c['approvals'] as List).cast<Map>(), '${c['today']}', c['days'] as int), c['expect']));
     }
   });
 

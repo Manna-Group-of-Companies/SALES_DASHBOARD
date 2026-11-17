@@ -13,6 +13,18 @@
 #     escalate   : name, remarks (optional)  manager -> GM (past the manager's authority)
 #     retry      : name                      push again after SAP refused
 #     sap_event  : name, event, ...          the SAP job only (Sync-CreditExtensions.ps1)
+#     settings   : [authorities, manager_max_amount, manager_cap_count, manager_cap_days]
+#                                            read (managers, GM); write (the GM only)
+#     alerts     : -                         this login's notifications about extensions
+#     seen       : -                         marks them read
+#
+# 17 Nov 2026, the user's defaults: a manager may give a customer at most
+# manager_cap_count extensions in manager_cap_days (2 in 90) before the GM must;
+# each manager may have their own authority (the settings' authorities table),
+# else the shared figure; and the escalation of a missed date no longer waits
+# on the SAP job - manna_credit_extension_watch (credit_extension_watch.py)
+# escalates every morning what the job has not, marked overdue_unchecked, and
+# the job's later count settles it here (late_check).
 #
 # Temporary credit extension with a payment commitment (16 Nov 2026, the
 # user's strict instruction). A SEPARATE workflow: order approval, credit
@@ -37,10 +49,56 @@
 # test_credit_extension.py runs the text between these two markers.
 
 
-def route_status(missed_before, open_extension):
+def route_status(missed_before, open_extension, manager_recent, cap):
     if int(missed_before or 0) > 0 or open_extension:
         return "Pending GM"
+    if int(manager_recent or 0) >= int(cap or 0):
+        return "Pending GM"
     return "Pending Manager"
+
+
+def manager_recent(approvals, today, days):
+    """How many of [approvals] ({role, on}) a manager gave in the [days]
+    calendar days up to and including [today]."""
+    n = []
+    for s in [str(today)[:10]] + [str(a.get("on") or "")[:10] for a in approvals]:
+        if len(s) != 10:
+            n.append(None)
+            continue
+        y = int(s[0:4])
+        m = int(s[5:7])
+        dd = int(s[8:10])
+        y2 = y - 1 if m <= 2 else y
+        era = y2 // 400
+        yoe = y2 - era * 400
+        doy = (153 * ((m + 9) % 12) + 2) // 5 + dd - 1
+        n.append(era * 146097 + yoe * 365 + yoe // 4 - yoe // 100 + doy)
+    count = 0
+    i = 0
+    for a in approvals:
+        i = i + 1
+        if (a.get("role") or "") != "manager" or n[i] is None:
+            continue
+        if 0 <= n[0] - n[i] < int(days or 0):
+            count = count + 1
+    return count
+
+
+def authority_for(manager, rows, default):
+    for r in rows:
+        if (r.get("manager") or "") == manager:
+            return float(r.get("max_amount") or 0)
+    return float(default or 0)
+
+
+def late_check(status, result):
+    """An overdue extension the watchdog escalated before SAP's payments were
+    counted, once they are: its status and whether the commitment was missed."""
+    if result == "paid":
+        return {"status": "Paid" if status == "Payment Commitment Overdue" else status, "missed": 0}
+    if result == "overdue":
+        return {"status": status, "missed": 1}
+    return {"status": status, "missed": 0}
 
 
 def check_manager(amount, authority, approved_on, commitment, reason, remarks):
@@ -105,6 +163,8 @@ def next_status(action, status, actor):
         return "Pending GM" if (status == "Pending Manager" and actor == "manager") else ""
     if action == "retry":
         return "Sending to SAP" if (status == "SAP Push Failed" and actor == "approver") else ""
+    if action == "date_passed":
+        return "Payment Commitment Overdue" if (status == "Active" and actor == "watchdog") else ""
     if actor != "sap_job":
         return ""
     if action == "sap_raised" and status == "Sending to SAP":
@@ -192,7 +252,16 @@ FIELDS = ["name", "status", "customer", "customer_name", "bp_code", "sales_order
           "rejected_by", "rejected_on", "rejection_remarks", "escalated_on", "escalation_reason",
           "original_limit", "raised_limit", "original_commitment", "raised_commitment", "sap_reference", "sap_raised", "sap_raised_on", "sap_error",
           "paid_amount", "remaining_amount", "payment_status", "last_payment_check",
-          "missed", "restore_status", "restored_on", "restore_reference"]
+          "missed", "overdue_unchecked", "restore_status", "restored_on", "restore_reference"]
+
+# Unset Int fields of a Single read back as 0, and a cap of 0 sends everything
+# to the GM: the safe direction if the installer never wrote the defaults.
+CAP_COUNT = frappe.utils.cint(frappe.db.get_single_value(SETTINGS, "manager_cap_count"))
+CAP_DAYS = frappe.utils.cint(frappe.db.get_single_value(SETTINGS, "manager_cap_days")) or 90
+DEFAULT_AUTHORITY = frappe.utils.flt(frappe.db.get_single_value(SETTINGS, "manager_max_amount"))
+AUTH_ROWS = frappe.get_all("Manna Credit Extension Authority",
+                           filters={"parenttype": SETTINGS, "parent": SETTINGS},
+                           fields=["manager", "max_amount"], limit_page_length=0)
 
 
 def notify(users, subject, name):
@@ -259,6 +328,13 @@ def history_of(customer, fields):
         "payments": [{"extension": p.parent, "doc_num": p.doc_num, "date": str(p.payment_date or ""),
                       "amount": p.amount} for p in pays],
     }
+
+
+def approvals_of(customer):
+    # Every approval the customer ever had, for manager_recent's window.
+    return [{"role": r.approver_role or "", "on": str(r.approved_on or "")}
+            for r in frappe.get_all("Manna Credit Extension", filters={"customer": customer, "approved_on": ["is", "set"]},
+                                    fields=["approver_role", "approved_on"], limit_page_length=0)]
 
 
 def load(name):
@@ -337,6 +413,9 @@ elif action == "list":
     customer = clean(frappe.form_dict.get("customer"))
     if customer:
         filters["customer"] = customer
+    so_filter = clean(frappe.form_dict.get("sales_order"))
+    if so_filter:
+        filters["sales_order"] = so_filter
     if is_gm:
         pass
     elif managed:
@@ -390,7 +469,12 @@ elif action == "detail":
         "customer": {"name": doc.customer, "customer_name": c.get("customer_name"), "bp_code": c.get("custom_bp_code"),
                      "credit_limit": frappe.utils.flt(c.get("custom_credit_limit")), "outstanding": outstanding_of(c) if c else 0,
                      "overdue": frappe.utils.flt(c.get("custom_overdue_past_terms")), "payment_terms": c.get("custom_payment_terms")},
-        "manager_authority": frappe.utils.flt(frappe.db.get_single_value(SETTINGS, "manager_max_amount")) if who in ("manager", "gm") else None,
+        # The manager's own authority; to the GM, the team manager's, so the GM
+        # can see why it came up.
+        "manager_authority": (authority_for(user if who == "manager" else ((team_managers(doc.team) or [""])[0]),
+                                            AUTH_ROWS, DEFAULT_AUTHORITY) if who in ("manager", "gm") else None),
+        "manager_cap": {"count": CAP_COUNT, "days": CAP_DAYS,
+                        "used": manager_recent(approvals_of(doc.customer), today, CAP_DAYS)},
         "payments": [{"doc_num": p.doc_num, "date": str(p.payment_date or ""), "amount": p.amount} for p in doc.payments],
         "log": [{"action": l.action, "role": l.actor_role, "by": l.by_user, "at": str(l.at or ""), "remarks": l.remarks,
                  "amount": l.amount, "commitment_date": str(l.commitment_date or "")} for l in doc.log],
@@ -431,7 +515,8 @@ elif action == "submit":
         frappe.throw("This customer already has a temporary credit request waiting for a decision.")
     missed = len(frappe.get_all(DT, filters={"customer": so.customer, "missed": 1}, fields=["name"], limit_page_length=0))
     running = bool(frappe.get_all(DT, filters={"customer": so.customer, "status": ["in", RUNNING]}, limit=1))
-    status = route_status(missed, running)
+    recent = manager_recent(approvals_of(so.customer), today, CAP_DAYS)
+    status = route_status(missed, running, recent, CAP_COUNT)
     doc = frappe.get_doc({
         "doctype": DT, "status": status, "customer": so.customer, "customer_name": c.customer_name,
         "bp_code": c.custom_bp_code, "sales_order": so.name, "sales_person": so.custom_sales_person,
@@ -443,7 +528,13 @@ elif action == "submit":
     })
     if status == "Pending GM":
         doc.escalated_on = frappe.utils.now()
-        doc.escalation_reason = "Missed a payment commitment before" if missed else "Another extension is still running"
+        if missed:
+            doc.escalation_reason = "Missed a payment commitment before"
+        elif running:
+            doc.escalation_reason = "Another extension is still running"
+        else:
+            doc.escalation_reason = ("The manager's limit of " + str(CAP_COUNT) + " extensions in " + str(CAP_DAYS)
+                                     + " days is reached (" + str(recent) + " given)")
     log(doc, "Requested", "rep" if me == so.custom_sales_person else ("gm" if is_gm else "manager"),
         doc.request_reason, 0, None)
     doc.insert(ignore_permissions=True)
@@ -498,16 +589,21 @@ elif action in ("approve", "reject", "escalate", "retry"):
             commitment = clean(frappe.form_dict.get("commitment_date"))
             reason = clean(frappe.form_dict.get("reason")) or doc.request_reason or ""
             if who == "manager":
-                problem = check_manager(amount, frappe.db.get_single_value(SETTINGS, "manager_max_amount"),
+                problem = check_manager(amount, authority_for(user, AUTH_ROWS, DEFAULT_AUTHORITY),
                                         today, commitment, reason, remarks)
                 if not problem:
                     if frappe.get_all(DT, filters={"customer": doc.customer, "missed": 1}, limit=1):
                         problem = "missed"
                     elif frappe.get_all(DT, filters={"customer": doc.customer, "status": ["in", RUNNING], "name": ["!=", doc.name]}, limit=1):
                         problem = "running"
+                    elif route_status(0, False, manager_recent(approvals_of(doc.customer), today, CAP_DAYS), CAP_COUNT) == "Pending GM":
+                        # Asked before the cap filled, decided after: still the GM's.
+                        problem = "cap"
                 if problem:
                     frappe.throw({"missed": "This customer missed a commitment before. Send it to the GM.",
-                                  "running": "This customer already has a temporary extension running. Send it to the GM."}.get(problem) or MESSAGES[problem])
+                                  "running": "This customer already has a temporary extension running. Send it to the GM.",
+                                  "cap": "This customer has had " + str(CAP_COUNT) + " manager extensions in " + str(CAP_DAYS)
+                                         + " days. Send it to the GM."}.get(problem) or MESSAGES[problem])
             else:
                 problem = check_gm(amount, today, commitment, remarks)
                 if problem:
@@ -590,6 +686,34 @@ elif action == "sap_event":
         doc.sap_error = clean(frappe.form_dict.get("error")) or "SAP refused the change."
         log(doc, "SAP refused", "sap_job", doc.sap_error, 0, None)
         notify([doc.approved_by], "SAP refused the temporary credit for " + (doc.customer_name or doc.customer), doc.name)
+    elif event == "payments" and doc.overdue_unchecked:
+        # The watchdog escalated this one before the job counted its payments;
+        # the count settles it now (late_check). Its escalation was notified
+        # then, so only a Paid after all is news.
+        rows = json.loads(frappe.form_dict.get("payments") or "[]")
+        have = set([str(p.sap_doc_entry) for p in doc.payments])
+        for p in rows:
+            if str(p.get("doc_entry")) in have:
+                continue
+            have.add(str(p.get("doc_entry")))
+            doc.append("payments", {"sap_doc_entry": str(p.get("doc_entry")), "doc_num": str(p.get("doc_num") or ""),
+                                    "payment_date": str(p.get("date"))[:10], "amount": frappe.utils.flt(p.get("amount"))})
+        paid = sum([frappe.utils.flt(p.amount) for p in doc.payments])
+        ps = payment_status(doc.amount, paid)
+        doc.paid_amount = paid
+        doc.remaining_amount = ps["remaining"]
+        doc.payment_status = ps["status"]
+        doc.last_payment_check = now
+        lc = late_check(st, outcome(doc.amount, paid, today, doc.commitment_date))
+        doc.status = lc["status"]
+        doc.missed = lc["missed"]
+        doc.overdue_unchecked = 0
+        if lc["missed"]:
+            log(doc, "Missed commitment confirmed against SAP", "sap_job",
+                "Paid " + str(paid) + " of " + str(doc.amount) + " by " + str(doc.commitment_date), paid, None)
+        else:
+            log(doc, "Paid in time after all (checked against SAP late)", "sap_job", "Payments " + str(paid), paid, None)
+            changed = "paid_late"
     elif event == "payments":
         if st != "Active":
             frappe.throw("Payments are only counted while the extension is active (it is " + st + ").")
@@ -639,11 +763,77 @@ elif action == "sap_event":
     who_name = doc.customer_name or doc.customer
     if changed == "overdue":
         notify(team_managers(doc.team) + gm_users(), "Payment commitment overdue: " + who_name + " - escalated to the GM", doc.name)
+    elif changed == "paid_late":
+        notify(team_managers(doc.team) + gm_users(), "Paid in time after all: " + who_name + " (" + doc.name
+               + ") - SAP shows the commitment met", doc.name)
     elif changed == "review":
         notify(gm_users() + [doc.approved_by], "Check SAP's credit limit for " + who_name + ": it was changed while the extension ran", doc.name)
     if changed in ("raised", "restored"):
         ask_credit_sync(user)
     frappe.response["message"] = {"name": doc.name, "status": doc.status, "restore_status": doc.restore_status}
+
+elif action == "settings":
+    if not (is_gm or managed):
+        frappe.throw("Only a manager or the GM can see the approval authority.", frappe.PermissionError)
+    if frappe.form_dict.get("save"):
+        if not is_gm:
+            frappe.throw("Only the GM sets the approval authority.", frappe.PermissionError)
+        s = frappe.get_doc(SETTINGS)
+        if frappe.form_dict.get("manager_max_amount") is not None:
+            s.manager_max_amount = max(0, frappe.utils.flt(frappe.form_dict.get("manager_max_amount")))
+        if frappe.form_dict.get("manager_cap_count") is not None:
+            s.manager_cap_count = max(0, frappe.utils.cint(frappe.form_dict.get("manager_cap_count")))
+        if frappe.form_dict.get("manager_cap_days") is not None:
+            d = frappe.utils.cint(frappe.form_dict.get("manager_cap_days"))
+            if d < 1:
+                frappe.throw("The window must be at least one day.")
+            s.manager_cap_days = d
+        if frappe.form_dict.get("authorities") is not None:
+            rows = json.loads(frappe.form_dict.get("authorities") or "[]")
+            s.set("authorities", [])
+            for r in rows:
+                m = clean(r.get("manager"))
+                if m and frappe.db.exists("User", m):
+                    s.append("authorities", {"manager": m, "max_amount": max(0, frappe.utils.flt(r.get("max_amount")))})
+        # The Single tracks changes, so every figure the GM sets is in its
+        # Version history: who, when, from what to what.
+        s.save(ignore_permissions=True)
+        CAP_COUNT = frappe.utils.cint(s.manager_cap_count)
+        CAP_DAYS = frappe.utils.cint(s.manager_cap_days) or 90
+        DEFAULT_AUTHORITY = frappe.utils.flt(s.manager_max_amount)
+        AUTH_ROWS = [{"manager": r.manager, "max_amount": r.max_amount} for r in s.authorities]
+    managers = frappe.get_all("User", filters={"custom_managed_team": ["is", "set"], "enabled": 1},
+                              fields=["name", "full_name", "custom_managed_team"], order_by="full_name asc", limit_page_length=0)
+    # A loop, not a comprehension: before Python 3.12 a Server Script
+    # comprehension cannot see the script's own names (authority_for, user).
+    shown = []
+    for m in managers:
+        if is_gm or m.name == user:
+            shown.append({"user": m.name, "name": m.full_name or m.name, "team": m.custom_managed_team,
+                          "authority": authority_for(m.name, AUTH_ROWS, DEFAULT_AUTHORITY)})
+    frappe.response["message"] = {
+        "can_edit": 1 if is_gm else 0,
+        "manager_max_amount": DEFAULT_AUTHORITY, "manager_cap_count": CAP_COUNT, "manager_cap_days": CAP_DAYS,
+        "max_days": 10,
+        "authorities": [{"manager": r.get("manager"), "max_amount": r.get("max_amount")} for r in AUTH_ROWS],
+        "managers": shown,
+        "my_authority": authority_for(user, AUTH_ROWS, DEFAULT_AUTHORITY) if managed else None,
+    }
+
+elif action == "alerts":
+    # Notification Log is Frappe's per-user store, and the script writes every
+    # extension notification there; neither app read it before 17 Nov 2026.
+    rows = frappe.get_all("Notification Log", filters={"for_user": user, "document_type": DT},
+                          fields=["name", "subject", "document_name", "read", "creation"],
+                          order_by="creation desc", limit_page_length=50)
+    frappe.response["message"] = [{"name": r.name, "subject": r.subject, "extension": r.document_name,
+                                   "read": 1 if r.read else 0, "at": str(r.creation)} for r in rows]
+
+elif action == "seen":
+    for r in frappe.get_all("Notification Log", filters={"for_user": user, "document_type": DT, "read": 0},
+                            fields=["name"], limit_page_length=0):
+        frappe.db.set_value("Notification Log", r.name, "read", 1, update_modified=False)
+    frappe.response["message"] = "ok"
 
 else:
     frappe.throw("Unknown action.")

@@ -720,3 +720,27 @@ phone "Temporary Credit". Enforced by `manna_credit_extension`
 `sap-credit-sync/Sync-CreditExtensions.ps1`. Full account and report:
 `docs/TEMPORARY_CREDIT_EXTENSION.md`.
 
+
+### Added 17 Nov 2026
+
+- **Manager cap.** A manager may approve at most 2 extensions for one customer
+  in any 90 days (Settings `manager_cap_count` / `manager_cap_days`); past
+  that the request goes to the GM, and an approval asked before the cap
+  filled is refused after it. GM approvals do not count.
+- **Each manager's authority.** The Settings' `authorities` table holds a
+  figure per manager; a manager without a row has `manager_max_amount`. A
+  row of 0 means none. The GM sets both on the dashboard ("Approval
+  authority" on `/credit-extensions`); the phone only shows them. Every
+  change is in the Settings' version history.
+- **Escalation no longer waits on the SAP job.** The Scheduler Server Script
+  `manna_credit_extension_watch` (`app/server/credit_extension_watch.py`,
+  09:00 daily) takes any `Active` extension past its commitment date to
+  `Payment Commitment Overdue`, marked `overdue_unchecked`, and notifies the
+  manager and the GM. The job's next payment count settles it: Paid after
+  all, or the commitment missed. It also tells the GM when the job has not
+  run for six hours while extensions wait on it.
+- **Notifications are shown.** Both apps list this login's extension
+  notifications (`action: alerts`, `seen`) — they were written to Frappe's
+  Notification Log, which neither app read.
+- **On the order.** The order page in both apps shows any extension asked on
+  that order (`action: list, sales_order`).
