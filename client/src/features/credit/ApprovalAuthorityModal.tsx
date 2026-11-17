@@ -31,7 +31,7 @@ export function ApprovalAuthorityModal({ onClose }: { onClose: () => void }) {
 
   const load = (r: ExtensionSettings) => {
     setV(r);
-    setDef(String(r.defaultAuthority));
+    setDef(String(r.authorityPercent));
     setCapCount(String(r.capCount));
     setCapDays(String(r.capDays));
     setOwn(Object.fromEntries(r.authorities.map((a) => [a.manager, String(a.maxAmount)])));
@@ -55,7 +55,7 @@ export function ApprovalAuthorityModal({ onClose }: { onClose: () => void }) {
     try {
       load(
         await saveExtensionSettings({
-          defaultAuthority: num(def),
+          authorityPercent: num(def),
           capCount: Math.floor(num(capCount)),
           capDays: Math.floor(num(capDays)),
           authorities: Object.entries(own)
@@ -84,12 +84,16 @@ export function ApprovalAuthorityModal({ onClose }: { onClose: () => void }) {
       <div className="tiny dim">
         A manager approves extra credit up to their authority, with a payment commitment of at most {v.maxDays} days, and at most{' '}
         {v.capCount} extension(s) for one customer in {v.capDays} days. Anything past that goes to the GM.
-        {v.myAuthority !== null && ` Your authority: ${rs(v.myAuthority)}.`}
+        {v.myAuthority !== null &&
+          (v.myOwnAuthority !== null
+            ? ` Your authority: ${rs(v.myOwnAuthority)}.`
+            : ` Your authority: ${v.authorityPercent}% of the order.`)}
       </div>
       {err && <Alert tone="danger">{err}</Alert>}
       {saved && <Alert tone="ok">Saved.</Alert>}
       <label className="tiny dim" style={{ marginTop: 10, display: 'block' }}>
-        Every manager&apos;s authority, unless set below (₹; 0 = none)
+        Every manager&apos;s authority, unless set below: how far over the credit limit they may approve, as a % of
+        the order (0 = none)
       </label>
       <Input value={def} onChange={(e) => setDef(e.target.value)} inputMode="decimal" disabled={!edit || busy} />
       <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
@@ -122,11 +126,11 @@ export function ApprovalAuthorityModal({ onClose }: { onClose: () => void }) {
                       value={own[m.user] ?? ''}
                       onChange={(e) => setOwn((o) => ({ ...o, [m.user]: e.target.value }))}
                       inputMode="decimal"
-                      placeholder={`default ${rs(Number(def.replace(/,/g, '')) || 0)}`}
+                      placeholder={`default ${Number(def.replace(/,/g, '')) || 0}% of the order`}
                       disabled={busy}
                     />
                   ) : (
-                    rs(m.authority)
+                    m.own !== null ? rs(m.own) : `${v.authorityPercent}% of the order`
                   )}
                 </td>
               </tr>

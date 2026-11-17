@@ -781,6 +781,8 @@ elif action == "settings":
         s = frappe.get_doc(SETTINGS)
         if frappe.form_dict.get("manager_max_amount") is not None:
             s.manager_max_amount = max(0, frappe.utils.flt(frappe.form_dict.get("manager_max_amount")))
+        if frappe.form_dict.get("manager_authority_percent") is not None:
+            s.manager_authority_percent = max(0, frappe.utils.flt(frappe.form_dict.get("manager_authority_percent")))
         if frappe.form_dict.get("manager_cap_count") is not None:
             s.manager_cap_count = max(0, frappe.utils.cint(frappe.form_dict.get("manager_cap_count")))
         if frappe.form_dict.get("manager_cap_days") is not None:
@@ -802,6 +804,13 @@ elif action == "settings":
         CAP_DAYS = frappe.utils.cint(s.manager_cap_days) or 90
         DEFAULT_AUTHORITY = frappe.utils.flt(s.manager_max_amount)
         AUTH_ROWS = [{"manager": r.manager, "max_amount": r.max_amount} for r in s.authorities]
+    # The payment commitment ladder's default (17 Nov 2026): a share of the
+    # order, unless a Manager has their own rupee figure below.
+    pct = frappe.db.get_single_value(SETTINGS, "manager_authority_percent")
+    pct = 10.0 if pct is None or str(pct) == "" else frappe.utils.flt(pct)
+    own_of = {}
+    for r in AUTH_ROWS:
+        own_of[r.get("manager")] = r.get("max_amount")
     managers = frappe.get_all("User", filters={"custom_managed_team": ["is", "set"], "enabled": 1},
                               fields=["name", "full_name", "custom_managed_team"], order_by="full_name asc", limit_page_length=0)
     # A loop, not a comprehension: before Python 3.12 a Server Script
@@ -810,10 +819,13 @@ elif action == "settings":
     for m in managers:
         if is_gm or m.name == user:
             shown.append({"user": m.name, "name": m.full_name or m.name, "team": m.custom_managed_team,
-                          "authority": authority_for(m.name, AUTH_ROWS, DEFAULT_AUTHORITY)})
+                          "authority": authority_for(m.name, AUTH_ROWS, DEFAULT_AUTHORITY),
+                          "own": own_of.get(m.name)})
     frappe.response["message"] = {
         "can_edit": 1 if is_gm else 0,
         "manager_max_amount": DEFAULT_AUTHORITY, "manager_cap_count": CAP_COUNT, "manager_cap_days": CAP_DAYS,
+        "manager_authority_percent": pct,
+        "my_own_authority": own_of.get(user) if managed else None,
         "max_days": 10,
         "authorities": [{"manager": r.get("manager"), "max_amount": r.get("max_amount")} for r in AUTH_ROWS],
         "managers": shown,

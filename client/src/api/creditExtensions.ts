@@ -152,10 +152,14 @@ export async function listCreditExtensions(filter: { salesOrder?: string } = {})
 export interface ExtensionSettings {
   canEdit: boolean;
   defaultAuthority: number;
+  /** The ladder's default (17 Nov 2026): a Manager may approve up to this % of the order over the limit. */
+  authorityPercent: number;
+  /** This Manager's own rupee figure, when they have one. */
+  myOwnAuthority: number | null;
   capCount: number;
   capDays: number;
   maxDays: number;
-  managers: { user: string; name: string; team: string; authority: number }[];
+  managers: { user: string; name: string; team: string; authority: number; own: number | null }[];
   /** Managers with a figure of their own; the rest have the default. */
   authorities: { manager: string; maxAmount: number }[];
   myAuthority: number | null;
@@ -165,6 +169,8 @@ function toSettings(m: Record<string, unknown>): ExtensionSettings {
   return {
     canEdit: flag(m.can_edit),
     defaultAuthority: n(m.manager_max_amount),
+    authorityPercent: m.manager_authority_percent == null ? 10 : n(m.manager_authority_percent),
+    myOwnAuthority: m.my_own_authority == null ? null : n(m.my_own_authority),
     capCount: n(m.manager_cap_count),
     capDays: n(m.manager_cap_days),
     maxDays: n(m.max_days) || 10,
@@ -173,6 +179,7 @@ function toSettings(m: Record<string, unknown>): ExtensionSettings {
       name: s(r.name) || s(r.user),
       team: s(r.team),
       authority: n(r.authority),
+      own: r.own == null ? null : n(r.own),
     })),
     authorities: ((m.authorities ?? []) as Record<string, unknown>[]).map((r) => ({ manager: s(r.manager), maxAmount: n(r.max_amount) })),
     myAuthority: m.my_authority == null ? null : n(m.my_authority),
@@ -185,7 +192,7 @@ export async function getExtensionSettings(): Promise<ExtensionSettings> {
 
 /** The GM only; the server refuses anyone else. Every change is in the settings' version history. */
 export async function saveExtensionSettings(v: {
-  defaultAuthority: number;
+  authorityPercent: number;
   capCount: number;
   capDays: number;
   authorities: { manager: string; maxAmount: number }[];
@@ -194,7 +201,7 @@ export async function saveExtensionSettings(v: {
     await callMethod<Record<string, unknown>>(METHOD, {
       action: 'settings',
       save: 1,
-      manager_max_amount: v.defaultAuthority,
+      manager_authority_percent: v.authorityPercent,
       manager_cap_count: v.capCount,
       manager_cap_days: v.capDays,
       authorities: JSON.stringify(v.authorities.map((a) => ({ manager: a.manager, max_amount: a.maxAmount }))),
