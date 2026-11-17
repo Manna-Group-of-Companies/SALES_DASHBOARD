@@ -2971,7 +2971,8 @@ function toOrderLine(r: Record<string, unknown>): OrderLine {
  * approval of the credit, which sends the order back to the sales manager at
  * `Pending Final Approval` — the GM never pushes (credit_commitment.json).
  */
-export type OrderDecision = 'approve' | 'gmApprove' | 'reject' | 'escalate';
+/** gmPush (17 Nov 2026): the GM approves and pushes to SAP in one step. */
+export type OrderDecision = 'approve' | 'gmApprove' | 'gmPush' | 'reject' | 'escalate';
 
 /**
  * Decide an order.
@@ -3013,8 +3014,11 @@ async function decideSalesOrder(input: {
   const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.id);
   const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
 
-  const approving = input.decision === 'approve';
-  const gmApproving = input.decision === 'gmApprove';
+  // The GM's approve-and-push (17 Nov 2026) is both: the GM's approval
+  // (stamp, condition) and the push (status, rates locked, the order sync).
+  const gmPushing = input.decision === 'gmPush';
+  const approving = input.decision === 'approve' || gmPushing;
+  const gmApproving = input.decision === 'gmApprove' || gmPushing;
   const isGm = input.role === 'general_manager';
   const storedStatus = str(doc[SALES_ORDER_FIELD.poStatus]);
 
@@ -3055,7 +3059,7 @@ async function decideSalesOrder(input: {
   const allowed = orderActions(input.role, storedStatus, overLimit);
   if (!allowed[input.decision]) {
     throw new Error(
-      approving && isGm
+      input.decision === 'approve' && isGm
         ? GM_DOES_NOT_PUSH
         : approving && overLimit
           ? SALES_MANAGER_CANNOT_APPROVE
@@ -3076,7 +3080,7 @@ async function decideSalesOrder(input: {
   }
 
   const status =
-    input.decision === 'approve'
+    input.decision === 'approve' || gmPushing
       ? PO_STATUS.approved
       : input.decision === 'gmApprove'
         ? PO_STATUS.finalApproval

@@ -122,7 +122,15 @@ export function GmOrderPage() {
         setPool(stock);
         setConditions(made);
         const r = await getOrderRoute(o.id).catch(() => null);
-        if (live) setRoute(r);
+        if (!live) return;
+        setRoute(r);
+        // An order needing a commitment is held to 10 days: the default due
+        // date stops there rather than offering one the save refuses.
+        if (r && (r.needs.needs || r.gmLock)) {
+          const d = new Date(serverNow().getTime() + 10 * 86_400_000);
+          const cap = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          setDue((cur) => (!cur || cur > cap ? cap : cur));
+        }
       })
       .catch((e: unknown) => {
         if (live) setError(e instanceof Error ? e.message : 'Could not read this order.');
@@ -214,12 +222,17 @@ export function GmOrderPage() {
    * manager pushes it to SAP (credit_commitment.json). The note, if any, goes
    * first as a comment, so the sales manager reads it beside the commitment.
    */
-  const approve = async () => {
+  /**
+   * `push` (17 Nov 2026, the user): the GM approves AND sends the order to
+   * SAP in one step, instead of handing it back to the sales manager. On an
+   * order the GM already approved it is only the push.
+   */
+  const approve = async (push = false) => {
     if (!order || !user) return;
-    setBusy('approve');
+    setBusy(push ? 'push' : 'approve');
     setError(null);
     try {
-      if (needsCommitment) {
+      if (needsCommitment && !gmApproved) {
         const problem = pcCheckApproval({ approvedOn: due ? isoToday() : '', commitment: due, remarks: terms });
         if (problem) {
           setError(
@@ -243,7 +256,7 @@ export function GmOrderPage() {
       }
       const saved = await Api.sales.decideOrder({
         id: order.id,
-        decision: 'gmApprove',
+        decision: push ? 'gmPush' : 'gmApprove',
         rateEdits,
         role: user.role,
         condition: terms.trim() ? { text: terms, dueDate: due } : undefined,
@@ -256,6 +269,13 @@ export function GmOrderPage() {
         setDone({
           text: 'Approved, but the condition was not saved. Save it again below.',
           tone: 'warn',
+        });
+      } else if (push) {
+        setDone({
+          text: saved.conditionSaved
+            ? `Approved and sent to SAP. Condition sent to ${order.rep || 'the rep'}.`
+            : 'Approved and sent to SAP.',
+          tone: 'ok',
         });
       } else {
         setDone({
@@ -662,6 +682,13 @@ export function GmOrderPage() {
               }
             >
               {conditionsBlock}
+              {acts.gmPush && (
+                <div className="mt-16">
+                  <Button variant="primary" onClick={() => void approve(true)} loading={busy === 'push'} disabled={!!busy}>
+                    Push to SAP
+                  </Button>
+                </div>
+              )}
               <div className="mt-16">{rejectControls('Withdraw approval…')}</div>
               <div className="mt-16">
                 <Link to={`/follow-up/${order.id}`} className="btn btn--sm">
@@ -727,11 +754,18 @@ export function GmOrderPage() {
                 <div className="lv__actions" style={{ justifyContent: 'flex-start', gap: 8 }}>
                   <Button
                     variant="primary"
+                    onClick={() => void approve(true)}
+                    loading={busy === 'push'}
+                    disabled={!acts.gmPush || !!busy || editing || Boolean(termsProblem)}
+                  >
+                    {terms.trim() ? 'Approve with condition & Push to SAP' : 'Approve & Push to SAP'}
+                  </Button>
+                  <Button
                     onClick={() => void approve()}
                     loading={busy === 'approve'}
                     disabled={!acts.gmApprove || !!busy || editing || Boolean(termsProblem)}
                   >
-                    {terms.trim() ? 'Approve with condition' : 'Approve'}
+                    {terms.trim() ? 'Approve with condition' : 'Approve'} (back to the manager)
                   </Button>
                   <Button
                     variant="ghost"

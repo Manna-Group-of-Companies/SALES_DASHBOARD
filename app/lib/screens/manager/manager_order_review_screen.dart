@@ -287,14 +287,16 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   /// The GM's approval of a customer order: on the rep's commitment, which
   /// becomes their condition. The dialog is the confirmation. It does not
   /// push to SAP — the order goes back to the sales manager, who does.
-  Future<void> _gmApprove() async {
+  /// [push] (17 Nov 2026, the user): approve AND push to SAP in one step,
+  /// instead of handing the order back to the sales manager.
+  Future<void> _gmApprove({bool push = false}) async {
     final terms = await askGmCondition(context,
         party: '${_customer['customer_name'] ?? _order['customer'] ?? ''}',
         rep: '${_order['custom_sales_person'] ?? 'the rep'}',
         commitment: _order['custom_credit_commitment'],
         commitmentDue: _order['custom_credit_commitment_due']);
     if (terms == null || !mounted) return;
-    if (_gmNeedsCommitment) {
+    if (_gmNeedsCommitment && !_gmApproved) {
       final problem = pcCheckApproval(
           approvedOn: _isoDay(DateTime.now()), commitment: terms.dueIso, remarks: terms.condition);
       if (problem != null) {
@@ -307,12 +309,12 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
 
     setState(() => _busy = true);
     try {
-      if (_gmNeedsCommitment) {
+      if (_gmNeedsCommitment && !_gmApproved) {
         await Api.givePaymentCommitment(widget.orderName, terms.dueIso, terms.condition,
             customerName: '${_customer['customer_name'] ?? ''}');
       }
       final saved = await Api.approveEscalatedOrder(widget.orderName,
-          condition: terms.condition, dueDateIso: terms.dueIso);
+          condition: terms.condition, dueDateIso: terms.dueIso, push: push);
       if (!mounted) return;
       if (saved == false) {
         // The approval stands, so the order will not come back to be approved
@@ -333,10 +335,14 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
           ),
         ));
       } else {
-        _snack(saved == true
-            ? 'Approved — back with the sales manager to push to SAP. The '
-                'condition is on the rep’s phone.'
-            : 'Approved — back with the sales manager to push to SAP.');
+        _snack(push
+            ? (saved == true
+                ? 'Approved and sent to SAP. The condition is on the rep’s phone.'
+                : 'Approved and sent to SAP.')
+            : saved == true
+                ? 'Approved — back with the sales manager to push to SAP. The '
+                    'condition is on the rep’s phone.'
+                : 'Approved — back with the sales manager to push to SAP.');
       }
       Navigator.pop(context, true);
     } catch (e) {
@@ -1082,6 +1088,19 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
               style: const TextStyle(fontSize: 12.5)),
         ),
       const SizedBox(height: 4),
+      // The GM approves and pushes in one step (17 Nov 2026, the user).
+      if (isGm && !_isLead && acts.gmPush) ...[
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+              onPressed: _busy ? null : () => _gmApprove(push: true),
+              icon: const Icon(Icons.cloud_upload),
+              label: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Text(_gmApproved ? 'Push to SAP' : 'Approve & Push to SAP'))),
+        ),
+        const SizedBox(height: 8),
+      ],
       Row(children: [
         if (forward)
           Expanded(

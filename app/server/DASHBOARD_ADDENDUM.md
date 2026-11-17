@@ -759,3 +759,14 @@ limits are no longer changed. Team Orders shows the new stages in both apps,
 and `/payment-commitments` holds the history. Rule:
 `shared/fixtures/payment_commitment.json`. Full account:
 `docs/PAYMENT_COMMITMENT.md`.
+
+### The GM may approve and push in one step (17 Nov 2026)
+
+The user changed the 24 Sep 2026 rule ("the GM approves, the sales manager
+pushes"). `orderActions` gains `gmPush` (`credit_commitment.json`,
+`gm_push`): wherever the GM may decide an order, including one they already
+approved, they may also **Approve & Push to SAP**. That writes 'PO Approved -
+Ready for SAP', locks the rates, stamps the GM's approval and asks for the
+order sync, the same as the Manager's push. The GM's plain Approve still
+hands the order back to the Manager. Both apps; decision `gmPush` on the
+dashboard, `push: true` on the phone's `gm_approve` outbox kind.

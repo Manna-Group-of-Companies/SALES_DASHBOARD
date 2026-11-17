@@ -72,6 +72,7 @@ describe('who may do what to an order', () => {
       expect({
         approve: got.approve,
         gm_approve: got.gmApprove,
+        gm_push: got.gmPush,
         escalate: got.escalate,
         reject: got.reject,
         comment: got.comment,

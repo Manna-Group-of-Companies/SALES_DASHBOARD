@@ -95,7 +95,8 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
   /// the words start as the rep's own commitment, and with one on the order
   /// the condition is required — `askGmCondition` and
   /// `Api.approveEscalatedOrder` both hold that line.
-  Future<void> _act(Approval a, bool approve) async {
+  /// [push] (17 Nov 2026, the user): the GM approves AND pushes to SAP.
+  Future<void> _act(Approval a, bool approve, {bool push = false}) async {
     GmApproval? terms;
     // Only on a real Sales Order, and only on the way in. A rejection carries
     // no obligation, and a Lead Order has no customer to hang one on yet.
@@ -133,7 +134,7 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
             await Api.givePaymentCommitment(a.name, t.dueIso, t.condition, customerName: '${a.party}');
           }
           conditionSaved = await Api.approveEscalatedOrder(a.name,
-              condition: t.condition, dueDateIso: t.dueIso);
+              condition: t.condition, dueDateIso: t.dueIso, push: push);
         } else {
           await Api.approveSalesOrderPO(a.name, false);
         }
@@ -232,6 +233,8 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
                   onOpen: () => _open(a),
                   onApprove: () => _act(a, true),
                   onReject: () => _act(a, false),
+                  // A customer order only: a lead order has no SAP order yet.
+                  onApproveAndPush: a.kind == 'gm_so_po' ? () => _act(a, true, push: true) : null,
                 );
               },
             ),
@@ -254,6 +257,7 @@ class GmEscalationCard extends StatelessWidget {
     required this.onOpen,
     required this.onApprove,
     required this.onReject,
+    this.onApproveAndPush,
     this.today,
   });
 
@@ -261,6 +265,9 @@ class GmEscalationCard extends StatelessWidget {
   final VoidCallback onOpen;
   final VoidCallback onApprove;
   final VoidCallback onReject;
+
+  /// The GM approves AND pushes to SAP in one step (17 Nov 2026, the user).
+  final VoidCallback? onApproveAndPush;
 
   /// The day the waiting time is counted to; today when not given.
   final DateTime? today;
@@ -539,6 +546,17 @@ class GmEscalationCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 6),
+          if (onApproveAndPush != null) ...[
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: onApproveAndPush,
+                icon: const Icon(Icons.cloud_upload),
+                label: const Text('Approve & Push to SAP'),
+              ),
+            ),
+            const SizedBox(height: 6),
+          ],
           Row(children: [
             Expanded(
                 child: OutlinedButton.icon(

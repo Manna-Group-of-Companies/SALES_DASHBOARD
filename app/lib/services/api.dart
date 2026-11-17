@@ -1369,6 +1369,7 @@ class Api {
     final allowed = switch (decision) {
       'approve' => acts.approve,
       'gm_approve' => acts.gmApprove,
+      'gm_push' => acts.gmPush,
       'escalate' => acts.escalate,
       _ => acts.reject,
     };
@@ -1976,19 +1977,32 @@ class Api {
   /// approval the GM believes they gave, reversed because a condition would
   /// not save, is the worse failure. Returns whether it landed — null when
   /// there was none to write — so the screen can say so.
+  /// [push] (17 Nov 2026, the user): the GM approves AND pushes to SAP in
+  /// one step - the order goes to 'PO Approved - Ready for SAP', its rates
+  /// lock and SAP is asked for it, as the sales manager's push does -
+  /// instead of going back to the sales manager.
   static Future<bool?> _approveEscalatedOrderNow(
     String name, {
     String? condition,
     String? dueDateIso,
+    bool push = false,
   }) async {
     final stored = await getOrder(name);
-    await _checkOrderDecision(stored, 'gm_approve');
+    await _checkOrderDecision(stored, push ? 'gm_push' : 'gm_approve');
     final problem = approvalConditionProblem(
         stored['custom_credit_commitment'], condition);
     if (problem != null) throw Exception(problem);
 
     await _put('Sales Order', name, {
-      'custom_po_status': kPoFinalApproval,
+      'custom_po_status': push ? 'PO Approved - Ready for SAP' : kPoFinalApproval,
+      if (push) 'custom_rate_approved': 1,
+      if (push)
+        'items': [
+          // Whole lines, as the sales manager's push sends them: a row
+          // with only some fields would lose the rest.
+          for (final it in ((stored['items'] as List?) ?? const []).whereType<Map>())
+            {...it.cast<String, dynamic>(), 'custom_rate_approved': 1}
+        ],
       // Whose approval the sales manager is acting on when they push.
       'custom_gm_approved_by': Session.I.salesPersonLabel ??
           Session.I.salesPerson ??
@@ -1996,6 +2010,7 @@ class Api {
       'custom_gm_approved_on': nowStamp(),
     });
     await OfflineCache.clear();
+    if (push) _askSapForApprovedOrder(name);
 
     final terms = (condition ?? '').trim();
     if (terms.isEmpty) return null;
@@ -4481,7 +4496,7 @@ class Api {
         _upsertOutstandingLimitNow('${a['rep']}', _dn(a['amount']) ?? 0),
     'escalate_order': (a, _) => _escalateSalesOrderPOToGMNow('${a['name']}'),
     'gm_approve': (a, _) => _approveEscalatedOrderNow('${a['name']}',
-        condition: _sn(a['condition']), dueDateIso: _sn(a['due'])),
+        condition: _sn(a['condition']), dueDateIso: _sn(a['due']), push: a['push'] == true),
     'escalate_lead_order': (a, _) =>
         _escalateLeadOrderPOToGMNow('${a['name']}'),
     'create_customer': (a, _) => _createCustomerNow(
@@ -4762,11 +4777,12 @@ class Api {
     String name, {
     String? condition,
     String? dueDateIso,
+    bool push = false,
   }) async {
     final r = await writeOrQueue(
         kind: 'gm_approve',
-        label: 'Order $name approved by the GM',
-        args: {'name': name, 'condition': condition, 'due': dueDateIso});
+        label: push ? 'Order $name approved by the GM and pushed to SAP' : 'Order $name approved by the GM',
+        args: {'name': name, 'condition': condition, 'due': dueDateIso, if (push) 'push': true});
     final v = r.result;
     return v is bool ? v : null;
   }

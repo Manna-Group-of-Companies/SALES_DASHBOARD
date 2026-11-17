@@ -80,6 +80,9 @@ class OrderActions {
   /// sales manager at [kPoFinalApproval].
   final bool gmApprove;
 
+  /// The GM approves AND pushes to SAP in one step (17 Nov 2026, the user).
+  final bool gmPush;
+
   /// Send to the general manager.
   final bool escalate;
   final bool reject;
@@ -90,6 +93,7 @@ class OrderActions {
   const OrderActions({
     this.approve = false,
     this.gmApprove = false,
+    this.gmPush = false,
     this.escalate = false,
     this.reject = false,
     this.comment = false,
@@ -134,7 +138,9 @@ OrderActions orderActions({
   final reject = s != 'Rejected';
 
   if (isGm) {
-    return OrderActions(gmApprove: !gmApproved, reject: reject, comment: true);
+    // Since 17 Nov 2026 the GM may also approve and push in one step - on
+    // anything not yet in SAP, including what they already approved.
+    return OrderActions(gmApprove: !gmApproved, gmPush: true, reject: reject, comment: true);
   }
 
   if (gmApproved) return const OrderActions(approve: true, comment: true);
