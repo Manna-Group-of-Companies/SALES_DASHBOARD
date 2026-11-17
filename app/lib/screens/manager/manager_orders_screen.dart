@@ -146,17 +146,20 @@ class OrderCard extends StatelessWidget {
             style: const TextStyle(fontSize: 12, color: kMuted)),
         const SizedBox(height: 8),
         Row(children: [
-          StatusPill(pill, tone: tone),
-          if (r['is_lead'] != true && r.containsKey('_pc_status')) ...[
-            const SizedBox(width: 6),
+          // One label (17 Nov 2026, the user): a Sales Order shows its stage.
+          // The old pill stays for a lead order and for one SAP cancelled,
+          // which no stage says. Without the commitment figures (no signal)
+          // the stage still reads from the order itself.
+          if (r['is_lead'] != true && bucketOf(r) != OrderBucket.cancelled)
             Builder(builder: (_) {
               final stage = pcOrderStage(
                   poStatus: textOf(r['custom_po_status']),
-                  pushed: r['_pushed'] == true,
+                  pushed: r['_pushed'] == true || textOf(r['custom_sap_sales_order']).isNotEmpty,
                   commitment: '${r['_pc_status'] ?? ''}');
               return StatusPill(stage, tone: _stageTone(stage));
-            }),
-          ],
+            })
+          else
+            StatusPill(pill, tone: tone),
           if (r['is_lead'] == true) ...[
             const SizedBox(width: 6),
             const StatusPill('Lead', tone: Tone.info),

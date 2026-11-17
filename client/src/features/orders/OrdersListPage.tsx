@@ -467,8 +467,14 @@ export function OrdersListPage() {
                 </div>
 
                 <div className="ordrow__status">
-                  <StatusPill status={r.status} sapStatus={r.sapSalesOrderStatus} />
-                  {r.kind === 'sales' &&
+                  {/*
+                    One label (17 Nov 2026, the user): a Sales Order shows its
+                    stage - Pending Manager Approval, Sent to GM, GM Approved,
+                    Rejected, Payment Pending, SAP Pushed. The old pill stays
+                    for a lead order, and for an order SAP cancelled, which no
+                    stage says.
+                  */}
+                  {r.kind === 'sales' && r.bucket !== 'cancelled' ? (
                     (() => {
                       const stage = pcOrderStage({
                         poStatus: r.status,
@@ -476,7 +482,10 @@ export function OrdersListPage() {
                         commitment: pc.orders[r.id]?.status ?? '',
                       });
                       return <Badge tone={STAGE_TONE[stage] ?? 'accent'}>{stage}</Badge>;
-                    })()}
+                    })()
+                  ) : (
+                    <StatusPill status={r.status} sapStatus={r.sapSalesOrderStatus} />
+                  )}
                   {/* Never a tick on a lead order: it is not a Sales Order yet
                       and has no production status, so an empty box would read
                       as "not finished" rather than "not applicable". */}
