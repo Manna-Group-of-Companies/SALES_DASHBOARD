@@ -498,7 +498,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                 }
                 Navigator.pop(ctx, true);
               },
-              child: const Text('Approve'),
+              child: const Text('Approve & Push to SAP'),
             ),
           ],
         ),
@@ -1098,7 +1098,9 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                               ? 'Send to GM'
                               : _gmApproved
                                   ? 'Push to SAP'
-                                  : 'Approve')))),
+                                  // The approval asks SAP for the order at
+                                  // once (_askSapForApprovedOrder).
+                                  : 'Approve & Push to SAP')))),
         if (forward && acts.reject) const SizedBox(width: 8),
         if (acts.reject)
           Expanded(

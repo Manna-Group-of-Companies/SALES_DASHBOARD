@@ -1037,7 +1037,8 @@ export function OrderDetailPage() {
                     loading={busy === 'approve'}
                     disabled={!!busy || editing}
                   >
-                    {needsCommitment ? 'Approve with commitment' : 'Approve'}
+                    {/* The approval asks the order sync to send it to SAP at once (requestOrderSync). */}
+                    {needsCommitment ? 'Approve with commitment & Push to SAP' : 'Approve & Push to SAP'}
                   </Button>
                 )}
                 {acts.escalate && (
