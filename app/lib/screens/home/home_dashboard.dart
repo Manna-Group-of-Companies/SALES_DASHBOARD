@@ -57,6 +57,7 @@ import 'package:manna_field_sales/services/sync_engine.dart';
 import 'package:manna_field_sales/screens/home/unsent_punches_screen.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/trip_tracker.dart';
+import 'package:manna_field_sales/widgets/home_tile.dart';
 import 'package:manna_field_sales/widgets/trip_recording_indicator.dart';
 
 class HomeDashboard extends StatefulWidget {
@@ -989,23 +990,8 @@ class _HomeDashboardState extends State<HomeDashboard>
               mainAxisSpacing: 12,
               crossAxisSpacing: 12,
               children: tiles
-                  .map((t) => InkWell(
-                onTap: t.onTap,
-                child: Card(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(t.icon, size: 40,
-                          color: const Color(0xFFF46A21)),
-                      const SizedBox(height: 8),
-                      Text(t.label,
-                          style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                ),
-              ))
+                  .map((t) =>
+                      HomeTile(label: t.label, icon: t.icon, onTap: t.onTap))
                   .toList(),
             ),
           ],
