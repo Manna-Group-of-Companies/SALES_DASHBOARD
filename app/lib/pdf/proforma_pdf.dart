@@ -341,7 +341,7 @@ Future<Uint8List> _richProforma(Map<String, dynamic> order,
       pw.SizedBox(height: 2),
       pw.Text('Terms and Condition :', style: st(8, b: true)),
       pw.Text(
-          'In case the payment is delayed more than the credit period, interest @ 18 % will be charged. Payment shall be made exclusively via bank transfer or cheque to the company account specified in the invoice. Please do not make any cash payments to company representatives.',
+          'In case the payment is delayed more than the credit period, interest @ 18 % will be charged. Payment shall be made exclusively via bank transfer or cheque to the company account specified in the invoice. Please do not make any cash payments to company representatives. $kPriceChangeTerm',
           style: st(7.5)),
       pw.SizedBox(height: 6),
       pw.Center(child: pw.Text(kJurisdiction, style: st(7, b: true))),
@@ -414,7 +414,8 @@ Future<Uint8List> _simpleProforma(Map<String, dynamic> order,
       pw.SizedBox(height: 10),
       pw.Text(
           'In case the payment is delayed more than the credit period, interest @ 18 % will be charged. '
-              'Payment shall be made exclusively via bank transfer or cheque to the company account specified in the invoice.',
+              'Payment shall be made exclusively via bank transfer or cheque to the company account specified in the invoice. '
+              '$kPriceChangeTerm',
           style: s(8)),
       pw.SizedBox(height: 8),
       pw.Text(kJurisdiction, style: s(8, b: true)),

@@ -24,6 +24,8 @@ const CO = {
   account: '125002176279',
   ifsc: 'CNRB0014301',
   jurisdiction: 'SUBJECT TO PERUMBAVOOR JURISDICTION',
+  /** 18 Nov 2026, the user: the price can go up or down. The phone's twin is kPriceChangeTerm (app/lib/core/constants.dart). */
+  priceTerm: 'Prices are subject to change without prior notice.',
 };
 
 /*
@@ -212,6 +214,7 @@ export function ProformaDocument({
           <div>
             A/C {CO.account} · IFSC {CO.ifsc}
           </div>
+          <div style={{ marginTop: 6 }}>{CO.priceTerm}</div>
           <div style={{ marginTop: 6 }}>{CO.jurisdiction}</div>
         </div>
         <div className="right">

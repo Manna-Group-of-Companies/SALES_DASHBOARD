@@ -30,6 +30,11 @@ const String kBankIFSC = 'CNRB0014301';
 const String kUpiVpa = 'pos.5126391@indus';
 const String kDefaultHSN = '40061000';
 const String kJurisdiction = 'SUBJECT TO PERUMBAVOOR JURISDICTION';
+
+/// On every proforma's terms, phone and web (18 Nov 2026, the user: the price
+/// can go up or down). The dashboard's twin is `CO.priceTerm` in
+/// client/src/features/orders/ProformaDocument.tsx.
+const String kPriceChangeTerm = 'Prices are subject to change without prior notice.';
 // ================================================================================
 
 // ===== Business units =====
