@@ -25,7 +25,7 @@ const CO = {
   ifsc: 'CNRB0014301',
   jurisdiction: 'SUBJECT TO PERUMBAVOOR JURISDICTION',
   /** 18 Nov 2026, the user: the price can go up or down. The phone's twin is kPriceChangeTerm (app/lib/core/constants.dart). */
-  priceTerm: 'Prices are subject to change without prior notice.',
+  priceTerm: 'Prices may increase or decrease without prior notice.',
 };
 
 /*
