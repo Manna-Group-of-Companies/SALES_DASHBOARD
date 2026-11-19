@@ -7,6 +7,7 @@ import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/credit_commitment.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
+import 'package:manna_field_sales/core/product_search.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/sync_scope.dart';
 import 'package:manna_field_sales/core/week.dart';
@@ -330,7 +331,7 @@ class _OrderScreenState extends State<OrderScreen> {
 
   List<OrderLine> get _filtered {
     final qq = _q.trim().toLowerCase();
-    return _lines.where((l) {
+    final shown = _lines.where((l) {
       if (_categoryFilter != null && l.product.category != _categoryFilter) {
         return false;
       }
@@ -338,9 +339,20 @@ class _OrderScreenState extends State<OrderScreen> {
         final onList = _stock.containsKey(l.product.code);
         if (onList != _stockFilter) return false;
       }
-      if (qq.isEmpty) return true;
-      return '${l.product.name} ${l.product.code}'.toLowerCase().contains(qq);
+      return true;
     }).toList();
+    if (qq.isEmpty) return shown;
+    // Only the products found at the strictest level that found any — see
+    // core/product_search.dart. "bl 34 12" shows the 34*12 item alone, and
+    // a half-typed "13" still shows the 130s rather than nothing.
+    final levels = {
+      for (final l in shown)
+        l: productSearchLevel(qq, l.product.name, l.product.code)
+    };
+    final found = levels.values.whereType<int>();
+    if (found.isEmpty) return const [];
+    final best = found.reduce((a, b) => a < b ? a : b);
+    return shown.where((l) => levels[l] == best).toList();
   }
 
   /// Item codes that were on the order when this edit began.
@@ -790,11 +802,13 @@ class _OrderScreenState extends State<OrderScreen> {
         child: DropdownButton<ProductCategory?>(
           value: _categoryFilter,
           isDense: true,
+          isExpanded: true,
+          icon: const Icon(Icons.keyboard_arrow_down),
           borderRadius: BorderRadius.circular(12),
-          // The collapsed label stays short so the search field keeps its
-          // width; the full family name is on each menu entry.
+          // The collapsed label stays short so it fits its half of the row;
+          // the full family name is on each menu entry.
           selectedItemBuilder: (_) => [
-            _pickerLabel('All'),
+            _pickerLabel('All Categories'),
             for (final c in _categories) _pickerLabel(c.shortLabel),
           ],
           items: [
@@ -817,6 +831,8 @@ class _OrderScreenState extends State<OrderScreen> {
       child: DropdownButton<bool?>(
         value: _stockFilter,
         isDense: true,
+        isExpanded: true,
+        icon: const Icon(Icons.keyboard_arrow_down),
         borderRadius: BorderRadius.circular(12),
         selectedItemBuilder: (_) => [
           _pickerLabel('Any stock'),
@@ -837,11 +853,22 @@ class _OrderScreenState extends State<OrderScreen> {
 
   Widget _pickerLabel(String text) => Align(
         alignment: Alignment.centerLeft,
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.filter_list, size: 16),
-          const SizedBox(width: 4),
-          Text(text, style: const TextStyle(fontSize: 13)),
-        ]),
+        child: Text(text,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+      );
+
+  /// The rounded grey-edged pill each filter sits in.
+  Widget _pill(Widget child) => Container(
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: const Color(0xFFECECEC)),
+        ),
+        child: child,
       );
 
   // ------------------------------------------------------------- build ---
@@ -851,10 +878,15 @@ class _OrderScreenState extends State<OrderScreen> {
     final name = widget.party.label;
     return Scaffold(
       appBar: AppBar(
+        // Orange on this screen only (19 Nov 2026, the user's drawing), so
+        // taking an order looks different from browsing.
+        backgroundColor: Theme.of(context).colorScheme.primary,
         // The rep is told which kind of party this is up front. A lead order
         // follows the same path but has to be complete enough to invoice
         // before the manager can approve it, and finding that out at the
         // counter is better than finding out at approval.
+        titleTextStyle: const TextStyle(
+            fontSize: 20, fontWeight: FontWeight.w600, color: Colors.white),
         title: Text(_isEdit
             ? 'Edit ${widget.existingOrder!['name']}'
             : widget.party.isLead
@@ -906,22 +938,35 @@ class _OrderScreenState extends State<OrderScreen> {
             ]),
           ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
           child: Column(children: [
             TextField(
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search),
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search, size: 26),
                 hintText: 'Search products…',
                 isDense: true,
-                border: OutlineInputBorder(),
+                filled: true,
+                fillColor: Colors.white,
+                enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFFECECEC))),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(
+                        color: Theme.of(context).colorScheme.primary,
+                        width: 1.5)),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14)),
               ),
               onChanged: (v) => setState(() => _q = v),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 10),
             Row(children: [
-              _categoryPicker(),
-              const SizedBox(width: 12),
-              _stockPicker(),
+              Expanded(child: _pill(_categoryPicker())),
+              if (_usesMinimumStock) ...[
+                const SizedBox(width: 10),
+                Expanded(child: _pill(_stockPicker())),
+              ],
             ]),
           ]),
         ),
@@ -1009,73 +1054,126 @@ class _OrderScreenState extends State<OrderScreen> {
 
   Widget _sectionHeader(ProductCategory c, int count) => Container(
         width: double.infinity,
-        color: const Color(0xFFF5F5F5),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Text('${c.label}  ($count)',
-            style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.4,
-                color: Colors.black54)),
+        color: const Color(0xFFF0F0F0),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Text.rich(TextSpan(children: [
+          TextSpan(
+              text: c.label,
+              style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black54)),
+          TextSpan(
+              text: '  ($count)',
+              style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).colorScheme.primary)),
+        ])),
       );
 
+  /// The item count and total on a strip of their own, then the delivery
+  /// date and the send button side by side — the billing-app layout the reps
+  /// asked for (19 Nov 2026). The date is still required; it just no longer
+  /// takes a whole outlined box.
   Widget _footer() {
+    final primary = Theme.of(context).colorScheme.primary;
+    final n = _picked.length;
+    final d = _deliveryDate;
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          InkWell(
-            onTap: _submitting
-                ? null
-                : () async {
-                    final now = DateTime.now();
-                    final d = await showDatePicker(
-                      context: context,
-                      initialDate:
-                          _deliveryDate ?? now.add(const Duration(days: 7)),
-                      firstDate: now,
-                      lastDate: now.add(const Duration(days: 365)),
-                    );
-                    if (d != null) setState(() => _deliveryDate = d);
-                  },
-            child: InputDecorator(
-              decoration: const InputDecoration(
-                  labelText: 'Required delivery date',
-                  border: OutlineInputBorder(),
-                  isDense: true),
-              child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(_deliveryDate == null
-                        ? 'Tap to pick a date'
-                        : '${_deliveryDate!.day}/${_deliveryDate!.month}/${_deliveryDate!.year}'),
-                    const Icon(Icons.event, size: 18),
-                  ]),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(children: [
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: double.infinity,
+          color: const Color(0xFFF0F0F0),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(children: [
             Expanded(
-                child: Text('Total: Rs ${_total.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.bold))),
-            FilledButton(
-              onPressed: _submitting ? null : _submit,
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: _submitting
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : Text(_isEdit ? 'Save Changes' : 'Send for Approval'),
-              ),
+              child: Text('$n item${n == 1 ? '' : 's'}',
+                  style: const TextStyle(fontSize: 16)),
+            ),
+            Container(width: 1, height: 22, color: const Color(0xFFBDBDBD)),
+            Expanded(
+              child: Text('Rs ${_total.toStringAsFixed(2)}',
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.bold)),
             ),
           ]),
-        ]),
-      ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+          child: Row(children: [
+            Expanded(
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: _submitting
+                    ? null
+                    : () async {
+                        final now = DateTime.now();
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate:
+                              _deliveryDate ?? now.add(const Duration(days: 7)),
+                          firstDate: now,
+                          lastDate: now.add(const Duration(days: 365)),
+                        );
+                        if (picked != null) {
+                          setState(() => _deliveryDate = picked);
+                        }
+                      },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.event, size: 18, color: primary),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                                d == null
+                                    ? 'Pick delivery date'
+                                    : '${d.day}/${d.month}/${d.year}',
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: primary)),
+                          ),
+                        ]),
+                        const SizedBox(height: 2),
+                        Text(
+                            d == null
+                                ? 'Required delivery date'
+                                : 'Required delivery date · tap to change',
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 12, color: Colors.black54)),
+                      ]),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(0, 52),
+                padding: const EdgeInsets.symmetric(horizontal: 22),
+              ),
+              onPressed: _submitting ? null : _submit,
+              child: _submitting
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : Text(_isEdit ? 'Save Changes' : 'Send for Approval',
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w600)),
+            ),
+          ]),
+        ),
+      ]),
     );
   }
 }
