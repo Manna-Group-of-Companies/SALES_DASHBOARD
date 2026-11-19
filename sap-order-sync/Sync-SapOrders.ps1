@@ -145,8 +145,10 @@
   PASS M, P and H - only with order_flow.mode = manna_first (3 Nov 2026)
     Manna Treads sells and Hi-Tech makes. For each order of order_flow.units
     created on or after order_flow.since (which PASS A then leaves alone):
-    PASS M, as soon as it exists, a Manna Treads Sales Order to the end
-    customer at the order's rate net of GST, tax code by bill-to state;
+    PASS M, once it is approved (order_sync.po_status_gate - changed
+    19 Nov 2026, it used to be as soon as the order existed), a Manna
+    Treads Sales Order to the end customer at the order's rate net of GST,
+    tax code by bill-to state;
     then B1if (sap-b1if/, 4 Nov 2026), not this script, makes Manna Treads'
     Purchase Order to Hi-Tech and Hi-Tech's Sales Order from it. PASS P and
     PASS H only find them by NumAtCard = the ERPNext name and write them
@@ -2396,7 +2398,18 @@ function Get-FlowSettings {
         }
     }
 
+    # Changed 19 Nov 2026: PASS M waits for approval. It first sent an order
+    # the moment it existed, holding back only skip_statuses, so orders still
+    # at 'Pending GM Approval' were in Manna Treads SAP (SAL-ORD-2026-00163 /
+    # 00164 -> SO 578 / 579). Now only an order at order_sync.po_status_gate -
+    # the same gate PASS A and PASS C use - is sent. Not configurable on
+    # purpose: an unapproved order has no business in SAP.
+    $approved = 'PO Approved - Ready for SAP'
+    $osb = Get-JsonProp $Config 'order_sync'
+    if ($null -ne $osb) { $approved = Get-OptionalString $osb 'po_status_gate' $approved }
+
     $out = @{
+        ApprovedStatus = $approved
         PickListsSince = $pkSince
         B1ifWait      = [int]$wait
         Mode          = $mode
@@ -2449,6 +2462,7 @@ function Get-MfSkipReason {
     $st = ConvertTo-CleanText (Get-JsonProp $Doc 'custom_po_status')
     if (@($Flow.SkipStatuses) -contains $st) { return "approval status is '$st'" }
     if (-not (Test-MfOwns -Row $Doc -Flow $Flow)) { return ("not a {0} order created on or after {1}" -f (@($Flow.Units) -join '/'), $Flow.Since) }
+    if ($st -ne $Flow.ApprovedStatus) { return ("not approved yet - approval status is '{0}', PASS M waits for '{1}'" -f $st, $Flow.ApprovedStatus) }
     return ''
 }
 
@@ -3413,8 +3427,9 @@ try {
         }
         $script:Result.mtRequested = $mtList.Count
 
-        # PASS M's working set: new orders of the units it owns, created on or
-        # after order_flow.since, with no Manna Treads order and no error yet.
+        # PASS M's working set: approved orders of the units it owns, created
+        # on or after order_flow.since, with no Manna Treads order and no error
+        # yet. Approved = order_sync.po_status_gate (19 Nov 2026).
         # Its own try, like PASS C's. creation is the server's own stamp, so a
         # back-dated transaction_date cannot pull an old order in.
         $script:Result.flow = $flow.Mode
@@ -3423,11 +3438,11 @@ try {
             try {
                 $unitsJson = ConvertTo-Json -InputObject @($flow.Units) -Compress
                 $skipJson  = ConvertTo-Json -InputObject @($flow.SkipStatuses) -Compress
-                $mfFilter  = '[["custom_company","in",' + $unitsJson + '],["creation",">=","' + $flow.Since + ' 00:00:00"],["' + $script:F_MT_SO + '","in",["",null]],["' + $script:F_MT_ERR + '","in",["",null]],["docstatus","<",2]'
+                $mfFilter  = '[["custom_company","in",' + $unitsJson + '],["creation",">=","' + $flow.Since + ' 00:00:00"],["custom_po_status","=","' + $flow.ApprovedStatus + '"],["' + $script:F_MT_SO + '","in",["",null]],["' + $script:F_MT_ERR + '","in",["",null]],["docstatus","<",2]'
                 if (@($flow.SkipStatuses).Count -gt 0) { $mfFilter += ',["custom_po_status","not in",' + $skipJson + ']' }
                 $mfFilter += ']'
                 $mfList = @(Get-ErpList -Filters $mfFilter -Fields @('name', 'customer', 'creation', 'custom_company') | Sort-Object { "$($_.name)" })
-                Write-Log INFO ("ERPNext: {0} new {1} order(s) since {2} without a Manna Treads order (manna_first)." -f $mfList.Count, (@($flow.Units) -join '/'), $flow.Since)
+                Write-Log INFO ("ERPNext: {0} approved {1} order(s) since {2} without a Manna Treads order (manna_first)." -f $mfList.Count, (@($flow.Units) -join '/'), $flow.Since)
             } catch {
                 Write-Log ERROR ("PASS M: could not read its orders - skipped this run: {0}" -f "$_")
                 $script:Result.failures++
@@ -4124,7 +4139,7 @@ try {
 
         # ============ PASS M - Manna Treads Sales Order, first (manna_first) ============
         #
-        # Every new order of order_flow.units, as soon as it is in ERPNext, as
+        # Every order of order_flow.units, once it is approved in ERPNext, as
         # a Manna Treads Sales Order to the end customer - what it was ordered
         # at, net of GST, with the tax code the customer's state calls for.
         # Its own Manna Treads session, after Hi-Tech's has logged out (one

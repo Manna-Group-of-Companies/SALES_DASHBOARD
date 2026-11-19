@@ -534,7 +534,8 @@ above is unchanged.
 
 Manna Treads sells, Hi-Tech makes and holds the stock. So an order goes:
 
-1. **PASS M** — as soon as the ERPNext order exists (not on approval), a
+1. **PASS M** — once the ERPNext order is **approved** (`custom_po_status`
+   at `order_sync.po_status_gate`, the same gate as PASS A), a
    Manna Treads Sales Order to the end customer (`Customer.custom_bp_code`),
    at the order's rate net of GST, tax code from the customer's bill-to
    state (KL `CG+SG@18`, any other `IGST@18`).
@@ -562,6 +563,16 @@ Manna Treads sells, Hi-Tech makes and holds the stock. So an order goes:
    `custom_sap_sync_error`, naming B1if's message log.
 5. *Not built yet:* the pick list, Hi-Tech's invoice for what was picked,
    Manna Treads' goods receipt and delivery note.
+
+**On approval, not on creation — changed 19 November 2026.** PASS M first
+sent an order the moment it existed and held back only `skip_statuses`
+(`Rejected`). SAL-ORD-2026-00163 and 00164 went to Manna Treads SAP as SO 578
+and 579 while still at *Pending GM Approval*. PASS M now takes only an order
+at `po_status_gate`; every *Pending …* status waits. This is not configurable:
+an order that has not passed the gate has no business in SAP (*What you must
+NOT write*, above). An order created on or after `since` and approved later
+is still PASS M's, and approval calls `manna_sap_order_request_sync`, so it
+goes at once. Orders already sent before the change stay in SAP as they are.
 
 Manna Treads rounds a document to the rupee and Hi-Tech keeps paise, so PO
 235 is ₹31,269 and Hi-Tech's SO 551 for it ₹31,269.19 — same lines, same

@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
-  Proves PASS M - the Manna Treads Sales Order made as soon as an ERPNext
-  order exists (order_flow.mode = manna_first, 3 Nov 2026).
+  Proves PASS M - the Manna Treads Sales Order made once an ERPNext order
+  is approved (order_flow.mode = manna_first, 3 Nov 2026; on approval since
+  19 Nov 2026 - it used to be as soon as the order existed).
 
 .DESCRIPTION
   OFFLINE. Extracts the real functions from Sync-SapOrders.ps1 by AST (its
@@ -13,7 +14,8 @@
       manna_first, the defaults (Manna Treads, Rejected skipped, KL CG+SG@18,
       anything else IGST@18);
     * which orders are PASS M's - and so not PASS A's: unit and creation date;
-    * what makes PASS M leave an order alone;
+    * what makes PASS M leave an order alone - not approved yet among them
+      (19 Nov 2026);
     * the tax code by bill-to state;
     * the plan: kilos, the rate as amount / kilos, net of GST, and the
       problems that refuse the whole order;
@@ -81,7 +83,19 @@ $doc = { param([hashtable] $f)
                      custom_po_status = 'Pending Approval'; custom_mt_sales_order = $null; custom_mt_sync_error = $null }
     foreach ($k in $f.Keys) { $d[$k] = $f[$k] }
     [pscustomobject]$d }
-Check 'a new, unapproved order is taken - as soon as it is created' ((Get-MfSkipReason -Doc (& $doc @{}) -Flow $flow) -eq '') (Get-MfSkipReason -Doc (& $doc @{}) -Flow $flow)
+# 19 Nov 2026: PASS M waits for approval. SAL-ORD-2026-00163 / 00164 went to
+# Manna Treads SAP (SO 578 / 579) while still at 'Pending GM Approval'.
+$ok = @{ custom_po_status = 'PO Approved - Ready for SAP' }
+Check 'an approved order is taken' ((Get-MfSkipReason -Doc (& $doc $ok) -Flow $flow) -eq '') (Get-MfSkipReason -Doc (& $doc $ok) -Flow $flow)
+foreach ($pending in @('Pending Approval', 'Pending Rate Approval', 'Pending Final Approval', 'Pending GM Approval', '')) {
+    $why = Get-MfSkipReason -Doc (& $doc @{ custom_po_status = $pending }) -Flow $flow
+    Check ("an order at '{0}' is NOT taken - it waits for approval" -f $pending) ($why -match 'not approved yet') $why
+}
+Check 'the approval status is PO Approved - Ready for SAP by default' ($flow.ApprovedStatus -eq 'PO Approved - Ready for SAP') $flow.ApprovedStatus
+$gated = Get-FlowSettings -Config (Cfg '{"order_sync":{"po_status_gate":"Approved X"},"order_flow":{"mode":"manna_first","since":"2026-11-03"}}')
+Check 'the approval status follows order_sync.po_status_gate - the same gate as PASS A' ($gated.ApprovedStatus -eq 'Approved X') $gated.ApprovedStatus
+Check '... and an order at the old default is then not taken' ((Get-MfSkipReason -Doc (& $doc $ok) -Flow $gated) -match 'not approved yet')
+Check '... while one at that gate is' ((Get-MfSkipReason -Doc (& $doc @{ custom_po_status = 'Approved X' }) -Flow $gated) -eq '')
 Check 'one that already has its Manna Treads order is skipped' ((Get-MfSkipReason -Doc (& $doc @{ custom_mt_sales_order = '561' }) -Flow $flow) -match '561')
 Check 'one with an error on it waits for somebody to clear it' ((Get-MfSkipReason -Doc (& $doc @{ custom_mt_sync_error = 'no code' }) -Flow $flow) -match 'custom_mt_sync_error')
 Check 'a cancelled order is skipped' ((Get-MfSkipReason -Doc (& $doc @{ docstatus = 2 }) -Flow $flow) -match 'cancelled')
