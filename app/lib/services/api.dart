@@ -1821,7 +1821,7 @@ class Api {
           fields:
           '["name","customer","customer_name","transaction_date","custom_sales_person",'
           '"grand_total","custom_po_status","custom_credit_commitment",'
-          '"custom_credit_commitment_due"]',
+          '"custom_credit_commitment_due","custom_mt_sales_order"]',
           filters: '[["custom_po_status","=","Pending GM Approval"]]',
           orderBy: 'creation desc');
 

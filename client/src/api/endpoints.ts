@@ -351,6 +351,13 @@ export const SALES_ORDER_FIELD = {
   sapInvoiceDate: 'custom_sap_invoice_date',
   sapSyncedAt: 'custom_sap_synced_at',
   sapSyncError: 'custom_sap_sync_error',
+  /**
+   * Manna Treads' SAP order number (DocNum), written by the order sync's
+   * PASS M. Until 19 Nov 2026 PASS M sent an order before it was approved,
+   * so an order still waiting for the GM can already be in SAP; the GM's
+   * screens say so. Read here; written only by the sync.
+   */
+  mtSalesOrder: 'custom_mt_sales_order',
 } as const;
 
 /** The six values `custom_proforma_status` accepts. */

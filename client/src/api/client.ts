@@ -2892,6 +2892,7 @@ function toTeamOrder(r: Record<string, unknown>): TeamOrder {
     ratesApproved: Number(r[SALES_ORDER_FIELD.ratesApproved]) === 1,
     sapSalesOrder: str(r[SALES_ORDER_FIELD.sapSalesOrder]),
     sapSalesOrderStatus: str(r[SALES_ORDER_FIELD.sapSalesOrderStatus]),
+    mtSalesOrder: notNull(str(r[SALES_ORDER_FIELD.mtSalesOrder])),
     sapInvoice: str(r[SALES_ORDER_FIELD.sapInvoice]),
     // Frappe reads an unset field back as the string 'null' on some paths,
     // which would print literally as the rep's commitment.

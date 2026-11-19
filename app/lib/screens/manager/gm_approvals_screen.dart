@@ -26,6 +26,12 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
 
   void _reload() => setState(() { _future = _load(); });
 
+  /// An unset field reads back as null, '' or the string 'null'.
+  static String _setOrBlank(dynamic v) {
+    final t = '${v ?? ''}'.trim();
+    return t == 'null' ? '' : t;
+  }
+
   Future<List<Approval>> _load() async {
     final res = await Future.wait([
       Api.getPendingGMSalesOrderPOs(),
@@ -39,7 +45,8 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
           commitment: r['custom_credit_commitment'],
           commitmentDue: r['custom_credit_commitment_due'],
           partyName: '${r['customer_name'] ?? ''}'.trim(),
-          placedOn: '${r['transaction_date'] ?? ''}'.trim()));
+          placedOn: '${r['transaction_date'] ?? ''}'.trim(),
+          mtSalesOrder: _setOrBlank(r['custom_mt_sales_order'])));
     }
     // Longest-waiting first, as on the dashboard: an escalation holds a
     // customer's goods, and the one raised three days ago matters more.
@@ -434,6 +441,23 @@ class GmEscalationCard extends StatelessWidget {
               ),
             ],
           ]),
+          // Until 19 Nov 2026 the order sync sent an order to SAP before the
+          // GM decided. A GM about to reject one needs to know there is an
+          // SAP order to cancel: rejecting here does not touch SAP.
+          if (a.mtSalesOrder.isNotEmpty)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFFDF3E2),
+                  borderRadius: BorderRadius.circular(6)),
+              child: Text('Already in SAP · Manna Treads SO ${a.mtSalesOrder}',
+                  style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: _amber)),
+            ),
           const SizedBox(height: 12),
           // The credit picture, which is the whole reason this reached the GM.
           // Projected is the number that matters: the question is not what

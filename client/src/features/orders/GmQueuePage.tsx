@@ -19,6 +19,10 @@
  * escalated to them. There the two exemptions apply: they may edit an order
  * that is not theirs, and change a rate the sales manager already locked. See
  * `orderStatus.ts` for why both exist.
+ *
+ * An order already in Manna Treads SAP says so under its header (19 Nov 2026).
+ * Until then the order sync sent an order before the GM had decided, and a
+ * GM about to reject one needs to know there is an SAP order to cancel.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -235,6 +239,12 @@ export function GmQueuePage() {
                 </div>
                 <span className={`gmq__wait${wait.long ? ' is-long' : ''}`}>{wait.text}</span>
               </header>
+
+              {o.mtSalesOrder && (
+                <div className="gmq__insap" title="The order sync sent this order to SAP before your decision">
+                  Already in SAP · Manna Treads SO <span className="mono">{o.mtSalesOrder}</span>
+                </div>
+              )}
 
               <div className="gmq__figures">
                 <div>

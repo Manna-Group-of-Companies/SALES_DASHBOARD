@@ -339,6 +339,12 @@ export interface TeamOrder {
    */
   sapSalesOrderStatus?: string;
   /**
+   * Manna Treads' SAP order number, when the order sync has made one. Can be
+   * set on an order the GM has not decided yet (orders sent before
+   * 19 Nov 2026), which is why the GM's screens show it.
+   */
+  mtSalesOrder?: string;
+  /**
    * The SAP invoice that completed the order — written only once every line
    * has been invoiced. What makes a list show it Dispatched; see `orderProgress`.
    */

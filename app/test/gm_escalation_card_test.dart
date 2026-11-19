@@ -102,6 +102,20 @@ void main() {
     expect(GmEscalationCard.inr(-157629), '-₹1,57,629');
   });
 
+  // SAL-ORD-2026-00163 / 00164 were in Manna Treads SAP (SO 578 / 579) while
+  // still waiting for the GM, and nothing on the card said so (19 Nov 2026).
+  testWidgets('an order already in SAP says so, with the SAP number', (tester) async {
+    final a = _order()..mtSalesOrder = '578';
+    await _pump(tester, a);
+    expect(tester.takeException(), isNull);
+    expect(find.text('Already in SAP · Manna Treads SO 578'), findsOneWidget);
+  });
+
+  testWidgets('an order not in SAP says nothing about SAP', (tester) async {
+    await _pump(tester, _order());
+    expect(find.textContaining('Already in SAP'), findsNothing);
+  });
+
   test('waiting time counts calendar days', () {
     final now = DateTime(2026, 10, 8, 9, 30);
     expect(GmEscalationCard.waited('2026-10-08', now), 'Raised today');

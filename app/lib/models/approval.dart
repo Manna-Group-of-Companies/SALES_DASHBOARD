@@ -30,6 +30,10 @@ class Approval {
   /// customer is overdue past their payment terms — the second reason an order
   /// reaches the GM (11 Oct 2026). Blank otherwise.
   String pastTerms = '';
+
+  /// Manna Treads' SAP order number when the order sync has already made one
+  /// — it did so before the GM decided until 19 Nov 2026. Blank otherwise.
+  String mtSalesOrder;
   Approval(this.title, this.name, this.rep, this.party, this.amount, this.kind,
       {this.lat,
         this.lng,
@@ -41,6 +45,7 @@ class Approval {
         this.commitment,
         this.commitmentDue,
         this.partyName = '',
-        this.placedOn = ''});
+        this.placedOn = '',
+        this.mtSalesOrder = ''});
 }
 
