@@ -102,18 +102,37 @@ void main() {
     expect(GmEscalationCard.inr(-157629), '-₹1,57,629');
   });
 
-  // SAL-ORD-2026-00163 / 00164 were in Manna Treads SAP (SO 578 / 579) while
-  // still waiting for the GM, and nothing on the card said so (19 Nov 2026).
-  testWidgets('an order already in SAP says so, with the SAP number', (tester) async {
-    final a = _order()..mtSalesOrder = '578';
-    await _pump(tester, a);
-    expect(tester.takeException(), isNull);
-    expect(find.text('Already in SAP · Manna Treads SO 578'), findsOneWidget);
-  });
-
-  testWidgets('an order not in SAP says nothing about SAP', (tester) async {
-    await _pump(tester, _order());
-    expect(find.textContaining('Already in SAP'), findsNothing);
+  // SAL-ORD-2026-00163 / 00164 sat in the GM's queue while already in Manna
+  // Treads SAP as SO 578 / 579 (19 Nov 2026). An order in SAP leaves it.
+  group('inGmQueue', () {
+    test('an order with the GM and not in SAP is in the queue', () {
+      expect(inGmQueue({'custom_po_status': 'Pending GM Approval'}), isTrue);
+      expect(
+          inGmQueue({
+            'custom_po_status': 'Pending GM Approval',
+            'custom_mt_sales_order': null
+          }),
+          isTrue);
+    });
+    test('an unset SAP number read back as the string null counts as unset', () {
+      expect(
+          inGmQueue({
+            'custom_po_status': 'Pending GM Approval',
+            'custom_mt_sales_order': 'null'
+          }),
+          isTrue);
+    });
+    test('an order already in Manna Treads SAP is not in the queue', () {
+      expect(
+          inGmQueue({
+            'custom_po_status': 'Pending GM Approval',
+            'custom_mt_sales_order': '578'
+          }),
+          isFalse);
+    });
+    test('an order not with the GM is never in the queue', () {
+      expect(inGmQueue({'custom_po_status': 'Pending Final Approval'}), isFalse);
+    });
   });
 
   test('waiting time counts calendar days', () {

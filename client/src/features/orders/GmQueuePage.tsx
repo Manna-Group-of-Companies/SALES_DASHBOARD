@@ -20,15 +20,14 @@
  * that is not theirs, and change a rate the sales manager already locked. See
  * `orderStatus.ts` for why both exist.
  *
- * An order already in Manna Treads SAP says so under its header (19 Nov 2026).
- * Until then the order sync sent an order before the GM had decided, and a
- * GM about to reject one needs to know there is an SAP order to cancel.
+ * An order already in Manna Treads SAP is not here at all (19 Nov 2026) —
+ * see `inGmQueue`.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { SalesCustomer, TeamOrder } from '@/domain/types';
-import { creditPicture, PO_STATUS } from '@/domain/orderStatus';
+import { creditPicture, inGmQueue, PO_STATUS } from '@/domain/orderStatus';
 import { agingOf, bucketsOf, escalationOf, pastTermsPhrase } from '@/domain/credit';
 import { hasCommitment } from '@/domain/creditCommitment';
 import { formatDate } from '@/domain/orderRules';
@@ -97,7 +96,7 @@ export function GmQueuePage() {
     ])
       .then(([o, c, conds]) => {
         if (!live) return;
-        setOrders(o.filter((x) => x.poStatus === PO_STATUS.pendingGm));
+        setOrders(o.filter(inGmQueue));
         setAwaitingPush(o.filter((x) => x.poStatus === PO_STATUS.finalApproval).length);
         setAnswered(conds.filter((k) => k.status === COND_AWAITING).length);
         setCustomers(c);
@@ -239,12 +238,6 @@ export function GmQueuePage() {
                 </div>
                 <span className={`gmq__wait${wait.long ? ' is-long' : ''}`}>{wait.text}</span>
               </header>
-
-              {o.mtSalesOrder && (
-                <div className="gmq__insap" title="The order sync sent this order to SAP before your decision">
-                  Already in SAP · Manna Treads SO <span className="mono">{o.mtSalesOrder}</span>
-                </div>
-              )}
 
               <div className="gmq__figures">
                 <div>

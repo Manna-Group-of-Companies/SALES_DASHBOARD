@@ -976,16 +976,6 @@
 .gmq__age.is-late b { color: var(--danger); }
 .gmq .gm__commit { margin: 12px 0 0; border-radius: 0 var(--r) var(--r) 0; }
 .gmq__due { margin-top: 4px; font-size: 11.5px; color: var(--text-3); }
-/* An order already in Manna Treads SAP before the GM decided (19 Nov 2026). */
-.gmq__insap {
-  margin: 10px 16px 0;
-  padding: 6px 10px;
-  border-radius: var(--r);
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--warn);
-  background: var(--warn-soft);
-}
 .gmq__foot {
   display: flex;
   align-items: center;

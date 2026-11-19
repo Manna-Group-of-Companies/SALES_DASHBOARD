@@ -10,6 +10,23 @@ import 'package:manna_field_sales/screens/manager/manager_order_review_screen.da
 import 'package:manna_field_sales/widgets/gm_condition_dialog.dart';
 import 'package:manna_field_sales/services/api.dart';
 
+/// Whether a Sales Order row belongs in the GM's queue: at `Pending GM
+/// Approval` and not already in Manna Treads SAP.
+///
+/// Until 19 Nov 2026 the order sync sent orders to SAP before the GM decided
+/// (SAL-ORD-2026-00163 / 00164 as SO 578 / 579). The user's call, that day:
+/// an order already in SAP has nothing left for the GM, so it leaves the
+/// queue; its status is not changed. The dashboard's GM queue applies the
+/// same test (`inGmQueue` in client/src/domain/orderStatus.ts).
+bool inGmQueue(Map<String, dynamic> r) {
+  if ('${r['custom_po_status'] ?? ''}'.trim() != 'Pending GM Approval') {
+    return false;
+  }
+  // An unset field reads back as null, '' or the string 'null'.
+  final sap = '${r['custom_mt_sales_order'] ?? ''}'.trim();
+  return sap.isEmpty || sap == 'null';
+}
+
 class GMApprovalsScreen extends StatefulWidget {
   const GMApprovalsScreen({super.key});
   @override
@@ -26,27 +43,20 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
 
   void _reload() => setState(() { _future = _load(); });
 
-  /// An unset field reads back as null, '' or the string 'null'.
-  static String _setOrBlank(dynamic v) {
-    final t = '${v ?? ''}'.trim();
-    return t == 'null' ? '' : t;
-  }
-
   Future<List<Approval>> _load() async {
     final res = await Future.wait([
       Api.getPendingGMSalesOrderPOs(),
       Api.getPendingGMLeadOrderPOs(),
     ]);
     final orders = <Approval>[];
-    for (final r in res[0]) {
+    for (final r in res[0].where(inGmQueue)) {
       orders.add(Approval('Customer PO — GM approval', r['name'],
           r['custom_sales_person'], r['customer'], (r['grand_total'] ?? 0),
           'gm_so_po',
           commitment: r['custom_credit_commitment'],
           commitmentDue: r['custom_credit_commitment_due'],
           partyName: '${r['customer_name'] ?? ''}'.trim(),
-          placedOn: '${r['transaction_date'] ?? ''}'.trim(),
-          mtSalesOrder: _setOrBlank(r['custom_mt_sales_order'])));
+          placedOn: '${r['transaction_date'] ?? ''}'.trim()));
     }
     // Longest-waiting first, as on the dashboard: an escalation holds a
     // customer's goods, and the one raised three days ago matters more.
@@ -441,23 +451,6 @@ class GmEscalationCard extends StatelessWidget {
               ),
             ],
           ]),
-          // Until 19 Nov 2026 the order sync sent an order to SAP before the
-          // GM decided. A GM about to reject one needs to know there is an
-          // SAP order to cancel: rejecting here does not touch SAP.
-          if (a.mtSalesOrder.isNotEmpty)
-            Container(
-              width: double.infinity,
-              margin: const EdgeInsets.only(top: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                  color: const Color(0xFFFDF3E2),
-                  borderRadius: BorderRadius.circular(6)),
-              child: Text('Already in SAP · Manna Treads SO ${a.mtSalesOrder}',
-                  style: const TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                      color: _amber)),
-            ),
           const SizedBox(height: 12),
           // The credit picture, which is the whole reason this reached the GM.
           // Projected is the number that matters: the question is not what
