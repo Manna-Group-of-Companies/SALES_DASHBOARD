@@ -24,7 +24,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { SalesCustomer, TeamOrder } from '@/domain/types';
-import { creditPicture, PO_STATUS } from '@/domain/orderStatus';
+import { creditPicture, inGmQueue, PO_STATUS } from '@/domain/orderStatus';
 import { agingOf, bucketsOf, escalationOf, pastTermsPhrase } from '@/domain/credit';
 import { hasCommitment } from '@/domain/creditCommitment';
 import { formatDate } from '@/domain/orderRules';
@@ -99,7 +99,8 @@ export function GmQueuePage() {
       .then(([o, c, conds, pcs]) => {
         if (!live) return;
         setCommitments(pcs);
-        setOrders(o.filter((x) => x.poStatus === PO_STATUS.pendingGm));
+        // Not an order already in Manna Treads SAP (19 Nov 2026) - see `inGmQueue`.
+        setOrders(o.filter(inGmQueue));
         setAwaitingPush(o.filter((x) => x.poStatus === PO_STATUS.finalApproval).length);
         setAnswered(conds.filter((k) => k.status === COND_AWAITING).length);
         setCustomers(c);

@@ -11,6 +11,23 @@ import 'package:manna_field_sales/screens/manager/manager_order_review_screen.da
 import 'package:manna_field_sales/widgets/gm_condition_dialog.dart';
 import 'package:manna_field_sales/services/api.dart';
 
+/// Whether a Sales Order row belongs in the GM's queue: at `Pending GM
+/// Approval` and not already in Manna Treads SAP.
+///
+/// Until 19 Nov 2026 the order sync sent orders to SAP before the GM decided
+/// (SAL-ORD-2026-00163 / 00164 as SO 578 / 579). The user's call, that day:
+/// an order already in SAP has nothing left for the GM, so it leaves the
+/// queue; its status is not changed. The dashboard's GM queue applies the
+/// same test (`inGmQueue` in client/src/domain/orderStatus.ts).
+bool inGmQueue(Map<String, dynamic> r) {
+  if ('${r['custom_po_status'] ?? ''}'.trim() != 'Pending GM Approval') {
+    return false;
+  }
+  // An unset field reads back as null, '' or the string 'null'.
+  final sap = '${r['custom_mt_sales_order'] ?? ''}'.trim();
+  return sap.isEmpty || sap == 'null';
+}
+
 class GMApprovalsScreen extends StatefulWidget {
   const GMApprovalsScreen({super.key});
   @override
@@ -33,7 +50,7 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
       Api.getPendingGMLeadOrderPOs(),
     ]);
     final orders = <Approval>[];
-    for (final r in res[0]) {
+    for (final r in res[0].where(inGmQueue)) {
       orders.add(Approval('Customer PO — GM approval', r['name'],
           r['custom_sales_person'], r['customer'], (r['grand_total'] ?? 0),
           'gm_so_po',
