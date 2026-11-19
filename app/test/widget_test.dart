@@ -27,14 +27,20 @@ Product _pctr() => Product({
     });
 
 void main() {
-  testWidgets('an item with no stock record at all says so', (tester) async {
+  // 19 Nov 2026: the card says nothing for an item with no stock record.
+  // It must never say "None left" or a count instead — those are for items
+  // SAP does hold a figure for.
+  testWidgets('an item with no stock record shows no stock line at all',
+      (tester) async {
     await tester.pumpWidget(_host(ProductRow(
       line: OrderLine(product: _pctr()),
       stock: null,
       onChanged: () {},
     )));
 
-    expect(find.text('No minimum stock'), findsOneWidget);
+    expect(find.text('No minimum stock'), findsNothing);
+    expect(find.textContaining('None left'), findsNothing);
+    expect(find.textContaining('available'), findsNothing);
   });
 
   testWidgets('the shelf reads what SAP says is available', (tester) async {
@@ -108,8 +114,9 @@ void main() {
 
   testWidgets('PCTR and CTR both offer rolls only, never loose belts',
       (tester) async {
+    // The unit chip shows once the line is on the order (ADD pressed).
     await tester.pumpWidget(_host(ProductRow(
-      line: OrderLine(product: _pctr()),
+      line: OrderLine(product: _pctr())..rolls = 1,
       stock: null,
       onChanged: () {},
     )));
@@ -124,7 +131,8 @@ void main() {
         'item_group': 'Hot Rubber',
         'stock_uom': 'Roll',
         'custom_weight_per_roll': 30.0,
-      })),
+      }))
+        ..rolls = 1,
       stock: null,
       onChanged: () {},
     )));
@@ -132,7 +140,7 @@ void main() {
     expect(find.text('Loose belts'), findsNothing);
   });
 
-  testWidgets('the rate is never typed: read-only, and no SAP price says so',
+  testWidgets('the rate is never typed: no box, and no SAP price says so',
       (tester) async {
     final line = OrderLine(product: _pctr());
     line.rolls = 2;
@@ -141,10 +149,9 @@ void main() {
       stock: null,
       onChanged: () {},
     )));
-    final rate = tester.widget<TextField>(find.byWidgetPredicate(
-        (w) => w is TextField && (w.decoration?.labelText ?? '').startsWith('Rate per')));
-    expect(rate.readOnly, isTrue);
-    expect(find.text('No price in SAP'), findsWidgets);
+    // Plain text since 19 Nov 2026: there is nothing to type into at all.
+    expect(find.byType(TextField), findsNothing);
+    expect(find.textContaining('No price in SAP'), findsWidgets);
   });
 
   // 11 Nov 2026: Retreads and UAE reps, and per-can items, have no SAP price
@@ -162,11 +169,10 @@ void main() {
         onChanged: () => setState(() {}),
       ),
     )));
-    final box = find.byWidgetPredicate(
-        (w) => w is TextField && (w.decoration?.labelText ?? '').startsWith('Rate per'));
+    final box = find.byType(TextField);
     expect(tester.widget<TextField>(box).readOnly, isFalse);
     expect(find.text('Enter a rate'), findsOneWidget);
-    expect(find.text('No price in SAP'), findsNothing);
+    expect(find.textContaining('No price in SAP'), findsNothing);
 
     await tester.enterText(box, '212.5');
     await tester.pump();
@@ -186,11 +192,9 @@ void main() {
       sapPriceLater: true,
       onChanged: () {},
     )));
-    final rate = tester.widget<TextField>(find.byWidgetPredicate(
-        (w) => w is TextField && (w.decoration?.labelText ?? '').startsWith('Rate per')));
-    expect(rate.readOnly, isTrue);
-    expect(find.text('SAP price when sent'), findsOneWidget);
-    expect(find.text('No price in SAP'), findsNothing);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.textContaining('SAP price when sent'), findsOneWidget);
+    expect(find.textContaining('No price in SAP'), findsNothing);
   });
 
   testWidgets('an SAP price stays locked even where typing is allowed',
@@ -204,12 +208,11 @@ void main() {
       sapRate: const SapRate(rate: 200, source: 'list', list: 200),
       onChanged: () {},
     )));
-    final rate = tester.widget<TextField>(find.byWidgetPredicate(
-        (w) => w is TextField && (w.decoration?.labelText ?? '').startsWith('Rate per')));
-    expect(rate.readOnly, isTrue);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.textContaining('₹ 200 / kg'), findsOneWidget);
   });
 
-  testWidgets('tapping + adds a roll and reports the derived weight',
+  testWidgets('tapping ADD adds a roll and reports the derived weight',
       (tester) async {
     final line = OrderLine(product: _pctr(), rate: 200);
     var changes = 0;
@@ -222,13 +225,68 @@ void main() {
       ),
     )));
 
-    await tester.tap(find.byIcon(Icons.add_circle_outline).first);
+    await tester.tap(find.text('ADD'));
     await tester.pump();
 
     expect(changes, 1);
     expect(line.rolls, 1);
     expect(find.textContaining('22.00 kg (avg)'), findsOneWidget);
     expect(find.text('Rs 4400.00'), findsOneWidget);
+    // ADD has turned into the stepper.
+    expect(find.text('ADD'), findsNothing);
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pump();
+    expect(line.rolls, 2);
+  });
+
+  // 19 Nov 2026: the billing-app layout. Taking the last roll off must put
+  // the ADD button back, not leave a stepper reading 0.
+  testWidgets('stepping a line down to nothing brings ADD back',
+      (tester) async {
+    final line = OrderLine(product: _pctr(), rate: 200)..rolls = 1;
+    await tester.pumpWidget(_host(StatefulBuilder(
+      builder: (_, setState) => ProductRow(
+        line: line,
+        stock: null,
+        onChanged: () => setState(() {}),
+      ),
+    )));
+    expect(find.text('ADD'), findsNothing);
+
+    await tester.tap(find.byIcon(Icons.remove));
+    await tester.pump();
+    expect(line.rolls, 0);
+    expect(find.text('ADD'), findsOneWidget);
+  });
+
+  testWidgets('bonding gum: the chips pick boxes or loose rolls',
+      (tester) async {
+    final line = OrderLine(
+        product: Product({
+      'name': 'BG-1',
+      'item_name': 'Bonding gum',
+      'item_group': 'Bonding Gum',
+      'stock_uom': 'Kg',
+    }), rate: 100);
+    await tester.pumpWidget(_host(StatefulBuilder(
+      builder: (_, setState) => ProductRow(
+        line: line,
+        stock: null,
+        onChanged: () => setState(() {}),
+      ),
+    )));
+
+    await tester.tap(find.text('ADD'));
+    await tester.pump();
+    expect(line.boxes, 1);
+
+    await tester.tap(find.text('Rolls'));
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pump();
+    expect(line.rolls, 1);
+    // The boxes already on the order stay put.
+    expect(line.boxes, 1);
   });
 
   group('ordering more than the pool holds', () {
@@ -349,7 +407,7 @@ void main() {
     )));
 
     expect(find.textContaining('Packing details needed'), findsOneWidget);
-    expect(find.text('Rolls'), findsNothing);
+    expect(find.text('ADD'), findsNothing);
     // Names only what is actually missing — the roll weight is already set.
     expect(find.textContaining('belts per roll'), findsOneWidget);
     expect(find.textContaining('weight of one roll'), findsNothing);
@@ -381,6 +439,6 @@ void main() {
     )));
 
     expect(find.textContaining('Packing details needed'), findsNothing);
-    expect(find.text('Rolls'), findsOneWidget);
+    expect(find.text('ADD'), findsOneWidget);
   });
 }

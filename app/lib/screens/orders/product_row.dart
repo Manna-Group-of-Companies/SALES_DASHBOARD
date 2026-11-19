@@ -77,7 +77,11 @@ class ProductRow extends StatefulWidget {
 class _ProductRowState extends State<ProductRow> {
   late final TextEditingController _rate;
   late final TextEditingController _kilos;
+  final FocusNode _rateFocus = FocusNode();
   bool _saving = false;
+
+  /// Which of [_units] the stepper moves. Only bonding gum has a choice.
+  int _unitIndex = 0;
 
   @override
   void initState() {
@@ -86,6 +90,13 @@ class _ProductRowState extends State<ProductRow> {
         text: widget.line.rate > 0 ? trimQty(widget.line.rate) : '');
     _kilos = TextEditingController(
         text: widget.line.kilos > 0 ? trimQty(widget.line.kilos) : '');
+    // An order opened for editing with loose rolls and no boxes starts on the
+    // unit that has something in it.
+    if (widget.line.product.category == ProductCategory.bondingGum &&
+        widget.line.boxes == 0 &&
+        widget.line.rolls > 0) {
+      _unitIndex = 1;
+    }
   }
 
   /// Collects the packing figures this item was imported without, and writes
@@ -265,6 +276,7 @@ class _ProductRowState extends State<ProductRow> {
   void dispose() {
     _rate.dispose();
     _kilos.dispose();
+    _rateFocus.dispose();
     super.dispose();
   }
 
@@ -370,32 +382,70 @@ class _ProductRowState extends State<ProductRow> {
     );
   }
 
+  /// Laid out the way the user drew it (19 Nov 2026): the name in bold with
+  /// ADD beside it, the packing facts under it, then "Price: ₹ 315 / kg" as
+  /// plain text and the stock line. ADD turns into a − / qty / + stepper once
+  /// the item is on the order. Only the layout changed — the price is still
+  /// SAP's and locked, typed only where the phone has no SAP price.
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final primary = Theme.of(context).colorScheme.primary;
+    // A white card per product, as the app's other cards are (radius 16,
+    // hairline border).
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0xFFE0E0E0))),
+      margin: const EdgeInsets.fromLTRB(10, 5, 10, 5),
+      padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFECECEC)),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x0A000000), blurRadius: 6, offset: Offset(0, 2)),
+        ],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(
-            child: Text(p.name,
-                style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w600)),
-          ),
-          if (!line.isEmpty)
-            Text('Rs ${line.amount.toStringAsFixed(2)}',
-                style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.primary)),
-        ]),
-        const SizedBox(height: 2),
+        // Always one line (19 Nov 2026, the user's request): a long name is
+        // shrunk to fit the card rather than wrapped or cut off, so the whole
+        // name is still there to read.
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(p.name,
+              maxLines: 1,
+              softWrap: false,
+              style: const TextStyle(
+                  fontSize: 15.5,
+                  fontWeight: FontWeight.w800,
+                  height: 1.3,
+                  color: Colors.black87)),
+        ),
+        const SizedBox(height: 4),
         _specLine(),
-        if (widget.showMinimumStock) ...[
-          const SizedBox(height: 6),
+        if (!p.isMisconfigured) ...[
+          const SizedBox(height: 10),
+          // Price on the left, ADD (or the stepper) on the right of it.
+          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            Expanded(child: _priceLine(primary)),
+            if (!_byKilo) ...[
+              const SizedBox(width: 10),
+              _quantityControl(primary),
+            ],
+          ]),
+          // Hot rubber with no roll weight is ordered in kilos (14 Nov 2026):
+          // the kilos box and "Add roll weight" stand where ADD would.
+          if (_byKilo) ...[
+            const SizedBox(height: 10),
+            _kilosField(),
+            _addRollWeight(),
+          ],
+        ],
+        // An item with no stock record shows no line at all (19 Nov 2026,
+        // the user's drawing): "No minimum stock" on almost every card was
+        // noise. An item that has a record still says what is available, or
+        // "None left" — which is why silence can only mean "no record".
+        if (widget.showMinimumStock && widget.stock != null) ...[
+          const SizedBox(height: 8),
           _stockLine(),
         ],
         /*
@@ -421,23 +471,32 @@ class _ProductRowState extends State<ProductRow> {
         // Removed with the rest of the dead-stock feature: how old stock is, is
         // not a rep's decision to make in front of a customer.
         if (p.isMisconfigured) ...[
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           _packingPrompt(),
         ] else ...[
-          const SizedBox(height: 8),
-          _inputs(),
-          const SizedBox(height: 8),
-          _rateField(),
           if (!line.isEmpty) ...[
-            const SizedBox(height: 6),
-            Text(
-                // The per-roll figure is shown because that is what ends up on
-                // the order line, and a rep who quoted per kg should be able to
-                // see the two agree before they submit.
-                p.category.isSoldByWeight && p.rollWeight > 0 && line.rate > 0
-                    ? '${line.packingNote}   ·   Rs ${trimQty(line.lineRate)}/roll'
-                    : line.packingNote,
-                style: const TextStyle(fontSize: 12, color: Colors.black54)),
+            const SizedBox(height: 8),
+            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Expanded(
+                child: Text(
+                    // The per-roll figure is shown because that is what ends
+                    // up on the order line, and a rep who quoted per kg should
+                    // be able to see the two agree before they submit.
+                    p.category.isSoldByWeight &&
+                            p.rollWeight > 0 &&
+                            line.rate > 0
+                        ? '${line.packingNote}   ·   Rs ${trimQty(line.lineRate)}/roll'
+                        : line.packingNote,
+                    style:
+                        const TextStyle(fontSize: 12, color: Colors.black54)),
+              ),
+              const SizedBox(width: 8),
+              Text('Rs ${line.amount.toStringAsFixed(2)}',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: primary)),
+            ]),
           ],
           if (_splitsWithProduction) ...[
             const SizedBox(height: 6),
@@ -486,7 +545,7 @@ class _ProductRowState extends State<ProductRow> {
         break;
     }
     return Text(bits.join('  ·  '),
-        style: const TextStyle(fontSize: 12, color: Colors.black54));
+        style: const TextStyle(fontSize: 13.5, color: Colors.black54));
   }
 
   // ------------------------------------------------------ minimum stock ---
@@ -496,7 +555,7 @@ class _ProductRowState extends State<ProductRow> {
     if (s == null) {
       return const Text('No minimum stock',
           style: TextStyle(
-              fontSize: 12,
+              fontSize: 13.5,
               color: Colors.black45,
               fontStyle: FontStyle.italic));
     }
@@ -511,7 +570,7 @@ class _ProductRowState extends State<ProductRow> {
         Expanded(
           child: Text('Stock not set up for this item',
               style: TextStyle(
-                  fontSize: 12,
+                  fontSize: 13.5,
                   color: Colors.black45,
                   fontStyle: FontStyle.italic)),
         ),
@@ -538,7 +597,7 @@ class _ProductRowState extends State<ProductRow> {
               ? 'None left'
               : '${trimQty(avail)} $unit available',
           style: TextStyle(
-              fontSize: 12, color: colour, fontWeight: FontWeight.w500),
+              fontSize: 13.5, color: colour, fontWeight: FontWeight.w500),
         ),
       ),
     ]);
@@ -546,44 +605,27 @@ class _ProductRowState extends State<ProductRow> {
 
   // ----------------------------------------------------------- inputs ---
 
-  Widget _inputs() {
+  /// What this family is counted in. Most have one unit; bonding gum has two
+  /// (boxes and loose rolls), and the chips over the stepper pick which one
+  /// the stepper moves.
+  List<_Unit> get _units {
     switch (p.category) {
       // Rolls only (10 Nov 2026): loose belts are no longer taken on an order.
-      case ProductCategory.ctr when p.soldByKg:
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _kilosField(),
-          _addRollWeight(),
-        ]);
       case ProductCategory.pctr:
       case ProductCategory.ctr:
-        return _counter('Rolls', line.rolls, (v) {
-          line.rolls = v;
-          widget.onChanged();
-        });
+        return [_Unit('Rolls', () => line.rolls, (v) => line.rolls = v)];
       case ProductCategory.bondingGum:
-        return Row(children: [
-          Expanded(
-              child: _counter('Boxes', line.boxes, (v) {
-            line.boxes = v;
-            widget.onChanged();
-          })),
-          const SizedBox(width: 10),
-          Expanded(
-              child: _counter('Loose rolls', line.rolls, (v) {
-            line.rolls = v;
-            widget.onChanged();
-          })),
-        ]);
+        return [
+          _Unit('Boxes', () => line.boxes, (v) => line.boxes = v),
+          // "Rolls" on the chip, which has little room; the typing dialog
+          // still says loose rolls.
+          _Unit('Loose rolls', () => line.rolls, (v) => line.rolls = v,
+              chip: 'Rolls'),
+        ];
       case ProductCategory.vulcanizingSolution:
-        return _counter('Cans', line.cans, (v) {
-          line.cans = v;
-          widget.onChanged();
-        });
+        return [_Unit('Cans', () => line.cans, (v) => line.cans = v)];
       case ProductCategory.other:
-        return _counter('Quantity', line.rolls, (v) {
-          line.rolls = v;
-          widget.onChanged();
-        });
+        return [_Unit('Quantity', () => line.rolls, (v) => line.rolls = v)];
     }
   }
 
@@ -630,29 +672,179 @@ class _ProductRowState extends State<ProductRow> {
         ),
       );
 
-  Widget _counter(String label, int value, ValueChanged<int> onSet) {
-    return InputDecorator(
-      decoration: InputDecoration(
-        labelText: label,
-        border: const OutlineInputBorder(),
-        isDense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      ),
-      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        InkWell(
-          onTap: value > 0 ? () => onSet(value - 1) : null,
-          child: Icon(Icons.remove_circle_outline,
-              size: 22, color: value > 0 ? Colors.black87 : Colors.black26),
+  bool get _byKilo => p.category == ProductCategory.ctr && p.soldByKg;
+
+  bool get _typesRate =>
+      widget.typedRate && !widget.rateLocked && widget.sapRate == null;
+
+  void _set(_Unit u, int v) {
+    setState(() => u.set(v < 0 ? 0 : v));
+    widget.onChanged();
+  }
+
+  /// ADD puts one of the selected unit on the order. Where the rep prices the
+  /// line themselves, the rate box takes the focus straight away, because a
+  /// line with no rate cannot be sent.
+  void _add() {
+    final units = _units;
+    _set(units[_unitIndex.clamp(0, units.length - 1)], 1);
+    if (_typesRate && line.rate <= 0) _rateFocus.requestFocus();
+  }
+
+  Widget _quantityControl(Color primary) {
+    if (line.isEmpty) {
+      return SizedBox(
+        width: 110,
+        height: 44,
+        child: OutlinedButton(
+          onPressed: _add,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: primary,
+            side: BorderSide(color: primary, width: 1.4),
+            padding: EdgeInsets.zero,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          child: const Row(mainAxisSize: MainAxisSize.min, children: [
+            Text('ADD',
+                style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5)),
+            SizedBox(width: 4),
+            Icon(Icons.add, size: 18),
+          ]),
         ),
-        Text('$value',
-            style:
-                const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-        InkWell(
-          onTap: () => onSet(value + 1),
-          child: const Icon(Icons.add_circle_outline, size: 22),
+      );
+    }
+    final units = _units;
+    final i = _unitIndex.clamp(0, units.length - 1);
+    return SizedBox(
+      width: 116,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+        Wrap(
+          alignment: WrapAlignment.end,
+          spacing: 4,
+          runSpacing: 4,
+          children: [
+            for (var k = 0; k < units.length; k++)
+              _unitChip(units[k], k == i, units.length > 1,
+                  () => setState(() => _unitIndex = k), primary),
+          ],
         ),
+        const SizedBox(height: 6),
+        _stepper(units[i], primary),
       ]),
     );
+  }
+
+  Widget _unitChip(_Unit u, bool selected, bool showCount, VoidCallback onTap,
+      Color primary) {
+    final n = u.get();
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: selected ? primary.withValues(alpha: 0.10) : null,
+          border: Border.all(
+              color: selected ? primary : const Color(0xFFDADADA)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Flexible(
+            child: Text(u.chip,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                    color: selected ? primary : Colors.black54)),
+          ),
+          // With two units the one not under the stepper still shows how many
+          // are on the order, so nothing typed is out of sight.
+          if (showCount && n > 0) ...[
+            const SizedBox(width: 4),
+            Text('$n',
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black87)),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  Widget _stepper(_Unit u, Color primary) {
+    final v = u.get();
+    Widget button(IconData icon, VoidCallback? onTap) => InkWell(
+          onTap: onTap,
+          child: SizedBox(
+            width: 34,
+            height: 38,
+            child: Icon(icon,
+                size: 18, color: onTap == null ? Colors.black26 : primary),
+          ),
+        );
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: const Color(0xFFDADADA)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        button(Icons.remove, v > 0 ? () => _set(u, v - 1) : null),
+        InkWell(
+          onTap: () => _typeQty(u),
+          child: Container(
+            width: 44,
+            height: 38,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              border: Border.symmetric(
+                  vertical: BorderSide(color: Color(0xFFDADADA))),
+            ),
+            child: Text('$v',
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600)),
+          ),
+        ),
+        button(Icons.add, () => _set(u, v + 1)),
+      ]),
+    );
+  }
+
+  /// Tapping the number types it, for the order of forty rolls that nobody
+  /// wants to reach by pressing + forty times.
+  Future<void> _typeQty(_Unit u) async {
+    final text = '${u.get()}';
+    final ctrl = TextEditingController(text: text)
+      ..selection = TextSelection(baseOffset: 0, extentOffset: text.length);
+    final v = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(u.label),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          decoration: const InputDecoration(border: OutlineInputBorder()),
+          onSubmitted: (t) => Navigator.pop(ctx, int.tryParse(t.trim()) ?? 0),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () =>
+                  Navigator.pop(ctx, int.tryParse(ctrl.text.trim()) ?? 0),
+              child: const Text('OK')),
+        ],
+      ),
+    );
+    if (v == null || !mounted) return;
+    _set(u, v);
   }
 
   /// The rate is SAP's, never typed (10 Nov 2026): the box shows Manna
@@ -664,54 +856,102 @@ class _ProductRowState extends State<ProductRow> {
   /// 11 Nov 2026): there the rep types it, never prefilled — field pricing is
   /// negotiated per customer, and a prefilled number is one a tired rep will
   /// accept.
-  Widget _rateField() {
+  ///
+  /// Shown as plain text, "Price: ₹ 315 / kg" (19 Nov 2026): a locked box
+  /// looked like something to type into. Only a typed rate gets a box.
+  Widget _priceLine(Color primary) {
     final sap = widget.sapRate;
     final unit = p.category.rateUnit;
-    final typed = widget.typedRate && !widget.rateLocked && sap == null;
-    final later = widget.sapPriceLater && !typed && !widget.rateLocked && sap == null;
+    final typed = _typesRate;
+    final later =
+        widget.sapPriceLater && !typed && !widget.rateLocked && sap == null;
     final noPrice =
         !typed && !later && !widget.rateLocked && sap == null && line.rate <= 0;
-    return TextField(
-      controller: _rate,
-      readOnly: !typed,
-      enableInteractiveSelection: typed,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [
-        FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))
+
+    const label = TextStyle(fontSize: 16, color: Colors.black54);
+    // One wrapping line of text rather than a row of boxes, so a long price
+    // on a small phone moves to a second line instead of overflowing.
+    final Widget main;
+    if (typed) {
+      main = TextField(
+        controller: _rate,
+        focusNode: _rateFocus,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: [
+          FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))
+        ],
+        style: TextStyle(
+            fontSize: 17, fontWeight: FontWeight.w700, color: primary),
+        decoration: InputDecoration(
+          labelText: 'Price',
+          prefixText: '₹ ',
+          suffixText: '/ $unit',
+          isDense: true,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          errorText: line.needsRate ? 'Enter a rate' : null,
+        ),
+        onChanged: (v) {
+          line.rate = double.tryParse(v) ?? 0;
+          widget.onChanged();
+        },
+      );
+    } else {
+      final TextSpan value;
+      if (later) {
+        value = const TextSpan(
+            text: 'SAP price when sent',
+            style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: Colors.black54));
+      } else if (noPrice) {
+        value = TextSpan(
+            text: 'No price in SAP',
+            style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: Colors.red.shade700));
+      } else {
+        value = TextSpan(children: [
+          TextSpan(
+              text: '₹ ${trimQty(line.rate)}',
+              style: TextStyle(
+                  fontSize: 19, fontWeight: FontWeight.w800, color: primary)),
+          TextSpan(text: ' / $unit', style: label),
+        ]);
+      }
+      main = Text.rich(
+          TextSpan(children: [const TextSpan(text: 'Price:  ', style: label), value]));
+    }
+
+    // What the price is, said in a few words: the long "Set in SAP — ask the
+    // office" line is gone with the box it sat under.
+    String? dealerNote(SapRate s) {
+      if (!s.isDealerPrice) return null;
+      final l = s.list;
+      return (l != null && l > 0 && (l - s.rate).abs() > 0.004)
+          ? "Dealer's price · list ₹ ${trimQty(l)}"
+          : "Dealer's price";
+    }
+
+    final String? note = widget.rateLocked
+        ? 'Approved by your manager'
+        : sap != null
+            ? (widget.leadOrder ? 'Lead order: list rate' : dealerNote(sap))
+            : later
+                ? 'Price from SAP when it is sent.'
+                : null;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      main,
+      if (note != null) ...[
+        const SizedBox(height: 2),
+        Text(note,
+            style: const TextStyle(fontSize: 12, color: Colors.black45)),
       ],
-      decoration: InputDecoration(
-        labelText: 'Rate per $unit',
-        prefixText: 'Rs ',
-        hintText: noPrice
-            ? 'No price in SAP'
-            : (later ? 'SAP price when sent' : null),
-        border: const OutlineInputBorder(),
-        isDense: true,
-        filled: !typed,
-        fillColor: const Color(0xFFF0F0F0),
-        suffixIcon: typed
-            ? null
-            : const Icon(Icons.lock_outline, size: 16, color: Colors.black45),
-        errorText: typed
-            ? (line.needsRate ? 'Enter a rate' : null)
-            : (noPrice && !line.isEmpty ? 'No price in SAP' : null),
-        helperText: widget.rateLocked
-            ? 'Approved by your manager'
-            : (sap != null
-                ? (widget.leadOrder ? sap.leadHint(unit) : sap.fixedHint(unit))
-                : (later
-                    ? 'Price from SAP when it is sent.'
-                    : null)),
-        helperMaxLines: 2,
-        helperStyle: const TextStyle(fontSize: 11),
-      ),
-      onChanged: typed
-          ? (v) {
-              line.rate = double.tryParse(v) ?? 0;
-              widget.onChanged();
-            }
-          : null,
-    );
+    ]);
   }
 
   /// What an incomplete item offers instead of a dead end.
@@ -770,4 +1010,19 @@ class _ProductRowState extends State<ProductRow> {
     return 'Needs the ${missing.join(' and the ')}.';
   }
 
+}
+
+/// One countable unit of a line — rolls, boxes, cans — read and written
+/// straight through to the [OrderLine], so the row keeps no second copy of
+/// the quantity to drift out of step.
+class _Unit {
+  final String label;
+  final int Function() get;
+  final void Function(int) set;
+
+  /// The shorter name on the chip, where there is little room.
+  final String chip;
+
+  const _Unit(this.label, this.get, this.set, {String? chip})
+      : chip = chip ?? label;
 }
