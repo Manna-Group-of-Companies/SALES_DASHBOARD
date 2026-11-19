@@ -473,6 +473,19 @@ export function GmOrderPage() {
       )}
       {loading && !order && !error && <Empty icon="◔" title="Loading…" />}
 
+      {/*
+        Orders sent to SAP before the GM decided (the order sync did that until
+        19 Nov 2026). Rejecting one does not touch SAP: the sync never cancels.
+      */}
+      {order && order.mtSalesOrder && (
+        <div style={{ marginBottom: 14 }}>
+          <Alert tone="warn" title={`Already in SAP as Manna Treads SO ${order.mtSalesOrder}`}>
+            The order sync sent this order to SAP before your decision. If you reject it, that SAP order
+            has to be cancelled in SAP by hand.
+          </Alert>
+        </div>
+      )}
+
       {order && (
         <div className="gmrev">
           {/* ---------------------------------------------- 1. credit --- */}

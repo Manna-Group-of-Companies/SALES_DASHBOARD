@@ -145,6 +145,22 @@ export function awaitingManager(status: string | undefined | null): boolean {
   return !isApproved(status);
 }
 
+/**
+ * Whether an order belongs in the GM's queue: at `Pending GM Approval` and
+ * not already in Manna Treads SAP.
+ *
+ * Until 19 Nov 2026 the order sync sent orders to SAP before the GM decided
+ * (SAL-ORD-2026-00163 / 00164 as SO 578 / 579). The user's call, that day:
+ * an order already in SAP has nothing left for the GM, so it leaves the
+ * queue. Its status is not changed — it simply stops being asked about. The
+ * phone's GM queue applies the same test (`inGmQueue`).
+ */
+export function inGmQueue(order: { poStatus?: string | null; mtSalesOrder?: string | null }): boolean {
+  if ((order.poStatus ?? '').trim() !== PO_STATUS.pendingGm) return false;
+  const sap = (order.mtSalesOrder ?? '').trim();
+  return sap === '' || sap === 'null';
+}
+
 // ------------------------------------------------ lead order status ---
 
 /**

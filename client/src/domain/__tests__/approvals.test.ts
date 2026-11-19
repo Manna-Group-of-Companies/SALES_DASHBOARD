@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   boundByOwnership,
+  inGmQueue,
   creditPicture,
   escalates,
   isApproved,
@@ -281,5 +282,24 @@ describe('quality and pattern parsed from the item name', () => {
   it('hides a dropdown that would offer only one value', () => {
     expect(worthOffering(['BLACK PEARL'])).toBe(false);
     expect(worthOffering(['BLACK PEARL', 'BLACK PEARL B'])).toBe(true);
+  });
+});
+
+// SAL-ORD-2026-00163 / 00164 sat in the GM's queue while already in Manna
+// Treads SAP as SO 578 / 579 (19 Nov 2026). An order in SAP leaves the queue.
+describe('inGmQueue', () => {
+  it('an order with the GM and not in SAP is in the queue', () => {
+    expect(inGmQueue({ poStatus: 'Pending GM Approval' })).toBe(true);
+    expect(inGmQueue({ poStatus: 'Pending GM Approval', mtSalesOrder: '' })).toBe(true);
+  });
+  it('an unset SAP number read back as the string null still counts as unset', () => {
+    expect(inGmQueue({ poStatus: 'Pending GM Approval', mtSalesOrder: 'null' })).toBe(true);
+  });
+  it('an order already in Manna Treads SAP is not in the queue', () => {
+    expect(inGmQueue({ poStatus: 'Pending GM Approval', mtSalesOrder: '578' })).toBe(false);
+  });
+  it('an order not with the GM is never in the queue', () => {
+    expect(inGmQueue({ poStatus: 'Pending Approval' })).toBe(false);
+    expect(inGmQueue({ poStatus: 'Pending Final Approval' })).toBe(false);
   });
 });
