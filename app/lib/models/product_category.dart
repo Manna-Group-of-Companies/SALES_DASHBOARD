@@ -202,6 +202,10 @@ class Product {
   /// 507 HOT items had none, and every one stopped the order on a prompt).
   /// Priced kilos x rate per kg; the kilos are what SAP's order line takes.
   /// A HOT item that does carry a roll weight is still counted in rolls.
+  ///
+  /// The rep may add the roll weight from the row (18 Nov 2026, optional):
+  /// from then on the item is counted in rolls, here and on every phone that
+  /// reads it.
   bool get soldByKg => category == ProductCategory.ctr && weightPerRoll <= 0;
 
   /// Vulcanizing solution only: tin size in litres, 10 or 30.
@@ -229,6 +233,16 @@ class Product {
         ProductCategory.vulcanizingSolution => packLitres <= 0,
         _ => false,
       };
+}
+
+/// Whole rolls for the kilos a rep had typed on hot rubber that has just been
+/// given a roll weight (18 Nov 2026): the nearest whole number, and at least
+/// one - kilos were typed, so the customer wants some. The rep is shown the
+/// result to check with the customer.
+int rollsForKilos(double kilos, double weightPerRoll) {
+  if (kilos <= 0 || weightPerRoll <= 0) return 0;
+  final n = (kilos / weightPerRoll).round();
+  return n < 1 ? 1 : n;
 }
 
 /// One line a rep is building. Holds what was typed — rolls, belts, boxes,

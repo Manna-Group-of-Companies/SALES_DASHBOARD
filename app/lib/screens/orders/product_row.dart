@@ -201,26 +201,61 @@ class _ProductRowState extends State<ProductRow> {
         beltsPerRoll: needsBelts ? belts : null,
         packLitres: needsLitres ? litres : null,
       );
+      final wasByKg = p.soldByKg;
+      final kilosBefore = line.kilos;
       // Applied to the in-memory item so the row prices immediately, rather
-      // than making the rep leave and come back.
-      p.doc.addAll(written);
-      widget.onChanged();
+      // than making the rep leave and come back. A save kept on the phone
+      // that could not read the item first comes back empty: the typed figures
+      // stand on the row until it is sent.
+      p.doc.addAll({
+        if (needsRoll && written['custom_weight_per_roll'] == null)
+          'custom_weight_per_roll': roll,
+        if (needsBelts && written['custom_belts_per_roll'] == null)
+          'custom_belts_per_roll': belts,
+        if (needsLitres && written['custom_pack_litres'] == null)
+          'custom_pack_litres': litres,
+        ...written,
+      });
       // Another rep can have filled the same item in between this screen
       // loading and this save. Theirs stands, and the rep is told so rather
       // than being left to wonder why the row prices off a different number.
-      final kept = (needsRoll && written['custom_weight_per_roll'] != roll) ||
-          (needsBelts && written['custom_belts_per_roll'] != belts) ||
-          (needsLitres && written['custom_pack_litres'] != litres);
+      final kept = (needsRoll &&
+              written['custom_weight_per_roll'] != null &&
+              written['custom_weight_per_roll'] != roll) ||
+          (needsBelts &&
+              written['custom_belts_per_roll'] != null &&
+              written['custom_belts_per_roll'] != belts) ||
+          (needsLitres &&
+              written['custom_pack_litres'] != null &&
+              written['custom_pack_litres'] != litres);
+      final switched = wasByKg && !p.soldByKg
+          ? _switchToRolls(kilosBefore)
+          : '';
+      widget.onChanged();
       _snack(kept
-          ? 'Someone else filled this in first — their figures are being used.'
+          ? 'Someone else filled this in first — their figures are being used.$switched'
           : (needsRoll || needsBelts)
-              ? 'Saved. It goes into SAP with the next stock sync.'
+              ? 'Saved. It goes into SAP with the next stock sync.$switched'
               : 'Saved. This cannot be changed from the app.');
     } catch (e) {
       _snack(humanError(e));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  /// Hot rubber that now has a roll weight is counted in rolls. Kilos already
+  /// typed become the nearest whole number of rolls, at least one, and the
+  /// rep is told what they became so they can check the count with the
+  /// customer. Returns that sentence, or '' when nothing was typed.
+  String _switchToRolls(double kilos) {
+    _kilos.clear();
+    line.kilos = 0;
+    if (kilos <= 0) return ' Now ordered in rolls.';
+    line.rolls = rollsForKilos(kilos, p.weightPerRoll);
+    return ' Now in rolls: ${trimQty(kilos)} kg became ${line.rolls} '
+        'roll${line.rolls == 1 ? '' : 's'} '
+        '(${trimQty(line.rolls * p.weightPerRoll)} kg). Check the count.';
   }
 
   void _snack(String m) => ScaffoldMessenger.of(context)
@@ -515,7 +550,10 @@ class _ProductRowState extends State<ProductRow> {
     switch (p.category) {
       // Rolls only (10 Nov 2026): loose belts are no longer taken on an order.
       case ProductCategory.ctr when p.soldByKg:
-        return _kilosField();
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _kilosField(),
+          _addRollWeight(),
+        ]);
       case ProductCategory.pctr:
       case ProductCategory.ctr:
         return _counter('Rolls', line.rolls, (v) {
@@ -566,6 +604,30 @@ class _ProductRowState extends State<ProductRow> {
           line.kilos = double.tryParse(v) ?? 0;
           widget.onChanged();
         },
+      );
+
+  /// Optional, never in the way (18 Nov 2026, the user: SAP has no roll weight
+  /// for most hot rubber, and a rep who knows it adds it here). Saving it
+  /// turns the row into a Rolls counter. Ordering in kilos needs none of it -
+  /// the blocking prompt went on 14 Nov 2026 for exactly that reason.
+  Widget _addRollWeight() => Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: _saving ? null : _collectPacking,
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            minimumSize: const Size(0, 32),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            textStyle: const TextStyle(fontSize: 12.5),
+          ),
+          icon: _saving
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.scale_outlined, size: 16),
+          label: const Text('Add roll weight'),
+        ),
       );
 
   Widget _counter(String label, int value, ValueChanged<int> onSet) {

@@ -214,6 +214,15 @@ class _OrderScreenState extends State<OrderScreen> {
         final kg = it['custom_total_weight'] ?? it['qty'];
         line.kilos =
             kg is num ? kg.toDouble() : (double.tryParse('${kg ?? ''}') ?? 0);
+      } else if (line.product.category == ProductCategory.ctr && line.rolls == 0) {
+        // Ordered in kilos before the item was given a roll weight (the row's
+        // Add roll weight, 18 Nov 2026): counted in rolls now, the nearest
+        // whole number, rather than opening as an empty line that a save
+        // would drop.
+        final kg = it['custom_total_weight'];
+        line.rolls = rollsForKilos(
+            kg is num ? kg.toDouble() : (double.tryParse('${kg ?? ''}') ?? 0),
+            line.product.weightPerRoll);
       }
       final perKg = it['custom_rate_per_kg'];
       line.rate = perKg is num
