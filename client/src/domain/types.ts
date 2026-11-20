@@ -826,6 +826,8 @@ export interface SalesVisit {
   customerId?: string;
   checkIn?: string;
   checkOut?: string;
+  /** Where the phone was at check-in — the visit's own location, not the party's. */
+  checkInAt?: { latitude: number; longitude: number };
   durationMinutes: number;
   purpose?: string;
   status?: string;
@@ -846,6 +848,8 @@ export interface TripTrack {
   stops: Array<{
     visit: SalesVisit;
     name: string;
+    /** The town or area, for a reader; see `areaOf`. */
+    area?: string;
     place?: { latitude: number; longitude: number };
   }>;
   gpsPoints: Array<{ latitude: number; longitude: number; at?: string }>;

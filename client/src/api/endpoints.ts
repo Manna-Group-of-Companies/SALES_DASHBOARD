@@ -271,6 +271,9 @@ export const SALES_VISIT_FIELD = {
   site: 'custom_site',
   checkIn: 'check_in_time',
   checkOut: 'check_out_time',
+  /** Where the phone was when the rep checked in. On every visit since November. */
+  checkInLatitude: 'check_in_latitude',
+  checkInLongitude: 'check_in_longitude',
   durationMinutes: 'custom_duration_minutes',
   purpose: 'visit_purpose',
   status: 'visit_status',
