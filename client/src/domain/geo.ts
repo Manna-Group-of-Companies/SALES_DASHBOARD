@@ -289,3 +289,35 @@ export function boundsOf(points: Point[]): [[number, number], [number, number]] 
     [maxLat, maxLng],
   ];
 }
+
+/**
+ * The town or area to print under a visited party's name.
+ *
+ * Nothing on the site is a clean "place" field for every party, so this takes
+ * the best of what there is, in order:
+ *
+ *   - a Lead's `city` — filled for most leads, and exactly what is wanted;
+ *   - a Lead's `custom_address`, but only when it is one short line. Reps
+ *     type contact names in there ("Maneesh / Vajra / Marady"), and a
+ *     multi-line address cannot be trusted to lead with the place;
+ *   - the place half of the party's Sales Route, which is named
+ *     `<Rep> - <Place>`. Customers carry nothing else: no city, and no
+ *     primary address on any of them. A route is an area rather than the
+ *     shop's own town, which is still what a manager scanning the day wants.
+ */
+export function areaOf(input: { city?: string; address?: string; route?: string }): string | undefined {
+  const city = input.city?.trim();
+  if (city) return city;
+  const address = input.address?.trim();
+  if (address && !/[\r\n]/.test(address) && address.length <= 40) return address;
+  const route = input.route?.trim();
+  if (!route) return undefined;
+  const cut = route.indexOf(' - ');
+  const place = (cut >= 0 ? route.slice(cut + 3) : route).trim();
+  return place || undefined;
+}
+
+/** A Google Maps link that drops a pin on a point. */
+export function mapsUrl(p: Point): string {
+  return `https://www.google.com/maps?q=${p.latitude},${p.longitude}`;
+}

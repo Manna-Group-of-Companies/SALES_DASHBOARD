@@ -118,6 +118,7 @@ import {
   type ConditionAction,
 } from '@/domain/creditCondition';
 import { checkCapture } from '@/domain/capture';
+import { areaOf, hasFix } from '@/domain/geo';
 import { DISPATCHED, rollUp } from '@/domain/production';
 import { isFullyDispatched, remainingToDispatch } from '@/domain/dispatch';
 import { planCombinedOrders, type CombinableOrder } from '@/domain/combinedOrders';
@@ -4826,6 +4827,7 @@ async function getTripTrack(tripId: string): Promise<TripTrack> {
       String(c.name),
       {
         name: str(c[SALES_CUSTOMER_FIELD.customerName]) ?? String(c.name),
+        area: areaOf({ route: str(c[SALES_CUSTOMER_FIELD.route]) }),
         ...place(c, SALES_CUSTOMER_FIELD as never),
       },
     ]),
@@ -4835,6 +4837,11 @@ async function getTripTrack(tripId: string): Promise<TripTrack> {
       String(l.name),
       {
         name: str(l[LEAD_FIELD.leadName]) ?? String(l.name),
+        area: areaOf({
+          city: str(l[LEAD_FIELD.city]),
+          address: str(l[LEAD_FIELD.address]),
+          route: str(l[LEAD_FIELD.route]),
+        }),
         ...place(l, LEAD_FIELD as never),
       },
     ]),
@@ -4849,6 +4856,7 @@ async function getTripTrack(tripId: string): Promise<TripTrack> {
     return {
       visit,
       name: found?.name ?? visit.customerId ?? visit.leadId ?? 'Unknown party',
+      area: found?.area,
       place: found ? { latitude: found.latitude, longitude: found.longitude } : undefined,
     };
   });
@@ -4887,6 +4895,13 @@ async function listVisitsForTrip(tripId: string): Promise<SalesVisit[]> {
   return rows.map(toSalesVisit);
 }
 
+/** A coordinate pair, or undefined when it is missing or the 0,0 a blank field reads as. */
+function fixOf(lat: unknown, lng: unknown): { latitude: number; longitude: number } | undefined {
+  if (lat == null || lng == null || lat === '' || lng === '') return undefined;
+  const p = { latitude: Number(lat), longitude: Number(lng) };
+  return hasFix(p) ? p : undefined;
+}
+
 function toSalesVisit(r: Record<string, unknown>): SalesVisit {
   return {
     id: String(r.name),
@@ -4897,6 +4912,7 @@ function toSalesVisit(r: Record<string, unknown>): SalesVisit {
     customerId: str(r[SALES_VISIT_FIELD.customer]),
     checkIn: str(r[SALES_VISIT_FIELD.checkIn]),
     checkOut: str(r[SALES_VISIT_FIELD.checkOut]),
+    checkInAt: fixOf(r[SALES_VISIT_FIELD.checkInLatitude], r[SALES_VISIT_FIELD.checkInLongitude]),
     durationMinutes: Number(r[SALES_VISIT_FIELD.durationMinutes]) || 0,
     purpose: str(r[SALES_VISIT_FIELD.purpose]),
     status: str(r[SALES_VISIT_FIELD.status]),

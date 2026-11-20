@@ -8,10 +8,12 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  areaOf,
   boundsOf,
   checkDistance,
   hasFix,
   haversineKm,
+  mapsUrl,
   pathKm,
   routeOf,
   waypointsOf,
@@ -170,5 +172,37 @@ describe('map bounds', () => {
 
   it('is null with nothing to show', () => {
     expect(boundsOf([])).toBeNull();
+  });
+});
+
+describe('areaOf — the place printed under a visited party', () => {
+  it("takes a lead's city first", () => {
+    expect(areaOf({ city: 'Mukkam', address: 'Mukkam', route: 'Amjad Pr - Kozhikode' })).toBe('Mukkam');
+  });
+
+  it('takes a one-line address when there is no city', () => {
+    expect(areaOf({ address: 'Alappuzha' })).toBe('Alappuzha');
+  });
+
+  it('skips a multi-line address — reps type contact names there — for the route', () => {
+    expect(
+      areaOf({ address: 'Maneesh\nVajra\nMarady', route: 'Bibin Balaravi - Muvattupuzha' }),
+    ).toBe('Muvattupuzha');
+  });
+
+  it("gives a customer the place half of its route, `<Rep> - <Place>`", () => {
+    expect(areaOf({ route: 'Prasad V - Karimugal' })).toBe('Karimugal');
+  });
+
+  it('is undefined with nothing to go on', () => {
+    expect(areaOf({ city: ' ', address: '', route: undefined })).toBeUndefined();
+  });
+});
+
+describe('mapsUrl', () => {
+  it('drops a pin on the point', () => {
+    expect(mapsUrl({ latitude: 9.981059, longitude: 76.386827 })).toBe(
+      'https://www.google.com/maps?q=9.981059,76.386827',
+    );
   });
 });
