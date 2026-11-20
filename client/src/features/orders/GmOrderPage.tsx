@@ -34,6 +34,7 @@ import {
 } from '@/domain/creditCommitment';
 import { poolByItem, positionFor, type Qty } from '@/domain/minimumStock';
 import { formatDate } from '@/domain/orderRules';
+import { lineAmountAt, weightUnit } from '@/domain/solutionLine';
 import { proformaHeld } from '@/domain/proformaRelease';
 import { serverNow } from '@/domain/serverClock';
 import { Api, type CreditCondition } from '@/api/client';
@@ -169,7 +170,7 @@ export function GmOrderPage() {
       const edited = rateEdits[l.id];
       const moved = edited != null && edited > 0 && edited !== l.ratePerKg;
       if (moved) changed = true;
-      total += moved ? l.totalWeight * edited : l.amount;
+      total += moved ? lineAmountAt(l, edited) : l.amount;
     }
     return { total, changed };
   }, [order, rateEdits]);
@@ -559,7 +560,7 @@ export function GmOrderPage() {
                     {order.lines.map((l) => {
                       const edited = rateEdits[l.id];
                       const moved = edited != null && edited > 0 && edited !== l.ratePerKg;
-                      const amount = moved ? l.totalWeight * edited : l.amount;
+                      const amount = moved ? lineAmountAt(l, edited) : l.amount;
                       const pos = positionFor(l.itemCode, stock);
                       return (
                         <tr key={l.id}>
@@ -572,7 +573,7 @@ export function GmOrderPage() {
                             {l.looseBelts
                               ? ` + ${l.looseBelts} belt${l.looseBelts === 1 ? '' : 's'}`
                               : ''}
-                            <div className="tiny dim">{l.totalWeight} kg</div>
+                            <div className="tiny dim">{l.totalWeight} {weightUnit(l.category)}</div>
                           </td>
                           <td className="right">
                             {/* The GM may move any rate, including one the

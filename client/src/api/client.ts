@@ -97,6 +97,7 @@ import {
 } from '@/domain/trips';
 import { allItemsReady, firstStage, isTerminalStage } from '@/domain/processStages';
 import { round2 } from '@/domain/productRules';
+import { unitRateFor } from '@/domain/solutionLine';
 
 import { frappeNow, noteServerDate, serverNow } from '@/domain/serverClock';
 import { getOrderRoute } from './paymentCommitments';
@@ -3124,10 +3125,14 @@ async function decideSalesOrder(input: {
      * agree with the proforma; writing ratePerKg alone would leave the two
      * describing different money.
      */
-    const perUnitBefore =
-      qty > 0 && weight > 0
-        ? (perKg * weight) / qty
-        : Number(l[SALES_ORDER_ITEM_FIELD.priceListRate]) || Number(l.rate) || 0;
+    // Solution is priced per can, not by its litres - see `unitRateFor`.
+    const perUnitBefore = unitRateFor({
+      category: l[SALES_ORDER_ITEM_FIELD.category],
+      qty,
+      weight,
+      ratePerKg: perKg,
+      fallback: Number(l[SALES_ORDER_ITEM_FIELD.priceListRate]) || Number(l.rate) || 0,
+    });
 
     /*
      * The rate is already net.

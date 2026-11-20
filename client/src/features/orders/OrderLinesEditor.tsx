@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { ItemOption, MinStockLine, OrderDetail } from '@/domain/types';
 import { orderLineValues, soldByKg } from '@/domain/productRules';
+import { weightUnit } from '@/domain/solutionLine';
 import { Api, type OrderLineWrite } from '@/api/client';
 import { Button, Card, Input } from '@/components/ui';
 import { money } from '@/components/common/format';
@@ -353,7 +354,7 @@ export function OrderLinesEditor({
                         )}
                       </div>
                     </td>
-                    <td className="right num">{v.totalWeight} kg</td>
+                    <td className="right num">{v.totalWeight} {weightUnit(d.item.category)}</td>
                     <td className="right">
                       <Input
                         numeric

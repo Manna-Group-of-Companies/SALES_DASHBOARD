@@ -26,6 +26,7 @@ import { mayAddFollowUpNote } from '@/domain/creditCommitment';
 import { followUpTimeline } from '@/domain/followUp';
 import { lineStatusFromSap, reachedSap } from '@/domain/sapOrderState';
 import { formatDate } from '@/domain/orderRules';
+import { weightUnit } from '@/domain/solutionLine';
 import { serverNow } from '@/domain/serverClock';
 import { Api, type CreditComment, type CreditCondition } from '@/api/client';
 import { useAppSelector } from '@/store/hooks';
@@ -435,7 +436,7 @@ export function GmFollowUpOrderPage() {
                           <td className="right num">
                             {l.rolls ? `${l.rolls} roll${l.rolls === 1 ? '' : 's'}` : `${l.qty}`}
                             {l.looseBelts ? ` + ${l.looseBelts} belt${l.looseBelts === 1 ? '' : 's'}` : ''}
-                            <div className="tiny dim">{l.totalWeight} kg</div>
+                            <div className="tiny dim">{l.totalWeight} {weightUnit(l.category)}</div>
                           </td>
                           <td className="right num">{money(l.amount, 0)}</td>
                           <td className="small">

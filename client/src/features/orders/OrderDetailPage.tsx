@@ -60,6 +60,7 @@ import {
 } from '@/domain/stageWatch';
 import { lineStatusFromSap, reachedSap } from '@/domain/sapOrderState';
 import { formatDate } from '@/domain/orderRules';
+import { lineAmountAt, weightUnit } from '@/domain/solutionLine';
 import { Api } from '@/api/client';
 import { markOrderSeen } from '@/api/orderSeen';
 import { useAppSelector } from '@/store/hooks';
@@ -272,7 +273,7 @@ export function OrderDetailPage() {
       const edited = rateEdits[l.id];
       const rateMoved = edited != null && edited > 0 && edited !== l.ratePerKg;
       if (rateMoved) changed = true;
-      total += rateMoved ? l.totalWeight * edited : l.amount;
+      total += rateMoved ? lineAmountAt(l, edited) : l.amount;
     }
     return { total, changed };
   }, [order, rateEdits]);
@@ -622,7 +623,7 @@ export function OrderDetailPage() {
                        * 17 September 2026 and the rep's rate is already net.
                        */
                       const rateMoved = edited != null && edited > 0 && edited !== l.ratePerKg;
-                      const lineTotal = rateMoved ? l.totalWeight * edited : l.amount;
+                      const lineTotal = rateMoved ? lineAmountAt(l, edited) : l.amount;
                       const pos = positionFor(l.itemCode, stock);
                       const split = splitOf(l, pos.available, stock.get(l.itemCode)?.beltsPerRoll ?? 0);
                       const mode = servedFrom(l);
@@ -637,7 +638,7 @@ export function OrderDetailPage() {
                           <td className="right num">
                             {l.rolls ? `${l.rolls} roll${l.rolls === 1 ? '' : 's'}` : `${l.qty}`}
                             {l.looseBelts ? ` + ${l.looseBelts} belt${l.looseBelts === 1 ? '' : 's'}` : ''}
-                            <div className="tiny dim">{l.totalWeight} kg</div>
+                            <div className="tiny dim">{l.totalWeight} {weightUnit(l.category)}</div>
                           </td>
                           <td className="right">
                             {/* Read-only once the GM has approved: the push goes

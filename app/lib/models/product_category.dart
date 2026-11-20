@@ -317,8 +317,15 @@ class OrderLine {
     }
   }
 
-  /// The weight the customer is actually billed for. Zero for solution, which
-  /// is sold by the tin.
+  /// The weight the customer is actually billed for - and, for solution, its
+  /// litres: cans x the tin size. Saved as `custom_total_weight`, which is the
+  /// quantity the order sync sends to SAP, where solution is held in litres.
+  ///
+  /// Solution was 0 until 20 Nov 2026, so the sync refused every solution
+  /// order ("has no weight"; SAL-ORD-2026-00162, 6 x 30 L). The dashboard
+  /// already wrote the litres on a line it edited (`orderLineValues`), and
+  /// the proforma fixture expected them. Solution is still priced by the can:
+  /// [amount] is cans x rate, not this.
   double get totalWeightKg {
     switch (product.category) {
       case ProductCategory.pctr:
@@ -328,6 +335,8 @@ class OrderLine {
         return product.soldByKg ? kilos : rolls * product.weightPerRoll;
       case ProductCategory.bondingGum:
         return qty;
+      case ProductCategory.vulcanizingSolution:
+        return cans * product.packLitres;
       default:
         return 0;
     }

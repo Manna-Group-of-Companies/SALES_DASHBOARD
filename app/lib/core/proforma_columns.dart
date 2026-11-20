@@ -70,6 +70,18 @@ class ProformaCells {
   });
 }
 
+/// Whether a line's `custom_product_category` is vulcanizing solution.
+///
+/// The phone writes 'Vulcanizing Solution' (`ProductCategory.shortLabel`),
+/// imports and the fixture write 'VS'. Only 'VS' was recognised until
+/// 20 Nov 2026, which held only while the phone left the line's litres at 0:
+/// once they are written (SAL-ORD-2026-00162, 6 x 30 L = 180) a phone line
+/// would have printed as 180 kg at its per-can rate.
+bool isSolutionCategory(Object? category) {
+  final t = '${category ?? ''}'.trim().toLowerCase();
+  return t == 'vs' || t.contains('solution') || t.contains('vulcan');
+}
+
 /// The cells for one line.
 ///
 /// A zero never prints in a packing column. An empty cell reads as "not
@@ -90,7 +102,7 @@ ProformaCells proformaCells(Map<String, dynamic> line) {
   // `qty` is the can count, not `custom_cans`: on the live orders those two
   // disagree (qty 3 against custom_cans 2 on SAL-ORD-2026-00129) and `qty` is
   // the one the amount was computed from.
-  if (category == 'VS') {
+  if (isSolutionCategory(category)) {
     return ProformaCells(
       rolls: '',
       belts: '',
@@ -122,7 +134,7 @@ ProformaCells proformaCells(Map<String, dynamic> line) {
 
 /// The column the row multiplies out on, for the test that proves it does.
 String reconcilesOn(Map<String, dynamic> line) {
-  if ('${line[kFieldCategory] ?? ''}' == 'VS') return 'cans';
+  if (isSolutionCategory(line[kFieldCategory])) return 'cans';
   return _num(line[kFieldRatePerKg]) > 0 && _num(line[kFieldWeight]) > 0
       ? 'weight'
       : 'qty';

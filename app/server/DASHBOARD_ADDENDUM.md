@@ -782,3 +782,30 @@ Ready for SAP', locks the rates, stamps the GM's approval and asks for the
 order sync, the same as the Manager's push. The GM's plain Approve still
 hands the order back to the Manager. Both apps; decision `gmPush` on the
 dashboard, `push: true` on the phone's `gm_approve` outbox kind.
+
+## Vulcanizing solution: litres as the line's weight (20 Nov 2026)
+
+`custom_total_weight` is a line's quantity in SAP's unit: kilos for tread
+rubber and gum, **litres for solution** (cans x tin size). The dashboard has
+written litres on a line it edits since `orderLineValues`; the phone wrote 0,
+so the order sync refused every solution order the phone took
+(SAL-ORD-2026-00162, 6 x 30 L). The phone now writes the litres too.
+
+Solution is still priced by the can: its `custom_rate_per_kg` is a rate per
+can, qty is the cans, and amount is cans x rate. Three readers that took the
+field for kilos now say so for solution (`client/src/domain/solutionLine.ts`):
+
+- the dashboard's approval keeps a solution line's rate per can, where the
+  tread formula `ratePerKg x weight / qty` would multiply it by the tin size;
+- the GM's and Manager's rate-edit previews total it as cans x rate;
+- screens label its weight `L`, not `kg`.
+
+The phone writes the category as 'Vulcanizing Solution', not 'VS'. Both
+proformas now read either as solution (`isSolutionCategory`, both apps;
+`shared/fixtures/proforma_columns.json` pins the phone's label at 180 L).
+
+Not changed: the `manna_sales_targets` Server Script counts a Tonnes target as
+`custom_total_weight` / 1000, so invoiced solution litres now count as kilos
+there (dashboard-edited lines already did). Pick lists: the
+`manna_pick_list_submit` Server Script still gives a solution line 0 kg, which
+the sync refuses.
