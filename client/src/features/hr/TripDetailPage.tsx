@@ -448,7 +448,7 @@ export function TripDetailPage() {
                             {s.area && <div className="dim small">{s.area}</div>}
                           </td>
                           <td className="num small">{s.visit.checkIn?.slice(11, 16) ?? '—'}</td>
-                          <td className="small right">
+                          <td className="small right" style={{ whiteSpace: 'nowrap' }}>
                             {/*
                               Where the phone was at check-in — the visit's own
                               location. The party's saved pin only when the
