@@ -53,6 +53,18 @@ class SapRate {
       'Lead order: Manna Treads list rate Rs ${trimQty(rate)}/$unit. '
       'A lower price goes through Higher Management once the lead is a customer.';
 
+  /// This rate in the unit of an item's rate box: SAP's x [factor] (see
+  /// `sapRateFactor` - 1 per kg, the tin size for solution, which SAP holds
+  /// per litre). The list price scales with it, so the hint compares like
+  /// with like.
+  SapRate scaled(double factor) => factor == 1
+      ? this
+      : SapRate(
+          rate: double.parse((rate * factor).toStringAsFixed(2)),
+          source: source,
+          list: list == null ? null : double.parse((list! * factor).toStringAsFixed(2)),
+        );
+
   /// One entry of the script's `rates`, or null when it is not a usable price.
   static SapRate? fromJson(dynamic v) {
     if (v is! Map) return null;

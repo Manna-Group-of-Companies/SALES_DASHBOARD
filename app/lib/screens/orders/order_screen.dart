@@ -278,17 +278,28 @@ class _OrderScreenState extends State<OrderScreen> {
     _applySapRates();
   }
 
-  /// The SAP rate for a line. SAP prices these items per kg, so only rows whose
-  /// rate box is per kg are given one (vulcanizing solution is per can).
-  SapRate? _sapRateFor(OrderLine line) =>
-      line.product.category.rateUnit == 'kg' ? _sapRates[line.product.code] : null;
+  /// What SAP's rate for [line] is multiplied by for its rate box, or null when
+  /// SAP does not price it - see [sapRateFactor].
+  double? _sapFactor(OrderLine line) => sapRateFactor(
+      rateUnit: line.product.category.rateUnit,
+      packLitres: line.product.packLitres);
+
+  /// The SAP rate for a line, in its rate box's unit: per kg as SAP holds it,
+  /// or per can for solution, which SAP holds per litre (20 Nov 2026; solution
+  /// was typed by hand before).
+  SapRate? _sapRateFor(OrderLine line) {
+    final f = _sapFactor(line);
+    final r = _sapRates[line.product.code];
+    return f == null || r == null ? null : r.scaled(f);
+  }
 
   /// Where the phone has no SAP price to offer, the rep types the rate (the
   /// user, 11 Nov 2026): reps of another unit, whose parties have no Manna
-  /// Treads price, and items not priced per kg (solution, per can). A Manna
-  /// Treads per-kg item is SAP's price or nothing.
+  /// Treads price, and items SAP does not price. A Manna Treads item SAP
+  /// prices - per kg, or solution per can since 20 Nov 2026 - is SAP's price
+  /// or nothing.
   bool _typesRate(OrderLine line) =>
-      !Session.I.isTreadsUnit || line.product.category.rateUnit != 'kg';
+      !Session.I.isTreadsUnit || _sapFactor(line) == null;
 
   /// A line priced by SAP, whatever the phone had to show for it. A kept
   /// order takes SAP's price on the day it is sent, not the copy on the phone
@@ -678,6 +689,10 @@ class _OrderScreenState extends State<OrderScreen> {
             l.product.code: {
               // Rate per kg -> line rate, as OrderLine.lineRate works it.
               'f': l.product.rollWeight > 0 ? l.product.rollWeight : 1.0,
+              // SAP's rate -> the rate box (sapRateFactor): the tin size for
+              // solution, which SAP holds per litre. Absent on drafts kept
+              // before 20 Nov 2026, which read it as 1.
+              'k': _sapFactor(l) ?? 1.0,
               'n': l.product.name,
             },
       },

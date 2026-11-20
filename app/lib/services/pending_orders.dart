@@ -283,11 +283,14 @@ class PendingOrders {
           throw OrderRefused('No price in SAP for ${wait['n'] ?? code}.');
         }
         final factor = (wait['f'] as num?)?.toDouble() ?? 1;
+        // SAP's rate in the rate box's unit: x the tin size for solution,
+        // which SAP holds per litre and the box shows per can (20 Nov 2026).
+        final box = r.scaled((wait['k'] as num?)?.toDouble() ?? 1).rate;
         final qty = (item['qty'] as num?)?.toDouble() ?? 0;
-        final lineRate = r.rate * factor;
+        final lineRate = box * factor;
         copy['rate'] = double.parse(lineRate.toStringAsFixed(4));
         copy['amount'] = double.parse((qty * lineRate).toStringAsFixed(2));
-        copy['custom_rate_per_kg'] = r.rate;
+        copy['custom_rate_per_kg'] = box;
       }
       out.add(copy);
     }

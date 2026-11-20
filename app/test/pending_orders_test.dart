@@ -309,6 +309,34 @@ void main() {
       expect(PendingOrders.totalOf(items), closeTo(4 * 220 * 16.4 + 900, 0.01));
     });
 
+    // Solution has taken SAP's price since 20 Nov 2026. SAP holds it per litre,
+    // the line per can: 6 cans of Manna 30 at 181/L are 5,430 a can.
+    test('kept solution takes SAP price per litre x the tin size, per can', () {
+      final d = PendingOrder(
+        id: 'draft-2',
+        customer: 'CUST-001',
+        customerName: 'Tyre Hub',
+        deliveryDate: '2026-11-24',
+        salesPerson: 'Sirajudheen',
+        savedAt: DateTime(2026, 11, 20),
+        items: [
+          {'item_code': 'SM030001', 'qty': 6.0, 'rate': 0.0, 'amount': 0.0, 'custom_total_weight': 180.0},
+        ],
+        sapPending: const {
+          'SM030001': {'f': 1.0, 'k': 30.0, 'n': 'VULCANIZING SOLUTION MANNA 30'},
+        },
+      );
+      final items = PendingOrders.priceFromSap(
+          d,
+          const SapRates(rates: {
+            'SM030001': SapRate(rate: 181, source: 'list', list: 181),
+          }));
+      expect(items[0]['custom_rate_per_kg'], 5430);
+      expect(items[0]['rate'], 5430);
+      expect(items[0]['amount'], 32580);
+      expect(items[0]['custom_total_weight'], 180, reason: 'the litres are left as they were');
+    });
+
     test('a product SAP still has no price for keeps the draft back', () {
       expect(
         () => PendingOrders.priceFromSap(draft(), SapRates.none),

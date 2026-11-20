@@ -312,6 +312,23 @@ bool orderSignedOff(Map<String, dynamic> order, {required bool isLead}) {
 bool ratesLocked(Map<String, dynamic> order) =>
     !Session.I.isGM && (order['custom_rate_approved'] ?? 0) == 1;
 
+/// What a Manna Treads SAP rate is multiplied by to give the figure in the
+/// item's rate box, or null when SAP does not price the item at all.
+///
+/// SAP's rates are per its own unit, GST-inclusive: per kg for tread rubber
+/// and gum, whose box is per kg too (1). Solution's box is per CAN and SAP
+/// holds it per LITRE, so its rate is SAP's x the tin size: Manna 30 at
+/// 181/L is 5,430 a can. Solution was typed by hand until 20 Nov 2026, when
+/// SAP first had solution prices (Price List 01, from 14 Nov 2026) and the
+/// user asked for them. A solution item with no tin size is not priced: its
+/// row already refuses it ([Product.isMisconfigured]).
+/// `shared/fixtures/sap_catalogue_visibility.json` pins it (`rate_factor`).
+double? sapRateFactor({required String rateUnit, required double packLitres}) {
+  if (rateUnit == 'kg') return 1;
+  if (rateUnit == 'can' && packLitres > 0) return packLitres;
+  return null;
+}
+
 /// Whether an item belongs in a Manna Treads order screen's catalogue at all
 /// (13 Nov 2026) — the rule `sap-pricing/README.md` already documents and
 /// `shared/fixtures/sap_catalogue_visibility.json` pins: Manna Treads' SAP
@@ -323,8 +340,11 @@ bool ratesLocked(Map<String, dynamic> order) =>
 ///
 /// Three things keep an item visible regardless, because hiding it would
 /// take away more than the rule means to:
-///  - [isTreadsUnit] false or [rateUnit] not `kg`: SAP never prices this item
-///    at all (another unit, or a family sold by the can or in belts);
+///  - [isTreadsUnit] false, or [rateUnit] one SAP never prices (another unit,
+///    or a family sold in a unit other than kg or the can). Solution, by the
+///    can, was left alone here until 20 Nov 2026, when it began to take SAP's
+///    price ([sapRateFactor]): one SAP has no price for is hidden now, as tread
+///    rubber is - which takes the old I-14068/I-14069 off the Treads screen;
 ///  - [ratesAnswered] false or [ratesOffline] true: the catalogue could not be
 ///    checked this time (no signal, a server error, or the fetch never ran) —
 ///    an unpriced item beats a rep unable to order anything;
@@ -349,7 +369,7 @@ bool sapCatalogueVisible({
   required bool hasSapRate,
 }) {
   if (!isTreadsUnit) return true;
-  if (rateUnit != 'kg') return true;
+  if (rateUnit != 'kg' && rateUnit != 'can') return true;
   if (!ratesAnswered || ratesOffline) return true;
   if (!anySapRates) return true;
   if (alreadyOnOrder) return true;

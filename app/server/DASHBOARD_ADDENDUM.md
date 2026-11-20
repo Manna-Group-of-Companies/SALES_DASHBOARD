@@ -809,3 +809,21 @@ Not changed: the `manna_sales_targets` Server Script counts a Tonnes target as
 there (dashboard-edited lines already did). Pick lists: the
 `manna_pick_list_submit` Server Script still gives a solution line 0 kg, which
 the sync refuses.
+
+## Vulcanizing solution takes SAP's price, per can (20 Nov 2026)
+
+Manna Treads' SAP has priced solution since 14 Nov 2026 (Price List 01, per
+LITRE, GST-inclusive: 181/L for the 30 L packs, 191/L for the 10 L), and
+`manna_customer_rates` returns it like any other item. The phone priced only
+per-kg items from SAP, so solution stayed typed by hand. Now (the user,
+20 Nov 2026) a solution line takes SAP's rate x the tin size as its price per
+can - Manna 30 is 5,430 a can at list - in a locked box, as tread rubber is;
+a dealer's own SAP price wins where there is one (`sapRateFactor`,
+`SapRate.scaled`). A kept draft does the same when it is sent (`'k'` in
+`sapPending`). A solution item SAP has no price for is hidden from a Treads
+order screen, as tread rubber is, which takes the old I-14068/I-14069 off it
+(`shared/fixtures/sap_catalogue_visibility.json`).
+
+The six SAP solution codes (SM/SR/SV 010001 and 030001) were added to ERPNext
+that day. The dashboard does not take SAP prices at all, so nothing changes
+there.
