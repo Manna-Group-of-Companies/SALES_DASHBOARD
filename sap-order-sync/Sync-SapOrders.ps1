@@ -2506,8 +2506,10 @@ function Get-MfTaxCode {
     * none (blank, 0, or the item missing in Hi-Tech): Quantity = rolls and
       the price is the app's per-roll rate (amount / qty) - the order's own
       units and total, converted to nothing.
-  Every other line, and every line when -WeightPerRoll is not given, is as
-  before: custom_total_weight at amount / kilos. PerUnit on each line is the
+  A tread sold by the kilo (no rolls, no belts, qty = custom_total_weight;
+  20 Nov 2026) is not a roll line. It, every other line, and every line when
+  -WeightPerRoll is not given, is as before: custom_total_weight at amount /
+  kilos. PerUnit on each line is the
   kilos per roll used (1 when 1:1, 0 when not a roll line); Kg is always
   what SAP's Quantity will be, and PASS M writes it back to the ERPNext line
   so the line reconcile and the pick list count in the same unit as SAP.
@@ -2517,9 +2519,20 @@ function Get-MfTaxCode {
      Total; Problems = <ArrayList of string> }
 #>
 function Test-MfRollLine {
-    # A tread line, ordered in rolls: the app's PCTR and CTR. Pure.
+    # A tread line, ordered in rolls: the app's PCTR and CTR - except a tread
+    # sold by the kilo, which the app writes as qty = custom_total_weight = the
+    # kilos, with no rolls and no loose belts. That line is already in SAP's
+    # unit and goes as its kilos. Until 20 Nov 2026 it was taken for rolls and
+    # multiplied by Hi-Tech's weight per roll: SAL-ORD-2026-00162's 600 kg of
+    # HMD001170 reached Manna Treads SO 588 as 18,000 kg. Pure.
     param($Item)
-    return ((ConvertTo-CleanText (Get-JsonProp $Item 'custom_product_category')).ToUpperInvariant() -in @('PCTR', 'CTR'))
+    if ((ConvertTo-CleanText (Get-JsonProp $Item 'custom_product_category')).ToUpperInvariant() -notin @('PCTR', 'CTR')) { return $false }
+    $rolls = ConvertTo-Number (Get-JsonProp $Item 'custom_rolls')
+    $belts = ConvertTo-Number (Get-JsonProp $Item 'custom_loose_belts')
+    $qty   = ConvertTo-Number (Get-JsonProp $Item 'qty')
+    $kg    = ConvertTo-Number (Get-JsonProp $Item 'custom_total_weight')
+    if ($rolls -le 0 -and $belts -le 0 -and $qty -gt 0 -and [math]::Abs($qty - $kg) -lt 0.0005) { return $false }
+    return $true
 }
 
 function Get-MfOrderPlan {

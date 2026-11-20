@@ -579,6 +579,16 @@ next order with no code or app change.
 | blank or 0 | the rolls, 1:1 | the app's per-roll price (`amount ÷ qty`), so SAP's total is the order's |
 
 The phone's own roll weight (`Item.custom_weight_per_roll`) plays no part.
+
+**A tread sold by the kilo is not a roll line — fixed 20 November 2026.** The
+app writes one as `qty` = `custom_total_weight` = the kilos, with
+`custom_rolls` and `custom_loose_belts` at 0. PASS M took it for rolls and
+multiplied by `U_WeightPerRoll`: SAL-ORD-2026-00162's hot lines (60, 600 and
+37.5 kg, at 30 and 35 kg a roll) reached Manna Treads SO 588 as 1,800, 18,000
+and 1,312.5 kg, ₹71.2 lakh against ₹7.32 lakh, and the wrong kilos were
+written back to the order. SO 588 and the order were corrected by hand that
+day. Such a line now goes as its kilos at `amount / kilos`
+(`Test-MfRollLine`).
 Every other line (bonding gum, solution) is sent as before, at
 `custom_total_weight`. A failed read of Hi-Tech's weights sends nothing;
 the order waits for the next run, rather than being guessed at 1:1.

@@ -168,6 +168,21 @@ Check 'no weights given at all: as before, custom_total_weight' (Near $p.Lines[0
 $p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @(& $roll 'HMD001240' 0 0 300) }) -WeightPerRoll @{}
 Check 'a roll line with no rolls refuses the order' ($p.Problems.Count -eq 1 -and $p.Problems[0] -match 'no rolls') ($p.Problems -join '; ')
 
+# SAL-ORD-2026-00162 (20 Nov 2026): hot rubber sold by the kilo - qty 600 =
+# custom_total_weight 600, no rolls, at 313/kg - with 30 kg a roll in
+# Hi-Tech SAP reached Manna Treads SO 588 as 18,000 kg.
+$kilo = { param($code, $kg, $perKg, $row = 'k1')
+    [pscustomobject]@{ name = $row; item_code = $code; item_name = 'HOT MANNA DOUBLE BLUE 40 16 (BLACK PEARL)'; custom_product_category = 'CTR'
+        qty = $kg; rate = $perKg; amount = $kg * $perKg; custom_rate_per_kg = $perKg
+        custom_total_weight = $kg; custom_rolls = 0; custom_loose_belts = 0 } }
+Check 'a CTR sold by the kilo is not a roll line' (-not (Test-MfRollLine -Item (& $kilo 'HMD001170' 600 313)))
+Check 'a CTR in rolls still is' (Test-MfRollLine -Item (& $roll 'HMD001240' 25 7500 300))
+Check 'PCTR with loose belts only still is' (Test-MfRollLine -Item (& $roll 'PMB00101002' 0.5 0 255 'PCTR' 12.1 'row1' 2))
+$p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @((& $kilo 'HMD001170' 600 313), (& $kilo 'HMD001340' 37.5 313 'k2')) }) -WeightPerRoll @{ 'HMD001170' = 30.0; 'HMD001340' = 35.0 }
+Check 'sold by the kilo: 600 kg goes as 600, whatever SAP''s weight per roll' ((Near $p.Lines[0].Kg 600) -and (Near $p.Lines[1].Kg 37.5)) ("{0} / {1}" -f $p.Lines[0].Kg, $p.Lines[1].Kg)
+Check 'sold by the kilo: at the order''s 313/kg, so SAP''s total is the order''s' ((Near $p.Lines[0].Rate 313) -and (Near $p.Total (600 * 313 + 37.5 * 313))) ("{0} / {1}" -f $p.Lines[0].Rate, $p.Total)
+Check 'sold by the kilo: PerUnit 0, so nothing is written back to the line' ((Near $p.Lines[0].PerUnit 0) -and (Near $p.Lines[1].PerUnit 0)) ("{0} / {1}" -f $p.Lines[0].PerUnit, $p.Lines[1].PerUnit)
+
 $wp = Get-MfWeightPerRoll -Rows @([pscustomobject]@{ ItemCode = 'a1'; U_WeightPerRoll = 10 }, [pscustomobject]@{ ItemCode = 'B2'; U_WeightPerRoll = 0 }, [pscustomobject]@{ ItemCode = 'C3'; U_WeightPerRoll = $null })
 Check 'SAP weights: upper-cased, and blank or 0 left out (so 1:1)' ($wp.Count -eq 1 -and (Near $wp['A1'] 10)) ("{0} key(s)" -f $wp.Count)
 
