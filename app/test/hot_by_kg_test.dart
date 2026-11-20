@@ -95,7 +95,8 @@ void main() {
   });
 
   testWidgets('with a roll weight the row is a Rolls counter, the weight exact', (tester) async {
-    final line = OrderLine(product: _hot(perRoll: 25));
+    // On the order (ADD pressed, 19 Nov 2026 layout), so the unit chip shows.
+    final line = OrderLine(product: _hot(perRoll: 25))..rolls = 1;
     await tester.pumpWidget(MaterialApp(
         home: Scaffold(
             body: SingleChildScrollView(

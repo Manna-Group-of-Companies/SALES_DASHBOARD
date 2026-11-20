@@ -91,3 +91,18 @@ int? productSearchLevel(String query, String name, String code) {
 /// True when [query] finds this product at any level.
 bool productMatchesSearch(String query, String name, String code) =>
     productSearchLevel(query, name, code) != null;
+
+/// The items [query] finds, keeping only those found at the strictest level
+/// that found any — what both the order screen and the Add products page
+/// show. Everything, in its own order, when the search is empty.
+List<T> bestSearchMatches<T>(String query, List<T> items,
+    {required String Function(T) name, required String Function(T) code}) {
+  if (query.trim().isEmpty) return items;
+  final levels = <T, int?>{
+    for (final i in items) i: productSearchLevel(query, name(i), code(i))
+  };
+  final found = levels.values.whereType<int>();
+  if (found.isEmpty) return const [];
+  final best = found.reduce((a, b) => a < b ? a : b);
+  return items.where((i) => levels[i] == best).toList();
+}

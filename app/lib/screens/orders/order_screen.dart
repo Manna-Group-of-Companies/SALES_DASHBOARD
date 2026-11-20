@@ -7,6 +7,7 @@ import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/credit_commitment.dart';
 import 'package:manna_field_sales/core/delivery_mode.dart';
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/order_copy.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/product_search.dart';
 import 'package:manna_field_sales/core/session.dart';
@@ -18,6 +19,7 @@ import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/models/sap_rates.dart';
 import 'package:manna_field_sales/screens/orders/min_stock_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
+import 'package:manna_field_sales/screens/orders/product_picker_screen.dart';
 import 'package:manna_field_sales/screens/orders/product_row.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/outbox.dart' show isLocalName;
@@ -36,10 +38,17 @@ class OrderScreen extends StatefulWidget {
   /// product rows to keep right.
   final Map<String, dynamic>? existingOrder;
 
+  /// A previous order to start this NEW one from (19 Nov 2026): its
+  /// quantities are put on the screen, and it is otherwise an ordinary new
+  /// order — today's prices, a fresh delivery date, sent for approval as
+  /// usual. See core/order_copy.dart for what is and is not carried over.
+  final Map<String, dynamic>? copyFrom;
+
   const OrderScreen({
     super.key,
     required this.party,
     this.existingOrder,
+    this.copyFrom,
   });
   @override
   State<OrderScreen> createState() => _OrderScreenState();
@@ -179,6 +188,13 @@ class _OrderScreenState extends State<OrderScreen> {
 
   bool get _isEdit => widget.existingOrder != null;
 
+  /// A new order started from a previous one.
+  bool get _isCopy => widget.copyFrom != null && !_isEdit;
+
+  /// Items on the order being copied that could not be put back (no longer
+  /// sold, or loose belts only). Said in a banner, not silently dropped.
+  List<String> _copyLeftOut = const [];
+
   /// What a lead is still missing before the manager can approve an order
   /// against it. Empty for a customer, and for a complete lead.
   List<String> get _leadMissing =>
@@ -276,8 +292,32 @@ class _OrderScreenState extends State<OrderScreen> {
       _sapRates = await sapRates;
       _sapRatesAnswered = !ratesFailed;
     }
+    // Copied once today's SAP prices are known, so an old item SAP no longer
+    // prices can be moved onto today's item for the same product.
+    if (widget.copyFrom != null) {
+      final copy = copyOrderQuantities(_lines, widget.copyFrom!,
+          sellable: _sellableNew);
+      // Shown at the top, as an edit's lines are, so the rep reviews what was
+      // copied before scrolling the catalogue.
+      _openedWith.addAll(copy.copied);
+      _copyLeftOut = copy.leftOut;
+    }
     _applySapRates();
   }
+
+  /// Whether [line] can go on a NEW order today: the catalogue rule without
+  /// the "already on the order" exception, which is for a manager editing an
+  /// order raised before a price was pulled. For a new Manna Treads order a
+  /// per-kg item is SAP's price or nothing.
+  bool _sellableNew(OrderLine line) => sapCatalogueVisible(
+        isTreadsUnit: Session.I.isTreadsUnit,
+        rateUnit: line.product.category.rateUnit,
+        ratesAnswered: _sapRatesAnswered,
+        ratesOffline: _ratesOffline,
+        anySapRates: _sapRates.rates.isNotEmpty,
+        alreadyOnOrder: false,
+        hasSapRate: _sapRates[line.product.code] != null,
+      );
 
   /// What SAP's rate for [line] is multiplied by for its rate box, or null when
   /// SAP does not price it - see [sapRateFactor].
@@ -409,18 +449,11 @@ class _OrderScreenState extends State<OrderScreen> {
       }
       return true;
     }).toList();
-    if (qq.isEmpty) return shown;
     // Only the products found at the strictest level that found any — see
     // core/product_search.dart. "bl 34 12" shows the 34*12 item alone, and
     // a half-typed "13" still shows the 130s rather than nothing.
-    final levels = {
-      for (final l in shown)
-        l: productSearchLevel(qq, l.product.name, l.product.code)
-    };
-    final found = levels.values.whereType<int>();
-    if (found.isEmpty) return const [];
-    final best = found.reduce((a, b) => a < b ? a : b);
-    return shown.where((l) => levels[l] == best).toList();
+    return bestSearchMatches(qq, shown,
+        name: (l) => l.product.name, code: (l) => l.product.code);
   }
 
   /// Item codes that were on the order when this edit began.
@@ -672,6 +705,128 @@ class _OrderScreenState extends State<OrderScreen> {
     );
   }
 
+  /// The order as it will be sent: each selected product with what was
+  /// counted, the rate and the amount, then the total and delivery date. The
+  /// rep confirms or goes back to change it.
+  Future<bool?> _confirmLines(DateTime delivery) {
+    final lines = _picked;
+    final primary = Theme.of(context).colorScheme.primary;
+    String rs(double v) => 'Rs ${v.toStringAsFixed(2)}';
+    return showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(ctx).size.height * 0.85),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                        _isEdit
+                            ? 'Save these changes?'
+                            : 'Send this order for approval?',
+                        style: const TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 4),
+                    Text(
+                        '${widget.party.label}  ·  '
+                        '${lines.length} item${lines.length == 1 ? '' : 's'}',
+                        style: const TextStyle(
+                            fontSize: 13.5, color: Colors.black54)),
+                  ]),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                itemCount: lines.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (_, i) {
+                  final l = lines[i];
+                  final unit = l.product.category.rateUnit;
+                  final rate = l.rate > 0
+                      ? 'Rs ${trimQty(l.rate)}/$unit'
+                      : 'SAP price when sent';
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(l.product.name,
+                                      style: const TextStyle(
+                                          fontSize: 14.5,
+                                          fontWeight: FontWeight.w600)),
+                                  const SizedBox(height: 2),
+                                  Text('${l.packingNote}  ·  $rate',
+                                      style: const TextStyle(
+                                          fontSize: 12.5,
+                                          color: Colors.black54)),
+                                ]),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(rs(l.amount),
+                              style: const TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w700)),
+                        ]),
+                  );
+                },
+              ),
+            ),
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+              child: Row(children: [
+                Expanded(
+                  child: Text(
+                      'Delivery ${delivery.day}/${delivery.month}/${delivery.year}',
+                      style: const TextStyle(
+                          fontSize: 14, color: Colors.black54)),
+                ),
+                Text('Total ${rs(_total)}',
+                    style: const TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.bold)),
+              ]),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
+              child: Row(children: [
+                Expanded(
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(50)),
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Back'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    style: FilledButton.styleFrom(
+                        backgroundColor: primary,
+                        minimumSize: const Size.fromHeight(50)),
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: Text(_isEdit ? 'Save' : 'Confirm & send',
+                        style: const TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
   /// Keeps an order that could not be sent for want of signal, and carries
   /// on exactly as if it had gone (the user, 13 Nov 2026: the app must not
   /// show that the net is gone). It is sent by itself when it can be.
@@ -752,6 +907,11 @@ class _OrderScreenState extends State<OrderScreen> {
         if (again != null) return _snack(again);
       }
     }
+
+    // Every selected line, read back before it goes (19 Nov 2026, the user's
+    // request). Asked after the prices are settled, so what is shown is what
+    // is sent; backing out leaves the order on screen untouched.
+    if (await _confirmLines(d) != true || !mounted) return;
 
     // Before anything is sent, so backing out of the dialog leaves the order
     // on screen exactly as the rep built it.
@@ -1008,6 +1168,9 @@ class _OrderScreenState extends State<OrderScreen> {
               ),
             ]),
           ),
+        // A copied order is built from what was copied plus the Add product
+        // page (20 Nov 2026), so it has no catalogue to search or filter.
+        if (!_isCopy)
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
           child: Column(children: [
@@ -1054,24 +1217,47 @@ class _OrderScreenState extends State<OrderScreen> {
               if (_lines.isEmpty) {
                 return const Center(child: Text('No sellable items found.'));
               }
-              final groups = _grouped;
-              if (groups.isEmpty) {
+              // A copied order shows only what is on it (19 Nov 2026, the
+              // user's request): the catalogue under it was hundreds of rows
+              // nobody had asked for. More are added on the Add product page.
+              final catalogueHidden = _isCopy;
+              final groups = catalogueHidden
+                  ? const <ProductCategory, List<OrderLine>>{}
+                  : _grouped;
+              final onOrder = _onOrder;
+              // A copy whose every line was dropped still shows why, and how
+              // to add something.
+              if (groups.isEmpty && onOrder.isEmpty && !catalogueHidden) {
                 return const Center(child: Text('No matching products.'));
               }
-              final onOrder = _onOrder;
               return ListView(
                 children: [
                   // The blue note on SAP-priced items ("priced from SAP and
                   // locked", the read time, a customer-code mismatch) was
                   // removed on 12 Nov 2026 at the user's request: the locked
                   // rate on each row already says it.
+                  if (_copyLeftOut.isNotEmpty)
+                    Container(
+                      width: double.infinity,
+                      color: const Color(0xFFFFF1F0),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      child: Text(
+                          'Could not be copied: '
+                          '${_copyLeftOut.join(', ')}',
+                          style: const TextStyle(
+                              fontSize: 13, color: Color(0xFFB3261E))),
+                    ),
                   if (onOrder.isNotEmpty) ...[
                     Container(
                       width: double.infinity,
                       color: const Color(0xFFFFF3E0),
                       padding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 8),
-                      child: Text('ALREADY ON THIS ORDER  (${onOrder.length})',
+                      child: Text(
+                          _isEdit
+                              ? 'ALREADY ON THIS ORDER  (${onOrder.length})'
+                              : 'THIS ORDER  (${onOrder.length})  ·  COPIED FROM ${widget.copyFrom?['name'] ?? 'A PREVIOUS ORDER'}',
                           style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.bold,
@@ -1079,19 +1265,29 @@ class _OrderScreenState extends State<OrderScreen> {
                               color: Colors.orange.shade900)),
                     ),
                     for (final line in onOrder)
-                      ProductRow(
-                        key: ValueKey(line.product.code),
-                        line: line,
-                        stock: _stock[line.product.code],
-                        showMinimumStock: _usesMinimumStock,
-                        rateLocked: _approvedLines.contains(line.product.code),
-                        sapRate: _sapRateFor(line),
-                        leadOrder: _sapRates.listOnly,
-                        typedRate: _typesRate(line),
-                        sapPriceLater: _sapPriceLater(line),
-                        onChanged: () => setState(() {}),
-                      ),
+                      _row(line, () => setState(() {})),
                   ],
+                  if (catalogueHidden)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 14, 12, 8),
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(52),
+                          foregroundColor:
+                              Theme.of(context).colorScheme.primary,
+                          side: BorderSide(
+                              color: Theme.of(context).colorScheme.primary,
+                              width: 1.4),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                        ),
+                        onPressed: _submitting ? null : _openPicker,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add product',
+                            style: TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.w700)),
+                      ),
+                    ),
                   for (final entry in groups.entries) ...[
                     _sectionHeader(entry.key, entry.value.length),
                     for (final line in entry.value)
@@ -1121,6 +1317,53 @@ class _OrderScreenState extends State<OrderScreen> {
       ]),
       bottomNavigationBar: _footer(),
     );
+  }
+
+  /// One product row as this order shows it — used by the list here and by
+  /// the Add product page, so both price and check a line the same way.
+  Widget _row(OrderLine line, VoidCallback onChanged) => ProductRow(
+        key: ValueKey(line.product.code),
+        line: line,
+        stock: _stock[line.product.code],
+        showMinimumStock: _usesMinimumStock,
+        rateLocked: _approvedLines.contains(line.product.code),
+        sapRate: _sapRateFor(line),
+        leadOrder: _sapRates.listOnly,
+        typedRate: _typesRate(line),
+        sapPriceLater: _sapPriceLater(line),
+        onChanged: onChanged,
+      );
+
+  /// Opens the Add product page for a copied order. What is picked there
+  /// comes back onto this order, with the copied lines; backing out of the
+  /// page without Done puts back everything picked on it.
+  Future<void> _openPicker() async {
+    final candidates = _lines
+        .where((l) => !_openedWith.contains(l.product.code) && _sapVisible(l))
+        .toList();
+    final done = await Navigator.of(context).push<bool>(MaterialPageRoute(
+        builder: (_) => ProductPickerScreen(
+              candidates: candidates,
+              rowBuilder: (line, changed) => _row(line, () {
+                changed();
+                if (mounted) setState(() {});
+              }),
+            )));
+    if (!mounted) return;
+    setState(() {
+      for (final l in candidates) {
+        if (l.isEmpty) continue;
+        if (done == true) {
+          _openedWith.add(l.product.code);
+        } else {
+          l
+            ..rolls = 0
+            ..looseBelts = 0
+            ..boxes = 0
+            ..cans = 0;
+        }
+      }
+    });
   }
 
   Widget _sectionHeader(ProductCategory c, int count) => Container(
