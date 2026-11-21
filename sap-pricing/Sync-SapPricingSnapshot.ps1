@@ -74,6 +74,10 @@ try {
     foreach ($k in 'erpnext_site', 'bot_api_key', 'bot_api_secret', 'control_doctype', 'sap_config') {
         if (-not "$($cfg.$k)".Trim()) { throw "config '$k' is missing in $ConfigPath" }
     }
+    # The companies (12 Nov 2026): live's by default; the local demo's runner names the TEST copies, so the
+    # MD's Sync from SAP works there too. Optional keys; live's poller.config.json sets neither.
+    if ($cfg.PSObject.Properties['treads_db'] -and "$($cfg.treads_db)".Trim()) { $TreadsDb = "$($cfg.treads_db)".Trim() }
+    if ($cfg.PSObject.Properties['hitech_db'] -and "$($cfg.hitech_db)".Trim()) { $HitechDb = "$($cfg.hitech_db)".Trim() }
     $site = "$($cfg.erpnext_site)".TrimEnd('/')
     $erpHeaders = @{ Authorization = "token $($cfg.bot_api_key):$($cfg.bot_api_secret)" }
     $ctl = [uri]::EscapeDataString("$($cfg.control_doctype)")

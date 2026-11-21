@@ -32,6 +32,17 @@ function New-SapSession {
         throw "no usable sap.url / sap.username / sap.password in $ConfigPath"
     }
     $tag = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    # Optional, both (12 Nov 2026, for the local demo's TEST companies; live sets neither and runs as before):
+    #   sap.pinned_pubkey      base64 SHA-256 of the Service Layer's public key. -k stays (the certificate is
+    #                          self-signed), but curl refuses any other server before the password is sent - the
+    #                          same pin Manna_CMMS/sap-sync/Sync-SapItemCategories.ps1 takes.
+    #   sap.password_overrides { "<CompanyDB>": "<password>" } for a company whose password differs.
+    $pin = if ($sap.PSObject.Properties['pinned_pubkey'] -and "$($sap.pinned_pubkey)".Trim()) { "sha256//$("$($sap.pinned_pubkey)".Trim())" } else { '' }
+    $pw = "$($sap.password)"
+    if ($sap.PSObject.Properties['password_overrides'] -and $sap.password_overrides -and
+        $sap.password_overrides.PSObject.Properties[$CompanyDb] -and "$($sap.password_overrides.$CompanyDb)") {
+        $pw = "$($sap.password_overrides.$CompanyDb)"
+    }
     $s = [pscustomobject]@{
         Base      = "$($sap.url)".TrimEnd('/')
         Root      = ([Uri]"$($sap.url)").GetLeftPart([UriPartial]::Authority)
@@ -39,12 +50,13 @@ function New-SapSession {
         Jar       = Join-Path $env:TEMP "sap-pricing-$tag.jar"
         Tag       = $tag
         CompanyDb = $CompanyDb
+        Pin       = $pin
         Open      = $false
     }
     $loginFile = Join-Path $env:TEMP "sap-pricing-$tag-login.json"
     try {
         [IO.File]::WriteAllText($loginFile,
-            (@{ CompanyDB = $CompanyDb; UserName = "$($sap.username)"; Password = "$($sap.password)" } | ConvertTo-Json -Compress),
+            (@{ CompanyDB = $CompanyDb; UserName = "$($sap.username)"; Password = $pw } | ConvertTo-Json -Compress),
             $script:SapUtf8)
         $r = Invoke-SapCurl -Session $s -Method POST -Url "$($s.Base)/Login" -BodyFile $loginFile -SaveCookies
     } finally {
@@ -66,6 +78,7 @@ function Invoke-SapCurl {
     $a = @('-k', '-s', '--globoff', '--connect-timeout', '15', '--max-time', '180',
            '-H', 'Expect:', '-H', 'Prefer: odata.maxpagesize=500',
            '-o', $resp, '-w', "%{http_code}$($script:SapUS)%{time_total}", '-X', $Method)
+    if ($Session.PSObject.Properties['Pin'] -and $Session.Pin) { $a += @('--pinnedpubkey', $Session.Pin) }
     if ($SaveCookies) { $a += @('-c', $Session.Jar) } else { $a += @('-b', $Session.Jar) }
     if ($BodyFile) { $a += @('-H', 'Content-Type: application/json', '--data-binary', "@$BodyFile") }
     $a += $Url

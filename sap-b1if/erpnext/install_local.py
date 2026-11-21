@@ -4,7 +4,8 @@
 # these scripts write customers, so they reach the live site only by hand, later.
 import json, os, sys, urllib.request, urllib.error
 HERE = os.path.dirname(os.path.abspath(__file__))
-ENV = r"C:\Users\Melvin\Documents\MANNA\Manna_CMMS\server\.env"
+# A PC that keeps the CMMS elsewhere sets MANNA_CMMS_DIR, as localdev/paths.mjs does.
+ENV = os.path.join(os.environ.get("MANNA_CMMS_DIR") or r"C:\Users\Melvin\Documents\MANNA\Manna_CMMS", "server", ".env")
 env = dict(l.strip().split("=", 1) for l in open(ENV, encoding="utf-8") if "=" in l and not l.startswith("#"))
 URL = env["ERPNEXT_URL"].rstrip("/")
 if URL not in ("http://127.0.0.1:8000", "http://localhost:8000"):
