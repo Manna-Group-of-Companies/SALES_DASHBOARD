@@ -46,9 +46,17 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
 
   double _num(dynamic v) => (v is num) ? v.toDouble() : 0.0;
 
-  // Only the trip owner can edit. Tagged members and HR are read-only.
+  // Only the trip owner can edit. Tagged members and HR are read-only —
+  // except that a tagged member may add their own expenses; see [_role].
   bool get _canEdit =>
       _trip != null && '${_trip!['sales_person']}' == Session.I.salesPerson;
+
+  TripExpenseRole get _role => _trip == null
+      ? TripExpenseRole.none
+      : tripExpenseRole(
+          owner: '${_trip!['sales_person'] ?? ''}',
+          tagged: _taggedReps,
+          me: Session.I.salesPerson);
 
   Future<void> _endTrip() async {
     if (_legs.isEmpty) {
@@ -516,6 +524,19 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     String? startUrl, endUrl;
     var startUploading = false, endUploading = false;
     String photoOf(String field) => '${l[field] ?? ''}'.trim();
+    // Once a leg has ended, its start photo can only be replaced alongside a
+    // corrected start reading. A camera in the evening cannot show the
+    // morning's reading, and reps who ended a leg without a photo came here,
+    // filled the first box — "Start odometer photo" — with the closing
+    // reading, and wiped the real start photo (TRP-00828, 00849, 01098).
+    // manna_trip_odometer_photos refuses the same thing on the server for
+    // older builds.
+    final startTextAtOpen = startOdo.text.trim();
+    final ended = _num(l['end_odometer']) > 0;
+    bool startPhotoOffered() =>
+        !ended ||
+        photoOf('start_odometer_photo').isEmpty ||
+        startOdo.text.trim() != startTextAtOpen;
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(builder: (ctx, setL) {
@@ -548,6 +569,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                         child: TextField(
                             controller: startOdo,
                             keyboardType: TextInputType.number,
+                            onChanged: (_) => setL(() {}),
                             decoration:
                             const InputDecoration(labelText: 'Start odo'))),
                     const SizedBox(width: 8),
@@ -565,7 +587,15 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                   // van may be parked up or gone by the time anyone notices the
                   // leg needs correcting, so camera-only made the correction
                   // impossible rather than careful.
-                  OdometerPhotoUpload(
+                  // Kept alive while hidden, so a start photo taken before the
+                  // reading was put back is not lost if it is changed again.
+                  Visibility(
+                    key: const ValueKey('edit-start-odometer-photo'),
+                    visible: startPhotoOffered(),
+                    maintainState: true,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: OdometerPhotoUpload(
                     label: 'Start odometer photo',
                     shortLabel: 'Start photo',
                     allowGallery: true,
@@ -578,8 +608,9 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                     onUrl: (u) => startUrl = u,
                     onStatus: (s) => setL(() =>
                         startUploading = s == OdometerPhotoStatus.uploading),
+                      ),
+                    ),
                   ),
-                  const SizedBox(height: 8),
                   OdometerPhotoUpload(
                     label: 'End odometer photo',
                     shortLabel: 'End photo',
@@ -626,7 +657,11 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       updated['end_odometer'] = eo;
       updated['leg_distance_km'] =
       (eo > so) ? eo - so : _num(l['leg_distance_km']);
-      if (startUrl != null) updated['start_odometer_photo'] = startUrl;
+      // A start photo taken and then hidden — the reading put back as it was
+      // — is not sent: the box it came from was no longer on screen.
+      if (startUrl != null && startPhotoOffered()) {
+        updated['start_odometer_photo'] = startUrl;
+      }
       if (endUrl != null) updated['end_odometer_photo'] = endUrl;
     }
     if (isMixed) {
@@ -799,16 +834,59 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     return t;
   }
 
-  Future<void> _saveExpenses(List<Map<String, dynamic>> expenses) async {
-    try {
-      await Api.saveTripExpenses(widget.tripName, expenses);
-      _load();
-    } catch (e) {
+  /// Applies [change] to the trip's expenses AS THEY ARE NOW on the server,
+  /// not as this screen last saw them, and saves only if nobody has saved in
+  /// between. Returns whether it was saved.
+  ///
+  /// The owner and the reps tagged on a trip can all add expenses, and the
+  /// table is rewritten whole on every save — so writing back this screen's
+  /// copy would delete whatever a colleague added since it loaded. [change]
+  /// returns null when the row it meant to change has gone.
+  Future<bool> _changeExpenses(
+      List<Map<String, dynamic>>? Function(List<Map<String, dynamic>> rows)
+          change) async {
+    void say(String m) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(humanError(e))));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
       }
     }
+
+    try {
+      // Twice: a refused save means somebody else just saved, and the change
+      // re-applied to their version is still exactly what this rep asked for.
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final fresh = await Api.getTrip(widget.tripName);
+        if (fresh == null) throw Exception('Trip not found.');
+        final rows = ((fresh['expenses'] as List?) ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        final next = change(rows);
+        if (next == null) {
+          say('That expense was changed on another phone. Showing the latest.');
+          _load();
+          return false;
+        }
+        if (await Api.saveTripExpenses(widget.tripName, next,
+            modified: '${fresh['modified'] ?? ''}')) {
+          _load();
+          return true;
+        }
+      }
+      say('Someone else is saving this trip. Try again in a moment.');
+    } catch (e) {
+      say(humanError(e));
+    }
+    _load();
+    return false;
+  }
+
+  /// Finds the row this screen showed at [index] in a freshly read list, by
+  /// its server name — positions shift when a colleague adds or deletes.
+  int? _freshIndex(List<Map<String, dynamic>> rows, int index) {
+    final id = '${_expenses[index]['name'] ?? ''}';
+    if (id.isEmpty || id == 'null') return null;
+    final i = rows.indexWhere((r) => '${r['name']}' == id);
+    return i < 0 ? null : i;
   }
 
   /// Attaches (or replaces) the bill on an expense that is already posted.
@@ -846,21 +924,26 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
 
     // The upload succeeded, so the row is only now safe to rewrite. Doing it
     // the other way round would clear a good bill on a failed upload.
-    final list = List<Map<String, dynamic>>.from(_expenses);
-    list[index] = Map<String, dynamic>.from(list[index])
-      ..['bill_photo'] = url
-      ..['has_bill'] = 1;
-    await _saveExpenses(list);
-    if (mounted) {
+    final saved = await _changeExpenses((rows) {
+      final i = _freshIndex(rows, index);
+      if (i == null) return null;
+      rows[i] = rows[i]
+        ..['bill_photo'] = url
+        ..['has_bill'] = 1;
+      return rows;
+    });
+    if (saved && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(had ? 'Bill replaced.' : 'Bill attached.')));
     }
   }
 
   Future<void> _deleteExpense(int index) async {
-    final list = List<Map<String, dynamic>>.from(_expenses);
-    list.removeAt(index);
-    await _saveExpenses(list);
+    await _changeExpenses((rows) {
+      final i = _freshIndex(rows, index);
+      if (i == null) return null;
+      return rows..removeAt(i);
+    });
   }
 
   Future<void> _addExpense() async {
@@ -878,6 +961,8 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
      * is a question nobody needs to answer.
      */
     String? forPerson;
+    final ownerChoices =
+        expenseOwnerChoices(_role, _travellers, Session.I.salesPerson);
     final expenseName = TextEditingController();
     final amount = TextEditingController();
     final remarks = TextEditingController();
@@ -918,7 +1003,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                   keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
                   decoration: const InputDecoration(labelText: 'Amount ₹')),
-              if (_travellers.length > 1)
+              if (_travellers.length > 1 && ownerChoices.isNotEmpty)
                 DropdownButtonFormField<String?>(
                   value: forPerson,
                   isExpanded: true,
@@ -931,7 +1016,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                       value: null,
                       child: Text('Common — everyone on this trip'),
                     ),
-                    ..._travellers.map((r) => DropdownMenuItem<String?>(
+                    ...ownerChoices.map((r) => DropdownMenuItem<String?>(
                           value: r,
                           child: Text(r == Session.I.salesPerson ? '$r (me)' : r),
                         )),
@@ -995,8 +1080,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       // than carrying an empty link that reads differently in two places.
       if (forPerson != null) kExpenseOwnerField: forPerson,
     };
-    final list = List<Map<String, dynamic>>.from(_expenses)..add(exp);
-    await _saveExpenses(list);
+    await _changeExpenses((rows) => rows..add(exp));
   }
 
   Future<void> _reviewExpense(int idx) async {
@@ -1063,14 +1147,17 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     );
     if (ok == true) {
       final appr = double.tryParse(amtCtrl.text.trim()) ?? 0;
-      final list = List<Map<String, dynamic>>.from(_expenses);
-      list[idx] = {
-        ...list[idx],
-        'status': status,
-        'custom_approved_amount': appr,
-        'custom_approval_remarks': remCtrl.text.trim(),
-      };
-      await _saveExpenses(list);
+      await _changeExpenses((rows) {
+        final i = _freshIndex(rows, idx);
+        if (i == null) return null;
+        rows[i] = {
+          ...rows[i],
+          'status': status,
+          'custom_approved_amount': appr,
+          'custom_approval_remarks': remCtrl.text.trim(),
+        };
+        return rows;
+      });
     }
   }
 
@@ -1212,7 +1299,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
         const Text('Expenses',
             style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-        if (_canEdit)
+        if (canAddTripExpense(_role))
           TextButton.icon(
               onPressed: _addExpense,
               icon: const Icon(Icons.add, size: 18),
@@ -1275,7 +1362,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
               trailing: Session.I.isHR
                   ? const Icon(Icons.rate_review_outlined,
                   color: Color(0xFF4338CA))
-                  : (_canEdit
+                  : (canChangeTripExpense(_role, x, Session.I.salesPerson)
                   ? Row(mainAxisSize: MainAxisSize.min, children: [
                       // A bill can go on after the fact — the rep at a busy
                       // pump records the amount and photographs the paper
@@ -1785,13 +1872,19 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
           ),
         ),
         if (!_canEdit)
-          const Card(
-            color: Color(0xFFEEF2FF),
+          Card(
+            color: const Color(0xFFEEF2FF),
             child: ListTile(
-              leading: Icon(Icons.visibility, color: Color(0xFF4338CA)),
-              title: Text('Shared trip — view only',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text('Only the trip creator can edit.'),
+              leading: const Icon(Icons.visibility, color: Color(0xFF4338CA)),
+              title: Text(
+                  _role == TripExpenseRole.tagged
+                      ? 'Shared trip'
+                      : 'Shared trip — view only',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text(_role == TripExpenseRole.tagged
+                  ? 'You can add your own expenses. Only the trip creator '
+                      'can edit the rest.'
+                  : 'Only the trip creator can edit.'),
             ),
           ),
         if (_trip!['status'] == 'Active' && _canEdit)

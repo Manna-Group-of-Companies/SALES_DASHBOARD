@@ -4523,8 +4523,17 @@ class Api {
     return null;
   }
 
-  static Future<void> saveTripExpenses(
-      String tripName, List<Map<String, dynamic>> expenses) async {
+  /// Rewrites a trip's expense table.
+  ///
+  /// [modified] is the trip's `modified` as it was read. Sent with the write,
+  /// Frappe refuses it if anyone has saved the trip since, and this returns
+  /// false. That matters because the table is replaced wholesale: since tagged
+  /// reps can add their own expenses, the owner and a passenger can both be
+  /// writing, and an unconditional save from a stale copy silently deletes
+  /// whatever the other one added.
+  static Future<bool> saveTripExpenses(
+      String tripName, List<Map<String, dynamic>> expenses,
+      {String? modified}) async {
     double total = 0;
     // Built by `tripExpenseRow`, which is the single place that knows which
     // fields a row carries. A whitelist inline here is what silently dropped
@@ -4533,8 +4542,23 @@ class Api {
       if (e['amount'] is num) total += (e['amount'] as num).toDouble();
       return tripExpenseRow(e);
     }).toList();
-    await _put(
-        'Trip', tripName, {'expenses': clean, 'total_expenses': total});
+    final stamp = (modified ?? '').trim();
+    final r = await Session.I.dio.put(
+        '${_res('Trip')}/${Uri.encodeComponent(tripName)}',
+        data: {
+          if (stamp.isNotEmpty && stamp != 'null') 'modified': stamp,
+          'expenses': clean,
+          'total_expenses': total,
+        });
+    final sc = r.statusCode ?? 0;
+    if (sc >= 200 && sc < 300) return true;
+    final text = '${r.data}'.toLowerCase();
+    if (sc == 409 ||
+        text.contains('timestampmismatch') ||
+        text.contains('has been modified')) {
+      return false;
+    }
+    throw Exception(_frappeError(r));
   }
 
   /// This rep's trips between two dates, with distance and expenses.

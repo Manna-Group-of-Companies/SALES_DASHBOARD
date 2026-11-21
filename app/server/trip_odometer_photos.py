@@ -16,7 +16,7 @@
 #      dialog, reopened it and did not retake it.
 #
 # Phones in the field run several app versions and are updated by side-loading,
-# so this is the copy that fixes all of them at once. Two rules, both limited
+# so this is the copy that fixes all of them at once. Three rules, all limited
 # to the rep saving their OWN trip — HR's edits pass through untouched, so an
 # HR "Delete photo" stays deleted:
 #
@@ -25,6 +25,10 @@
 #          arrived since (from HR, or from manna_file_odometer_photo) would be
 #          wiped by that stale copy. No phone screen offers "remove photo", so
 #          a blank from the rep is never deliberate.
+#
+#   MISFILED  (added 19 Nov 2026) A new start photo on an ENDED leg, with the
+#          start reading unchanged, is the end photo in the wrong box: the
+#          leg keeps its start photo and the new one goes to the end slot.
 #
 #   ADOPT  When a leg starts or ends in this save with no photo, take the
 #          newest photo of that kind the rep uploaded to this Trip in the last
@@ -44,7 +48,10 @@ try:
         for r in frappe.get_all(
             "Trip Vehicle Leg",
             filters={"parent": doc.name, "parenttype": "Trip"},
-            fields=["name", "start_odometer_photo", "end_odometer_photo", "end_odometer"],
+            fields=[
+                "name", "start_odometer", "start_odometer_photo",
+                "end_odometer_photo", "end_odometer",
+            ],
             limit_page_length=0,
         ):
             stored[r.name] = r
@@ -57,6 +64,36 @@ try:
                     leg.start_odometer_photo = was.start_odometer_photo
                 if was.end_odometer_photo and not leg.end_odometer_photo:
                     leg.end_odometer_photo = was.end_odometer_photo
+
+        # MISFILED — a start photo sent for a leg that has ended is its END
+        # photo. A camera cannot photograph the morning's reading in the
+        # evening, so a "new start photo" on an ended leg is the closing
+        # reading put in the wrong box. That is what the phone's Edit leg
+        # dialog let happen: it showed "Start odometer photo" first, and a rep
+        # who ended the leg without a photo opened Edit, photographed the
+        # odometer into that first box, and replaced the morning's photo with
+        # the evening's (TRP-00828, TRP-00849 three times, TRP-01098). HR then
+        # saw an evening picture as the start and "no photo" at the end.
+        #
+        # So: keep the start photo the leg already had, and put the new one in
+        # the end slot if that is empty. If the end slot is already filled the
+        # new photo stays in the Trip's attachments, where HR's pages list it.
+        # A deliberate start correction changes the start READING too
+        # (TRP-00883), and that passes through untouched.
+        for leg in doc.legs:
+            was = stored.get(leg.name) if leg.name else None
+            if (
+                was
+                and was.start_odometer_photo
+                and leg.start_odometer_photo
+                and leg.start_odometer_photo != was.start_odometer_photo
+                and (leg.end_odometer or 0) > 0
+                and frappe.utils.flt(leg.start_odometer) == frappe.utils.flt(was.start_odometer)
+            ):
+                sent = leg.start_odometer_photo
+                leg.start_odometer_photo = was.start_odometer_photo
+                if not leg.end_odometer_photo:
+                    leg.end_odometer_photo = sent
 
         # ADOPT
         used = set()

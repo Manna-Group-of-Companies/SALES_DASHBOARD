@@ -134,6 +134,7 @@ void main() {
   });
 
   _writeBack();
+  _whoMayKey();
 
   group('parseTagged', () {
     test('reads the pipe-wrapped form the app writes', () {
@@ -146,6 +147,69 @@ void main() {
 }
 
 // ---------------------------------------------------------------------------
+
+// Phone-only: the dashboard is HR's and never keys a rep's expense, so this is
+// not in the shared fixture.
+void _whoMayKey() {
+  group('who may key an expense on a shared trip', () {
+    TripExpenseRole role(String? me) => tripExpenseRole(
+        owner: 'Jaimon D', tagged: const ['Pareeth Kb'], me: me);
+
+    test('a rep tagged on a trip can add their own expenses', () {
+      // TRP-01108: Jaimon's colleague rode along, paid for things, and the
+      // trip was view-only to them — there was no way to claim it.
+      expect(role('Pareeth Kb'), TripExpenseRole.tagged);
+      expect(canAddTripExpense(role('Pareeth Kb')), isTrue);
+    });
+
+    test('the owner still can', () {
+      expect(role('Jaimon D'), TripExpenseRole.owner);
+      expect(canAddTripExpense(role('Jaimon D')), isTrue);
+    });
+
+    test('somebody not on the trip cannot, nor a login with no sales person',
+        () {
+      expect(canAddTripExpense(role('Amjad Pr')), isFalse);
+      expect(canAddTripExpense(role(null)), isFalse);
+      expect(canAddTripExpense(role('')), isFalse);
+      expect(canAddTripExpense(role('null')), isFalse);
+    });
+
+    test('a tagged rep can only put an expense against themselves', () {
+      // Or common. Never on the owner's sheet, or another passenger's.
+      expect(
+          expenseOwnerChoices(TripExpenseRole.tagged,
+              ['Jaimon D', 'Pareeth Kb', 'Amjad Pr'], 'Pareeth Kb'),
+          ['Pareeth Kb']);
+      expect(
+          expenseOwnerChoices(TripExpenseRole.owner,
+              ['Jaimon D', 'Pareeth Kb'], 'Jaimon D'),
+          ['Jaimon D', 'Pareeth Kb']);
+    });
+
+    test('a tagged rep changes only the rows tagged to them', () {
+      final mine = {'name': 'r1', kExpenseOwnerField: 'Pareeth Kb'};
+      final owners = {'name': 'r2', kExpenseOwnerField: 'Jaimon D'};
+      final common = {'name': 'r3'};
+      final t = TripExpenseRole.tagged;
+      expect(canChangeTripExpense(t, mine, 'Pareeth Kb'), isTrue);
+      expect(canChangeTripExpense(t, owners, 'Pareeth Kb'), isFalse);
+      // A common row is the journey's — a passenger deleting the toll would
+      // take it off the driver's claim.
+      expect(canChangeTripExpense(t, common, 'Pareeth Kb'), isFalse);
+    });
+
+    test('the owner changes any row, and an outsider none', () {
+      final common = {'name': 'r3'};
+      expect(canChangeTripExpense(TripExpenseRole.owner, common, 'Jaimon D'),
+          isTrue);
+      expect(
+          canChangeTripExpense(TripExpenseRole.none,
+              {kExpenseOwnerField: 'Amjad Pr'}, 'Amjad Pr'),
+          isFalse);
+    });
+  });
+}
 
 void _writeBack() {
   group('writing a trip expense back', () {
