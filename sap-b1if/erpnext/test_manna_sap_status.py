@@ -5,11 +5,14 @@ import types
 HERE = os.path.dirname(__file__)
 ns = {"frappe": types.SimpleNamespace(flags={"manna_test": True})}
 exec(open(os.path.join(HERE, "manna_sap_status.py"), encoding="utf-8").read(), ns)
-plan, order_status, merge_stage = ns["plan"], ns["order_status"], ns["merge_stage"]
+plan, order_status, merge_stage, merge_date = ns["plan"], ns["order_status"], ns["merge_stage"], ns["merge_date"]
 
 
 def order(*items, status=""):
-	return {"status": status, "lines": [{"name": "row-%s" % it, "item_code": it, "ht_stage": ht, "dispatched": d, "status": s} for it, ht, d, s in items]}
+	# A 5th element is the ship date already stored for that line; left out, "".
+	return {"status": status, "lines": [
+		{"name": "row-%s" % it, "item_code": it, "ht_stage": ht, "dispatched": d, "status": s, "ship_date": (rest[0] if rest else "")}
+		for it, ht, d, s, *rest in items]}
 
 
 def test_an_order_has_a_status_only_when_every_line_has_reached_it():
@@ -87,3 +90,43 @@ def test_an_order_not_in_erpnext_is_reported_not_guessed():
 def test_item_codes_match_whatever_their_case():
 	p = plan("hitech", [{"order": "SO1", "item": "pmb001", "stage": "In SAP"}], {"SO1": order(("PMB001", "", 0, ""))})
 	assert p["lines"][0]["fields"]["custom_sap_line_status"] == "In SAP"
+
+
+def test_hitech_moving_the_date_is_carried_to_the_line():
+	p = plan("hitech", [{"order": "SO1", "item": "A", "stage": "In SAP", "date": "2026-11-20"}],
+		{"SO1": order(("A", "In SAP", 0, "In SAP", "2026-11-13"))})
+	assert p["lines"][0]["fields"]["custom_sap_ship_date"] == "2026-11-20"
+
+
+def test_a_blank_date_is_itself_the_news_the_line_closed():
+	p = plan("hitech", [{"order": "SO1", "item": "A", "stage": "Picked", "date": ""}],
+		{"SO1": order(("A", "In SAP", 0, "In SAP", "2026-11-13"))})
+	assert p["lines"][0]["fields"]["custom_sap_ship_date"] is None
+
+
+def test_the_same_date_already_held_writes_nothing_for_it():
+	p = plan("hitech", [{"order": "SO1", "item": "A", "stage": "In SAP", "date": "2026-11-13"}],
+		{"SO1": order(("A", "In SAP", 0, "In SAP", "2026-11-13"))})
+	assert "custom_sap_ship_date" not in p["lines"][0]["fields"] if p["lines"] else True
+
+
+def test_a_manna_post_never_touches_the_ship_date():
+	p = plan("manna", [{"order": "SO1", "item": "A", "stage": "Dispatched"}],
+		{"SO1": order(("A", "Picked", 0, "Picked", "2026-11-13"))})
+	assert "custom_sap_ship_date" not in p["lines"][0]["fields"]
+
+
+def test_an_item_split_across_two_hitech_lines_takes_the_later_open_date():
+	p = plan("hitech", [
+		{"order": "SO1", "item": "A", "stage": "In SAP", "date": "2026-11-20"},
+		{"order": "SO1", "item": "A", "stage": "Picked", "date": "2026-11-15"},
+	], {"SO1": order(("A", "", 0, "", ""))})
+	assert p["lines"][0]["fields"]["custom_sap_ship_date"] == "2026-11-20"
+
+
+def test_merge_date_ignores_blanks_and_keeps_the_later_one():
+	assert merge_date("2026-11-13", "2026-11-20") == "2026-11-20"
+	assert merge_date("2026-11-20", "2026-11-13") == "2026-11-20"
+	assert merge_date("2026-11-13", "") == "2026-11-13"
+	assert merge_date("", "2026-11-13") == "2026-11-13"
+	assert merge_date("", "") == ""

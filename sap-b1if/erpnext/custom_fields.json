@@ -61,6 +61,18 @@
       "no_copy": 1
     },
     {
+      "dt": "Sales Order Item",
+      "fieldname": "custom_sap_ship_date",
+      "label": "Hi-Tech Ship Date",
+      "fieldtype": "Date",
+      "insert_after": "custom_sap_mt_dispatched",
+      "read_only": 1,
+      "hidden": 1,
+      "allow_on_submit": 1,
+      "no_copy": 1,
+      "description": "Hi-Tech's own promised date for this line (RDR1.ShipDate), sent only while the line is still Open in SAP - blank once it closes, because nothing can move it after that. The app watches this for the news, same as custom_sap_ht_stage."
+    },
+    {
       "dt": "SAP Sync Control",
       "fieldname": "custom_b1if_writes",
       "label": "B1iF: syncs that write",

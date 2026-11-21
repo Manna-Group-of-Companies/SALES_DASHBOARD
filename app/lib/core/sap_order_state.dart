@@ -74,12 +74,20 @@ class SapLineState {
   final String? invoice;
   final String? invoiceDate;
 
-  const SapLineState({this.invoice, this.invoiceDate});
+  /// Hi-Tech's own promised date for this line (`manna_sap_status.py`,
+  /// 13 Nov 2026) — RDR1.ShipDate, sent only while the line is still Open in
+  /// SAP. Blank means either nothing has been heard yet, or the line has
+  /// closed and nothing in SAP can move it again; `ship_date_watch.dart` is
+  /// what tells those two apart for a rep who has looked before.
+  final String? shipDate;
+
+  const SapLineState({this.invoice, this.invoiceDate, this.shipDate});
 
   /// Straight off a row of the order's `items` table.
   factory SapLineState.fromLine(Map<String, dynamic> l) => SapLineState(
         invoice: l['custom_sap_invoice'] as String?,
         invoiceDate: l['custom_sap_invoice_date'] as String?,
+        shipDate: l['custom_sap_ship_date'] as String?,
       );
 
   /// Whether SAP has said anything about this line of its own — which, with

@@ -2,7 +2,7 @@
 #   Name          : manna_sap_status
 #   Script Type   : API
 #   API Method    : manna_sap_status
-#   Body (POST)   : JSON {"source": "hitech" | "manna", "lines": [ {order, item, stage}, ... ], "dry_run": 0|1}
+#   Body (POST)   : JSON {"source": "hitech" | "manna", "lines": [ {order, item, stage, date}, ... ], "dry_run": 0|1}
 #
 # The order and line status the reps see (decided by the user, 9 Nov 2026).
 # Two B1iF timer packages post here, one per company, because a B1iF query runs
@@ -10,15 +10,24 @@
 #   hitech - per Hi-Tech sales-order line made for an ERPNext order:
 #            stage "In SAP" (the line exists), "Picked" (on a pick list, or
 #            already delivered or invoiced) or "Cancelled" (the order was
-#            cancelled, or the line closed with nothing sent)
+#            cancelled, or the line closed with nothing sent);
+#            date  Hi-Tech's own ShipDate for the line (RDR1, not the order's
+#                  header date - that is the only place a single item's date
+#                  can be), sent only while the line is still Open. Added
+#                  13 Nov 2026, the user's team: production can still move a
+#                  line's date in Hi-Tech after the order is placed. A blank
+#                  date is itself the news - the line closed and Hi-Tech will
+#                  not move it again.
 #   manna  - per Manna Treads sales-order line: stage "Dispatched" when a Manna
 #            A/R invoice covers it (straight from the order, or through its
-#            delivery), else ""
+#            delivery), else "". Carries no date - Manna Treads' own delivery
+#            date is what the rep typed with the order, not Hi-Tech's plan.
 # `order` is the ERPNext name, which the whole chain carries in NumAtCard.
 #
 # Each post is the whole state of every order it names: a line of a named order
 # that the batch does not mention has nothing from that source (a Hi-Tech line
 # removed, an invoice cancelled) and is cleared. Orders not named are untouched.
+# A `manna` post never touches custom_sap_ship_date - only hitech carries dates.
 #
 # Line status = Dispatched if Manna invoiced it, else Hi-Tech's stage.
 # Order status (Cancelled lines left out): Dispatched when every line is,
@@ -26,7 +35,12 @@
 # way, In SAP when every line is at least in SAP, else blank. A line's place in
 # the chain is found by ITEM CODE, as PASS B and the pick-list step find it -
 # the chain carries no line key - so an item on two lines of one order cannot
-# be told apart and gets no status, reported.
+# be told apart and gets no status, reported. A date is not this ambiguous on
+# the SAP side - Z.LIVEmannaicdt's own rule is "the LATEST date among that
+# item's open lines, because a line split to send part later is complete on
+# the later day" - but it still cannot be WRITTEN when ERPNext itself holds the
+# item on two rows, for the same reason as stage: there is no key saying which
+# row Hi-Tech's line was for, so it is left alone there too.
 #
 # Writes with frappe.db.set_value and update_modified=False: these are reports
 # about the order, and bumping `modified` would make a rep editing a draft lose
@@ -35,6 +49,16 @@
 # Callers: System Manager or the "SAP Sync Bot" role.
 
 LINE_STAGES = ["", "In SAP", "Picked", "Cancelled"]
+
+
+def merge_date(prev, d):
+	"""Pure. The later of two ShipDates for the same item, blanks ignored - Hi-
+	Tech's own rule for a line split across two rows (Z.LIVEmannaicdt)."""
+	if not d:
+		return prev or ""
+	if not prev:
+		return d
+	return d if d > prev else prev
 
 
 def squash(s):
@@ -84,9 +108,10 @@ def order_status(statuses):
 
 def plan(source, rows, orders):
 	"""Pure. orders: ERPNext name -> {"status": current order status,
-	"lines": [ {name, item_code, ht_stage, dispatched, status} ]}.
+	"lines": [ {name, item_code, ht_stage, dispatched, status, ship_date} ]}.
 	Returns {"lines": [ {row, fields} ], "orders": [ {name, status} ], "notes": [...]}."""
 	got = {}
+	got_dates = {}
 	notes = []
 	for r in rows:
 		o = squash(r.get("order"))
@@ -100,6 +125,8 @@ def plan(source, rows, orders):
 		got.setdefault(o, {})
 		if source == "hitech":
 			got[o][it] = merge_stage(got[o].get(it), st)
+			got_dates.setdefault(o, {})
+			got_dates[o][it] = merge_date(got_dates[o].get(it), squash(r.get("date"))[:10])
 		else:
 			got[o][it] = got[o].get(it, True) and st == "Dispatched"
 	line_writes = []
@@ -135,6 +162,10 @@ def plan(source, rows, orders):
 				fields["custom_sap_mt_dispatched"] = disp
 			if new != squash(l.get("status")):
 				fields["custom_sap_line_status"] = new
+			if source == "hitech":
+				date = got_dates.get(o, {}).get(k, "")
+				if date != squash(l.get("ship_date"))[:10]:
+					fields["custom_sap_ship_date"] = date or None
 			if fields:
 				line_writes.append({"order": o, "row": l["name"], "item": k, "fields": fields})
 			statuses.append(new)
@@ -170,9 +201,9 @@ def run():
 			orders[so.name] = {"status": so.custom_sap_order_status, "lines": []}
 		if orders:
 			for l in frappe.get_all("Sales Order Item", filters={"parent": ["in", list(orders.keys())], "parenttype": "Sales Order"},
-					fields=["name", "parent", "item_code", "custom_sap_ht_stage", "custom_sap_mt_dispatched", "custom_sap_line_status"], limit_page_length=0):
+					fields=["name", "parent", "item_code", "custom_sap_ht_stage", "custom_sap_mt_dispatched", "custom_sap_line_status", "custom_sap_ship_date"], limit_page_length=0):
 				orders[l.parent]["lines"].append({"name": l.name, "item_code": l.item_code, "ht_stage": l.custom_sap_ht_stage,
-					"dispatched": l.custom_sap_mt_dispatched, "status": l.custom_sap_line_status})
+					"dispatched": l.custom_sap_mt_dispatched, "status": l.custom_sap_line_status, "ship_date": l.custom_sap_ship_date})
 	p = plan(source, rows, orders)
 	if not dry:
 		stamp = frappe.utils.now()

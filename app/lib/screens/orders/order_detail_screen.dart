@@ -11,6 +11,7 @@ import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/proforma_release.dart';
 import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/ship_date_watch.dart';
 import 'package:manna_field_sales/pdf/proforma_pdf.dart';
 import 'package:manna_field_sales/screens/conditions/my_conditions_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
@@ -33,6 +34,10 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   /// What production moved since this phone last opened the order. Computed
   /// once per load, before the snapshot is written back.
   List<StageChange> _stageNews = const [];
+
+  /// What Hi-Tech has moved an item's delivery date to since this phone last
+  /// opened the order — see `ship_date_watch.dart`.
+  List<ShipDateChange> _shipDateNews = const [];
   Map<String, dynamic> _customer = {};
   bool _busy = false;
 
@@ -78,6 +83,9 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         .toList();
     _stageNews = changesSince(await StageSeen.load(widget.orderName), rows);
     await StageSeen.save(widget.orderName, snapshotOf(rows));
+    _shipDateNews =
+        shipDateChangesSince(await ShipDateSeen.load(widget.orderName), rows);
+    await ShipDateSeen.save(widget.orderName, shipDateSnapshotOf(rows));
     final cust = _order['customer'];
     if (cust != null) {
       try {
@@ -421,6 +429,43 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     );
   }
 
+  /// What Hi-Tech has moved an item's delivery date to since this phone last
+  /// had the order open — see `ship_date_watch.dart`. Orange rather than the
+  /// stage card's blue: a date moving is the kind of news a rep needs to act
+  /// on with the customer, not just note.
+  Widget _shipDateNewsCard() {
+    if (_shipDateNews.isEmpty) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+          color: const Color(0xFFFCEEDC),
+          borderRadius: BorderRadius.circular(8)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.event_outlined, size: 18, color: Colors.orange.shade900),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+                'SAP moved the delivery date on '
+                '${_shipDateNews.length} '
+                '${_shipDateNews.length == 1 ? 'item' : 'items'} '
+                'since you last looked',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orange.shade900)),
+          ),
+        ]),
+        const SizedBox(height: 6),
+        ..._shipDateNews.map((c) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Text('• ${describeShipDateChange(c)}',
+                  style: const TextStyle(fontSize: 12.5)),
+            )),
+      ]),
+    );
+  }
+
   /// Every item on the order, with what SAP says about it.
   ///
   /// This showed the in-app production stage — "Being made: Curing", "From
@@ -450,6 +495,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
 
   Widget _itemsCard(List items) {
     final moved = changedLineIds(_stageNews);
+    final dateMoved = _shipDateNews.map((c) => c.lineId).toSet();
     final sap = SapOrderState.fromOrder(_order);
     final cancelled = cancelledInSap(sap);
 
@@ -488,6 +534,11 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               ? 'Cancelled in SAP'
               : lineStatusFromSap(SapLineState.fromLine(it), order: sap);
           final didMove = moved.contains(id);
+          final didDateMove = dateMoved.contains(id);
+          final shipDateRaw = '${it[kShipDateField] ?? ''}'.trim();
+          final shipDate = (shipDateRaw.isEmpty || shipDateRaw == 'null')
+              ? ''
+              : shipDateRaw.substring(0, shipDateRaw.length < 10 ? shipDateRaw.length : 10);
           final dispatchedRolls = (it['custom_dispatched_rolls'] as num?) ?? 0;
           final dispatchedBelts = (it['custom_dispatched_loose_belts'] as num?) ?? 0;
           final shortReason = '${it['custom_dispatch_short_reason'] ?? ''}'.trim();
@@ -520,6 +571,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                                       color: Color(0xFFB4530F))),
                             ),
                           stageLine('Status', status),
+                          if (shipDate.isNotEmpty)
+                            stageLine('SAP ships (editable)', shipDate),
                           if (showDispatched)
                             stageLine('Dispatched', dispatchedLabel(it)),
                           if (shortReason.isNotEmpty)
@@ -548,6 +601,20 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                                 fontSize: 9,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.blue.shade900)),
+                      ),
+                    if (didDateMove)
+                      Container(
+                        margin: const EdgeInsets.only(top: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                            color: Colors.orange.shade100,
+                            borderRadius: BorderRadius.circular(4)),
+                        child: Text('DATE MOVED',
+                            style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.orange.shade900)),
                       ),
                   ]),
                 ],
@@ -696,6 +763,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                             style: const TextStyle(color: Colors.red))),
                   ])),
             _stageNewsCard(),
+            _shipDateNewsCard(),
             _itemsCard(items),
             _statusRow('Order placed', _placedAt),
             _statusRow('Proforma', pf),
