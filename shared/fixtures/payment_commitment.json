@@ -1,0 +1,81 @@
+{
+  "about": "The 10-day payment commitment ladder on an order (17 Nov 2026, the user's spec and choices). An order whose customer is overdue more than 30 days past their payment terms, or which takes them past their credit limit, needs a credit decision: the Manager may approve it only with a payment commitment of at most 10 days (over the limit only within their approval authority); a customer who missed a commitment goes to the GM, bypassing the Manager, until what was overdue is cleared; the GM may approve another 10-day commitment or reject. Everything lives in ERPNext (Manna Payment Commitment); SAP receives only approved orders, with the commitment in the order's Comments. Merged on the user's choice with the temporary credit extension (credit_extension.json), which no longer changes SAP credit limits. Implemented by the manna_payment_commitment Server Scripts (enforced), client/src/domain/paymentCommitment.ts and app/lib/core/payment_commitment.dart; all three test against this file.",
+
+  "limits": { "max_days": 10, "overdue_days_trigger": 30, "overdue_rounding": 1 },
+
+  "rules": {
+    "needs": "An order needs a commitment when the customer is overdue past their payment terms (custom_overdue_past_terms more than overdue_rounding rupees, credit.json's tolerance) by MORE than 30 days (custom_overdue_days), or when outstanding + this order goes past a credit limit that is set (credit.json's over-limit test). Overdue 1 to 30 days past terms needs nothing: an ordinary Manager approval (the user's choice, 17 Nov 2026 - it replaces the 11 Oct rule that sent every overdue-past-terms order to the GM).",
+    "route": "A customer with a missed commitment not yet cleared goes to the GM, whatever the order. Otherwise: over the limit by more than the Manager's approval authority -> the GM; the Manager's cap of commitments in the window reached (credit_extension.json's manager_cap) -> the GM; needs a commitment -> the Manager, who approves only with one; else an ordinary Manager approval. An order whose route is the GM goes there straight when it is raised ('Pending GM Approval', the Sales Order backstop), bypassing the Manager, and the Manager and the GM are notified; the Manager still sees it and may add a Note for GM to its thread, but may not decide it (the user, 17 Nov 2026).",
+    "approval": "Manager or GM: a commitment date from the approval day to max_days calendar days after it, and remarks. The GM is held to 10 days as well (the spec: 'another 10-day extension').",
+    "kept": "The user's choice: a commitment is kept when nothing is overdue past terms (custom_overdue_past_terms at most overdue_rounding), read from SAP figures synced AFTER the approval, on or before the end of the commitment date.",
+    "missed": "Missed when figures synced after the commitment date still show something overdue. Until such figures exist it is 'unchecked' - the credit sync is asked for, and nothing is marked missed on stale figures.",
+    "gm_lock": "A missed commitment sends the customer's orders to the GM until a later sync shows nothing overdue (cleared_on). The user's choice: until the overdue is cleared, then the ordinary ladder again; the history keeps every miss.",
+    "kept_without_overdue": "A commitment given only because of the credit limit, to a customer with nothing overdue, is kept on the first fresh figures: the user chose 'all overdue cleared' as the test.",
+    "status": "What the Manager and GM dashboards show for an order: Rejected; Sent to GM (Pending GM Approval - also when the order went there directly); GM Approved (Pending Final Approval); Pending Manager Approval (Pending Approval, PO Uploaded, Pending Rate Approval); and once approved: Payment Pending while its commitment runs or is unchecked, SAP Pushed once it is in SAP, else Approved."
+  },
+
+  "needs": [
+    { "why": "overdue 31 days past terms needs a commitment", "customer": { "custom_overdue_past_terms": 25000, "custom_overdue_days": 31, "custom_credit_limit": 500000, "custom_outstanding_balance": 60000 }, "order_total": 10000, "expect": { "overdue30": true, "over_limit": false, "excess": 0, "needs": true } },
+    { "why": "exactly 30 days is not more than 30", "customer": { "custom_overdue_past_terms": 25000, "custom_overdue_days": 30, "custom_credit_limit": 500000, "custom_outstanding_balance": 60000 }, "order_total": 10000, "expect": { "overdue30": false, "over_limit": false, "excess": 0, "needs": false } },
+    { "why": "overdue 1-30 days past terms: an ordinary Manager approval", "customer": { "custom_overdue_past_terms": 25000, "custom_overdue_days": 12, "custom_credit_limit": 500000, "custom_outstanding_balance": 60000 }, "order_total": 10000, "expect": { "overdue30": false, "over_limit": false, "excess": 0, "needs": false } },
+    { "why": "old days with a rupee of rounding left is not overdue", "customer": { "custom_overdue_past_terms": 0.6, "custom_overdue_days": 400, "custom_credit_limit": 500000, "custom_outstanding_balance": 60000 }, "order_total": 10000, "expect": { "overdue30": false, "over_limit": false, "excess": 0, "needs": false } },
+    { "why": "over the credit limit needs a commitment, and says by how much", "customer": { "custom_overdue_past_terms": 0, "custom_overdue_days": 0, "custom_credit_limit": 30000, "custom_outstanding_balance": 0 }, "order_total": 42328, "expect": { "overdue30": false, "over_limit": true, "excess": 12328, "needs": true } },
+    { "why": "no credit limit set is not over it", "customer": { "custom_overdue_past_terms": 0, "custom_overdue_days": 0, "custom_credit_limit": 0, "custom_outstanding_balance": 900000 }, "order_total": 42328, "expect": { "overdue30": false, "over_limit": false, "excess": 0, "needs": false } },
+    { "why": "both at once", "customer": { "custom_overdue_past_terms": 5000, "custom_overdue_days": 45, "custom_credit_limit": 30000, "custom_outstanding_balance": 25000 }, "order_total": 10000, "expect": { "overdue30": true, "over_limit": true, "excess": 5000, "needs": true } },
+    { "why": "a customer the credit sync has not reached reads as nothing overdue", "customer": {}, "order_total": 10000, "expect": { "overdue30": false, "over_limit": false, "excess": 0, "needs": false } }
+  ],
+
+  "route": [
+    { "why": "nothing needed: an ordinary Manager approval", "needs": false, "over_limit": false, "excess": 0, "authority": 50000, "gm_lock": false, "cap_reached": false, "expect": "manager" },
+    { "why": "overdue more than 30 days: the Manager, with a commitment", "needs": true, "over_limit": false, "excess": 0, "authority": 0, "gm_lock": false, "cap_reached": false, "expect": "manager_commitment" },
+    { "why": "over the limit within the Manager's authority: the Manager, with a commitment", "needs": true, "over_limit": true, "excess": 12328, "authority": 20000, "gm_lock": false, "cap_reached": false, "expect": "manager_commitment" },
+    { "why": "over the limit beyond the Manager's authority: the GM", "needs": true, "over_limit": true, "excess": 20001, "authority": 20000, "gm_lock": false, "cap_reached": false, "expect": "gm" },
+    { "why": "no authority configured is no authority over the limit", "needs": true, "over_limit": true, "excess": 1, "authority": 0, "gm_lock": false, "cap_reached": false, "expect": "gm" },
+    { "why": "a missed commitment not yet cleared: the GM, bypassing the Manager", "needs": true, "over_limit": false, "excess": 0, "authority": 50000, "gm_lock": true, "cap_reached": false, "expect": "gm" },
+    { "why": "the GM lock holds even for an order that needs nothing", "needs": false, "over_limit": false, "excess": 0, "authority": 50000, "gm_lock": true, "cap_reached": false, "expect": "gm" },
+    { "why": "the Manager's cap of commitments reached: the GM", "needs": true, "over_limit": false, "excess": 0, "authority": 50000, "gm_lock": false, "cap_reached": true, "expect": "gm" },
+    { "why": "the cap does not touch an order that needs nothing", "needs": false, "over_limit": false, "excess": 0, "authority": 50000, "gm_lock": false, "cap_reached": true, "expect": "manager" }
+  ],
+
+  "gm_lock": [
+    { "why": "no commitments", "commitments": [], "expect": false },
+    { "why": "a missed commitment not cleared", "commitments": [{ "status": "Missed", "cleared_on": "" }], "expect": true },
+    { "why": "a missed commitment cleared later", "commitments": [{ "status": "Missed", "cleared_on": "2026-11-20" }], "expect": false },
+    { "why": "kept and running ones do not lock", "commitments": [{ "status": "Kept", "cleared_on": "" }, { "status": "Running", "cleared_on": "" }], "expect": false },
+    { "why": "one uncleared miss among cleared ones still locks", "commitments": [{ "status": "Missed", "cleared_on": "2026-10-01" }, { "status": "Missed", "cleared_on": "" }], "expect": true }
+  ],
+
+  "approval": [
+    { "why": "10 days with remarks", "approved_on": "2026-11-17", "commitment": "2026-11-27", "remarks": "Pays Friday", "expect": null },
+    { "why": "the approval day itself", "approved_on": "2026-11-17", "commitment": "2026-11-17", "remarks": "Today", "expect": null },
+    { "why": "11 days is too long, for the GM as well", "approved_on": "2026-11-17", "commitment": "2026-11-28", "remarks": "x", "expect": "too_long" },
+    { "why": "a date already gone", "approved_on": "2026-11-17", "commitment": "2026-11-16", "remarks": "x", "expect": "date_past" },
+    { "why": "no date", "approved_on": "2026-11-17", "commitment": "", "remarks": "x", "expect": "date_past" },
+    { "why": "remarks are required", "approved_on": "2026-11-17", "commitment": "2026-11-20", "remarks": "  ", "expect": "remarks" },
+    { "why": "across a year end", "approved_on": "2026-12-27", "commitment": "2027-01-06", "remarks": "x", "expect": null }
+  ],
+
+  "track": [
+    { "why": "fresh figures show nothing overdue: kept", "status": "Running", "approved_on": "2026-11-17 10:00:00", "commitment": "2026-11-27", "today": "2026-11-20", "overdue_now": 0, "synced_at": "2026-11-19 18:00:00", "expect": "kept" },
+    { "why": "kept on the commitment day itself", "status": "Running", "approved_on": "2026-11-17 10:00:00", "commitment": "2026-11-27", "today": "2026-11-27", "overdue_now": 0, "synced_at": "2026-11-27 17:00:00", "expect": "kept" },
+    { "why": "figures from before the approval prove nothing", "status": "Running", "approved_on": "2026-11-17 10:00:00", "commitment": "2026-11-27", "today": "2026-11-18", "overdue_now": 0, "synced_at": "2026-11-17 09:00:00", "expect": "running" },
+    { "why": "still overdue, date not passed: running", "status": "Running", "approved_on": "2026-11-17 10:00:00", "commitment": "2026-11-27", "today": "2026-11-25", "overdue_now": 9000, "synced_at": "2026-11-25 09:00:00", "expect": "running" },
+    { "why": "date passed and figures after it still overdue: missed", "status": "Running", "approved_on": "2026-11-17 10:00:00", "commitment": "2026-11-27", "today": "2026-11-28", "overdue_now": 9000, "synced_at": "2026-11-28 08:00:00", "expect": "missed" },
+    { "why": "date passed but no figures since: unchecked, never missed on stale figures", "status": "Running", "approved_on": "2026-11-17 10:00:00", "commitment": "2026-11-27", "today": "2026-11-28", "overdue_now": 9000, "synced_at": "2026-11-26 18:00:00", "expect": "unchecked" },
+    { "why": "paid late, after the date: still missed", "status": "Running", "approved_on": "2026-11-17 10:00:00", "commitment": "2026-11-27", "today": "2026-11-29", "overdue_now": 0, "synced_at": "2026-11-29 08:00:00", "expect": "missed_cleared" },
+    { "why": "a kept one stays kept", "status": "Kept", "approved_on": "2026-11-17 10:00:00", "commitment": "2026-11-27", "today": "2026-11-29", "overdue_now": 9000, "synced_at": "2026-11-29 08:00:00", "expect": "none" }
+  ],
+
+  "order_status": [
+    { "why": "waiting on the Manager", "po_status": "Pending Approval", "pushed": false, "commitment": "", "expect": "Pending Manager Approval" },
+    { "why": "a PO uploaded waits on the Manager too", "po_status": "PO Uploaded - Pending Approval", "pushed": false, "commitment": "", "expect": "Pending Manager Approval" },
+    { "why": "with the GM, sent or direct", "po_status": "Pending GM Approval", "pushed": false, "commitment": "", "expect": "Sent to GM" },
+    { "why": "the GM approved; back with the Manager to push", "po_status": "Pending Final Approval", "pushed": false, "commitment": "Running", "expect": "GM Approved" },
+    { "why": "rejected", "po_status": "Rejected", "pushed": false, "commitment": "", "expect": "Rejected" },
+    { "why": "approved with its commitment running", "po_status": "PO Approved - Ready for SAP", "pushed": true, "commitment": "Running", "expect": "Payment Pending" },
+    { "why": "an unchecked commitment is still pending", "po_status": "PO Approved - Ready for SAP", "pushed": true, "commitment": "Unchecked", "expect": "Payment Pending" },
+    { "why": "kept and in SAP", "po_status": "PO Approved - Ready for SAP", "pushed": true, "commitment": "Kept", "expect": "SAP Pushed" },
+    { "why": "no commitment, in SAP", "po_status": "PO Approved - Ready for SAP", "pushed": true, "commitment": "", "expect": "SAP Pushed" },
+    { "why": "approved, not yet in SAP", "po_status": "PO Approved - Ready for SAP", "pushed": false, "commitment": "", "expect": "Approved" }
+  ]
+}

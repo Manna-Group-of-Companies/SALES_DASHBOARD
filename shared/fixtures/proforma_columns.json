@@ -118,6 +118,29 @@
       }
     },
     {
+      "why": "the phone writes the category as 'Vulcanizing Solution', not 'VS', and since 20 Nov 2026 the litres as custom_total_weight (6 x 30 L = 180, SAL-ORD-2026-00162). It is still a can row: read as weight it would print 180 kg at 5130 per kg against an amount of 30780",
+      "line": {
+        "custom_product_category": "Vulcanizing Solution",
+        "custom_rolls": 0,
+        "custom_loose_belts": 0,
+        "custom_total_weight": 180,
+        "custom_rate_per_kg": 5130,
+        "qty": 6,
+        "rate": 5130,
+        "amount": 30780
+      },
+      "expect": {
+        "rolls": "",
+        "belts": "",
+        "cans": "6",
+        "qty": "180 L",
+        "mrp": 5130,
+        "mrp_unit": "per can",
+        "amount": 30780,
+        "reconciles_on": "cans"
+      }
+    },
+    {
       "why": "bonding gum is sold by the kilogram and needs no packing column at all",
       "line": {
         "custom_product_category": "BG",

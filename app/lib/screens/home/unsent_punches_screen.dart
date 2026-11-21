@@ -53,7 +53,7 @@ class _UnsentPunchesScreenState extends State<UnsentPunchesScreen> {
     await _load();
     if (!mounted) return;
     if (r.stoppedOffline && r.sent == 0) {
-      _snack('Still no signal. Saved here.');
+      _snack('Saved. It goes by itself.');
     } else if (r.failed.isNotEmpty) {
       _snack('Sent ${r.sent}; ${r.failed.length} failed.');
     } else if (r.sent > 0) {
@@ -145,7 +145,7 @@ class _UnsentPunchesScreenState extends State<UnsentPunchesScreen> {
             Text('Every punch has been sent',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             SizedBox(height: 8),
-            Text('Punches made without signal wait here.',
+            Text('Nothing waiting to send.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: Colors.black54),
             ),
@@ -165,7 +165,7 @@ class _UnsentPunchesScreenState extends State<UnsentPunchesScreen> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Not sent yet. They send by themselves when you have signal.',
+              'Sending… These go by themselves.',
               style: const TextStyle(fontSize: 12.5, height: 1.4),
             ),
           ),
@@ -201,7 +201,7 @@ class _UnsentPunchesScreenState extends State<UnsentPunchesScreen> {
             const Text('Goes after the punch-in it closes.',
                 style: TextStyle(fontSize: 12, color: Colors.black54)),
           ],
-          if (p.lastError != null) ...[
+          if (p.lastError != null && p.lastError != kNotYet) ...[
             const SizedBox(height: 8),
             Container(
               width: double.infinity,

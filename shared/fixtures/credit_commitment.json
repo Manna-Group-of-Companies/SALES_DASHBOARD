@@ -12,13 +12,13 @@
   "rules": {
     "when_required": "Exactly when the order will escalate to the GM: the customer's outstanding plus this order goes past a credit limit that is set. The same test as credit.json's 'escalates', so an order can never reach the GM without one - and a customer with no limit, or a lead, is never asked.",
     "min_length": 10,
-    "sales_manager": "Reads the commitment and may comment. May NOT approve an over-limit order: the only ways forward are Send to GM or Reject. Once the order is with the GM, the sales manager may still comment but no longer decides. When the GM has approved it, the sales manager's one move is Push to SAP - at the rates the GM approved.",
+    "sales_manager": "Reads the commitment and may comment. Since 17 Nov 2026 an order needing a credit decision follows payment_commitment.json: within the Manager's approval authority the Manager approves it WITH a 10-day payment commitment (the server's route, passed here as overLimit=false); beyond it, or for a customer with a missed commitment not cleared, the only ways forward are Send to GM or Reject (overLimit=true). Once the order is with the GM, the sales manager may still comment but no longer decides. When the GM has approved it, the sales manager's one move is Push to SAP - at the rates the GM approved.",
     "gm": "Reads the commitment and every comment, may edit the order, may comment, and approves or rejects. The GM's approval is a credit decision, NOT a push to SAP: it moves the order to 'Pending Final Approval' and back to the sales manager. Approving an order that carries a commitment always creates the credit condition - the GM may reword it and set the date, but may not drop it. Until the sales manager pushes, the GM may still reject it, which closes that condition.",
     "rep": "Writes the commitment and nothing else here. The rep's later say is the answer on the condition, under credit_condition.json.",
     "after_approval": "Once the sales manager has pushed it to SAP the thread is closed. What happens next is the condition's life, not the order's.",
     "within_limit_by_decision": "If the order is back inside the limit by the time the sales manager decides it - SAP brought a payment in - they approve it as usual and no condition is made: there is nothing left to be conditional on, and a condition is the GM's to set.",
     "no_commitment": "An order that reaches the GM without one - escalated before this existed, or pushed over the limit after the rep sent it - keeps the old rule: the GM's condition is optional.",
-    "gm_never_pushes": "Asked for 24 Sep 2026: the GM approves, the sales manager pushes. 'approve' below always means approve to SAP, and the GM never has it.",
+    "gm_never_pushes": "Asked for 24 Sep 2026: the GM approves, the sales manager pushes - 'approve' below means the sales manager's approve to SAP. 17 Nov 2026 (the user): the GM may also approve AND push to SAP in one step ('gm_push'), on anything not yet in SAP, including an order they already approved; their plain approval still hands it back to the sales manager.",
     "edited_after_gm": "Since 26 September 2026 nobody may change an order the GM has approved (order_locked_after_approval.json, 'by_role'): the sales manager pushes it as approved, or the GM withdraws by rejecting. Until then, changing the lines of a GM-approved order sent it back to the GM with the approval cleared. While an order is with the GM only the GM may change it, and it stays with them."
   },
   "required": [
@@ -59,12 +59,13 @@
       "expect": false
     },
     {
-      "why": "inside the limit, but invoices are overdue past the customer's payment terms - it escalates since 11 Oct 2026 (credit.json past_terms), so it needs the reason too",
+      "why": "inside the limit, but invoices are overdue past the customer's payment terms - more than 30 days late it needs a credit decision (credit.json past_terms, narrowed 17 Nov 2026), so it needs the reason too",
       "customer": {
         "custom_outstanding_balance": 10000,
         "custom_credit_limit": 100000,
         "custom_overdue_past_terms": 8000,
-        "custom_payment_terms": "Net-30"
+        "custom_payment_terms": "Net-30",
+        "custom_overdue_days": 45
       },
       "order_total": 5000,
       "expect": true
@@ -149,87 +150,87 @@
     {
       "why": "the sales manager meets an over-limit order and can only send it on - approving it to SAP needs the GM first",
       "role": "sales_manager", "po_status": "Pending Approval", "over_limit": true,
-      "expect": { "approve": false, "gm_approve": false, "escalate": true, "reject": true, "comment": true }
+      "expect": { "approve": false, "gm_approve": false, "gm_push": false, "escalate": true, "reject": true, "comment": true }
     },
     {
       "why": "inside the limit nothing changes: the sales manager approves as always, and there is nobody to escalate to",
       "role": "sales_manager", "po_status": "Pending Approval", "over_limit": false,
-      "expect": { "approve": true, "gm_approve": false, "escalate": false, "reject": true, "comment": true }
+      "expect": { "approve": true, "gm_approve": false, "gm_push": false, "escalate": false, "reject": true, "comment": true }
     },
     {
       "why": "an old waiting status reads as waiting - the over-limit rule is not dodged by a legacy value",
       "role": "sales_manager", "po_status": "PO Uploaded - Pending Approval", "over_limit": true,
-      "expect": { "approve": false, "gm_approve": false, "escalate": true, "reject": true, "comment": true }
+      "expect": { "approve": false, "gm_approve": false, "gm_push": false, "escalate": true, "reject": true, "comment": true }
     },
     {
       "why": "once it is with the GM the sales manager no longer decides it, but can still add what they know",
       "role": "sales_manager", "po_status": "Pending GM Approval", "over_limit": true,
-      "expect": { "approve": false, "gm_approve": false, "escalate": false, "reject": false, "comment": true }
+      "expect": { "approve": false, "gm_approve": false, "gm_push": false, "escalate": false, "reject": false, "comment": true }
     },
     {
       "why": "the GM decides what was escalated to them - by approving the credit, not by pushing to SAP",
       "role": "general_manager", "po_status": "Pending GM Approval", "over_limit": true,
-      "expect": { "approve": false, "gm_approve": true, "escalate": false, "reject": true, "comment": true }
+      "expect": { "approve": false, "gm_approve": true, "gm_push": true, "escalate": false, "reject": true, "comment": true }
     },
     {
       "why": "a GM who trims the order back inside the limit still decides it - it was escalated to them, and handing it back undecided would be a second trip for nothing",
       "role": "general_manager", "po_status": "Pending GM Approval", "over_limit": false,
-      "expect": { "approve": false, "gm_approve": true, "escalate": false, "reject": true, "comment": true }
+      "expect": { "approve": false, "gm_approve": true, "gm_push": true, "escalate": false, "reject": true, "comment": true }
     },
     {
       "why": "the GM outranks the queue: an order not yet escalated is still theirs to approve - and still goes back to the sales manager to push",
       "role": "general_manager", "po_status": "Pending Approval", "over_limit": true,
-      "expect": { "approve": false, "gm_approve": true, "escalate": false, "reject": true, "comment": true }
+      "expect": { "approve": false, "gm_approve": true, "gm_push": true, "escalate": false, "reject": true, "comment": true }
     },
     {
       "why": "approved by the GM, the order is back with the sales manager, whose one move is to push it to SAP - over the limit or not, the GM has decided the credit",
       "role": "sales_manager", "po_status": "Pending Final Approval", "over_limit": true,
-      "expect": { "approve": true, "gm_approve": false, "escalate": false, "reject": false, "comment": true }
+      "expect": { "approve": true, "gm_approve": false, "gm_push": false, "escalate": false, "reject": false, "comment": true }
     },
     {
       "why": "the sales manager may not refuse what the GM approved; if it must not ship, that is the GM's call",
       "role": "sales_manager", "po_status": "Pending Final Approval", "over_limit": false,
-      "expect": { "approve": true, "gm_approve": false, "escalate": false, "reject": false, "comment": true }
+      "expect": { "approve": true, "gm_approve": false, "gm_push": false, "escalate": false, "reject": false, "comment": true }
     },
     {
       "why": "the GM has approved it and does not push it - but may still withdraw the approval by rejecting, until the sales manager has pushed",
       "role": "general_manager", "po_status": "Pending Final Approval", "over_limit": true,
-      "expect": { "approve": false, "gm_approve": false, "escalate": false, "reject": true, "comment": true }
+      "expect": { "approve": false, "gm_approve": false, "gm_push": true, "escalate": false, "reject": true, "comment": true }
     },
     {
       "why": "pushed to SAP is finished - the thread closes and the condition takes over",
       "role": "general_manager", "po_status": "PO Approved - Ready for SAP", "over_limit": true,
-      "expect": { "approve": false, "gm_approve": false, "escalate": false, "reject": false, "comment": false }
+      "expect": { "approve": false, "gm_approve": false, "gm_push": false, "escalate": false, "reject": false, "comment": false }
     },
     {
       "why": "the sales manager cannot re-open a pushed order's thread either",
       "role": "sales_manager", "po_status": "PO Approved - Ready for SAP", "over_limit": false,
-      "expect": { "approve": false, "gm_approve": false, "escalate": false, "reject": false, "comment": false }
+      "expect": { "approve": false, "gm_approve": false, "gm_push": false, "escalate": false, "reject": false, "comment": false }
     },
     {
       "why": "a rejected order may be decided again - the phone has no Undo, and deciding it is its only way back - but an over-limit one still only goes to the GM, and it cannot be rejected twice",
       "role": "sales_manager", "po_status": "Rejected", "over_limit": true,
-      "expect": { "approve": false, "gm_approve": false, "escalate": true, "reject": false, "comment": true }
+      "expect": { "approve": false, "gm_approve": false, "gm_push": false, "escalate": true, "reject": false, "comment": true }
     },
     {
       "why": "a rejected order back inside the limit is the sales manager's to approve again",
       "role": "sales_manager", "po_status": "Rejected", "over_limit": false,
-      "expect": { "approve": true, "gm_approve": false, "escalate": false, "reject": false, "comment": true }
+      "expect": { "approve": true, "gm_approve": false, "gm_push": false, "escalate": false, "reject": false, "comment": true }
     },
     {
       "why": "the GM may take back their own rejection by approving - which again goes to the sales manager",
       "role": "general_manager", "po_status": "Rejected", "over_limit": true,
-      "expect": { "approve": false, "gm_approve": true, "escalate": false, "reject": false, "comment": true }
+      "expect": { "approve": false, "gm_approve": true, "gm_push": true, "escalate": false, "reject": false, "comment": true }
     },
     {
       "why": "the rep's say is the commitment itself, not a vote on the order",
       "role": "rep", "po_status": "Pending Approval", "over_limit": true,
-      "expect": { "approve": false, "gm_approve": false, "escalate": false, "reject": false, "comment": false }
+      "expect": { "approve": false, "gm_approve": false, "gm_push": false, "escalate": false, "reject": false, "comment": false }
     },
     {
       "why": "a role nobody recognises is refused everything rather than guessed at",
       "role": "production_manager", "po_status": "Pending GM Approval", "over_limit": true,
-      "expect": { "approve": false, "gm_approve": false, "escalate": false, "reject": false, "comment": false }
+      "expect": { "approve": false, "gm_approve": false, "gm_push": false, "escalate": false, "reject": false, "comment": false }
     }
   ],
   "approval": [

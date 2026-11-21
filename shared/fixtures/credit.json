@@ -121,7 +121,7 @@
 
   "past_terms": [
     {
-      "why": "the rule asked for on 11 Oct 2026: within the credit limit, but invoices are overdue past the payment terms SAP holds for this customer - the order goes to the GM like an over-limit one",
+      "why": "the rule asked for on 11 Oct 2026, narrowed 17 Nov 2026 (the user): overdue past terms by only 12 days is an ordinary approval now - only MORE than 30 days needs a credit decision (payment_commitment.json). The figure is still read",
       "customer": {
         "custom_outstanding_balance": 40000,
         "custom_credit_limit": 100000,
@@ -130,25 +130,50 @@
         "custom_overdue_days": 12
       },
       "order_total": 5000,
-      "expect": { "escalates": true, "over_limit": false, "past_terms": true, "overdue_past_terms": 25000 }
+      "expect": { "escalates": false, "over_limit": false, "past_terms": false, "overdue_past_terms": 25000 }
     },
     {
-      "why": "no credit limit set does not escalate on the limit (see overdue), but being overdue past the payment terms still does - the terms rule does not need a limit",
+      "why": "overdue MORE than 30 days past terms needs a credit decision (17 Nov 2026), whatever the limit",
       "customer": {
         "custom_outstanding_balance": 40000,
-        "custom_credit_limit": 0,
+        "custom_credit_limit": 100000,
         "custom_overdue_past_terms": 25000,
-        "custom_payment_terms": "Net-15"
+        "custom_payment_terms": "Net-30",
+        "custom_overdue_days": 31
       },
       "order_total": 5000,
       "expect": { "escalates": true, "over_limit": false, "past_terms": true }
     },
     {
-      "why": "both at once - over the limit AND overdue past terms. One escalation, both reasons shown to the GM",
+      "why": "exactly 30 days late is not more than 30",
+      "customer": {
+        "custom_outstanding_balance": 40000,
+        "custom_credit_limit": 100000,
+        "custom_overdue_past_terms": 25000,
+        "custom_overdue_days": 30
+      },
+      "order_total": 5000,
+      "expect": { "escalates": false, "past_terms": false }
+    },
+    {
+      "why": "no credit limit set does not escalate on the limit (see overdue); overdue more than 30 days past terms still does - the terms rule does not need a limit",
+      "customer": {
+        "custom_outstanding_balance": 40000,
+        "custom_credit_limit": 0,
+        "custom_overdue_past_terms": 25000,
+        "custom_payment_terms": "Net-15",
+        "custom_overdue_days": 45
+      },
+      "order_total": 5000,
+      "expect": { "escalates": true, "over_limit": false, "past_terms": true }
+    },
+    {
+      "why": "both at once - over the limit AND overdue more than 30 days past terms. One credit decision, both reasons shown",
       "customer": {
         "custom_outstanding_balance": 169900,
         "custom_credit_limit": 70000,
         "custom_overdue_past_terms": 90000,
+        "custom_overdue_days": 45,
         "custom_payment_terms": "Net-30"
       },
       "order_total": 5000,

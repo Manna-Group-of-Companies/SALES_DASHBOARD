@@ -145,10 +145,8 @@
   PASS M, P and H - only with order_flow.mode = manna_first (3 Nov 2026)
     Manna Treads sells and Hi-Tech makes. For each order of order_flow.units
     created on or after order_flow.since (which PASS A then leaves alone):
-    PASS M, once it is approved (order_sync.po_status_gate - changed
-    19 Nov 2026, it used to be as soon as the order existed), a Manna
-    Treads Sales Order to the end customer at the order's rate net of GST,
-    tax code by bill-to state;
+    PASS M, as soon as it exists, a Manna Treads Sales Order to the end
+    customer at the order's rate net of GST, tax code by bill-to state;
     then B1if (sap-b1if/, 4 Nov 2026), not this script, makes Manna Treads'
     Purchase Order to Hi-Tech and Hi-Tech's Sales Order from it. PASS P and
     PASS H only find them by NumAtCard = the ERPNext name and write them
@@ -2398,18 +2396,15 @@ function Get-FlowSettings {
         }
     }
 
-    # Changed 19 Nov 2026: PASS M waits for approval. It first sent an order
-    # the moment it existed, holding back only skip_statuses, so orders still
-    # at 'Pending GM Approval' were in Manna Treads SAP (SAL-ORD-2026-00163 /
-    # 00164 -> SO 578 / 579). Now only an order at order_sync.po_status_gate -
-    # the same gate PASS A and PASS C use - is sent. Not configurable on
-    # purpose: an unapproved order has no business in SAP.
-    $approved = 'PO Approved - Ready for SAP'
-    $osb = Get-JsonProp $Config 'order_sync'
-    if ($null -ne $osb) { $approved = Get-OptionalString $osb 'po_status_gate' $approved }
+    # Only approved orders go to SAP (17 Nov 2026, the user: ERPNext is where
+    # orders are decided; SAP gets them once approved). order_flow
+    # require_approval: false restores sending an order as soon as it exists.
+    $requireApproval = $true
+    $rp = $b.PSObject.Properties['require_approval']
+    if ($rp -and $null -ne $rp.Value) { $requireApproval = [bool]$rp.Value }
 
     $out = @{
-        ApprovedStatus = $approved
+        RequireApproval = $requireApproval
         PickListsSince = $pkSince
         B1ifWait      = [int]$wait
         Mode          = $mode
@@ -2462,8 +2457,18 @@ function Get-MfSkipReason {
     $st = ConvertTo-CleanText (Get-JsonProp $Doc 'custom_po_status')
     if (@($Flow.SkipStatuses) -contains $st) { return "approval status is '$st'" }
     if (-not (Test-MfOwns -Row $Doc -Flow $Flow)) { return ("not a {0} order created on or after {1}" -f (@($Flow.Units) -join '/'), $Flow.Since) }
-    if ($st -ne $Flow.ApprovedStatus) { return ("not approved yet - approval status is '{0}', PASS M waits for '{1}'" -f $st, $Flow.ApprovedStatus) }
+    if ($Flow.RequireApproval -and $st -ne 'PO Approved - Ready for SAP') { return "waits for approval (it is '$st')" }
     return ''
+}
+
+function Get-MfCommitmentText {
+    # The SAP Comments line for an order's payment commitment: the latest one.
+    # '' when it has none. Pure.
+    param([object[]] $Rows)
+    $r = @($Rows | Where-Object { $_ }) | Select-Object -Last 1
+    if (-not $r) { return '' }
+    $who = $(if ("$(Get-JsonProp $r 'approver_role')" -eq 'gm') { 'GM' } else { 'Manager' })
+    return ("payment commitment {0}: pays by {1} ({2})" -f (Get-JsonProp $r 'name'), (Get-JsonProp $r 'commitment_date'), $who)
 }
 
 function Get-MfTaxCode {
@@ -2501,8 +2506,10 @@ function Get-MfTaxCode {
     * none (blank, 0, or the item missing in Hi-Tech): Quantity = rolls and
       the price is the app's per-roll rate (amount / qty) - the order's own
       units and total, converted to nothing.
-  Every other line, and every line when -WeightPerRoll is not given, is as
-  before: custom_total_weight at amount / kilos. PerUnit on each line is the
+  A tread sold by the kilo (no rolls, no belts, qty = custom_total_weight;
+  20 Nov 2026) is not a roll line. It, every other line, and every line when
+  -WeightPerRoll is not given, is as before: custom_total_weight at amount /
+  kilos. PerUnit on each line is the
   kilos per roll used (1 when 1:1, 0 when not a roll line); Kg is always
   what SAP's Quantity will be, and PASS M writes it back to the ERPNext line
   so the line reconcile and the pick list count in the same unit as SAP.
@@ -2512,9 +2519,20 @@ function Get-MfTaxCode {
      Total; Problems = <ArrayList of string> }
 #>
 function Test-MfRollLine {
-    # A tread line, ordered in rolls: the app's PCTR and CTR. Pure.
+    # A tread line, ordered in rolls: the app's PCTR and CTR - except a tread
+    # sold by the kilo, which the app writes as qty = custom_total_weight = the
+    # kilos, with no rolls and no loose belts. That line is already in SAP's
+    # unit and goes as its kilos. Until 20 Nov 2026 it was taken for rolls and
+    # multiplied by Hi-Tech's weight per roll: SAL-ORD-2026-00162's 600 kg of
+    # HMD001170 reached Manna Treads SO 588 as 18,000 kg. Pure.
     param($Item)
-    return ((ConvertTo-CleanText (Get-JsonProp $Item 'custom_product_category')).ToUpperInvariant() -in @('PCTR', 'CTR'))
+    if ((ConvertTo-CleanText (Get-JsonProp $Item 'custom_product_category')).ToUpperInvariant() -notin @('PCTR', 'CTR')) { return $false }
+    $rolls = ConvertTo-Number (Get-JsonProp $Item 'custom_rolls')
+    $belts = ConvertTo-Number (Get-JsonProp $Item 'custom_loose_belts')
+    $qty   = ConvertTo-Number (Get-JsonProp $Item 'qty')
+    $kg    = ConvertTo-Number (Get-JsonProp $Item 'custom_total_weight')
+    if ($rolls -le 0 -and $belts -le 0 -and $qty -gt 0 -and [math]::Abs($qty - $kg) -lt 0.0005) { return $false }
+    return $true
 }
 
 function Get-MfOrderPlan {
@@ -2682,10 +2700,14 @@ function New-MfSalesOrderBody {
         [Parameter(Mandatory = $true)] [string] $DocDate,
         [Parameter(Mandatory = $true)] [string] $DueDate,
         [string] $Rep = '',
-        [Parameter(Mandatory = $true)] $Settings
+        [Parameter(Mandatory = $true)] $Settings,
+        [string] $Commitment = ''
     )
     $comments = "From ERPNext $OrderName"
     if ("$Rep".Trim() -ne '') { $comments = "$comments - rep $("$Rep".Trim())" }
+    # The order's 10-day payment commitment, decided in ERPNext (17 Nov 2026):
+    # SAP is told, never asked.
+    if ("$Commitment".Trim() -ne '') { $comments = "$comments - $("$Commitment".Trim())" }
     if ($comments.Length -gt 254) { $comments = $comments.Substring(0, 251) + '...' }
 
     $lines = New-Object System.Collections.ArrayList
@@ -3427,9 +3449,8 @@ try {
         }
         $script:Result.mtRequested = $mtList.Count
 
-        # PASS M's working set: approved orders of the units it owns, created
-        # on or after order_flow.since, with no Manna Treads order and no error
-        # yet. Approved = order_sync.po_status_gate (19 Nov 2026).
+        # PASS M's working set: new orders of the units it owns, created on or
+        # after order_flow.since, with no Manna Treads order and no error yet.
         # Its own try, like PASS C's. creation is the server's own stamp, so a
         # back-dated transaction_date cannot pull an old order in.
         $script:Result.flow = $flow.Mode
@@ -3438,11 +3459,12 @@ try {
             try {
                 $unitsJson = ConvertTo-Json -InputObject @($flow.Units) -Compress
                 $skipJson  = ConvertTo-Json -InputObject @($flow.SkipStatuses) -Compress
-                $mfFilter  = '[["custom_company","in",' + $unitsJson + '],["creation",">=","' + $flow.Since + ' 00:00:00"],["custom_po_status","=","' + $flow.ApprovedStatus + '"],["' + $script:F_MT_SO + '","in",["",null]],["' + $script:F_MT_ERR + '","in",["",null]],["docstatus","<",2]'
+                $mfFilter  = '[["custom_company","in",' + $unitsJson + '],["creation",">=","' + $flow.Since + ' 00:00:00"],["' + $script:F_MT_SO + '","in",["",null]],["' + $script:F_MT_ERR + '","in",["",null]],["docstatus","<",2]'
                 if (@($flow.SkipStatuses).Count -gt 0) { $mfFilter += ',["custom_po_status","not in",' + $skipJson + ']' }
+                if ($flow.RequireApproval) { $mfFilter += ',["custom_po_status","=","PO Approved - Ready for SAP"]' }
                 $mfFilter += ']'
                 $mfList = @(Get-ErpList -Filters $mfFilter -Fields @('name', 'customer', 'creation', 'custom_company') | Sort-Object { "$($_.name)" })
-                Write-Log INFO ("ERPNext: {0} approved {1} order(s) since {2} without a Manna Treads order (manna_first)." -f $mfList.Count, (@($flow.Units) -join '/'), $flow.Since)
+                Write-Log INFO ("ERPNext: {0} new {1} order(s) since {2} without a Manna Treads order (manna_first)." -f $mfList.Count, (@($flow.Units) -join '/'), $flow.Since)
             } catch {
                 Write-Log ERROR ("PASS M: could not read its orders - skipped this run: {0}" -f "$_")
                 $script:Result.failures++
@@ -4139,7 +4161,7 @@ try {
 
         # ============ PASS M - Manna Treads Sales Order, first (manna_first) ============
         #
-        # Every order of order_flow.units, once it is approved in ERPNext, as
+        # Every new order of order_flow.units, as soon as it is in ERPNext, as
         # a Manna Treads Sales Order to the end customer - what it was ordered
         # at, net of GST, with the tax code the customer's state calls for.
         # Its own Manna Treads session, after Hi-Tech's has logged out (one
@@ -4327,9 +4349,21 @@ try {
                                 if ($why) { $null = Write-MfRefusal -Name $name -Message $why -When $mfNow -IsDryRun ([bool]$DryRun); continue }
 
                                 # (d) build and create
+                                $pcText = ''
+                                try {
+                                    $pcQ = 'fields=' + [uri]::EscapeDataString('["name","commitment_date","approver_role"]') +
+                                           '&filters=' + [uri]::EscapeDataString('[["sales_order","=","' + $name + '"],["status","in",["Running","Unchecked","Kept","Missed"]]]') +
+                                           '&order_by=' + [uri]::EscapeDataString('creation asc') + '&limit_page_length=0'
+                                    $pcRows = @((Invoke-ErpApi -Method 'GET' -Path '/api/resource/Manna%20Payment%20Commitment' -Query $pcQ).data)
+                                    $pcText = Get-MfCommitmentText -Rows $pcRows
+                                } catch {
+                                    # A site without the ladder's doctype, or a read that failed: the
+                                    # order still goes, without the line.
+                                    $pcText = ''
+                                }
                                 $body = New-MfSalesOrderBody -Plan $plan -CardCode $w.BpCode -OrderName $name -TaxCode $taxCode `
                                             -DocDate $mfToday -DueDate (Get-MfDueDate -DeliveryDate (Get-JsonProp $w.Doc 'delivery_date') -Today $mfToday) `
-                                            -Rep (ConvertTo-CleanText (Get-JsonProp $w.Doc 'custom_sales_person')) -Settings $mf
+                                            -Rep (ConvertTo-CleanText (Get-JsonProp $w.Doc 'custom_sales_person')) -Settings $mf -Commitment $pcText
                                 if ($DryRun) {
                                     Write-Log INFO ("PASS M {0}: WOULD POST /Orders to {1} ({2} line(s), {3} incl. GST, {4}):`n{5}" -f `
                                         $name, $mf.CompanyDb, $plan.Lines.Count, $plan.Total, $taxCode, ($body | ConvertTo-Json -Depth 8))

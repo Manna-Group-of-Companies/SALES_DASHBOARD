@@ -22,6 +22,7 @@ import {
   beltWeight,
   isMisconfigured,
   rollWeight,
+  soldByKg,
   type LineInput,
 } from '@/domain/productRules';
 import { shelfAvailable } from '@/domain/minimumStock';
@@ -95,11 +96,14 @@ export const ProductRow = memo(function ProductRow({
               <span className="dim">{round(beltWeight(product))} kg/belt</span>
             </>
           )}
-          {product.category === 'CTR' && (
-            <span>
-              Exact <b>{round(rollWeight(product))} kg</b>/roll
-            </span>
-          )}
+          {product.category === 'CTR' &&
+            (soldByKg(product) ? (
+              <span>Sold by kg</span>
+            ) : (
+              <span>
+                Exact <b>{round(rollWeight(product))} kg</b>/roll
+              </span>
+            ))}
           {product.category === 'BG' && (
             <span>
               Box <b>{BG_KG_PER_BOX} kg</b> ({BG_KG_PER_ROLL} kg × 4 rolls)
@@ -115,7 +119,11 @@ export const ProductRow = memo(function ProductRow({
           <StockChip
             item={minStock}
             available={available ?? undefined}
-            uom={product.category === 'PCTR' || product.category === 'CTR' ? 'rolls' : 'kg'}
+            uom={
+              product.category === 'PCTR' || (product.category === 'CTR' && !soldByKg(product))
+                ? 'rolls'
+                : 'kg'
+            }
           />
         </div>
         {broken && <div className="prow__broken">{broken}</div>}
@@ -143,7 +151,25 @@ export const ProductRow = memo(function ProductRow({
           </>
         )}
 
-        {product.category === 'CTR' && (
+        {product.category === 'CTR' && soldByKg(product) && (
+          <div className="prow__input--wide">
+            <Field label="Kilos" error={issueFor('kg')}>
+              <UnitInput
+                suffix="kg"
+                compact
+                type="number"
+                min={0}
+                step={0.001}
+                placeholder="0"
+                value={input.kg ?? ''}
+                invalid={Boolean(issueFor('kg'))}
+                onChange={(e) => set({ kg: toNum(e.target.value) })}
+              />
+            </Field>
+          </div>
+        )}
+
+        {product.category === 'CTR' && !soldByKg(product) && (
           // No loose-belt field: CTR is always sold as fixed-weight rolls (1.3).
           <div className="prow__input">
             <Field label="Rolls" error={issueFor('rolls')}>

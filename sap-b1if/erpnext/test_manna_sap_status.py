@@ -5,14 +5,11 @@ import types
 HERE = os.path.dirname(__file__)
 ns = {"frappe": types.SimpleNamespace(flags={"manna_test": True})}
 exec(open(os.path.join(HERE, "manna_sap_status.py"), encoding="utf-8").read(), ns)
-plan, order_status, merge_stage, merge_date = ns["plan"], ns["order_status"], ns["merge_stage"], ns["merge_date"]
+plan, order_status, merge_stage = ns["plan"], ns["order_status"], ns["merge_stage"]
 
 
 def order(*items, status=""):
-	# A 5th element is the ship date already stored for that line; left out, "".
-	return {"status": status, "lines": [
-		{"name": "row-%s" % it, "item_code": it, "ht_stage": ht, "dispatched": d, "status": s, "ship_date": (rest[0] if rest else "")}
-		for it, ht, d, s, *rest in items]}
+	return {"status": status, "lines": [{"name": "row-%s" % it, "item_code": it, "ht_stage": ht, "dispatched": d, "status": s} for it, ht, d, s in items]}
 
 
 def test_an_order_has_a_status_only_when_every_line_has_reached_it():
@@ -92,41 +89,89 @@ def test_item_codes_match_whatever_their_case():
 	assert p["lines"][0]["fields"]["custom_sap_line_status"] == "In SAP"
 
 
-def test_hitech_moving_the_date_is_carried_to_the_line():
-	p = plan("hitech", [{"order": "SO1", "item": "A", "stage": "In SAP", "date": "2026-11-20"}],
-		{"SO1": order(("A", "In SAP", 0, "In SAP", "2026-11-13"))})
-	assert p["lines"][0]["fields"]["custom_sap_ship_date"] == "2026-11-20"
+# ---- delivery dates (13 Nov 2026): Hi-Tech's line date becomes the order's
 
 
-def test_a_blank_date_is_itself_the_news_the_line_closed():
-	p = plan("hitech", [{"order": "SO1", "item": "A", "stage": "Picked", "date": ""}],
-		{"SO1": order(("A", "In SAP", 0, "In SAP", "2026-11-13"))})
-	assert p["lines"][0]["fields"]["custom_sap_ship_date"] is None
+def dated(header, *items, original="", status="In SAP"):
+	"""An order whose lines are (item, stage/status, delivery date)."""
+	return {"status": status, "delivery_date": header, "original_delivery_date": original,
+		"lines": [{"name": "row-%s" % it, "item_code": it, "ht_stage": st if st != "Dispatched" else "Picked", "dispatched": 1 if st == "Dispatched" else 0,
+			"status": st, "delivery_date": d} for it, st, d in items]}
 
 
-def test_the_same_date_already_held_writes_nothing_for_it():
-	p = plan("hitech", [{"order": "SO1", "item": "A", "stage": "In SAP", "date": "2026-11-13"}],
-		{"SO1": order(("A", "In SAP", 0, "In SAP", "2026-11-13"))})
-	assert "custom_sap_ship_date" not in p["lines"][0]["fields"] if p["lines"] else True
+def ht(order, item, date, stage="In SAP"):
+	return {"order": order, "item": item, "stage": stage, "date": date}
 
 
-def test_a_manna_post_never_touches_the_ship_date():
-	p = plan("manna", [{"order": "SO1", "item": "A", "stage": "Dispatched"}],
-		{"SO1": order(("A", "Picked", 0, "Picked", "2026-11-13"))})
-	assert "custom_sap_ship_date" not in p["lines"][0]["fields"]
+def test_a_date_moved_for_the_whole_order_moves_every_line_and_the_order():
+	p = plan("hitech", [ht("SO1", "A", "2026-11-25"), ht("SO1", "B", "2026-11-25")],
+		{"SO1": dated("2026-11-20", ("A", "In SAP", "2026-11-20"), ("B", "In SAP", "2026-11-20"))})
+	assert [(w["item"], w["from"], w["to"]) for w in p["date_lines"]] == [("A", "2026-11-20", "2026-11-25"), ("B", "2026-11-20", "2026-11-25")]
+	assert p["date_orders"] == [{"name": "SO1", "from": "2026-11-20", "to": "2026-11-25", "original": "2026-11-20"}]
 
 
-def test_an_item_split_across_two_hitech_lines_takes_the_later_open_date():
-	p = plan("hitech", [
-		{"order": "SO1", "item": "A", "stage": "In SAP", "date": "2026-11-20"},
-		{"order": "SO1", "item": "A", "stage": "Picked", "date": "2026-11-15"},
-	], {"SO1": order(("A", "", 0, "", ""))})
-	assert p["lines"][0]["fields"]["custom_sap_ship_date"] == "2026-11-20"
+def test_a_date_moved_for_one_item_moves_that_line_and_the_order_is_complete_on_the_latest():
+	p = plan("hitech", [ht("SO1", "A", "2026-11-20"), ht("SO1", "B", "2026-11-27")],
+		{"SO1": dated("2026-11-20", ("A", "In SAP", "2026-11-20"), ("B", "In SAP", "2026-11-20"))})
+	assert [(w["item"], w["to"]) for w in p["date_lines"]] == [("B", "2026-11-27")]
+	assert p["date_orders"][0]["to"] == "2026-11-27"
 
 
-def test_merge_date_ignores_blanks_and_keeps_the_later_one():
-	assert merge_date("2026-11-13", "2026-11-20") == "2026-11-20"
-	assert merge_date("2026-11-20", "2026-11-13") == "2026-11-20"
-	assert merge_date("2026-11-13", "") == "2026-11-13"
-	assert merge_date("", "2026-11-13") == "2026-11-13"
-	assert merge_date("", "") == ""
+def test_dates_that_already_agree_write_nothing():
+	p = plan("hitech", [ht("SO1", "A", "2026-11-20")], {"SO1": dated("2026-11-20", ("A", "In SAP", "2026-11-20"))})
+	assert p["date_lines"] == [] and p["date_orders"] == []
+
+
+def test_the_date_the_customer_was_given_is_kept_once_and_never_overwritten():
+	p = plan("hitech", [ht("SO1", "A", "2026-11-30")],
+		{"SO1": dated("2026-11-25", ("A", "In SAP", "2026-11-25"), original="2026-11-20")})
+	assert p["date_orders"] == [{"name": "SO1", "from": "2026-11-25", "to": "2026-11-30", "original": ""}]
+
+
+def test_a_line_with_no_date_in_the_batch_keeps_its_own():
+	# Closed or cancelled in Hi-Tech, or a package from before dates were sent.
+	p = plan("hitech", [ht("SO1", "A", ""), ht("SO1", "B", "")],
+		{"SO1": dated("2026-11-20", ("A", "In SAP", "2026-11-20"), ("B", "In SAP", "2026-11-22"))})
+	assert p["date_lines"] == [] and p["date_orders"] == []
+
+
+def test_a_dispatched_or_cancelled_line_does_not_hold_the_orders_date():
+	p = plan("hitech", [ht("SO1", "A", "", "Picked"), ht("SO1", "B", "2026-11-18"), ht("SO1", "C", "", "Cancelled")],
+		{"SO1": dated("2026-11-28", ("A", "Dispatched", "2026-11-28"), ("B", "In SAP", "2026-11-28"), ("C", "In SAP", "2026-11-28"))})
+	assert [(w["item"], w["to"]) for w in p["date_lines"]] == [("B", "2026-11-18")]
+	assert p["date_orders"][0]["to"] == "2026-11-18"
+
+
+def test_an_item_split_over_two_hitech_lines_takes_the_later_date():
+	p = plan("hitech", [ht("SO1", "A", "2026-11-20"), ht("SO1", "A", "2026-11-27")],
+		{"SO1": dated("2026-11-20", ("A", "In SAP", "2026-11-20"))})
+	assert p["date_lines"][0]["to"] == "2026-11-27"
+
+
+def test_an_item_on_two_erpnext_lines_keeps_its_dates_and_they_still_count_for_the_order():
+	p = plan("hitech", [ht("SO1", "A", "2026-11-30"), ht("SO1", "B", "2026-11-22")],
+		{"SO1": {"status": "", "delivery_date": "2026-11-20", "original_delivery_date": "", "lines": [
+			{"name": "r1", "item_code": "A", "ht_stage": "", "dispatched": 0, "status": "", "delivery_date": "2026-11-20"},
+			{"name": "r2", "item_code": "A", "ht_stage": "", "dispatched": 0, "status": "", "delivery_date": "2026-11-24"},
+			{"name": "r3", "item_code": "B", "ht_stage": "", "dispatched": 0, "status": "", "delivery_date": "2026-11-20"}]}})
+	assert [(w["row"], w["to"]) for w in p["date_lines"]] == [("r3", "2026-11-22")]
+	assert p["date_orders"][0]["to"] == "2026-11-24"
+
+
+def test_something_that_is_not_a_date_is_never_written():
+	p = plan("hitech", [ht("SO1", "A", "25/11/2026"), ht("SO1", "B", "2026-11-2")],
+		{"SO1": dated("2026-11-20", ("A", "In SAP", "2026-11-20"), ("B", "In SAP", "2026-11-20"))})
+	assert p["date_lines"] == [] and p["date_orders"] == []
+
+
+def test_manna_posts_never_move_a_date():
+	p = plan("manna", [{"order": "SO1", "item": "A", "stage": "Dispatched", "date": "2026-12-01"}],
+		{"SO1": dated("2026-11-20", ("A", "Picked", "2026-11-20"))})
+	assert p["date_lines"] == [] and p["date_orders"] == []
+
+
+def test_a_date_read_as_a_date_object_compares_as_its_day():
+	import datetime
+	p = plan("hitech", [ht("SO1", "A", "2026-11-20")],
+		{"SO1": dated(datetime.date(2026, 11, 20), ("A", "In SAP", datetime.date(2026, 11, 20)))})
+	assert p["date_lines"] == [] and p["date_orders"] == []

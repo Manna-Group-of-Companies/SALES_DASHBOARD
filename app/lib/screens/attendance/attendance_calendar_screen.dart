@@ -60,6 +60,11 @@ class _AttendanceCalendarScreenState extends State<AttendanceCalendarScreen> {
   String _key(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
+  /// The month could not be read - no signal and nothing kept. Its days are
+  /// then left blank, never painted absent (13 Nov 2026: offline, every day of
+  /// a rep's month showed red). Unknown is not absent.
+  bool _unread = false;
+
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
@@ -78,7 +83,13 @@ class _AttendanceCalendarScreenState extends State<AttendanceCalendarScreen> {
       for (final lv in leaves) {
         _leaves['${lv['leave_date']}'] = lv;
       }
-    } catch (_) {}
+      _unread = false;
+    } catch (_) {
+      _logs.clear();
+      _regs.clear();
+      _leaves.clear();
+      _unread = true;
+    }
     if (!mounted) return;
     setState(() => _loading = false);
     final day = widget.regularizeDate;
@@ -126,6 +137,7 @@ class _AttendanceCalendarScreenState extends State<AttendanceCalendarScreen> {
     if (d0.isAfter(t0)) return null;
     final log = _logs[_key(day)];
     if (log == null) {
+      if (_unread) return null; // the month could not be read: unknown, not absent
       if (d0.isAtSameMomentAs(t0)) return null; // today, not punched yet
       if (d0.isBefore(kGoLiveDate)) return null; // before the app existed
       return Colors.red; // absent

@@ -1,0 +1,64 @@
+{
+  "about": "Manna Credit Period Request (16 Nov 2026): a customer's request, through their rep, for a different SAP payment term on their Manna Treads account. Up to 30 days the rep's manager approves and pushes it; 31 to 40 days the GM does, after the manager escalates it. System Manager only, like Manna Item Request: every read and write goes through the manna_credit_period_request Server Script (credit_period_request.py). SAP Sync Bot reads it, to find what to push; it reports back through the script. Rules: shared/fixtures/credit_period_request.json. Also here: the field on SAP Sync Control the credit sync copies SAP's payment terms into.",
+  "doctypes": [
+    {
+      "doctype": "DocType",
+      "name": "Manna Credit Period Request",
+      "module": "Selling",
+      "custom": 1,
+      "autoname": "format:CPR-{#####}",
+      "sort_field": "creation",
+      "sort_order": "DESC",
+      "track_changes": 1,
+      "title_field": "customer_name",
+      "permissions": [
+        { "role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1 },
+        { "role": "SAP Sync Bot", "read": 1 }
+      ],
+      "fields": [
+        { "fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "With Manager\nWith GM\nApproved\nSending to SAP\nIn SAP\nRejected", "default": "With Manager", "in_list_view": 1, "in_standard_filter": 1, "description": "With Manager: up to 30 days the manager decides; 31-40 the manager escalates. Sending to SAP: pushed, waiting for the credit sync." },
+        { "fieldname": "customer", "label": "Customer", "fieldtype": "Link", "options": "Customer", "reqd": 1, "in_standard_filter": 1 },
+        { "fieldname": "customer_name", "label": "Customer Name", "fieldtype": "Data", "read_only": 1, "in_list_view": 1 },
+        { "fieldname": "bp_code", "label": "SAP Code", "fieldtype": "Data", "read_only": 1, "description": "custom_bp_code when asked: the Manna Treads business partner the push changes" },
+        { "fieldname": "column_break_1", "fieldtype": "Column Break" },
+        { "fieldname": "current_term", "label": "Current Term", "fieldtype": "Data", "read_only": 1 },
+        { "fieldname": "current_term_days", "label": "Current Days", "fieldtype": "Int", "read_only": 1 },
+        { "fieldname": "requested_term", "label": "Requested Term", "fieldtype": "Data", "read_only": 1, "in_list_view": 1 },
+        { "fieldname": "requested_term_code", "label": "Requested Term Code", "fieldtype": "Int", "read_only": 1, "description": "SAP PaymentTermsTypes.GroupNumber (OCTG.GroupNum)" },
+        { "fieldname": "requested_days", "label": "Requested Days", "fieldtype": "Int", "read_only": 1, "in_list_view": 1 },
+        { "fieldname": "section_reason", "fieldtype": "Section Break" },
+        { "fieldname": "reason", "label": "Reason", "fieldtype": "Small Text" },
+        { "fieldname": "section_who", "label": "Requested", "fieldtype": "Section Break" },
+        { "fieldname": "sales_person", "label": "Sales Person", "fieldtype": "Link", "options": "Sales Person", "read_only": 1, "in_standard_filter": 1 },
+        { "fieldname": "team", "label": "Team", "fieldtype": "Data", "read_only": 1, "in_standard_filter": 1, "description": "The rep's team token (Sales Person.custom_team_manager): whose manager decides" },
+        { "fieldname": "requested_by", "label": "Requested By", "fieldtype": "Link", "options": "User", "read_only": 1 },
+        { "fieldname": "requested_on", "label": "Requested On", "fieldtype": "Datetime", "read_only": 1 },
+        { "fieldname": "section_manager", "label": "Manager", "fieldtype": "Section Break" },
+        { "fieldname": "escalated_by", "label": "Escalated By", "fieldtype": "Link", "options": "User", "read_only": 1 },
+        { "fieldname": "escalated_on", "label": "Escalated On", "fieldtype": "Datetime", "read_only": 1 },
+        { "fieldname": "manager_note", "label": "Manager's Note", "fieldtype": "Small Text", "read_only": 1 },
+        { "fieldname": "section_decision", "label": "Decision", "fieldtype": "Section Break" },
+        { "fieldname": "decided_by", "label": "Decided By", "fieldtype": "Link", "options": "User", "read_only": 1 },
+        { "fieldname": "decided_on", "label": "Decided On", "fieldtype": "Datetime", "read_only": 1 },
+        { "fieldname": "approver_role", "label": "Decided As", "fieldtype": "Select", "options": "\nmanager\ngm", "read_only": 1, "description": "The credit sync refuses to push 31-40 days not decided as gm" },
+        { "fieldname": "decision_note", "label": "Decision Note", "fieldtype": "Small Text", "read_only": 1 },
+        { "fieldname": "section_sap", "label": "SAP", "fieldtype": "Section Break" },
+        { "fieldname": "push_requested_by", "label": "Pushed By", "fieldtype": "Link", "options": "User", "read_only": 1 },
+        { "fieldname": "push_requested_on", "label": "Pushed On", "fieldtype": "Datetime", "read_only": 1 },
+        { "fieldname": "sap_company", "label": "SAP Company", "fieldtype": "Data", "read_only": 1 },
+        { "fieldname": "column_break_2", "fieldtype": "Column Break" },
+        { "fieldname": "sap_pushed_on", "label": "In SAP On", "fieldtype": "Datetime", "read_only": 1 },
+        { "fieldname": "sap_previous_term", "label": "Term in SAP Before", "fieldtype": "Data", "read_only": 1 },
+        { "fieldname": "sap_error", "label": "SAP Error", "fieldtype": "Small Text", "read_only": 1 }
+      ]
+    }
+  ],
+  "single_fields": [
+    {
+      "doctype": "SAP Sync Control",
+      "fields": [
+        { "fieldname": "payment_terms_json", "label": "SAP Payment Terms", "fieldtype": "Long Text", "read_only": 1, "description": "Written by the credit sync every run (16 Nov 2026): Manna Treads' payment terms as [{code, name, days}], for credit-period requests. SAP Sync Control is our own doctype, so no custom_ prefix." }
+      ]
+    }
+  ]
+}

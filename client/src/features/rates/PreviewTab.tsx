@@ -13,6 +13,7 @@ import { Alert, Badge, Button, Card, Segmented } from '@/components/ui';
 import {
   buildDtwFiles,
   hitechByQuality,
+  HITECH_PRICE_LIST,
   roundMoney,
   type DealerSummary,
   type DtwDelivery,
@@ -169,7 +170,7 @@ export function PreviewTab({
                 <div className="rates__bar">
                   <b>After import</b>
                   <Button size="sm" onClick={onSync}>
-                    Sync from SAP
+                    Reload
                   </Button>
                 </div>
               </li>
@@ -179,7 +180,7 @@ export function PreviewTab({
       )}
 
       <Card title="Confirm" className="rates__confirm-card">
-        {plan.hitechSkipped && (
+        {HITECH_PRICE_LIST && plan.hitechSkipped && (
           <Alert tone="warn" title={`No ${hitechName} prices`}>
             {plan.hitechSkipped}.
           </Alert>
@@ -208,7 +209,7 @@ export function PreviewTab({
         )}
         <div className="rates__confirm">
           <span className="small">
-            {!dirty ? 'No changes — SAP already matches.' : awaitingImport ? `Files made ${confirmed?.at}. Import them, then Sync from SAP.` : `Confirming ${will}.`}
+            {!dirty ? 'No changes — SAP already matches.' : awaitingImport ? `Files made ${confirmed?.at}. Import them; SAP is read again at :29 and :59, then Reload.` : `Confirming ${will}.`}
           </span>
           {awaitingImport ? (
             <Button variant="ghost" disabled={!dirty} loading={confirming} onClick={onConfirm}>
@@ -447,7 +448,7 @@ export function PreviewTab({
         )}
       </Card>
 
-      {snapshot.hitech && (
+      {HITECH_PRICE_LIST && snapshot.hitech && (
         <Card
           title={`${hitechName} prices`}
           actions={

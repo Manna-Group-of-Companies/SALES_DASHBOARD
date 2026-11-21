@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/payment_commitment.dart';
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/credit_commitment.dart';
 import 'package:manna_field_sales/core/errors.dart';
@@ -111,7 +112,8 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
   /// the words start as the rep's own commitment, and with one on the order
   /// the condition is required — `askGmCondition` and
   /// `Api.approveEscalatedOrder` both hold that line.
-  Future<void> _act(Approval a, bool approve) async {
+  /// [push] (17 Nov 2026, the user): the GM approves AND pushes to SAP.
+  Future<void> _act(Approval a, bool approve, {bool push = false}) async {
     GmApproval? terms;
     // Only on a real Sales Order, and only on the way in. A rejection carries
     // no obligation, and a Lead Order has no customer to hang one on yet.
@@ -130,8 +132,26 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
       if (a.kind == 'gm_so_po') {
         if (approve) {
           final t = terms!;
+          // An order needing a credit decision (over the limit, overdue more
+          // than 30 days past terms, or a missed commitment not cleared) is
+          // another 10-day payment commitment: the condition and its date
+          // (payment_commitment.json). Sent first, so the approval finds it.
+          final route = await Api.getOrderRoute(a.name);
+          final needs = (route['needs'] as Map?) ?? const {};
+          if (needs['needs'] == true || route['gm_lock'] == true) {
+            final d = DateTime.now();
+            final today =
+                '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+            final problem = pcCheckApproval(approvedOn: today, commitment: t.dueIso, remarks: t.condition);
+            if (problem != null) {
+              throw Exception(problem == 'remarks'
+                  ? 'Write the condition: it is the payment commitment for this order.'
+                  : '${kPcMessages[problem]} The due date is the payment commitment date.');
+            }
+            await Api.givePaymentCommitment(a.name, t.dueIso, t.condition, customerName: '${a.party}');
+          }
           conditionSaved = await Api.approveEscalatedOrder(a.name,
-              condition: t.condition, dueDateIso: t.dueIso);
+              condition: t.condition, dueDateIso: t.dueIso, push: push);
         } else {
           await Api.approveSalesOrderPO(a.name, false);
         }
@@ -230,6 +250,8 @@ class _GMApprovalsScreenState extends State<GMApprovalsScreen> {
                   onOpen: () => _open(a),
                   onApprove: () => _act(a, true),
                   onReject: () => _act(a, false),
+                  // A customer order only: a lead order has no SAP order yet.
+                  onApproveAndPush: a.kind == 'gm_so_po' ? () => _act(a, true, push: true) : null,
                 );
               },
             ),
@@ -252,6 +274,7 @@ class GmEscalationCard extends StatelessWidget {
     required this.onOpen,
     required this.onApprove,
     required this.onReject,
+    this.onApproveAndPush,
     this.today,
   });
 
@@ -259,6 +282,9 @@ class GmEscalationCard extends StatelessWidget {
   final VoidCallback onOpen;
   final VoidCallback onApprove;
   final VoidCallback onReject;
+
+  /// The GM approves AND pushes to SAP in one step (17 Nov 2026, the user).
+  final VoidCallback? onApproveAndPush;
 
   /// The day the waiting time is counted to; today when not given.
   final DateTime? today;
@@ -537,6 +563,17 @@ class GmEscalationCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 6),
+          if (onApproveAndPush != null) ...[
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: onApproveAndPush,
+                icon: const Icon(Icons.cloud_upload),
+                label: const Text('Approve & Push to SAP'),
+              ),
+            ),
+            const SizedBox(height: 6),
+          ],
           Row(children: [
             Expanded(
                 child: OutlinedButton.icon(

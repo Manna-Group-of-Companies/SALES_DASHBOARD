@@ -4,6 +4,25 @@ PowerShell, run on the SAP server, behind the Managing Director's rates screen
 in the dashboard (`client/src/features/rates/`). Reads SAP through the Service
 Layer. Writes to SAP only through DTW files that a person imports.
 
+## Since 14 November 2026
+
+- **The groups are the rows of management's price list** ("PRICE LIST AS ON
+  13.11.26.xlsx", sheet MRP): Manna Treads' item properties 1–17, named exactly
+  as the rows ("PCTR MANNA DOUBLE BLUE (BP)" … "SOLUTION 10"), ticked by DTW on
+  every new code (638), with Price List 01 at the row's price. Only a ticked
+  item is in a group; nothing is worked out from names any more.
+- **Each dealer gets rupees off per row** (sheet C.WISE MRP: the row's price
+  less the dealer's), kept as *SAP Dealer Rate Rule* in ERPNext. A dealer with
+  no discount on a row has no rule there and pays the list price.
+- **Hi-Tech keeps no price list.** B1if makes Manna Treads' purchase order at
+  Manna Treads' price less `@MANNA_IC` `MARGIN` and Hi-Tech's sales order from
+  it, so the screen makes, files and checks no Hi-Tech price
+  (`HITECH_PRICE_LIST` in `client/src/domain/dealerRates.ts` and
+  `sap-b1if/erpnext/manna_sap_pricing.py`). The Hi-Tech rule below is history.
+- **B1if writes the snapshot** every half hour (`Z.LIVEerpprice`, :29 and :59).
+  The office server's pricing task is retired, so the screen's button reloads
+  the latest read rather than asking for one.
+
 ## The rules
 
 Decided with the user on 25 September 2026.
@@ -36,6 +55,42 @@ and so on. Each item carries exactly one (25 Sep 2026).
   on the screen as a new group with no code change.
 - An item carrying two named properties is flagged, and a change to both of
   its groups is refused for it.
+
+**An item nobody has ticked joins a group by itself** (11 Nov 2026,
+`AutoGroups.ps1`): its SAP item group gives the type (HOT → Hot, PRECURED →
+PCTR) and its name, else `U_SubTypeA`, gives the quality. A ticked property
+still wins. An item whose name and `U_SubTypeA` name different qualities, or
+neither names one, is left out and listed under the groups on the screen
+(`snapshot.ungrouped`). The grouping is done once, in the sync. The screen and
+the server check both read `props` from the snapshot, so there is no second
+copy of the rule to drift.
+
+**Stand-in prices, on test companies only.** When neither company database
+ends in `_LIVE`, an item with no Price List 01 price (or a price of 0) gets its
+group's median in whole rupees. A group with no priced item gets the median for
+its type. Those items are marked `listPriceSource = 'placeholder'`, and the
+screen shows a banner and a *stand-in* badge. File 1 then writes every stand-in
+into SAP, because the dealer and Hi-Tech files are worked out from it. On live
+an unpriced item stays unpriced.
+
+**The same rules run in two places**, both tested against
+`shared/fixtures/price_groups.json`:
+- here, in `AutoGroups.ps1`;
+- in B1iF's `Z.erpprice` step, which posts to the `manna_sap_pricing` Server
+  Script (`sap-b1if/erpnext/manna_sap_pricing.py`). Its query,
+  `sap-b1if/pricing/pricing_manna.sql`, returns the HOT and PRECURED items as
+  well as the ticked ones.
+
+Qualities are matched as plain text with spaces removed, never by regex,
+because a Server Script cannot use `re`. A local run:
+
+```powershell
+.\Sync-SapPricingSnapshot.ps1 -ConfigPath <poller.json for the local ERPNext> `
+  -TreadsDb TEST_MANNA_TREADS -HitechDb TEST_HITECH_PRETREADS
+```
+
+`sap.password_overrides.<CompanyDb>` in the SAP config handles a test company
+whose password is different from the others.
 
 The code still calls a group a "quality" in places; its name is whatever SAP
 says. The type shown beside an item (HOT, PCTR, BONDING GUM) is read from its

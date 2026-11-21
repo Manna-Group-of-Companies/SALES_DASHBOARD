@@ -255,7 +255,9 @@ export type ManagerScreen =
   | 'regularizations'
   | 'orders'
   | 'stock'
-  | 'targets';
+  | 'targets'
+  /** Credit-period requests (16 Nov 2026): shared/fixtures/credit_period_request.json. */
+  | 'credit';
 
 /** Everything. */
 const FULL: ManagerScreen[] = [
@@ -266,13 +268,15 @@ const FULL: ManagerScreen[] = [
   'orders',
   'stock',
   'targets',
+  'credit',
 ];
 
 /**
  * Party records and their own people. Every manager sets their own team's
- * monthly targets (3 Nov 2026).
+ * monthly targets (3 Nov 2026) and decides their team's credit-period
+ * requests (16 Nov 2026).
  */
-const PARTY_ONLY: ManagerScreen[] = ['customers', 'leads', 'locations', 'regularizations', 'targets'];
+const PARTY_ONLY: ManagerScreen[] = ['customers', 'leads', 'locations', 'regularizations', 'targets', 'credit'];
 
 /**
  * Keyed by the team token on `Sales Person.custom_team_manager`, which is what

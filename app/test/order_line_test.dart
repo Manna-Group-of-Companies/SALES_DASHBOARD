@@ -205,8 +205,14 @@ void main() {
       // Priced by the tin, not by weight.
       expect(small.qty, 3);
       expect(small.amount, 2850);
-      expect(small.totalWeightKg, 0);
       expect(large.amount, 5400);
+      // But the litres are the line's quantity in SAP (20 Nov 2026): a 0 here
+      // made the order sync refuse every solution order.
+      expect(small.totalWeightKg, 30);
+      expect(large.totalWeightKg, 60);
+      expect(large.toSalesOrderItem()['custom_total_weight'], 60);
+      expect(large.toSalesOrderItem()['qty'], 2);
+      expect(large.toSalesOrderItem()['amount'], 5400);
       expect(tenL.category.rateUnit, 'can');
       expect(small.packingNote, '3 x 10L cans');
     });
@@ -291,7 +297,10 @@ void main() {
           'MSB-00004');
     });
 
-    test('solution carries no weight', () {
+    // It carried 0 until 20 Nov 2026, and the order sync - which sends
+    // custom_total_weight as SAP's quantity - refused every solution order
+    // (SAL-ORD-2026-00162). SAP holds solution in litres.
+    test('solution carries its litres as the weight, cans x tin size', () {
       final line = OrderLine(
         product: _item({
           'item_group': 'Vulcanizing Solution',
@@ -299,6 +308,15 @@ void main() {
         }),
         cans: 2,
       );
+      expect(line.toSalesOrderItem()['custom_total_weight'], 60);
+    });
+
+    test('a solution item with no tin size still carries no weight', () {
+      final line = OrderLine(
+        product: _item({'item_group': 'Vulcanizing Solution'}),
+        cans: 2,
+      );
+      // isMisconfigured stops it at the row; the sync refuses it if it got by.
       expect(line.toSalesOrderItem()['custom_total_weight'], 0);
     });
   });

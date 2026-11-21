@@ -11,6 +11,7 @@
 
 import 'package:flutter/material.dart';
 
+import 'package:manna_field_sales/core/payment_commitment.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
@@ -64,6 +65,14 @@ OrderBucket bucketOf(Map<String, dynamic> r) {
       poStatus: r['custom_po_status'],
       sap: SapOrderState.fromOrder(r));
 }
+
+/// The stage names the user asked for (17 Nov 2026), coloured like the pills.
+Tone _stageTone(String stage) => switch (stage) {
+      kStageRejected => Tone.bad,
+      kStagePushed || kStageApproved => Tone.good,
+      kStageGm => Tone.info,
+      _ => Tone.warn,
+    };
 
 /// The pill on an order card: its words and how worried to look.
 (String, Tone) orderPill(Map<String, dynamic> r) {
@@ -132,11 +141,25 @@ class OrderCard extends StatelessWidget {
               if (sapNo.isNotEmpty) 'SAP $sapNo' else 'Not in SAP yet',
               textOf(r['custom_sales_person']),
               shortDate(r['transaction_date']),
+              if (r['_outstanding'] is num) 'Outstanding ${money(numOf(r['_outstanding']))}',
             ].where((s) => s.isNotEmpty).join(' · '),
             style: const TextStyle(fontSize: 12, color: kMuted)),
         const SizedBox(height: 8),
         Row(children: [
-          StatusPill(pill, tone: tone),
+          // One label (17 Nov 2026, the user): a Sales Order shows its stage.
+          // The old pill stays for a lead order and for one SAP cancelled,
+          // which no stage says. Without the commitment figures (no signal)
+          // the stage still reads from the order itself.
+          if (r['is_lead'] != true && bucketOf(r) != OrderBucket.cancelled)
+            Builder(builder: (_) {
+              final stage = pcOrderStage(
+                  poStatus: textOf(r['custom_po_status']),
+                  pushed: r['_pushed'] == true || textOf(r['custom_sap_sales_order']).isNotEmpty,
+                  commitment: '${r['_pc_status'] ?? ''}');
+              return StatusPill(stage, tone: _stageTone(stage));
+            })
+          else
+            StatusPill(pill, tone: tone),
           if (r['is_lead'] == true) ...[
             const SizedBox(width: 6),
             const StatusPill('Lead', tone: Tone.info),
@@ -212,8 +235,31 @@ class _TeamOrdersViewState extends State<TeamOrdersView> {
     ];
   }
 
-  Future<List<Map<String, dynamic>>> _load() =>
-      Api.getTeamOrders(from: _week.from, to: _week.to);
+  /// The week's orders, each with its payment-commitment stage and the
+  /// customer's outstanding (17 Nov 2026). Those two are extras: a list that
+  /// cannot read them still lists.
+  Future<List<Map<String, dynamic>>> _load() async {
+    final rows = await Api.getTeamOrders(from: _week.from, to: _week.to);
+    final orders = [for (final r in rows) if (r['is_lead'] != true) '${r['name']}'];
+    try {
+      final results = await Future.wait([
+        Api.getOrdersCommitments(orders),
+        Api.getCustomersOutstanding([for (final r in rows) if (r['is_lead'] != true) '${r['customer']}']),
+      ]);
+      final pc = results[0];
+      final owed = results[1] as Map<String, double>;
+      final byOrder = (pc['orders'] as Map?) ?? const {};
+      final pushed = ((pc['pushed'] as List?) ?? const []).map((e) => '$e').toSet();
+      for (final r in rows) {
+        if (r['is_lead'] == true) continue;
+        final c = byOrder['${r['name']}'];
+        r['_pc_status'] = c is Map ? '${c['status'] ?? ''}' : '';
+        r['_pushed'] = pushed.contains('${r['name']}') || textOf(r['custom_sap_sales_order']).isNotEmpty;
+        r['_outstanding'] = owed['${r['customer']}'];
+      }
+    } catch (_) {}
+    return rows;
+  }
 
   void _reload() {
     if (mounted) setState(() => _future = _load());

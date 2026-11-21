@@ -229,7 +229,7 @@ class CreditEscalation {
 CreditEscalation escalationOf(Map<String, dynamic> customer, double orderTotal) =>
     CreditEscalation(
       overLimit: overCreditLimit(customer, orderTotal),
-      pastTerms: overduePastTerms(customer) > kOverdueTolerance,
+      pastTerms: overduePastTerms(customer) > kOverdueTolerance && overdueDaysOf(customer) > 30,
     );
 
 /// Whether an order needs the general manager's credit approval.
@@ -276,3 +276,36 @@ const String kAgingNoData = '—';
 const String kAgingNotSynced = 'No age breakdown from SAP yet.';
 
 const String kAgingMismatch = 'Age breakdown does not match the balance. Re-sync from SAP.';
+
+/// What [customers] owe between them, each counted as [agingOf] counts it -
+/// the same figure their own page shows (14 Nov 2026, the user: show the
+/// total outstanding on the customer list). A customer in credit takes off
+/// what they hold, as it does in SAP's own balance.
+double totalOutstanding(Iterable<Map<String, dynamic>> customers) =>
+    _round2(customers.fold(0.0, (sum, c) => sum + agingOf(c).total));
+
+/// Rupees with Indian grouping, whole rupees: 1234567 -> ₹12,34,567.
+String inr(num v) {
+  final neg = v < 0;
+  var digits = v.abs().round().toString();
+  if (digits.length > 3) {
+    final last3 = digits.substring(digits.length - 3);
+    var rest = digits.substring(0, digits.length - 3);
+    final groups = <String>[];
+    while (rest.length > 2) {
+      groups.insert(0, rest.substring(rest.length - 2));
+      rest = rest.substring(0, rest.length - 2);
+    }
+    if (rest.isNotEmpty) groups.insert(0, rest);
+    digits = '${groups.join(',')},$last3';
+  }
+  return '${neg ? '-' : ''}₹$digits';
+}
+
+/// The customers whose payment is due: money overdue past their payment
+/// terms, as SAP's credit sync wrote it (14 Nov 2026, the user: show the
+/// payment-due customers on the dashboard). Most overdue first.
+List<Map<String, dynamic>> paymentDueCustomers(
+        Iterable<Map<String, dynamic>> customers) =>
+    customers.where((c) => overduePastTerms(c) >= kOverdueTolerance).toList()
+      ..sort((a, b) => overduePastTerms(b).compareTo(overduePastTerms(a)));

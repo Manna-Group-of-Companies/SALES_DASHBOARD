@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 
 import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/party_location.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/services/map_service.dart' show openInGoogleMaps;
 import 'package:manna_field_sales/screens/leads/add_lead_screen.dart';
 import 'package:manna_field_sales/screens/leads/lead_detail_screen.dart';
 import 'package:manna_field_sales/screens/customers/routes_screen.dart';
@@ -288,6 +290,15 @@ class _LeadsScreenState extends State<LeadsScreen> {
                     ? TextStyle(color: Colors.orange.shade700)
                     : null),
             trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+              // The lead's pin, one tap to Google Maps (14 Nov 2026). Only
+              // when there is a real position: a button that opens the
+              // Atlantic is worse than none.
+              if (partyLatLng(r) case final p?)
+                IconButton(
+                  tooltip: 'Open in Google Maps',
+                  icon: const Icon(Icons.location_on, color: Color(0xFFF46A21)),
+                  onPressed: () => openInGoogleMaps(p.lat, p.lng),
+                ),
               // Deliberately behind a menu rather than a swipe. A swipe-to-
               // delete on a list a rep scrolls one-handed in a shop doorway is
               // how the wrong lead goes.

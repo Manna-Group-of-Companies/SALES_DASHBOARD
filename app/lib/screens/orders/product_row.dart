@@ -76,6 +76,7 @@ class ProductRow extends StatefulWidget {
 
 class _ProductRowState extends State<ProductRow> {
   late final TextEditingController _rate;
+  late final TextEditingController _kilos;
   final FocusNode _rateFocus = FocusNode();
   bool _saving = false;
 
@@ -87,6 +88,8 @@ class _ProductRowState extends State<ProductRow> {
     super.initState();
     _rate = TextEditingController(
         text: widget.line.rate > 0 ? trimQty(widget.line.rate) : '');
+    _kilos = TextEditingController(
+        text: widget.line.kilos > 0 ? trimQty(widget.line.kilos) : '');
     // An order opened for editing with loose rolls and no boxes starts on the
     // unit that has something in it.
     if (widget.line.product.category == ProductCategory.bondingGum &&
@@ -209,20 +212,41 @@ class _ProductRowState extends State<ProductRow> {
         beltsPerRoll: needsBelts ? belts : null,
         packLitres: needsLitres ? litres : null,
       );
+      final wasByKg = p.soldByKg;
+      final kilosBefore = line.kilos;
       // Applied to the in-memory item so the row prices immediately, rather
-      // than making the rep leave and come back.
-      p.doc.addAll(written);
-      widget.onChanged();
+      // than making the rep leave and come back. A save kept on the phone
+      // that could not read the item first comes back empty: the typed figures
+      // stand on the row until it is sent.
+      p.doc.addAll({
+        if (needsRoll && written['custom_weight_per_roll'] == null)
+          'custom_weight_per_roll': roll,
+        if (needsBelts && written['custom_belts_per_roll'] == null)
+          'custom_belts_per_roll': belts,
+        if (needsLitres && written['custom_pack_litres'] == null)
+          'custom_pack_litres': litres,
+        ...written,
+      });
       // Another rep can have filled the same item in between this screen
       // loading and this save. Theirs stands, and the rep is told so rather
       // than being left to wonder why the row prices off a different number.
-      final kept = (needsRoll && written['custom_weight_per_roll'] != roll) ||
-          (needsBelts && written['custom_belts_per_roll'] != belts) ||
-          (needsLitres && written['custom_pack_litres'] != litres);
+      final kept = (needsRoll &&
+              written['custom_weight_per_roll'] != null &&
+              written['custom_weight_per_roll'] != roll) ||
+          (needsBelts &&
+              written['custom_belts_per_roll'] != null &&
+              written['custom_belts_per_roll'] != belts) ||
+          (needsLitres &&
+              written['custom_pack_litres'] != null &&
+              written['custom_pack_litres'] != litres);
+      final switched = wasByKg && !p.soldByKg
+          ? _switchToRolls(kilosBefore)
+          : '';
+      widget.onChanged();
       _snack(kept
-          ? 'Someone else filled this in first — their figures are being used.'
+          ? 'Someone else filled this in first — their figures are being used.$switched'
           : (needsRoll || needsBelts)
-              ? 'Saved. It goes into SAP with the next stock sync.'
+              ? 'Saved. It goes into SAP with the next stock sync.$switched'
               : 'Saved. This cannot be changed from the app.');
     } catch (e) {
       _snack(humanError(e));
@@ -231,12 +255,27 @@ class _ProductRowState extends State<ProductRow> {
     }
   }
 
+  /// Hot rubber that now has a roll weight is counted in rolls. Kilos already
+  /// typed become the nearest whole number of rolls, at least one, and the
+  /// rep is told what they became so they can check the count with the
+  /// customer. Returns that sentence, or '' when nothing was typed.
+  String _switchToRolls(double kilos) {
+    _kilos.clear();
+    line.kilos = 0;
+    if (kilos <= 0) return ' Now ordered in rolls.';
+    line.rolls = rollsForKilos(kilos, p.weightPerRoll);
+    return ' Now in rolls: ${trimQty(kilos)} kg became ${line.rolls} '
+        'roll${line.rolls == 1 ? '' : 's'} '
+        '(${trimQty(line.rolls * p.weightPerRoll)} kg). Check the count.';
+  }
+
   void _snack(String m) => ScaffoldMessenger.of(context)
       .showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 5)));
 
   @override
   void dispose() {
     _rate.dispose();
+    _kilos.dispose();
     _rateFocus.dispose();
     super.dispose();
   }
@@ -388,9 +427,18 @@ class _ProductRowState extends State<ProductRow> {
           // Price on the left, ADD (or the stepper) on the right of it.
           Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
             Expanded(child: _priceLine(primary)),
-            const SizedBox(width: 10),
-            _quantityControl(primary),
+            if (!_byKilo) ...[
+              const SizedBox(width: 10),
+              _quantityControl(primary),
+            ],
           ]),
+          // Hot rubber with no roll weight is ordered in kilos (14 Nov 2026):
+          // the kilos box and "Add roll weight" stand where ADD would.
+          if (_byKilo) ...[
+            const SizedBox(height: 10),
+            _kilosField(),
+            _addRollWeight(),
+          ],
         ],
         // An item with no stock record shows no line at all (19 Nov 2026,
         // the user's drawing): "No minimum stock" on almost every card was
@@ -481,6 +529,8 @@ class _ProductRowState extends State<ProductRow> {
       case ProductCategory.ctr:
         if (p.weightPerRoll > 0) {
           bits.add('${trimQty(p.weightPerRoll)} kg/roll exact');
+        } else {
+          bits.add('Sold by kg');
         }
         break;
       case ProductCategory.bondingGum:
@@ -578,6 +628,51 @@ class _ProductRowState extends State<ProductRow> {
         return [_Unit('Quantity', () => line.rolls, (v) => line.rolls = v)];
     }
   }
+
+  /// Hot rubber with no roll weight: the kilos, typed (14 Nov 2026).
+  Widget _kilosField() => TextField(
+        controller: _kilos,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: [
+          FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,3}'))
+        ],
+        decoration: const InputDecoration(
+          labelText: 'Kilos',
+          suffixText: 'kg',
+          border: OutlineInputBorder(),
+          isDense: true,
+        ),
+        onChanged: (v) {
+          line.kilos = double.tryParse(v) ?? 0;
+          widget.onChanged();
+        },
+      );
+
+  /// Optional, never in the way (18 Nov 2026, the user: SAP has no roll weight
+  /// for most hot rubber, and a rep who knows it adds it here). Saving it
+  /// turns the row into a Rolls counter. Ordering in kilos needs none of it -
+  /// the blocking prompt went on 14 Nov 2026 for exactly that reason.
+  Widget _addRollWeight() => Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: _saving ? null : _collectPacking,
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            minimumSize: const Size(0, 32),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            textStyle: const TextStyle(fontSize: 12.5),
+          ),
+          icon: _saving
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.scale_outlined, size: 16),
+          label: const Text('Add roll weight'),
+        ),
+      );
+
+  bool get _byKilo => p.category == ProductCategory.ctr && p.soldByKg;
 
   bool get _typesRate =>
       widget.typedRate && !widget.rateLocked && widget.sapRate == null;
@@ -846,7 +941,7 @@ class _ProductRowState extends State<ProductRow> {
         : sap != null
             ? (widget.leadOrder ? 'Lead order: list rate' : dealerNote(sap))
             : later
-                ? 'No signal: priced from SAP when it is sent.'
+                ? 'Price from SAP when it is sent.'
                 : null;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -905,8 +1000,7 @@ class _ProductRowState extends State<ProductRow> {
   String get _missingLabel {
     final p = widget.line.product;
     final missing = <String>[
-      if (p.category == ProductCategory.pctr ||
-          p.category == ProductCategory.ctr)
+      if (p.category == ProductCategory.pctr)
         if (p.weightPerRoll <= 0) 'weight of one roll',
       if (p.category == ProductCategory.pctr)
         if (p.beltsPerRoll <= 0) 'belts per roll',

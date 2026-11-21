@@ -10,14 +10,12 @@
 --                      - step 3's rule for what is sent - or has been delivered
 --                      or invoiced. A list only released is still "In SAP".
 --           In SAP     otherwise
---   date  = the row's own ShipDate (RDR1), not the order's DocDueDate - that
---           is the only place a single item's delivery date can be, and it is
---           what SAP itself plans by. Sent only while the line is still Open:
---           that is what "still editable in SAP" means, so a blank is itself
---           the news - the line closed and nothing more can move it. (Added
---           13 Nov 2026, the user's team: production can still move a line's
---           date in Hi-Tech after the order is placed; the rep needs to know
---           when it has, and that it no longer can once the line closes.)
+--   date  = the line's own Delivery Date (RDR1.ShipDate) while the line is open
+--           on an order that is not cancelled, else ''. Production moves it in
+--           SAP when the plan changes - for the whole order (SAP then offers to
+--           update the rows: answer Yes) or on single rows - and ERPNext's
+--           order follows it (13 Nov 2026). A closed line's date is history
+--           and is not sent.
 DECLARE @days int = 120;
 
 SELECT

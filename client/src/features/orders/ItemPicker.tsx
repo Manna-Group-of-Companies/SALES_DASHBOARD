@@ -26,7 +26,7 @@
 import { useMemo, useState } from 'react';
 import type { ItemOption, MinStockLine, Product, ProductCategory } from '@/domain/types';
 import { CATEGORY_LABEL } from '@/domain/types';
-import { isMisconfigured, rollWeight, beltWeight } from '@/domain/productRules';
+import { isMisconfigured, rollWeight, beltWeight, soldByKg } from '@/domain/productRules';
 import { NONE, poolByItem, shelfAvailable, type Qty } from '@/domain/minimumStock';
 import { Badge, Empty, Input, Segmented, Select } from '@/components/ui';
 import './orders.css';
@@ -301,7 +301,7 @@ export function ItemPicker({
                     </Badge>
                   ) : i.category === 'VS' ? (
                     <span className="tiny dim">{i.packLitres} L tin</span>
-                  ) : i.category === 'BG' ? (
+                  ) : i.category === 'BG' || soldByKg(asProduct(i)) ? (
                     <span className="tiny dim">Per kg</span>
                   ) : (
                     <span className="tiny dim num">

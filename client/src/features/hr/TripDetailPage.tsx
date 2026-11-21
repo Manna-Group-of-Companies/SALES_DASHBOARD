@@ -40,7 +40,15 @@ import {
 } from '@/domain/trips';
 import { clockOf, shiftIso } from '@/domain/attendance';
 import { formatDate } from '@/domain/orderRules';
-import { checkDistance, hasFix, haversineKm, pathKm, routeOf, waypointsOf } from '@/domain/geo';
+import {
+  checkDistance,
+  hasFix,
+  haversineKm,
+  mapsUrl,
+  pathKm,
+  routeOf,
+  waypointsOf,
+} from '@/domain/geo';
 import { Api, type StrayOdometerPhoto } from '@/api/client';
 import { Alert, Badge, Button, Card, Empty } from '@/components/ui';
 import { money } from '@/components/common/format';
@@ -435,10 +443,35 @@ export function TripDetailPage() {
                           <td className="dim small" style={{ width: 28 }}>
                             {i + 1}
                           </td>
-                          <td>{s.name}</td>
+                          <td>
+                            {s.name}
+                            {s.area && <div className="dim small">{s.area}</div>}
+                          </td>
                           <td className="num small">{s.visit.checkIn?.slice(11, 16) ?? '—'}</td>
-                          <td className="dim small">
-                            {s.place ? '' : 'no coordinates on this party'}
+                          <td className="small right" style={{ whiteSpace: 'nowrap' }}>
+                            {/*
+                              Where the phone was at check-in — the visit's own
+                              location. The party's saved pin only when the
+                              visit has none.
+                            */}
+                            {(() => {
+                              const at = s.visit.checkInAt ?? s.place;
+                              if (!at) return <span className="dim">no location</span>;
+                              return (
+                                <a
+                                  href={mapsUrl(at)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title={
+                                    s.visit.checkInAt
+                                      ? 'Where the rep checked in'
+                                      : "The party's saved location — this visit recorded none"
+                                  }
+                                >
+                                  Map ↗
+                                </a>
+                              );
+                            })()}
                           </td>
                         </tr>
                       ))}

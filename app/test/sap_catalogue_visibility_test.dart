@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:manna_field_sales/core/order_rules.dart';
+import 'package:manna_field_sales/models/sap_rates.dart';
 
 void main() {
   final raw = File('../shared/fixtures/sap_catalogue_visibility.json')
@@ -29,6 +30,25 @@ void main() {
           hasSapRate: m['has_sap_rate'] as bool,
         );
         expect(visible, m['visible'], reason: m['why'] as String);
+      });
+    }
+  });
+
+  // SAP holds solution per litre; the rate box is per can (20 Nov 2026).
+  group('shared fixture: rate_factor', () {
+    for (final c in (doc['rate_factor'] as Map)['cases'] as List) {
+      final m = c as Map<String, dynamic>;
+      test(m['why'], () {
+        final f = sapRateFactor(
+            rateUnit: m['rate_unit'] as String,
+            packLitres: (m['pack_litres'] as num).toDouble());
+        expect(f, m['factor'] == null ? isNull : (m['factor'] as num).toDouble());
+        if (m.containsKey('box_rate')) {
+          final r = SapRate(rate: (m['sap_rate'] as num).toDouble(), source: 'list', list: (m['sap_rate'] as num).toDouble())
+              .scaled(f!);
+          expect(r.rate, (m['box_rate'] as num).toDouble());
+          expect(r.list, (m['box_rate'] as num).toDouble());
+        }
       });
     }
   });

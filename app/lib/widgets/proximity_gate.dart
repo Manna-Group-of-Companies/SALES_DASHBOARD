@@ -14,11 +14,10 @@ import 'package:manna_field_sales/services/api.dart';
 /// Runs the duplicate check and, if anything is nearby, tells the rep and
 /// refuses. Returns true only when the ground is genuinely clear.
 ///
-/// Fails closed. If the lookup itself cannot run — no signal, server refusing —
-/// this returns false and says why, rather than waving the rep through. A guard
-/// that opens whenever the network is down is a guard that gets bypassed by
-/// turning on flight mode, and duplicate leads are exactly what a rep in a
-/// hurry would create that way.
+/// Fails closed when the server refuses the lookup. With no signal it lets the
+/// rep through, because the write is kept on the phone and this same check
+/// runs before it is sent — flight mode only delays the check, it does not
+/// skip it.
 Future<bool> ensureNothingNearby(
   BuildContext context, {
   required double lat,
@@ -32,12 +31,18 @@ Future<bool> ensureNothingNearby(
     near = await Api.nearbyPlaces(
         lat: lat, lng: lng, radiusMetres: radiusMetres, exclude: exclude);
   } catch (e) {
+    // No signal and nothing kept to judge by (13 Nov 2026): let the rep carry
+    // on. The write is then kept on the phone, and the same check runs on the
+    // server's records when it is sent — a duplicate is refused there, on the
+    // item, with the reason (Api._refuseIfDuplicate, and the punch queue's own
+    // check). The guard does not open: it moves to where it can run.
+    if (isNetworkFailure(e)) return true;
     if (context.mounted) {
       await _tell(
         context,
         title: 'Could not check for duplicates',
         body: 'The app could not read what is already on record here, so it '
-            'will not $subject. Get a signal and try again.\n\n${humanError(e)}',
+            'will not $subject.\n\n${humanError(e)}',
       );
     }
     return false;

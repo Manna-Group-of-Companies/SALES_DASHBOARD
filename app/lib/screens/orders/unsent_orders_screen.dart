@@ -5,13 +5,18 @@
 // the customer, so they are the one who has to know the difference between an
 // order the factory has and a note on a phone.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import 'package:manna_field_sales/core/credit_commitment.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
+import 'package:manna_field_sales/services/sync_engine.dart';
 
 class UnsentOrdersScreen extends StatefulWidget {
   const UnsentOrdersScreen({super.key});
@@ -53,7 +58,7 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
     if (!await Api.recoverAfterOfflineStart()) {
       if (!mounted) return;
       setState(() => _sending = false);
-      _snack('Still no signal. Saved here.');
+      _snack('Saved. It goes by itself.');
       return;
     }
     final result =
@@ -86,6 +91,47 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
       return;
     }
     _snack('Sent ${result.sent.length}, ${result.failed.length} still waiting.');
+  }
+
+  /// The customer's commitment, for a draft held because the customer is
+  /// over their limit as they stand now (13 Nov 2026). The same test as at
+  /// the counter (credit_commitment.json); the draft then goes by itself.
+  Future<void> _addCommitment(PendingOrder draft) async {
+    final ctrl = TextEditingController();
+    String? problem;
+    final text = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) => AlertDialog(
+          title: const Text("Customer's commitment"),
+          content: TextField(
+            controller: ctrl,
+            autofocus: true,
+            maxLines: 3,
+            decoration: InputDecoration(
+              hintText: 'What the customer will pay, and when',
+              errorText: problem,
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () {
+                  final p = commitmentProblem(ctrl.text);
+                  if (p != null) return set(() => problem = p);
+                  Navigator.pop(ctx, ctrl.text.trim());
+                },
+                child: const Text('Save')),
+          ],
+        ),
+      ),
+    );
+    if (text == null) return;
+    await PendingOrders.setCommitment(draft.id, text, null);
+    await _load();
+    unawaited(SyncEngine.I.sendNow().then((_) => _load()));
   }
 
   Future<void> _discard(PendingOrder draft) async {
@@ -163,7 +209,7 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
               Text('Everything has been sent',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
               SizedBox(height: 8),
-              Text('Orders taken without signal wait here.',
+              Text('Nothing waiting to send.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: Colors.black54),
               ),
@@ -185,8 +231,8 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
             Icon(Icons.info_outline, size: 20, color: Color(0xFFB35309)),
             SizedBox(width: 10),
             Expanded(
-              child: Text('Not sent yet. No stock held. Sent by itself when '
-                'there is signal.',
+              child: Text('Sending… These go by themselves. No stock is '
+                'held until SAP has the order.',
                 style: TextStyle(fontSize: 12.5, height: 1.4),
               ),
             ),
@@ -214,7 +260,7 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
                 // Lines kept with no signal have no price until SAP gives one
                 // at send; ₹0.00 read as a free order.
                 Text(
-                    d.sapPending.isEmpty
+                    PendingOrders.pricedTotal(d) != null
                         ? '₹${d.total.toStringAsFixed(2)}'
                         : 'Price from SAP',
                     style: const TextStyle(
@@ -233,7 +279,9 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
             // anything. No draft holds anything now — stock is committed in
             // SAP, which no draft has reached — and the banner above says so
             // once for the whole screen.
-            if (d.lastError != null) ...[
+            // Only a refusal: a try that failed for want of signal is not
+            // news (the user, 13 Nov 2026 — nothing says the network is gone).
+            if (d.refused && d.lastError != null) ...[
               const SizedBox(height: 8),
               Container(
                 width: double.infinity,
@@ -250,13 +298,20 @@ class _UnsentOrdersScreenState extends State<UnsentOrdersScreen> {
               ),
             ],
             const SizedBox(height: 6),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: _sending ? null : () => _discard(d),
-                child: const Text('Discard',
-                    style: TextStyle(color: Colors.redAccent)),
-              ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (d.refused && d.lastError == kNeedsCommitmentNow)
+                  TextButton(
+                    onPressed: _sending ? null : () => _addCommitment(d),
+                    child: const Text('Add commitment'),
+                  ),
+                TextButton(
+                  onPressed: _sending ? null : () => _discard(d),
+                  child: const Text('Discard',
+                      style: TextStyle(color: Colors.redAccent)),
+                ),
+              ],
             ),
           ],
         ),

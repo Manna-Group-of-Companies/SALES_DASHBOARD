@@ -30,7 +30,12 @@ import 'package:manna_field_sales/screens/manager/manager_targets_screen.dart';
 import 'package:manna_field_sales/screens/map/day_map_screen.dart';
 import 'package:manna_field_sales/screens/map/map_screen.dart';
 import 'package:manna_field_sales/screens/orders/min_stock_screen.dart';
+import 'package:manna_field_sales/core/credit.dart' show inr, overduePastTerms, paymentDueCustomers;
+import 'package:manna_field_sales/core/pick_list.dart' show kPickListsReleased;
+import 'package:manna_field_sales/screens/customers/payment_due_screen.dart';
 import 'package:manna_field_sales/screens/orders/pick_list_page.dart';
+import 'package:manna_field_sales/screens/requests/payment_commitments_screen.dart';
+import 'package:manna_field_sales/screens/requests/credit_period_screen.dart';
 import 'package:manna_field_sales/screens/requests/item_request_screen.dart';
 import 'package:manna_field_sales/screens/production/production_dashboard_screen.dart';
 import 'package:manna_field_sales/screens/retread/retread_orders_screen.dart';
@@ -48,9 +53,11 @@ import 'package:manna_field_sales/services/outbox.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/screens/home/unsent_items_screen.dart';
 import 'package:manna_field_sales/services/pending_punches.dart';
+import 'package:manna_field_sales/services/sync_engine.dart';
 import 'package:manna_field_sales/screens/home/unsent_punches_screen.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/trip_tracker.dart';
+import 'package:manna_field_sales/widgets/home_tile.dart';
 import 'package:manna_field_sales/widgets/trip_recording_indicator.dart';
 
 class HomeDashboard extends StatefulWidget {
@@ -67,6 +74,9 @@ class _HomeDashboardState extends State<HomeDashboard>
   // new request on every setState, and its card dropped back to a loading
   // placeholder each time, which is part of what made this screen flicker.
   late Future<TargetMonth> _target;
+
+  /// Customers whose payment is due, for the home card (14 Nov 2026).
+  late Future<List<Map<String, dynamic>>> _due;
 
   /// Today's attendance as shown: the server's row with any punch still on the
   /// phone laid over it (see PendingPunches.attendanceView). [_attServer] is
@@ -126,6 +136,7 @@ class _HomeDashboardState extends State<HomeDashboard>
       _counts = _loadCounts();
       _activeTrip = _loadActiveTrip();
       _target = _loadTarget();
+      _due = _loadDue();
     });
     _loadAtt();
     _loadUnsent();
@@ -157,87 +168,18 @@ class _HomeDashboardState extends State<HomeDashboard>
     }
   }
 
-  /// Sends whatever punches are waiting, if there is a signal to send them on.
-  ///
-  /// An app opened with no signal first re-confirms who is signed in — see
-  /// Api.recoverAfterOfflineStart — and sends nothing until it has.
+  /// Sends whatever the phone is holding — punches, route points, orders and
+  /// the rest — through the app-wide sender (services/sync_engine.dart), then
+  /// re-reads what this screen shows. The sender says nothing unless the
+  /// server refuses something (13 Nov 2026: nothing says the network is gone).
   Future<void> _syncPunches() async {
-    if (Session.I.offlineStart) {
-      if (!await Api.recoverAfterOfflineStart()) return;
-      // Who this login is has just been re-read; the screen may change.
-      if (mounted) setState(() {});
-    }
-    // Route points too: the same signal, the same moment.
-    unawaited(TripTracker.I.flushPending());
-    // And orders and the rest of the field work kept on the phone (11 Nov
-    // 2026). Not awaited before the punches: a slow send must not hold a
-    // punch back.
-    unawaited(_syncOrders());
-    unawaited(_syncOutbox());
-    if (await PendingPunches.count() == 0) return;
-    final r = await PendingPunches.flush(Api.sendPendingPunch,
-        describe: humanError);
+    final wasOfflineStart = Session.I.offlineStart;
+    await SyncEngine.I.sendNow();
     if (!mounted) return;
+    // Who this login is may just have been re-read.
+    if (wasOfflineStart && !Session.I.offlineStart) setState(() {});
     await _loadUnsent();
-    if (r.sent > 0) {
-      await _loadAtt();
-      if (!mounted) return;
-      _snack(r.failed.isEmpty
-          ? 'Sent ${r.sent} saved punch${r.sent == 1 ? '' : 'es'} ✓'
-          : 'Sent ${r.sent}; ${r.failed.length} could not be sent — '
-              'see Unsent Punches.');
-    }
-  }
-
-  /// Sends the orders kept on the phone, by itself, once there is a signal
-  /// (11 Nov 2026). Refused ones are left for the rep on Unsent Orders.
-  Future<void> _syncOrders() async {
-    if (await PendingOrders.autoCount() == 0) return;
-    // Told once, when a draft is refused, not every minute after.
-    final refusedBefore = {
-      for (final d in await PendingOrders.all())
-        if (d.refused) d.id
-    };
-    final r = await PendingOrders.sendAll(Api.sendPendingOrder,
-        describe: humanError, auto: true);
-    if (!mounted) return;
-    await _loadUnsent();
-    if (!mounted) return;
-    final refused =
-        r.failed.where((d) => d.refused && !refusedBefore.contains(d.id)).length;
-    if (r.sent.isNotEmpty) {
-      _snack(refused == 0
-          ? 'Sent ${r.sent.length} saved order${r.sent.length == 1 ? '' : 's'} ✓'
-          : 'Sent ${r.sent.length}; $refused could not be sent — '
-              'see Unsent Orders.');
-    } else if (refused > 0) {
-      _snack('A saved order could not be sent — see Unsent Orders.');
-    }
-  }
-
-  /// Sends the rest of the field work kept on the phone (the outbox), by
-  /// itself, once there is a signal. Refused items are left for the rep.
-  Future<void> _syncOutbox() async {
-    if (await Outbox.autoCount() == 0) return;
-    // Told once, when an item is refused, not every minute after.
-    final refusedBefore = {
-      for (final i in await Outbox.all())
-        if (i.refused) i.id
-    };
-    final r = await Outbox.flush(Api.sendOutboxItem,
-        describe: humanError, auto: true);
-    if (!mounted) return;
-    await _loadUnsent();
-    if (!mounted) return;
-    final refused =
-        r.failed.where((i) => i.refused && !refusedBefore.contains(i.id)).length;
-    if (r.sent > 0) {
-      _snack(refused == 0
-          ? 'Sent ${r.sent} saved item${r.sent == 1 ? '' : 's'} ✓'
-          : 'Sent ${r.sent}; $refused could not be sent — see Waiting to Send.');
-    } else if (refused > 0) {
-      _snack('Something saved could not be sent — see Waiting to Send.');
-    }
+    await _loadAtt();
   }
 
   /// Offered once per launch. A rep who says "Later" is not asked again until
@@ -254,6 +196,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     _counts = _loadCounts();
     _activeTrip = _loadActiveTrip();
     _target = _loadTarget();
+    _due = _loadDue();
     _loadAtt();
     _loadUnsent();
     _offerUpdate();
@@ -346,7 +289,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       duration: const Duration(seconds: 6),
-      content: Text('No signal. Punch saved at ${hhmm(at)}, sends by itself.'),
+      content: Text('Punch saved at ${hhmm(at)} ✓'),
     ));
   }
 
@@ -368,6 +311,7 @@ class _HomeDashboardState extends State<HomeDashboard>
   Future<void> _punchIn() async {
     final rep = Session.I.salesPerson;
     if (rep == null) return _snack('No rep linked to this login.');
+    if (_attBusy) return;
     setState(() => _attBusy = true);
     _snack('Getting GPS…');
     try {
@@ -403,8 +347,28 @@ class _HomeDashboardState extends State<HomeDashboard>
 
   Future<void> _punchOut() async {
     final att = _att;
-    if (att == null) return;
+    if (att == null || _attBusy) return;
     final again = att['punch_out_time'] != null;
+    // Never on one tap (13 Nov 2026): see punchOutQuestion. Asked before
+    // anything else, so a stray tap costs the rep a "Not yet" and nothing more.
+    final sure = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text(again ? 'Punch out again?' : 'Punch out?'),
+        content: Text(punchOutQuestion(
+            '${att['punch_in_time'] ?? ''}', ServerClock.I.now())),
+        actions: [
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Not yet')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Punch out')),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
     setState(() => _attBusy = true);
     _snack('Getting GPS…');
     try {
@@ -623,6 +587,34 @@ class _HomeDashboardState extends State<HomeDashboard>
     );
   }
 
+  Future<List<Map<String, dynamic>>> _loadDue() async =>
+      paymentDueCustomers(await Api.getCustomers());
+
+  /// Payment due (14 Nov 2026, the user): how many of this login's customers
+  /// are overdue past their terms and by how much; tap for the list and
+  /// their orders. Says nothing at all while it loads or when it cannot, so
+  /// a slow customer list never holds the home screen up.
+  Widget _paymentDueCard() => FutureBuilder<List<Map<String, dynamic>>>(
+        future: _due,
+        builder: (context, snap) {
+          final due = snap.data;
+          if (due == null) return const SizedBox.shrink();
+          final total = due.fold(0.0, (s, c) => s + overduePastTerms(c));
+          return Card(
+            child: ListTile(
+              leading: Icon(Icons.request_quote,
+                  color: due.isEmpty ? Colors.grey : Colors.red.shade700),
+              title: const Text('Payment Due'),
+              subtitle: Text(due.isEmpty
+                  ? 'No customer is overdue past their terms'
+                  : '${due.length} customer${due.length == 1 ? '' : 's'}  ·  ${inr(total)} overdue'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _go(const PaymentDueScreen()),
+            ),
+          );
+        },
+      );
+
   Future<List<int>> _loadCounts() async {
     final t = today();
     final me = Session.I.salesPerson ?? '__none__';
@@ -662,8 +654,7 @@ class _HomeDashboardState extends State<HomeDashboard>
           content: Text(
               '$what ${one ? 'has' : 'have'} not reached the office. Signing '
               'out deletes ${one ? 'it' : 'them'} from this phone.\n\nStay '
-              'signed in until you have signal and ${one ? 'it has' : 'they have'} '
-              'been sent.'),
+              'signed in until ${one ? 'it has' : 'they have'} been sent.'),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, true),
@@ -700,6 +691,16 @@ class _HomeDashboardState extends State<HomeDashboard>
       if (Session.I.isGM && !Session.I.isManager)
         _Tile('Item Request Approvals', Icons.add_box_outlined,
                 () => _go(const ItemRequestApprovalsScreen())),
+      // 31-40 days come to the GM, and the GM decides for reps with no team
+      // (16 Nov 2026). A manager has it behind the Manager bar.
+      if (Session.I.isGM && !Session.I.isManager)
+        _Tile('Credit Period Requests', Icons.event_repeat,
+                () => _go(const CreditPeriodRequestsScreen())),
+      // The 10-day payment commitments (17 Nov 2026; they replaced the
+      // temporary credit extensions): missed ones send orders to the GM.
+      if (Session.I.isGM && !Session.I.isManager)
+        _Tile('Payment Commitments', Icons.add_card,
+                () => _go(const PaymentCommitmentsScreen())),
       if (isRep || Session.I.isManager || Session.I.isGM || Session.I.isHR)
         _Tile('Day Map', Icons.pin_drop, () => _go(const DayMapScreen())),
       // Sits above everything else a rep does: an order nobody has received is
@@ -725,11 +726,19 @@ class _HomeDashboardState extends State<HomeDashboard>
                 ? const RetreadOrdersScreen()
                 : const MyOrdersScreen())),
         // Reps make pick lists; a manager only views them (manager screens).
-        if (Session.I.company != kUnitRetreads && !Session.I.isManager)
+        if (kPickListsReleased && Session.I.company != kUnitRetreads && !Session.I.isManager)
           _Tile('Pick List', Icons.playlist_add_check,
               () => _go(const PickListPage())),
         _Tile('Item Request', Icons.add_box_outlined,
             () => _go(const ItemRequestScreen())),
+        // Asked from the customer's screen; this is where the rep follows
+        // them (16 Nov 2026).
+        _Tile('Credit Periods', Icons.event_repeat,
+            () => _go(const CreditPeriodRequestsScreen())),
+        // The commitments given on this rep's orders, and whether they were
+        // kept (17 Nov 2026).
+        _Tile('Payment Commitments', Icons.add_card,
+            () => _go(const PaymentCommitmentsScreen())),
         // Beside Collections on purpose: both are money the rep owes somebody
         // an answer about, and a condition is usually discharged by collecting.
         _Tile('My Conditions', Icons.rule,
@@ -916,17 +925,29 @@ class _HomeDashboardState extends State<HomeDashboard>
                     future: _counts,
                     builder: (context, snap) {
                       final v = snap.data;
-                      Widget metric(String label, String value) => Column(
-                        children: [
-                          Text(value,
-                              style: const TextStyle(
-                                  color: Color(0xFFF7943E),
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.bold)),
-                          Text(label,
-                              style:
-                              const TextStyle(color: Colors.white70)),
-                        ],
+                      // Each figure opens the screen of the tile below that
+                      // shares its name. Until 14 Nov 2026 a tap on the
+                      // number did nothing, though it looks like a way in.
+                      Widget metric(String label, String value,
+                          VoidCallback onTap) => InkWell(
+                        onTap: onTap,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 4),
+                          child: Column(
+                            children: [
+                              Text(value,
+                                  style: const TextStyle(
+                                      color: Color(0xFFF7943E),
+                                      fontSize: 28,
+                                      fontWeight: FontWeight.bold)),
+                              Text(label,
+                                  style: const TextStyle(
+                                      color: Colors.white70)),
+                            ],
+                          ),
+                        ),
                       );
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -938,10 +959,15 @@ class _HomeDashboardState extends State<HomeDashboard>
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceAround,
                             children: [
-                              metric('Visits', v == null ? '—' : '${v[0]}'),
-                              metric('Orders', v == null ? '—' : '${v[1]}'),
+                              metric('Visits', v == null ? '—' : '${v[0]}',
+                                  () => _go(const MyVisitsScreen())),
+                              metric('Orders', v == null ? '—' : '${v[1]}',
+                                  () => _go(Session.I.company == kUnitRetreads
+                                      ? const RetreadOrdersScreen()
+                                      : const MyOrdersScreen())),
                               metric('Collections',
-                                  v == null ? '—' : '${v[2]}'),
+                                  v == null ? '—' : '${v[2]}',
+                                  () => _go(const MyCollectionsScreen())),
                             ],
                           ),
                         ],
@@ -952,6 +978,8 @@ class _HomeDashboardState extends State<HomeDashboard>
               ),
             if (isRep) const SizedBox(height: 16),
             if (isRep) _myTargetCard(),
+            if (isRep) const SizedBox(height: 12),
+            if (isRep) _paymentDueCard(),
             const SizedBox(height: 16),
             // Two tiles a row on a phone, three or four on a tablet
             // (core/responsive.dart), from the width the app really has.
@@ -962,23 +990,8 @@ class _HomeDashboardState extends State<HomeDashboard>
               mainAxisSpacing: 12,
               crossAxisSpacing: 12,
               children: tiles
-                  .map((t) => InkWell(
-                onTap: t.onTap,
-                child: Card(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(t.icon, size: 40,
-                          color: const Color(0xFFF46A21)),
-                      const SizedBox(height: 8),
-                      Text(t.label,
-                          style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                ),
-              ))
+                  .map((t) =>
+                      HomeTile(label: t.label, icon: t.icon, onTap: t.onTap))
                   .toList(),
             ),
           ],

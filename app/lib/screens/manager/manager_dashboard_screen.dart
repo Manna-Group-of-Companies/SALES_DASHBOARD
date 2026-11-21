@@ -19,7 +19,10 @@ import 'package:manna_field_sales/screens/manager/manager_approvals_screen.dart'
 import 'package:manna_field_sales/screens/manager/manager_customers_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_orders_screen.dart';
 import 'package:manna_field_sales/screens/manager/manager_targets_screen.dart';
+import 'package:manna_field_sales/core/pick_list.dart' show kPickListsReleased;
 import 'package:manna_field_sales/screens/orders/pick_list_screen.dart';
+import 'package:manna_field_sales/screens/requests/payment_commitments_screen.dart';
+import 'package:manna_field_sales/screens/requests/credit_period_screen.dart';
 import 'package:manna_field_sales/screens/requests/item_request_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 
@@ -33,6 +36,8 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
   late Future<int> _orders;
   late Future<int> _locations;
   late Future<int> _itemRequests;
+  late Future<int> _creditPeriods;
+  late Future<int> _creditExtensions;
 
   /// What this manager may open — the same rule as the dashboard's sidebar
   /// (shared/fixtures/manager_scope.json).
@@ -49,7 +54,19 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
         _orders = _countOrders();
         _locations = _countLocations();
         _itemRequests = _countItemRequests();
+        _creditPeriods = _countCreditPeriods();
+        _creditExtensions = _countCreditExtensions();
       });
+
+  /// Temporary credit extensions waiting on this manager (16 Nov 2026).
+  /// The team's commitments still waiting on the customer's payment.
+  Future<int> _countCreditExtensions() async => (await Api.getPaymentCommitments())
+      .where((r) => r['status'] == 'Running' || r['status'] == 'Unchecked')
+      .length;
+
+  /// Credit-period requests waiting on this manager: to decide, escalate or push.
+  Future<int> _countCreditPeriods() async =>
+      (await Api.getCreditPeriodRequests()).where((r) => r.waitingOnMe).length;
 
   /// Item requests this manager may approve now (the server's can_approve).
   Future<int> _countItemRequests() async =>
@@ -121,7 +138,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                     (n) => '$n order${n == 1 ? '' : 's'} waiting on you'),
                 const _TeamOrdersScreen()),
           // Pick lists come from orders, so they go with the order pipeline.
-          if (_can(ManagerScreen.orders))
+          if (kPickListsReleased && _can(ManagerScreen.orders))
             _card(
                 Icons.playlist_add_check,
                 'Pick Lists',
@@ -135,6 +152,23 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
               _waitingSubtitle(_itemRequests, 'No item requests waiting',
                   (n) => '$n request${n == 1 ? '' : 's'} waiting on you'),
               const ItemRequestApprovalsScreen()),
+          // A customer's new payment term (16 Nov 2026): up to 30 days the
+          // manager decides and pushes it to SAP; 31-40 go on to the GM.
+          if (_can(ManagerScreen.credit))
+            _card(
+                Icons.event_repeat,
+                'Credit Period Requests',
+                _waitingSubtitle(_creditPeriods, 'No credit periods waiting',
+                    (n) => '$n request${n == 1 ? '' : 's'} waiting on you'),
+                const CreditPeriodRequestsScreen()),
+          // The 10-day payment commitments given on the team's orders (17 Nov
+          // 2026; they replaced the temporary credit extensions).
+          _card(
+              Icons.add_card,
+              'Payment Commitments',
+              _waitingSubtitle(_creditExtensions, 'No payment pending',
+                  (n) => '$n payment${n == 1 ? '' : 's'} pending'),
+              const PaymentCommitmentsScreen()),
           if (_can(ManagerScreen.regularizations))
             _card(
                 Icons.event_available,

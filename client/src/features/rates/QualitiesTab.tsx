@@ -1,14 +1,14 @@
 /**
  * List prices by group: one row per item property named in Manna Treads' SAP —
- * "HOT - Black Pearl", "PCTR - Black Pearl", and any group named later, such as
- * "BONDING GUM - Black Pearl" — with how many items carry it, Manna Treads'
- * price range today, the change in rupees, the new range, and what Hi-Tech's
- * price for the same items becomes. Each row has its own change box. Clicking
- * a row opens its items, each with its Hi-Tech twin.
+ * since 14 Nov 2026 the rows of management's price list ("PCTR MANNA DOUBLE
+ * BLUE (BP)" … "SOLUTION 10") — with how many items carry it, Manna Treads'
+ * price range today, the change in rupees and the new range. Each row has its
+ * own change box. Clicking a row opens its items. The Hi-Tech column shows only
+ * while HITECH_PRICE_LIST is on (off since 14 Nov 2026).
  */
 
-import { Alert, Badge, Card, Input } from '@/components/ui';
-import { roundMoney, type QualitySummary, type RatesPlan } from '@/domain/dealerRates';
+import { Alert, Badge, Button, Card, Input } from '@/components/ui';
+import { HITECH_PRICE_LIST, roundMoney, type QualitySummary, type RatesPlan, type UngroupedItem } from '@/domain/dealerRates';
 import { ExpandRow, Paged, keepRow, kindOf, matchItem, range, rs, signed, useOpenSet } from './parts';
 
 export function QualitiesTab({
@@ -17,13 +17,19 @@ export function QualitiesTab({
   hitechName,
   changeInput,
   setChange,
+  ungrouped = [],
+  ungroupedNoTwin = 0,
 }: {
   summaries: QualitySummary[];
   plan: RatesPlan;
   hitechName: string;
   changeInput: Record<string, string>;
   setChange: (key: string, value: string) => void;
+  ungrouped?: UngroupedItem[];
+  ungroupedNoTwin?: number;
 }) {
+  const cols = HITECH_PRICE_LIST ? 8 : 7;
+  const leftOut = useOpenSet<string>();
   const rows = useOpenSet<string>();
   const newPrice = new Map(plan.listChanges.map((c) => [c.item.code, c.newPrice]));
   const hitechBy = new Map(plan.hitechRows.map((r) => [r.item.code, r]));
@@ -41,7 +47,7 @@ export function QualitiesTab({
               <th className="right">List price now</th>
               <th className="right">Change ₹/kg</th>
               <th className="right">New list price</th>
-              <th className="right">{hitechName}</th>
+              {HITECH_PRICE_LIST && <th className="right">{hitechName}</th>}
               <th className="right">Dealers</th>
             </tr>
           </thead>
@@ -53,7 +59,7 @@ export function QualitiesTab({
                   key={q.key}
                   open={rows.has(q.key)}
                   onToggle={() => rows.toggle(q.key)}
-                  colSpan={8}
+                  colSpan={cols}
                   tone={changed ? 'changed' : undefined}
                   label={`${q.label}: ${q.items.length} items`}
                   cells={
@@ -81,15 +87,17 @@ export function QualitiesTab({
                       <td className="right num">
                         {changed ? <b>{range(q.listNew)}</b> : <span className="dim">—</span>}
                       </td>
-                      <td className="right num">
-                        {!q.hitechNew.length ? (
-                          <span className="dim">—</span>
-                        ) : q.hitechChanging ? (
-                          <b>{range(q.hitechNew)}</b>
-                        ) : (
-                          range(q.hitechNew)
-                        )}
-                      </td>
+                      {HITECH_PRICE_LIST && (
+                        <td className="right num">
+                          {!q.hitechNew.length ? (
+                            <span className="dim">—</span>
+                          ) : q.hitechChanging ? (
+                            <b>{range(q.hitechNew)}</b>
+                          ) : (
+                            range(q.hitechNew)
+                          )}
+                        </td>
+                      )}
                       <td className="right num">{q.dealers}</td>
                     </>
                   }
@@ -107,7 +115,7 @@ export function QualitiesTab({
                         <th className="right">List now</th>
                         <th className="right">New list</th>
                         <th className="right">Change</th>
-                        <th className="right">{hitechName} now → new</th>
+                        {HITECH_PRICE_LIST && <th className="right">{hitechName} now → new</th>}
                       </tr>
                     }
                   >
@@ -123,20 +131,29 @@ export function QualitiesTab({
                             {i.frozen && <Badge tone="danger">frozen</Badge>}
                           </td>
                           <td>{kindOf(i)}</td>
-                          <td className="right num">{rs(i.listPrice)}</td>
-                          <td className="right num">{np !== undefined ? <b>{rs(np)}</b> : <span className="dim">{rs(i.listPrice)}</span>}</td>
-                          <td className="right num">{np !== undefined ? signed(roundMoney(np - Number(i.listPrice))) : ''}</td>
                           <td className="right num">
-                            {h ? (
-                              <>
-                                {rs(h.hitechNow)} → {h.action === 'UPDATE' ? <b>{rs(h.newPrice)}</b> : rs(h.newPrice)}
-                              </>
-                            ) : (
-                              <span className="dim" title={i.twinNote ?? (i.twin ? undefined : 'No Hi-Tech twin')}>
-                                —
-                              </span>
+                            {rs(i.listPrice)}
+                            {i.listPriceSource === 'placeholder' && (
+                              <Badge tone="warn" title="SAP has no Price List 01 price; the group's median, for testing">
+                                stand-in
+                              </Badge>
                             )}
                           </td>
+                          <td className="right num">{np !== undefined ? <b>{rs(np)}</b> : <span className="dim">{rs(i.listPrice)}</span>}</td>
+                          <td className="right num">{np !== undefined ? signed(roundMoney(np - Number(i.listPrice))) : ''}</td>
+                          {HITECH_PRICE_LIST && (
+                            <td className="right num">
+                              {h ? (
+                                <>
+                                  {rs(h.hitechNow)} → {h.action === 'UPDATE' ? <b>{rs(h.newPrice)}</b> : rs(h.newPrice)}
+                                </>
+                              ) : (
+                                <span className="dim" title={i.twinNote ?? (i.twin ? undefined : 'No Hi-Tech twin')}>
+                                  —
+                                </span>
+                              )}
+                            </td>
+                          )}
                         </tr>
                       );
                     }}
@@ -153,6 +170,45 @@ export function QualitiesTab({
             Untick all but one in Manna Treads' SAP: {plan.multiGroup.slice(0, 10).map((i) => i.code).join(', ')}
             {plan.multiGroup.length > 10 ? `, …and ${plan.multiGroup.length - 10} more` : ''}.
           </Alert>
+        </div>
+      )}
+      {ungrouped.length > 0 && (
+        <div className="rates__pad">
+          <Alert tone="warn" title={`${ungrouped.length} HOT / PRECURED item(s) are in no group`}>
+            They are in Hi-Tech too, so an order could carry them, but the phone cannot price them: tick their group (Item
+            Master Data, Properties) in Manna Treads' SAP. They show after the next SAP read.
+            {ungroupedNoTwin > 0 ? ` ${ungroupedNoTwin} more are Manna Treads' own codes, which no order can carry, and are left out.` : ''}{' '}
+            <Button size="sm" variant="ghost" onClick={() => leftOut.toggle('all')}>
+              {leftOut.has('all') ? 'Hide' : 'Show'} them
+            </Button>
+          </Alert>
+          {leftOut.has('all') && (
+            <Paged
+              rows={ungrouped}
+              match={(u, q) => `${u.code} ${u.name} ${u.reason}`.toLowerCase().includes(q.toLowerCase())}
+              placeholder="Filter items left out"
+              empty="None"
+              header={
+                <tr>
+                  <th>Item</th>
+                  <th>Name</th>
+                  <th>Item group</th>
+                  <th>U_SubTypeA</th>
+                  <th>Why</th>
+                </tr>
+              }
+            >
+              {(u) => (
+                <tr key={u.code}>
+                  <td className="mono">{u.code}</td>
+                  <td>{u.name}</td>
+                  <td>{u.groupName}</td>
+                  <td>{u.subType}</td>
+                  <td>{u.reason}</td>
+                </tr>
+              )}
+            </Paged>
+          )}
         </div>
       )}
       {itemProblems.length > 0 && (

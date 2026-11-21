@@ -16,14 +16,17 @@
 // stamps "today" or "now" is given the moment it was saved instead, so a
 // collection sent tomorrow is still dated today.
 //
-// NOT HERE, ON PURPOSE (the user, 11 Nov 2026)
-//   - Approvals by managers, the GM and HR: a decision taken on what the phone
-//     last saw, landing later, can contradict what has happened since.
-//   - The Sync buttons and signing in: there is nothing to do without a server.
-//   - New leads, new customers and trips: what is done on them offline has to
-//     be linked to the record once it exists. Next, after the 14 Nov release.
-//   - A lead's location: its duplicate check needs the server and refuses
-//     without one, so that a shop is not put on the map twice.
+// EVERYTHING ELSE TOO (the user, 13 Nov 2026: "When the net is gone they
+// must still be able to do everything in the app.") Approvals, new leads and
+// customers, trips, pick lists and the rest come here as well, through
+// `Api.writeOrQueue`. What the 11 Nov list kept out, and how each is now safe:
+//   - Approvals: the sender is the same function that decides online, so it
+//     reads the order as it is NOW and re-checks it. If someone else decided
+//     it meanwhile, the item is refused with the reason, not written over.
+//   - New leads, customers, trips: the phone hands back a [kLocalPrefix] name
+//     at once, so the rep carries on with it. Anything queued behind that
+//     carries the local name and is sent with the real one ([resolve]).
+//   - Duplicate checks run when the item is sent; a failure refuses it.
 //
 // THE SAME RULES AS THE PUNCH QUEUE
 //   - Sent oldest first, one run at a time (the home screen's one-minute retry
@@ -47,12 +50,20 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/local_overlay.dart';
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
 
-/// What every screen says when it kept a write here.
-const String kSavedOffline =
-    'No signal — saved on the phone. It is sent by itself when the signal is back.';
+/// What a screen says when it kept a write here. The same as being sent, on
+/// purpose (13 Nov 2026): the user asked that nothing in the app say the
+/// network has gone. Where it waits shows only on Waiting to Send.
+const String kSavedOffline = 'Saved ✓';
+
+/// The prefix of a name the phone gave something it made with no signal — a
+/// lead, a trip, a visit — before the server has given it a real one.
+const String kLocalPrefix = 'LOCAL-';
+
+bool isLocalName(String? s) => s != null && s.startsWith(kLocalPrefix);
 
 /// An item the app will not send as it stands, with the sentence to show.
 class OutboxRefused implements Exception {
@@ -84,6 +95,14 @@ class OutboxItem {
   final String? lastError;
   final bool refused;
 
+  /// What it will change once sent, laid over what screens read meanwhile
+  /// (`core/local_overlay.dart`).
+  final List<LocalEffect> effects;
+
+  /// The [kLocalPrefix] name it handed back for a document it creates, which
+  /// later writes may carry until the server gives the real one.
+  final String? localName;
+
   OutboxItem({
     required this.id,
     required this.kind,
@@ -94,6 +113,8 @@ class OutboxItem {
     required this.savedAt,
     this.lastError,
     this.refused = false,
+    this.effects = const [],
+    this.localName,
   });
 
   OutboxItem withError(String? error, {bool refused = false}) => OutboxItem(
@@ -106,6 +127,8 @@ class OutboxItem {
         savedAt: savedAt,
         lastError: error,
         refused: refused,
+        effects: effects,
+        localName: localName,
       );
 
   Map<String, dynamic> toJson() => {
@@ -118,6 +141,9 @@ class OutboxItem {
         'saved_at': savedAt.toIso8601String(),
         if (lastError != null) 'last_error': lastError,
         if (refused) 'refused': true,
+        if (effects.isNotEmpty)
+          'effects': effects.map((e) => e.toJson()).toList(),
+        if (localName != null) 'local_name': localName,
       };
 
   /// Null for anything that cannot be sent: no id or no kind.
@@ -139,6 +165,12 @@ class OutboxItem {
       savedAt: DateTime.tryParse('${j['saved_at'] ?? ''}') ?? serverNow(),
       lastError: j['last_error'] as String?,
       refused: j['refused'] == true,
+      effects: [
+        if (j['effects'] is List)
+          for (final e in j['effects'] as List)
+            if (LocalEffect.fromJson(e) case final x?) x
+      ],
+      localName: j['local_name'] as String?,
     );
   }
 }
@@ -156,6 +188,7 @@ class OutboxResult {
 
 class Outbox {
   static const _key = 'outbox';
+  static const _namesKey = 'outbox_names';
 
   static Future<SharedPreferences> get _prefs =>
       SharedPreferences.getInstance();
@@ -171,6 +204,83 @@ class Outbox {
 
   static Future<int> count() async => (await all()).length;
 
+  /// What the items still to be sent will change, oldest first. A refused
+  /// item changes nothing until the rep sends it again, so it is left out:
+  /// showing its change would claim something the server said no to.
+  static Future<List<LocalEffect>> effects() async => [
+        for (final i in await all())
+          if (!i.refused) ...i.effects
+      ];
+
+  /// A fresh [kLocalPrefix] name.
+  static String newLocalName() =>
+      '$kLocalPrefix${serverNow().microsecondsSinceEpoch}-${_seq++}';
+
+  /// Local names the server has since given real ones to.
+  static Future<Map<String, String>> names() async {
+    try {
+      final s = (await _prefs).getString(_namesKey);
+      if (s == null || s.isEmpty) return {};
+      final m = jsonDecode(s);
+      return m is Map ? {for (final e in m.entries) '${e.key}': '${e.value}'} : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Records that [local] is [real] on the server. Called by the sender of a
+  /// create, the moment the server answers, so a write behind it in the queue
+  /// goes with the real name.
+  static Future<void> recordName(String local, String real) async {
+    final m = await names();
+    m[local] = real;
+    await (await _prefs).setString(_namesKey, jsonEncode(m));
+  }
+
+  /// [value] with every local name the server has answered for replaced by
+  /// the real one, at any depth. A local name with no answer yet is refused
+  /// with the reason — the write it belongs to cannot go before the thing it
+  /// points at exists.
+  static Future<T> resolve<T>(T value) async {
+    final m = await names();
+    String? missing;
+    dynamic walk(dynamic v) {
+      if (v is String) {
+        if (!isLocalName(v)) return v;
+        final real = m[v];
+        if (real == null) missing ??= v;
+        return real ?? v;
+      }
+      if (v is Map) {
+        return <String, dynamic>{
+          for (final e in v.entries) '${e.key}': walk(e.value)
+        };
+      }
+      if (v is List) return <dynamic>[for (final x in v) walk(x)];
+      return v;
+    }
+
+    final out = walk(value);
+    if (missing != null) {
+      final maker = (await _raw()).where((i) => i.localName == missing);
+      throw OutboxRefused(maker.isEmpty
+          ? 'What this points at was never sent, so this cannot be sent.'
+          : 'Waiting for "${maker.first.label}" to be sent first.');
+    }
+    return out as T;
+  }
+
+  /// [s] with a local name the server has answered for replaced; anything
+  /// else as it is. For paths, where a refusal is the server's to give.
+  static Future<String> realName(String s) async {
+    if (!s.contains(kLocalPrefix)) return s;
+    var out = s;
+    for (final e in (await names()).entries) {
+      out = out.replaceAll(e.key, e.value);
+    }
+    return out;
+  }
+
   /// Items the home screen would send by itself: not refused.
   static Future<int> autoCount() async =>
       (await all()).where((i) => !i.refused).length;
@@ -183,6 +293,8 @@ class Outbox {
     required String label,
     required Map<String, dynamic> args,
     Map<String, String> files = const {},
+    List<LocalEffect> effects = const [],
+    String? localName,
   }) async {
     final existing = await _raw();
     final now = serverNow();
@@ -203,6 +315,8 @@ class Outbox {
       files: kept,
       salesPerson: Session.I.salesPerson ?? '',
       savedAt: now,
+      effects: effects,
+      localName: localName,
     );
     await _replaceAll([...existing, item]);
     return item;
@@ -225,6 +339,7 @@ class Outbox {
         await _dropFiles(i);
       }
       await (await _prefs).remove(_key);
+      await (await _prefs).remove(_namesKey);
     } catch (_) {}
   }
 
@@ -258,6 +373,12 @@ class Outbox {
         continue;
       }
       try {
+        // Local names first: a write about a lead made in the same dead zone
+        // goes with the name the server gave that lead a moment ago.
+        final resolved = await resolve(Map<String, dynamic>.from(item.args));
+        item.args
+          ..clear()
+          ..addAll(resolved);
         await send(item);
         await _dropFiles(item);
         await _replaceAll((await _raw()).where((o) => o.id != item.id).toList());

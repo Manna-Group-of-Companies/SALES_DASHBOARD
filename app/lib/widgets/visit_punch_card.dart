@@ -8,6 +8,7 @@ import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
+import 'package:manna_field_sales/services/outbox.dart' show isLocalName;
 import 'package:manna_field_sales/services/pending_punches.dart';
 import 'package:manna_field_sales/services/trip_tracker.dart';
 import 'package:manna_field_sales/widgets/proximity_gate.dart';
@@ -144,7 +145,7 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
       trip: kind == PunchKind.visitIn ? TripTracker.I.activeTrip.value : null,
       checkNearby: checkNearby,
     );
-    _snack('No signal. Saved at ${hhmm(at)}, sends by itself.');
+    _snack('Saved at ${hhmm(at)} ✓');
   }
 
   void _snack(String m) {
@@ -253,7 +254,11 @@ class _VisitPunchCardState extends State<VisitPunchCard> {
           accuracy: pos.accuracy,
           checkNearby: checkLater);
 
-      if (checkLater) {
+      // At a place made with no signal and not on the server yet, the visit
+      // waits behind it on the phone and goes with its real name.
+      if (checkLater ||
+          isLocalName(widget.customer) ||
+          isLocalName(widget.lead)) {
         // Not even tried live. A signal that came back in the last second
         // would write the visit with its duplicate check never run.
         await queueIt();

@@ -678,3 +678,152 @@ appeared to nobody and could be corrected by no one. The phone now offers
 "Location wrong? Re-capture" on the customer and lead screens and inside the
 "too far to punch in" dialog; it clears the stale verified pair, without which
 the correction would change nothing.
+
+## Credit-period requests (16 Nov 2026)
+
+A customer asks, through their rep, for a different credit period: the SAP
+payment term on their Manna Treads account (`OCRD.GroupNum`). The rep asks
+on the customer's screen on the phone; the decision is on both the phone and
+the dashboard (`/credit-periods`).
+
+- **Up to 30 days:** the rep's team manager approves or rejects it, then
+  pushes it to SAP. No GM.
+- **31 to 40 days:** the manager may only escalate it to the GM (or reject
+  it). The GM approves or rejects it, and pushes it.
+- **Over 40 days:** not offered, and refused by the server.
+- The GM may decide any open request and is the manager of a rep with no team.
+
+"Push" marks the request `Sending to SAP` and raises the credit sync's flag;
+the sync changes the term in SAP and the request becomes `In SAP` by itself,
+or goes back to `Approved` with SAP's error. The payment term only, never the
+credit limit. The terms offered are SAP's own, copied by the credit sync.
+
+Enforced by the `manna_credit_period_request` Server Script
+(`app/server/credit_period_request.py`); pinned by
+`shared/fixtures/credit_period_request.json`, implemented for the buttons in
+`app/lib/core/credit_period_request.dart` and
+`client/src/domain/creditPeriodRequest.ts`. **Change the fixture and every
+implementation together** — the script, both apps and the sync's
+`Get-TermPushPlan` all test against it.
+
+## Temporary credit extensions (16 Nov 2026)
+
+A separate workflow beside order approval, which is unchanged. On an order
+waiting for approval that takes its customer past the SAP credit limit, a rep
+or manager asks; the manager approves a temporary additional credit within
+their authority (Manna Credit Extension Settings) with a payment commitment of
+at most 10 days, which pushes it to SAP; SAP payments decide Paid or Payment
+Commitment Overdue, which goes to the GM. Dashboard `/credit-extensions`,
+phone "Temporary Credit". Enforced by `manna_credit_extension`
+(`app/server/credit_extension.py`); pinned by
+`shared/fixtures/credit_extension.json`; the SAP job is
+`sap-credit-sync/Sync-CreditExtensions.ps1`. Full account and report:
+`docs/TEMPORARY_CREDIT_EXTENSION.md`.
+
+
+### Added 17 Nov 2026
+
+- **Manager cap.** A manager may approve at most 2 extensions for one customer
+  in any 90 days (Settings `manager_cap_count` / `manager_cap_days`); past
+  that the request goes to the GM, and an approval asked before the cap
+  filled is refused after it. GM approvals do not count.
+- **Each manager's authority.** The Settings' `authorities` table holds a
+  figure per manager; a manager without a row has `manager_max_amount`. A
+  row of 0 means none. The GM sets both on the dashboard ("Approval
+  authority" on `/credit-extensions`); the phone only shows them. Every
+  change is in the Settings' version history.
+- **Escalation no longer waits on the SAP job.** The Scheduler Server Script
+  `manna_credit_extension_watch` (`app/server/credit_extension_watch.py`,
+  09:00 daily) takes any `Active` extension past its commitment date to
+  `Payment Commitment Overdue`, marked `overdue_unchecked`, and notifies the
+  manager and the GM. The job's next payment count settles it: Paid after
+  all, or the commitment missed. It also tells the GM when the job has not
+  run for six hours while extensions wait on it.
+- **Notifications are shown.** Both apps list this login's extension
+  notifications (`action: alerts`, `seen`) — they were written to Frappe's
+  Notification Log, which neither app read.
+- **On the order.** The order page in both apps shows any extension asked on
+  that order (`action: list, sales_order`).
+
+## Payment commitments: the 10-day ladder (17 Nov 2026)
+
+Overdue more than 30 days past terms, or over the credit limit, now needs a
+**payment commitment of up to 10 days** with the approval. The Manager gives it
+within their authority; otherwise the GM decides. Overdue 1–30 days is an
+ordinary approval. A missed commitment sends the customer's orders to the GM
+until the overdue is cleared. The server decides the route (`action: route`),
+and both apps pass `overLimit = route === 'gm'` to `orderActions`.
+`manna_payment_commitment_order` refuses an approval without its commitment.
+This replaces the temporary credit extension's request flow, and SAP credit
+limits are no longer changed. Team Orders shows the new stages in both apps,
+and `/payment-commitments` holds the history. Rule:
+`shared/fixtures/payment_commitment.json`. Full account:
+`docs/PAYMENT_COMMITMENT.md`.
+
+### Only the GM may decide it: straight to the GM (17 Nov 2026)
+
+An order whose route is `gm` (over the limit beyond the team Manager's
+authority, the Manager's cap of commitments reached, or a missed commitment
+not cleared) goes straight to 'Pending GM Approval' when it is raised. The
+Sales Order backstop does it, so both apps get it without a change of their
+own, and the Manager and the GM are notified ("Sent to GM: ..."). The
+Manager still sees the order, with the reason and the figures, and writes a
+**Note for GM** (a comment on the order's thread: the dashboard's own box
+under the alert, the phone's thread box relabelled). Orders already waiting
+on the Manager before this keep Send to GM.
+
+### The GM may approve and push in one step (17 Nov 2026)
+
+The user changed the 24 Sep 2026 rule ("the GM approves, the sales manager
+pushes"). `orderActions` gains `gmPush` (`credit_commitment.json`,
+`gm_push`): wherever the GM may decide an order, including one they already
+approved, they may also **Approve & Push to SAP**. That writes 'PO Approved -
+Ready for SAP', locks the rates, stamps the GM's approval and asks for the
+order sync, the same as the Manager's push. The GM's plain Approve still
+hands the order back to the Manager. Both apps; decision `gmPush` on the
+dashboard, `push: true` on the phone's `gm_approve` outbox kind.
+
+## Vulcanizing solution: litres as the line's weight (20 Nov 2026)
+
+`custom_total_weight` is a line's quantity in SAP's unit: kilos for tread
+rubber and gum, **litres for solution** (cans x tin size). The dashboard has
+written litres on a line it edits since `orderLineValues`; the phone wrote 0,
+so the order sync refused every solution order the phone took
+(SAL-ORD-2026-00162, 6 x 30 L). The phone now writes the litres too.
+
+Solution is still priced by the can: its `custom_rate_per_kg` is a rate per
+can, qty is the cans, and amount is cans x rate. Three readers that took the
+field for kilos now say so for solution (`client/src/domain/solutionLine.ts`):
+
+- the dashboard's approval keeps a solution line's rate per can, where the
+  tread formula `ratePerKg x weight / qty` would multiply it by the tin size;
+- the GM's and Manager's rate-edit previews total it as cans x rate;
+- screens label its weight `L`, not `kg`.
+
+The phone writes the category as 'Vulcanizing Solution', not 'VS'. Both
+proformas now read either as solution (`isSolutionCategory`, both apps;
+`shared/fixtures/proforma_columns.json` pins the phone's label at 180 L).
+
+Not changed: the `manna_sales_targets` Server Script counts a Tonnes target as
+`custom_total_weight` / 1000, so invoiced solution litres now count as kilos
+there (dashboard-edited lines already did). Pick lists: the
+`manna_pick_list_submit` Server Script still gives a solution line 0 kg, which
+the sync refuses.
+
+## Vulcanizing solution takes SAP's price, per can (20 Nov 2026)
+
+Manna Treads' SAP has priced solution since 14 Nov 2026 (Price List 01, per
+LITRE, GST-inclusive: 181/L for the 30 L packs, 191/L for the 10 L), and
+`manna_customer_rates` returns it like any other item. The phone priced only
+per-kg items from SAP, so solution stayed typed by hand. Now (the user,
+20 Nov 2026) a solution line takes SAP's rate x the tin size as its price per
+can - Manna 30 is 5,430 a can at list - in a locked box, as tread rubber is;
+a dealer's own SAP price wins where there is one (`sapRateFactor`,
+`SapRate.scaled`). A kept draft does the same when it is sent (`'k'` in
+`sapPending`). A solution item SAP has no price for is hidden from a Treads
+order screen, as tread rubber is, which takes the old I-14068/I-14069 off it
+(`shared/fixtures/sap_catalogue_visibility.json`).
+
+The six SAP solution codes (SM/SR/SV 010001 and 030001) were added to ERPNext
+that day. The dashboard does not take SAP prices at all, so nothing changes
+there.

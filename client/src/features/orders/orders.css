@@ -1028,4 +1028,35 @@
 .gmrev td.num { white-space: nowrap; }
 .gmrev__decision .field + .field { margin-top: 12px; }
 .gmrev__decision .lv__actions { margin-top: 14px; }
+/*
+ * The decision's buttons wrap inside their column. Three long labels in one
+ * row ("Approve with condition & Push to SAP", "... (back to the manager)",
+ * "Reject...") ran past the 400px column and pushed the whole page sideways,
+ * Reject cut off at the edge (17 Nov 2026). The push leads, a row of its own.
+ */
+.gmrev__decision .lv__actions { display: flex; flex-wrap: wrap; }
+.gmrev__decision .alert + .field { margin-top: 12px; }
+.gmrev__decision .lv__actions > .btn--primary { flex: 1 1 100%; }
+.gmrev__decision .lv__actions > .btn,
+.decide__bar > .btn {
+  max-width: 100%;
+  height: auto;
+  min-height: 34px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  line-height: 1.25;
+  white-space: normal;
+  text-align: center;
+}
+/* Sticky, but never taller than the screen: on a laptop the card's buttons
+   sat below the fold with no way to scroll to them while it stuck. */
+.gmrev__decision { max-height: calc(100vh - 110px); overflow-y: auto; }
+@media (max-width: 1100px) {
+  .gmrev__decision { max-height: none; overflow: visible; }
+}
+@media (max-width: 560px) {
+  .gmrev__credit .aging__boxes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .gmrev__decision .lv__actions > .btn { flex: 1 1 100%; }
+  .decide__bar > .btn { flex: 1 1 100%; }
+}
 .fu__grid td.num { white-space: nowrap; }

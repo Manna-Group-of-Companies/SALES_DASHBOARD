@@ -97,9 +97,10 @@ import {
 } from '@/domain/trips';
 import { allItemsReady, firstStage, isTerminalStage } from '@/domain/processStages';
 import { round2 } from '@/domain/productRules';
+import { unitRateFor } from '@/domain/solutionLine';
 
 import { frappeNow, noteServerDate, serverNow } from '@/domain/serverClock';
-import { OUTSTANDING_FIELD, creditEscalates } from '@/domain/credit';
+import { getOrderRoute } from './paymentCommitments';
 import {
   approvalConditionProblem,
   COMMENT_EMPTY,
@@ -118,6 +119,7 @@ import {
   type ConditionAction,
 } from '@/domain/creditCondition';
 import { checkCapture } from '@/domain/capture';
+import { areaOf, hasFix } from '@/domain/geo';
 import { DISPATCHED, rollUp } from '@/domain/production';
 import { isFullyDispatched, remainingToDispatch } from '@/domain/dispatch';
 import { planCombinedOrders, type CombinableOrder } from '@/domain/combinedOrders';
@@ -2972,7 +2974,8 @@ function toOrderLine(r: Record<string, unknown>): OrderLine {
  * approval of the credit, which sends the order back to the sales manager at
  * `Pending Final Approval` — the GM never pushes (credit_commitment.json).
  */
-export type OrderDecision = 'approve' | 'gmApprove' | 'reject' | 'escalate';
+/** gmPush (17 Nov 2026): the GM approves and pushes to SAP in one step. */
+export type OrderDecision = 'approve' | 'gmApprove' | 'gmPush' | 'reject' | 'escalate';
 
 /**
  * Decide an order.
@@ -3014,8 +3017,11 @@ async function decideSalesOrder(input: {
   const doc = await getDoc<Record<string, unknown>>(DOCTYPE.salesOrder, input.id);
   const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
 
-  const approving = input.decision === 'approve';
-  const gmApproving = input.decision === 'gmApprove';
+  // The GM's approve-and-push (17 Nov 2026) is both: the GM's approval
+  // (stamp, condition) and the push (status, rates locked, the order sync).
+  const gmPushing = input.decision === 'gmPush';
+  const approving = input.decision === 'approve' || gmPushing;
+  const gmApproving = input.decision === 'gmApprove' || gmPushing;
   const isGm = input.role === 'general_manager';
   const storedStatus = str(doc[SALES_ORDER_FIELD.poStatus]);
 
@@ -3038,25 +3044,25 @@ async function decideSalesOrder(input: {
     input.decision !== 'reject' &&
     storedStatus !== PO_STATUS.finalApproval
   ) {
-    const customerId = str(doc[SALES_ORDER_FIELD.customer]);
-    const [party] = customerId
-      ? await listDocs<Record<string, unknown>>(DOCTYPE.customer, {
-          fields: Object.values(OUTSTANDING_FIELD),
-          filters: [['name', '=', customerId]],
-          limit: 1,
-        }).catch(() => [])
-      : [];
-    if (!party) {
+    /*
+     * Since 17 Nov 2026 the server decides where an order goes (the 10-day
+     * payment commitment ladder, payment_commitment.json): only its 'gm' route
+     * takes Approve away from the sales manager. An order that needs a
+     * commitment may be approved with one - manna_payment_commitment_order
+     * refuses the save without it. Unreadable: refused, never waved through.
+     */
+    const route = await getOrderRoute(input.id).catch(() => null);
+    if (!route) {
       throw new Error(
         "Could not read the customer's credit position, so this was not saved. Try again.",
       );
     }
-    overLimit = creditEscalates(party, Number(doc[SALES_ORDER_FIELD.total]) || 0);
+    overLimit = route.route === 'gm';
   }
   const allowed = orderActions(input.role, storedStatus, overLimit);
   if (!allowed[input.decision]) {
     throw new Error(
-      approving && isGm
+      input.decision === 'approve' && isGm
         ? GM_DOES_NOT_PUSH
         : approving && overLimit
           ? SALES_MANAGER_CANNOT_APPROVE
@@ -3077,7 +3083,7 @@ async function decideSalesOrder(input: {
   }
 
   const status =
-    input.decision === 'approve'
+    input.decision === 'approve' || gmPushing
       ? PO_STATUS.approved
       : input.decision === 'gmApprove'
         ? PO_STATUS.finalApproval
@@ -3120,10 +3126,14 @@ async function decideSalesOrder(input: {
      * agree with the proforma; writing ratePerKg alone would leave the two
      * describing different money.
      */
-    const perUnitBefore =
-      qty > 0 && weight > 0
-        ? (perKg * weight) / qty
-        : Number(l[SALES_ORDER_ITEM_FIELD.priceListRate]) || Number(l.rate) || 0;
+    // Solution is priced per can, not by its litres - see `unitRateFor`.
+    const perUnitBefore = unitRateFor({
+      category: l[SALES_ORDER_ITEM_FIELD.category],
+      qty,
+      weight,
+      ratePerKg: perKg,
+      fallback: Number(l[SALES_ORDER_ITEM_FIELD.priceListRate]) || Number(l.rate) || 0,
+    });
 
     /*
      * The rate is already net.
@@ -4822,6 +4832,7 @@ async function getTripTrack(tripId: string): Promise<TripTrack> {
       String(c.name),
       {
         name: str(c[SALES_CUSTOMER_FIELD.customerName]) ?? String(c.name),
+        area: areaOf({ route: str(c[SALES_CUSTOMER_FIELD.route]) }),
         ...place(c, SALES_CUSTOMER_FIELD as never),
       },
     ]),
@@ -4831,6 +4842,11 @@ async function getTripTrack(tripId: string): Promise<TripTrack> {
       String(l.name),
       {
         name: str(l[LEAD_FIELD.leadName]) ?? String(l.name),
+        area: areaOf({
+          city: str(l[LEAD_FIELD.city]),
+          address: str(l[LEAD_FIELD.address]),
+          route: str(l[LEAD_FIELD.route]),
+        }),
         ...place(l, LEAD_FIELD as never),
       },
     ]),
@@ -4845,6 +4861,7 @@ async function getTripTrack(tripId: string): Promise<TripTrack> {
     return {
       visit,
       name: found?.name ?? visit.customerId ?? visit.leadId ?? 'Unknown party',
+      area: found?.area,
       place: found ? { latitude: found.latitude, longitude: found.longitude } : undefined,
     };
   });
@@ -4883,6 +4900,13 @@ async function listVisitsForTrip(tripId: string): Promise<SalesVisit[]> {
   return rows.map(toSalesVisit);
 }
 
+/** A coordinate pair, or undefined when it is missing or the 0,0 a blank field reads as. */
+function fixOf(lat: unknown, lng: unknown): { latitude: number; longitude: number } | undefined {
+  if (lat == null || lng == null || lat === '' || lng === '') return undefined;
+  const p = { latitude: Number(lat), longitude: Number(lng) };
+  return hasFix(p) ? p : undefined;
+}
+
 function toSalesVisit(r: Record<string, unknown>): SalesVisit {
   return {
     id: String(r.name),
@@ -4893,6 +4917,7 @@ function toSalesVisit(r: Record<string, unknown>): SalesVisit {
     customerId: str(r[SALES_VISIT_FIELD.customer]),
     checkIn: str(r[SALES_VISIT_FIELD.checkIn]),
     checkOut: str(r[SALES_VISIT_FIELD.checkOut]),
+    checkInAt: fixOf(r[SALES_VISIT_FIELD.checkInLatitude], r[SALES_VISIT_FIELD.checkInLongitude]),
     durationMinutes: Number(r[SALES_VISIT_FIELD.durationMinutes]) || 0,
     purpose: str(r[SALES_VISIT_FIELD.purpose]),
     status: str(r[SALES_VISIT_FIELD.status]),

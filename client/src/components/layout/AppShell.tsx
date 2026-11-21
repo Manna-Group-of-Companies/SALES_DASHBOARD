@@ -8,6 +8,7 @@
  * around" needs.
  */
 
+import { itemRequestsWaitingOn, listItemRequests } from '@/api/itemRequests';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import type { Role } from '@/domain/types';
@@ -147,6 +148,31 @@ export function AppShell() {
     };
   }, [user?.role, location.pathname]);
 
+  /*
+   * Item requests waiting on this login - for the accounts staff, the ones a
+   * manager has just approved (17 Nov 2026). The bell has no store on the
+   * live site, so the menu count is the notification: read on every page
+   * change and every minute, so an approval shows without a reload.
+   */
+  const [waitingRequests, setWaitingRequests] = useState(0);
+  const role = user?.role;
+  const readsRequests =
+    role === 'accounts_staff' || role === 'sales_manager' || role === 'general_manager';
+  useEffect(() => {
+    if (!readsRequests) return;
+    let live = true;
+    const read = () =>
+      listItemRequests()
+        .then((rows) => live && setWaitingRequests(itemRequestsWaitingOn(role, rows)))
+        .catch(() => {});
+    read();
+    const t = window.setInterval(read, 60_000);
+    return () => {
+      live = false;
+      window.clearInterval(t);
+    };
+  }, [role, readsRequests, location.pathname]);
+
   if (!user) return null;
 
   const items: NavItem[] = [
@@ -159,7 +185,11 @@ export function AppShell() {
     { to: '/gm', label: 'Escalated to You', icon: 'inbox', roles: ['general_manager'], group: 'Overview' },
     { to: '/follow-up', label: 'Follow-up', icon: 'listChecks', roles: ['general_manager'], count: repAnswers, urgent: repAnswers > 0, group: 'Overview' },
     // The GM approves item requests of reps with no team, and may any.
-    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['general_manager'], group: 'Overview' },
+    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['general_manager'], count: waitingRequests, urgent: waitingRequests > 0, group: 'Overview' },
+    // 31-40 days come to the GM; the GM decides for reps with no team (16 Nov 2026).
+    { to: '/credit-periods', label: 'Credit Periods', icon: 'clock', roles: ['general_manager'], group: 'Overview' },
+    // The 10-day payment commitments and their history (17 Nov 2026).
+    { to: '/payment-commitments', label: 'Payment Commitments', icon: 'rupee', roles: ['general_manager'], group: 'Overview' },
     // Every team's targets, read-only (5 Nov 2026).
     { to: '/targets', label: 'Team Targets', icon: 'chart', roles: ['general_manager'], group: 'Overview' },
     // Which products sell most (5 Nov 2026).
@@ -176,7 +206,11 @@ export function AppShell() {
     // What reps picked, view only.
     { to: '/pick-lists', label: 'Pick Lists', icon: 'listChecks', roles: ['sales_manager'], screen: 'orders', group: 'Sales' },
     // The manager approves a new product before the accountant makes it (12 Nov 2026).
-    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['sales_manager'], group: 'Sales' },
+    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['sales_manager'], count: waitingRequests, urgent: waitingRequests > 0, group: 'Sales' },
+    // A customer's new payment term: up to 30 days the manager decides and pushes it to SAP (16 Nov 2026).
+    { to: '/credit-periods', label: 'Credit Periods', icon: 'clock', roles: ['sales_manager'], screen: 'credit', group: 'Sales' },
+    // The 10-day payment commitments given on the team's orders (17 Nov 2026).
+    { to: '/payment-commitments', label: 'Payment Commitments', icon: 'rupee', roles: ['sales_manager'], group: 'Sales' },
     { to: '/locations', label: 'Location Checks', icon: 'pin', roles: ['sales_manager'], screen: 'locations', group: 'Sales' },
     { to: '/team/regularizations', label: 'Attendance Corrections', icon: 'clock', roles: ['sales_manager'], screen: 'regularizations', group: 'Sales' },
     // Monthly targets against SAP invoices, every team (3 Nov 2026).
@@ -216,7 +250,7 @@ export function AppShell() {
     { to: '/hr/odometer', label: 'Odometer Check', icon: 'gauge', roles: ['hr', 'accounts_staff'], group: 'People' },
     { to: '/hr/trips', label: 'Trips & Routes', icon: 'map', roles: ['hr', 'accounts_staff'], group: 'People' },
     // What the reps asked for, read-only; the accountant answers (10 Nov 2026).
-    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['hr', 'accounts_staff'], group: 'People' },
+    { to: '/item-requests', label: 'Item Requests', icon: 'inbox', roles: ['hr', 'accounts_staff'], count: role === 'accounts_staff' ? waitingRequests : undefined, urgent: role === 'accounts_staff' && waitingRequests > 0, group: 'People' },
 
     { to: '/reports/expenses', label: 'Monthly Expenses', icon: 'receipt', roles: ['hr', 'accounts_staff'], group: 'Reports' },
     { to: '/reports/summary', label: 'Range Summary', icon: 'chart', roles: ['hr', 'accounts_staff'], group: 'Reports' },

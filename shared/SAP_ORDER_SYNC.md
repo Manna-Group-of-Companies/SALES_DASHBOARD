@@ -534,8 +534,7 @@ above is unchanged.
 
 Manna Treads sells, Hi-Tech makes and holds the stock. So an order goes:
 
-1. **PASS M** — once the ERPNext order is **approved** (`custom_po_status`
-   at `order_sync.po_status_gate`, the same gate as PASS A), a
+1. **PASS M** — as soon as the ERPNext order exists (not on approval), a
    Manna Treads Sales Order to the end customer (`Customer.custom_bp_code`),
    at the order's rate net of GST, tax code from the customer's bill-to
    state (KL `CG+SG@18`, any other `IGST@18`).
@@ -564,16 +563,6 @@ Manna Treads sells, Hi-Tech makes and holds the stock. So an order goes:
 5. *Not built yet:* the pick list, Hi-Tech's invoice for what was picked,
    Manna Treads' goods receipt and delivery note.
 
-**On approval, not on creation — changed 19 November 2026.** PASS M first
-sent an order the moment it existed and held back only `skip_statuses`
-(`Rejected`). SAL-ORD-2026-00163 and 00164 went to Manna Treads SAP as SO 578
-and 579 while still at *Pending GM Approval*. PASS M now takes only an order
-at `po_status_gate`; every *Pending …* status waits. This is not configurable:
-an order that has not passed the gate has no business in SAP (*What you must
-NOT write*, above). An order created on or after `since` and approved later
-is still PASS M's, and approval calls `manna_sap_order_request_sync`, so it
-goes at once. Orders already sent before the change stay in SAP as they are.
-
 Manna Treads rounds a document to the rupee and Hi-Tech keeps paise, so PO
 235 is ₹31,269 and Hi-Tech's SO 551 for it ₹31,269.19 — same lines, same
 VAT. Stage 4's invoice and goods receipt will meet the same paise.
@@ -590,6 +579,16 @@ next order with no code or app change.
 | blank or 0 | the rolls, 1:1 | the app's per-roll price (`amount ÷ qty`), so SAP's total is the order's |
 
 The phone's own roll weight (`Item.custom_weight_per_roll`) plays no part.
+
+**A tread sold by the kilo is not a roll line — fixed 20 November 2026.** The
+app writes one as `qty` = `custom_total_weight` = the kilos, with
+`custom_rolls` and `custom_loose_belts` at 0. PASS M took it for rolls and
+multiplied by `U_WeightPerRoll`: SAL-ORD-2026-00162's hot lines (60, 600 and
+37.5 kg, at 30 and 35 kg a roll) reached Manna Treads SO 588 as 1,800, 18,000
+and 1,312.5 kg, ₹71.2 lakh against ₹7.32 lakh, and the wrong kilos were
+written back to the order. SO 588 and the order were corrected by hand that
+day. Such a line now goes as its kilos at `amount / kilos`
+(`Test-MfRollLine`).
 Every other line (bonding gum, solution) is sent as before, at
 `custom_total_weight`. A failed read of Hi-Tech's weights sends nothing;
 the order waits for the next run, rather than being guessed at 1:1.

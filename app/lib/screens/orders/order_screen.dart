@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/credit_commitment.dart';
+import 'package:manna_field_sales/core/delivery_mode.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/order_copy.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
@@ -21,6 +22,7 @@ import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
 import 'package:manna_field_sales/screens/orders/product_picker_screen.dart';
 import 'package:manna_field_sales/screens/orders/product_row.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/services/outbox.dart' show isLocalName;
 import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/widgets/sync_all_button.dart';
 
@@ -85,6 +87,11 @@ class _OrderScreenState extends State<OrderScreen> {
   String _company = '';
   String _q = '';
   DateTime? _deliveryDate;
+
+  /// Who pays the courier, Paid or To Pay (14 Nov 2026). Asked on every
+  /// order; an order being edited starts from what it already says.
+  String? _deliveryMode;
+  String? _transportMode;
   bool _submitting = false;
   bool _reloading = false;
   Timer? _poll;
@@ -100,6 +107,8 @@ class _OrderScreenState extends State<OrderScreen> {
     if (existing != null) {
       final d = existing['delivery_date'];
       if (d != null) _deliveryDate = DateTime.tryParse('$d');
+      _deliveryMode = deliveryModeOf(existing[kFieldDeliveryMode]);
+      _transportMode = transportModeOf(existing[kFieldTransportMode]);
     }
     _init = _load();
     // The Sync button over every screen does not reload what is showing; this
@@ -217,6 +226,21 @@ class _OrderScreenState extends State<OrderScreen> {
       line.looseBelts = asInt(it['custom_loose_belts']);
       line.boxes = asInt(it['custom_boxes']);
       line.cans = asInt(it['custom_cans']);
+      // Hot rubber by the kilo: the kilos ordered are the line's weight.
+      if (line.product.soldByKg) {
+        final kg = it['custom_total_weight'] ?? it['qty'];
+        line.kilos =
+            kg is num ? kg.toDouble() : (double.tryParse('${kg ?? ''}') ?? 0);
+      } else if (line.product.category == ProductCategory.ctr && line.rolls == 0) {
+        // Ordered in kilos before the item was given a roll weight (the row's
+        // Add roll weight, 18 Nov 2026): counted in rolls now, the nearest
+        // whole number, rather than opening as an empty line that a save
+        // would drop.
+        final kg = it['custom_total_weight'];
+        line.rolls = rollsForKilos(
+            kg is num ? kg.toDouble() : (double.tryParse('${kg ?? ''}') ?? 0),
+            line.product.weightPerRoll);
+      }
       final perKg = it['custom_rate_per_kg'];
       line.rate = perKg is num
           ? perKg.toDouble()
@@ -295,17 +319,36 @@ class _OrderScreenState extends State<OrderScreen> {
         hasSapRate: _sapRates[line.product.code] != null,
       );
 
-  /// The SAP rate for a line. SAP prices these items per kg, so only rows whose
-  /// rate box is per kg are given one (vulcanizing solution is per can).
-  SapRate? _sapRateFor(OrderLine line) =>
-      line.product.category.rateUnit == 'kg' ? _sapRates[line.product.code] : null;
+  /// What SAP's rate for [line] is multiplied by for its rate box, or null when
+  /// SAP does not price it - see [sapRateFactor].
+  double? _sapFactor(OrderLine line) => sapRateFactor(
+      rateUnit: line.product.category.rateUnit,
+      packLitres: line.product.packLitres);
+
+  /// The SAP rate for a line, in its rate box's unit: per kg as SAP holds it,
+  /// or per can for solution, which SAP holds per litre (20 Nov 2026; solution
+  /// was typed by hand before).
+  SapRate? _sapRateFor(OrderLine line) {
+    final f = _sapFactor(line);
+    final r = _sapRates[line.product.code];
+    return f == null || r == null ? null : r.scaled(f);
+  }
 
   /// Where the phone has no SAP price to offer, the rep types the rate (the
   /// user, 11 Nov 2026): reps of another unit, whose parties have no Manna
-  /// Treads price, and items not priced per kg (solution, per can). A Manna
-  /// Treads per-kg item is SAP's price or nothing.
+  /// Treads price, and items SAP does not price. A Manna Treads item SAP
+  /// prices - per kg, or solution per can since 20 Nov 2026 - is SAP's price
+  /// or nothing.
   bool _typesRate(OrderLine line) =>
-      !Session.I.isTreadsUnit || line.product.category.rateUnit != 'kg';
+      !Session.I.isTreadsUnit || _sapFactor(line) == null;
+
+  /// A line priced by SAP, whatever the phone had to show for it. A kept
+  /// order takes SAP's price on the day it is sent, not the copy on the phone
+  /// (the user, 13 Nov 2026), so every such line is re-priced then.
+  bool _takesSapPrice(OrderLine line) =>
+      !_typesRate(line) &&
+      !_approvedLines.contains(line.product.code) &&
+      (_sapRateFor(line) != null || _sapPriceLater(line));
 
   /// A line whose SAP price could not be read for want of a signal: kept on
   /// the phone with no price, and priced from SAP when the draft is sent.
@@ -462,6 +505,10 @@ class _OrderScreenState extends State<OrderScreen> {
   String? _validate() {
     if (_picked.isEmpty) return 'Add at least one product.';
     if (_deliveryDate == null) return 'Pick a required delivery date.';
+    if (_transportMode == null) {
+      return 'Choose the mode of delivery: By Road, By KSRTC or By Railway.';
+    }
+    if (_deliveryMode == null) return 'Choose the freight: Paid or To Pay.';
     final unpriced =
         _picked.where((l) => l.needsRate && !_sapPriceLater(l)).toList();
     if (unpriced.isNotEmpty) {
@@ -780,38 +827,18 @@ class _OrderScreenState extends State<OrderScreen> {
     );
   }
 
-  /// Offers to hold an order that could not be sent for want of signal.
+  /// Keeps an order that could not be sent for want of signal, and carries
+  /// on exactly as if it had gone (the user, 13 Nov 2026: the app must not
+  /// show that the net is gone). It is sent by itself when it can be.
   ///
-  /// The wording is careful on purpose. No order number exists and no stock is
-  /// held — stock is committed in SAP, which this order has not reached — so
-  /// the rep must not walk away believing the customer is covered. Another rep
-  /// in signal can take the same rolls before this draft is ever sent.
+  /// No stock is held by it — stock is committed in SAP, which this order has
+  /// not reached — but that is as true of a sent order until SAP has it. What
+  /// is checked again when it is sent: SAP's price on every line that takes
+  /// one, and the customer's credit as they stand then.
   Future<void> _offerDraft(String deliveryDate,
       {({String text, String? due})? commitment}) async {
     if (!mounted) return;
     setState(() => _submitting = false);
-
-    final keep = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('No signal'),
-        content: Text(
-          'Not sent — no stock held.\n\nKeep it on the phone? It is sent by '
-          'itself when the signal is back.'
-          '${_picked.any(_sapPriceLater) ? '\n\nPrices are taken from SAP when it is sent.' : ''}',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Discard')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Keep it')),
-        ],
-      ),
-    );
-
-    if (keep != true) return;
 
     await PendingOrders.save(
       customer: widget.party.name,
@@ -821,18 +848,26 @@ class _OrderScreenState extends State<OrderScreen> {
       isLead: widget.party.isLead,
       commitment: commitment?.text,
       commitmentDue: commitment?.due,
+      deliveryMode: _deliveryMode,
+      transportMode: _transportMode,
       sapPending: {
         for (final l in _picked)
-          if (_sapPriceLater(l))
+          if (_takesSapPrice(l))
             l.product.code: {
               // Rate per kg -> line rate, as OrderLine.lineRate works it.
               'f': l.product.rollWeight > 0 ? l.product.rollWeight : 1.0,
+              // SAP's rate -> the rate box (sapRateFactor): the tin size for
+              // solution, which SAP holds per litre. Absent on drafts kept
+              // before 20 Nov 2026, which read it as 1.
+              'k': _sapFactor(l) ?? 1.0,
               'n': l.product.name,
             },
       },
     );
     if (!mounted) return;
-    _snack('Saved on phone. It is sent when the signal is back.');
+    _snack(commitment != null
+        ? 'Order saved with your commitment ✓'
+        : 'Order saved — sending for approval ✓');
     await Future.delayed(const Duration(milliseconds: 600));
     if (mounted) Navigator.pop(context, true);
   }
@@ -914,6 +949,8 @@ class _OrderScreenState extends State<OrderScreen> {
           isLead: widget.party.isLead,
           commitment: commitment?.text,
           commitmentDue: commitment?.due,
+          deliveryMode: _deliveryMode,
+          transportMode: _transportMode,
         );
         _snack(_wasApproved
             ? 'Order updated ✓ — sent back to your manager'
@@ -924,12 +961,19 @@ class _OrderScreenState extends State<OrderScreen> {
         await Future.delayed(const Duration(milliseconds: 400));
         if (mounted) Navigator.pop(context, true);
         return;
+      } else if (isLocalName(widget.party.name)) {
+        // A lead or customer made with no signal and not on the server yet:
+        // the order waits behind it on the phone and goes with its real name.
+        await _offerDraft(dd, commitment: commitment);
+        return;
       } else if (widget.party.isLead) {
         name = await Api.placeLeadOrder(
           lead: widget.party.name,
           items: [for (final l in _picked) l.toSalesOrderItem()],
           deliveryDate: dd,
           total: _total,
+          deliveryMode: _deliveryMode,
+          transportMode: _transportMode,
         );
         _snack('Order sent for approval ✓  $name');
         // A lead order has no proforma screen to go on to — it becomes a real
@@ -945,6 +989,8 @@ class _OrderScreenState extends State<OrderScreen> {
           deliveryDate: dd,
           commitment: commitment?.text,
           commitmentDue: commitment?.due,
+          deliveryMode: _deliveryMode,
+          transportMode: _transportMode,
         );
         _snack(commitment != null
             ? 'Order sent with your commitment ✓  $name'
@@ -1340,6 +1386,39 @@ class _OrderScreenState extends State<OrderScreen> {
         ])),
       );
 
+  /// One row of choices, none picked until the rep picks one.
+  Widget _choice(String label, List<String> options, String? selected,
+          void Function(String?) set) =>
+      Row(children: [
+        SizedBox(
+          width: 84,
+          child: Text(label,
+              style: const TextStyle(fontSize: 12.5, color: Colors.black54)),
+        ),
+        Expanded(
+          child: SegmentedButton<String>(
+            showSelectedIcon: false,
+            emptySelectionAllowed: true,
+            segments: [
+              for (final o in options)
+                ButtonSegment(
+                    value: o,
+                    label: Text(o,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12.5))),
+            ],
+            selected: {?selected},
+            onSelectionChanged: _submitting
+                ? null
+                : (s) => setState(() => set(s.isEmpty ? null : s.first)),
+            style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+          ),
+        ),
+      ]);
+
   /// The item count and total on a strip of their own, then the delivery
   /// date and the send button side by side — the billing-app layout the reps
   /// asked for (19 Nov 2026). The date is still required; it just no longer
@@ -1350,6 +1429,18 @@ class _OrderScreenState extends State<OrderScreen> {
     final d = _deliveryDate;
     return SafeArea(
       child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // Both asked on every order (14 Nov 2026, the user): how it travels,
+        // and who pays the freight.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: Column(children: [
+            _choice('Mode of delivery', kTransportModes, _transportMode,
+                (v) => _transportMode = v),
+            const SizedBox(height: 6),
+            _choice('Freight', kDeliveryModes, _deliveryMode,
+                (v) => _deliveryMode = v),
+          ]),
+        ),
         Container(
           width: double.infinity,
           color: const Color(0xFFF0F0F0),

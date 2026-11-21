@@ -24,6 +24,7 @@ import {
   AGING_NOT_SYNCED,
   AGING_NO_DATA,
   OVERDUE_TOLERANCE,
+  overdueDaysOf,
   overduePastTerms,
   pastTermsPhrase,
   paymentTermsOf,
@@ -85,7 +86,12 @@ export function AgingBoxes({
         the term it is measured against.
       */}
       {overduePastTerms(customer) > OVERDUE_TOLERANCE ? (
-        <p className="aging__warn">Overdue: {pastTermsPhrase(customer)}. Orders go to the GM.</p>
+        <p className="aging__warn">
+          Overdue: {pastTermsPhrase(customer)}.{' '}
+          {overdueDaysOf(customer) > 30
+            ? 'Orders need a payment commitment of up to 10 days.'
+            : 'Within 30 days of the terms: an ordinary approval.'}
+        </p>
       ) : paymentTermsOf(customer) ? (
         <p className="tiny dim" style={{ margin: '6px 0 0' }}>
           Payment terms: {paymentTermsOf(customer)}. Nothing overdue past them.

@@ -17,7 +17,10 @@ enum ManagerScreen {
   regularizations,
   orders,
   stock,
-  targets
+  targets,
+  /// Credit-period requests (16 Nov 2026): every manager decides their
+  /// team's, up to 30 days, and escalates 31-40 to the GM.
+  credit
 }
 
 const List<ManagerScreen> _full = ManagerScreen.values;
@@ -29,6 +32,7 @@ const List<ManagerScreen> _partyOnly = [
   ManagerScreen.locations,
   ManagerScreen.regularizations,
   ManagerScreen.targets,
+  ManagerScreen.credit,
 ];
 
 /// Keyed by the team token on `Sales Person.custom_team_manager`.

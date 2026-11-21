@@ -32,17 +32,10 @@ function New-SapSession {
         throw "no usable sap.url / sap.username / sap.password in $ConfigPath"
     }
     $tag = [guid]::NewGuid().ToString('N').Substring(0, 8)
-    # Optional, both (12 Nov 2026, for the local demo's TEST companies; live sets neither and runs as before):
-    #   sap.pinned_pubkey      base64 SHA-256 of the Service Layer's public key. -k stays (the certificate is
-    #                          self-signed), but curl refuses any other server before the password is sent - the
-    #                          same pin Manna_CMMS/sap-sync/Sync-SapItemCategories.ps1 takes.
-    #   sap.password_overrides { "<CompanyDB>": "<password>" } for a company whose password differs.
+    # Optional sap.pinned_pubkey (12 Nov 2026): base64 SHA-256 of the Service Layer's public key. -k stays (the
+    # certificate is self-signed), but curl refuses any other server before the password is sent - the same pin
+    # Manna_CMMS/sap-sync/Sync-SapItemCategories.ps1 takes. Live's config leaves it unset and runs as before.
     $pin = if ($sap.PSObject.Properties['pinned_pubkey'] -and "$($sap.pinned_pubkey)".Trim()) { "sha256//$("$($sap.pinned_pubkey)".Trim())" } else { '' }
-    $pw = "$($sap.password)"
-    if ($sap.PSObject.Properties['password_overrides'] -and $sap.password_overrides -and
-        $sap.password_overrides.PSObject.Properties[$CompanyDb] -and "$($sap.password_overrides.$CompanyDb)") {
-        $pw = "$($sap.password_overrides.$CompanyDb)"
-    }
     $s = [pscustomobject]@{
         Base      = "$($sap.url)".TrimEnd('/')
         Root      = ([Uri]"$($sap.url)").GetLeftPart([UriPartial]::Authority)
@@ -53,10 +46,15 @@ function New-SapSession {
         Pin       = $pin
         Open      = $false
     }
+    # Optional sap.password_overrides.<CompanyDb>: a test company whose password is not the others'.
+    $password = "$($sap.password)"
+    if ($sap.PSObject.Properties['password_overrides'] -and $sap.password_overrides.PSObject.Properties[$CompanyDb]) {
+        $password = "$($sap.password_overrides.$CompanyDb)"
+    }
     $loginFile = Join-Path $env:TEMP "sap-pricing-$tag-login.json"
     try {
         [IO.File]::WriteAllText($loginFile,
-            (@{ CompanyDB = $CompanyDb; UserName = "$($sap.username)"; Password = $pw } | ConvertTo-Json -Compress),
+            (@{ CompanyDB = $CompanyDb; UserName = "$($sap.username)"; Password = $password } | ConvertTo-Json -Compress),
             $script:SapUtf8)
         $r = Invoke-SapCurl -Session $s -Method POST -Url "$($s.Base)/Login" -BodyFile $loginFile -SaveCookies
     } finally {

@@ -86,5 +86,20 @@ class ServerClock {
   /// Now, as the server sees it, rendered in the phone's own timezone. Before
   /// the first response lands this is the device clock corrected by the last
   /// skew the server ever reported.
-  DateTime now() => DateTime.now().add(_skew);
+  ///
+  /// Inside [at], the moment given there instead: a write kept on the phone
+  /// and sent later runs as of when the rep made it, so every "today" and
+  /// "now" it stamps — and every time-of-day rule it is judged by — is the
+  /// moment they did it, not the moment the signal came back.
+  DateTime now() {
+    final z = Zone.current[_zoneKey];
+    if (z is DateTime) return z;
+    return DateTime.now().add(_skew);
+  }
+
+  static const Symbol _zoneKey = #mannaWrittenAt;
+
+  /// Runs [f] with [now] answering [moment].
+  static Future<T> at<T>(DateTime moment, Future<T> Function() f) =>
+      runZoned(f, zoneValues: {_zoneKey: moment});
 }

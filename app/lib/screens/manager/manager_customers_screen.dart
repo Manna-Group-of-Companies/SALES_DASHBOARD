@@ -11,6 +11,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:manna_field_sales/core/credit.dart';
 import 'package:manna_field_sales/core/errors.dart';
+import 'package:manna_field_sales/core/party_location.dart';
+import 'package:manna_field_sales/services/map_service.dart' show openInGoogleMaps;
 import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/manager/manager_ui.dart';
 import 'package:manna_field_sales/services/api.dart';
@@ -402,6 +404,18 @@ class _PartySheetState extends State<_PartySheet> {
               _row('Location', textOf(p['custom_location_status']).isEmpty
                   ? '—'
                   : textOf(p['custom_location_status'])),
+              // A lead's pin opens in Google Maps (14 Nov 2026).
+              if (widget.lead)
+                if (partyLatLng(p) case final pos?)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => openInGoogleMaps(pos.lat, pos.lng),
+                      icon: const Icon(Icons.map_outlined, size: 18),
+                      label: Text(
+                          '${pos.lat.toStringAsFixed(5)}, ${pos.lng.toStringAsFixed(5)} · Open in Google Maps'),
+                    ),
+                  ),
               if (a != null) ...[
                 const Divider(height: 24),
                 _row('Outstanding', money(a.total)),

@@ -83,6 +83,8 @@ export interface OrderActions {
   approve: boolean;
   /** The GM's approval of the credit, which sends the order back to the sales manager. */
   gmApprove: boolean;
+  /** The GM approves AND pushes to SAP in one step (17 Nov 2026, the user). */
+  gmPush: boolean;
   /** Send to the general manager. */
   escalate: boolean;
   reject: boolean;
@@ -93,6 +95,7 @@ export interface OrderActions {
 const NONE: OrderActions = {
   approve: false,
   gmApprove: false,
+  gmPush: false,
   escalate: false,
   reject: false,
   comment: false,
@@ -139,7 +142,9 @@ export function orderActions(
   const reject = s !== PO_STATUS.rejected;
 
   if (isGm) {
-    return { ...NONE, gmApprove: !gmApproved, reject, comment: true };
+    // Since 17 Nov 2026 the GM may also approve and push in one step - on
+    // anything not yet in SAP, including what they already approved.
+    return { ...NONE, gmApprove: !gmApproved, gmPush: true, reject, comment: true };
   }
 
   if (gmApproved) return { ...NONE, approve: true, comment: true };

@@ -68,11 +68,12 @@ void main() {
       expect(r.fetchedAt, isNotNull);
     });
 
-    test('the rep is told the data is old', () async {
+    // The user, 13 Nov 2026: "The app must not show that the net is gone."
+    test('the rep is not told the network is gone', () async {
       await _read(() async => _rows);
       final r = await _read(() async => throw _offline());
 
-      expect(r.ageLabel, contains('Offline'));
+      expect(r.ageLabel, isEmpty);
     });
 
     test('with nothing cached the failure still reaches the rep', () async {
@@ -99,17 +100,17 @@ void main() {
   });
 
   group('Stale limits', () {
-    test('a copy past the age limit is not served', () async {
-      // Written by hand with an old timestamp — the cache is only allowed to
-      // answer for data recent enough to still be worth quoting.
+    // Reversed 13 Nov 2026: an old copy beats an error screen. What matters
+    // is checked again on the server's figures when a write is sent.
+    test('an old copy is still served rather than an error', () async {
       final old = DateTime.now().subtract(const Duration(days: 30));
       SharedPreferences.setMockInitialValues({
         'cache:customers':
             '{"at":"${old.toIso8601String()}","data":${'[{"name":"OLD"}]'}}',
       });
 
-      await expectLater(
-          _read(() async => throw _offline()), throwsA(isA<DioException>()));
+      final r = await _read(() async => throw _offline());
+      expect(r.value.single['name'], 'OLD');
     });
 
     test('a corrupt cache entry is a miss, not a crash', () async {
@@ -129,68 +130,26 @@ void main() {
   });
 
   group('Telling a screen how old its data is', () {
-    test('a live read reports no staleness', () async {
+    // Every screen quotes these; all of them say nothing since 13 Nov 2026.
+    test('a read from the saved copy says nothing about the network',
+        () async {
       await _read(() async => _rows);
+      await _read(() async => throw _offline());
       expect(OfflineCache.ageLabel('customers'), isEmpty);
+      expect(OfflineCache.worstAge(['customers']), isEmpty);
     });
 
-    test('a cached read reports it', () async {
-      await _read(() async => _rows);
-      await _read(() async => throw _offline());
-      expect(OfflineCache.ageLabel('customers'), contains('Offline'));
-    });
-
-    test('coming back online clears the notice', () async {
-      await _read(() async => _rows);
-      await _read(() async => throw _offline());
-      expect(OfflineCache.ageLabel('customers'), isNotEmpty);
-
-      await _read(() async => _rows);
-      expect(OfflineCache.ageLabel('customers'), isEmpty,
-          reason: 'a stale banner must not outlive the network coming back');
-    });
-
-    test('a key never read is not stale', () {
-      expect(OfflineCache.ageLabel('never-touched'), isEmpty);
-    });
-
-    test('a screen built from several reads is as stale as its worst', () async {
-      await OfflineCache.read<List<Map<String, dynamic>>>(
-          'a', () async => _rows,
-          decode: decodeRows);
-      await OfflineCache.read<List<Map<String, dynamic>>>(
-          'b', () async => _rows,
-          decode: decodeRows);
-      // 'a' still live, 'b' falls back.
-      await OfflineCache.read<List<Map<String, dynamic>>>(
-          'b', () async => throw _offline(),
-          decode: decodeRows);
-
-      expect(OfflineCache.worstAge(['a', 'b']), contains('Offline'));
-      expect(OfflineCache.worstAge(['a']), isEmpty);
-    });
-
-    test('clearing on sign-out drops the notices too', () async {
-      await _read(() async => _rows);
-      await _read(() async => throw _offline());
-      await OfflineCache.clear();
-      expect(OfflineCache.ageLabel('customers'), isEmpty);
-    });
-  });
-
-  group('Age wording', () {
-    test('reads in minutes, hours then days', () {
-      String label(Duration ago) => Cached(
-            _rows,
-            fetchedAt: DateTime.now().subtract(ago),
-            stale: true,
-          ).ageLabel;
-
-      expect(label(const Duration(minutes: 5)), contains('5 min ago'));
-      expect(label(const Duration(hours: 3)), contains('3 hours ago'));
-      expect(label(const Duration(hours: 1)), contains('1 hour ago'));
-      expect(label(const Duration(days: 2)), contains('2 days ago'));
-      expect(label(const Duration(days: 1)), contains('1 day ago'));
+    test('no age is put into words, however old', () {
+      for (final ago in const [
+        Duration(minutes: 5),
+        Duration(hours: 3),
+        Duration(days: 2),
+      ]) {
+        expect(
+            Cached(_rows, fetchedAt: DateTime.now().subtract(ago), stale: true)
+                .ageLabel,
+            isEmpty);
+      }
     });
   });
 }

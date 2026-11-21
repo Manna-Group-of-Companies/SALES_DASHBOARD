@@ -74,7 +74,8 @@ function Get-HitechPrice {
 function Get-ItemKind {
     param([string] $Type, [string] $Name)
     foreach ($t in @("$Type".ToUpperInvariant(), "$Name".ToUpperInvariant())) {
-        if ($t -match '\bGUM\b') { return 'BONDING GUM' }
+        # "BG MANNA 220 04": the new codes' bonding gum (14 Nov 2026).
+        if ($t -match '\bGUM\b' -or $t -match '^\s*BG\b') { return 'BONDING GUM' }
         if ($t.Contains('PRECURED') -or $t -match '\bPCTR\b') { return 'PCTR' }
         if ($t -match '\bHOT\b') { return 'HOT' }
     }

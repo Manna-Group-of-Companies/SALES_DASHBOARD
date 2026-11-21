@@ -10,24 +10,15 @@
 #   hitech - per Hi-Tech sales-order line made for an ERPNext order:
 #            stage "In SAP" (the line exists), "Picked" (on a pick list, or
 #            already delivered or invoiced) or "Cancelled" (the order was
-#            cancelled, or the line closed with nothing sent);
-#            date  Hi-Tech's own ShipDate for the line (RDR1, not the order's
-#                  header date - that is the only place a single item's date
-#                  can be), sent only while the line is still Open. Added
-#                  13 Nov 2026, the user's team: production can still move a
-#                  line's date in Hi-Tech after the order is placed. A blank
-#                  date is itself the news - the line closed and Hi-Tech will
-#                  not move it again.
+#            cancelled, or the line closed with nothing sent)
 #   manna  - per Manna Treads sales-order line: stage "Dispatched" when a Manna
 #            A/R invoice covers it (straight from the order, or through its
-#            delivery), else "". Carries no date - Manna Treads' own delivery
-#            date is what the rep typed with the order, not Hi-Tech's plan.
+#            delivery), else ""
 # `order` is the ERPNext name, which the whole chain carries in NumAtCard.
 #
 # Each post is the whole state of every order it names: a line of a named order
 # that the batch does not mention has nothing from that source (a Hi-Tech line
 # removed, an invoice cancelled) and is cleared. Orders not named are untouched.
-# A `manna` post never touches custom_sap_ship_date - only hitech carries dates.
 #
 # Line status = Dispatched if Manna invoiced it, else Hi-Tech's stage.
 # Order status (Cancelled lines left out): Dispatched when every line is,
@@ -35,30 +26,37 @@
 # way, In SAP when every line is at least in SAP, else blank. A line's place in
 # the chain is found by ITEM CODE, as PASS B and the pick-list step find it -
 # the chain carries no line key - so an item on two lines of one order cannot
-# be told apart and gets no status, reported. A date is not this ambiguous on
-# the SAP side - Z.LIVEmannaicdt's own rule is "the LATEST date among that
-# item's open lines, because a line split to send part later is complete on
-# the later day" - but it still cannot be WRITTEN when ERPNext itself holds the
-# item on two rows, for the same reason as stage: there is no key saying which
-# row Hi-Tech's line was for, so it is left alone there too.
+# be told apart and gets no status, reported.
 #
 # Writes with frappe.db.set_value and update_modified=False: these are reports
 # about the order, and bumping `modified` would make a rep editing a draft lose
 # their edit to "the document has been modified".
 #
+# DELIVERY DATES (13 Nov 2026, the user's decision). The rep picks a delivery date
+# with the order; production moves it in Hi-Tech's sales order when the plan
+# changes, for the whole order or for single lines. Hi-Tech's rows now carry
+# `date`, the line's own Delivery Date in SAP (RDR1.ShipDate) while the line is
+# still open, else "". From it:
+#   line  - Sales Order Item.delivery_date becomes Hi-Tech's date
+#   order - Sales Order.delivery_date becomes the latest date among the lines
+#           still to come (not Cancelled, not Dispatched): the day the order is
+#           complete. The first time it moves, the date the customer was given
+#           goes into custom_original_delivery_date and is never overwritten -
+#           the dashboard's production page keeps it the same way, and the phone
+#           app shows an order as moved from that field.
+# SAP wins: once an order is in Hi-Tech, a date changed only in ERPNext is put
+# back by the next post. A line with no date in the batch (closed, cancelled,
+# an older package) is left exactly as it is; so is an order none of whose lines
+# carried one. One item on two Hi-Tech lines (a line split to send part later)
+# takes the later date - that is when the item is complete.
+# Dates are written only when SAP Sync Control -> "B1iF: syncs that write" names
+# `dates` - its own word, which "all" does NOT cover: the first post compares
+# every open order, old ones included, and that should be read as a dry run
+# (date_line_writes / date_order_writes in the answer) before it is let write.
+#
 # Callers: System Manager or the "SAP Sync Bot" role.
 
 LINE_STAGES = ["", "In SAP", "Picked", "Cancelled"]
-
-
-def merge_date(prev, d):
-	"""Pure. The later of two ShipDates for the same item, blanks ignored - Hi-
-	Tech's own rule for a line split across two rows (Z.LIVEmannaicdt)."""
-	if not d:
-		return prev or ""
-	if not prev:
-		return d
-	return d if d > prev else prev
 
 
 def squash(s):
@@ -106,12 +104,22 @@ def order_status(statuses):
 	return ""
 
 
+def day(v):
+	"""A date as yyyy-mm-dd, or "" when it is not one."""
+	s = squash(v)[:10]
+	if len(s) != 10 or s[4] != "-" or s[7] != "-" or not (s[:4] + s[5:7] + s[8:]).isdigit():
+		return ""
+	return s
+
+
 def plan(source, rows, orders):
 	"""Pure. orders: ERPNext name -> {"status": current order status,
-	"lines": [ {name, item_code, ht_stage, dispatched, status, ship_date} ]}.
-	Returns {"lines": [ {row, fields} ], "orders": [ {name, status} ], "notes": [...]}."""
+	"delivery_date", "original_delivery_date",
+	"lines": [ {name, item_code, ht_stage, dispatched, status, delivery_date} ]}.
+	Returns {"lines": [ {row, fields} ], "orders": [ {name, status} ], "notes": [...],
+	"date_lines": [ {order, row, item, from, to} ], "date_orders": [ {name, from, to, original} ]}."""
 	got = {}
-	got_dates = {}
+	dates = {}
 	notes = []
 	for r in rows:
 		o = squash(r.get("order"))
@@ -125,12 +133,15 @@ def plan(source, rows, orders):
 		got.setdefault(o, {})
 		if source == "hitech":
 			got[o][it] = merge_stage(got[o].get(it), st)
-			got_dates.setdefault(o, {})
-			got_dates[o][it] = merge_date(got_dates[o].get(it), squash(r.get("date"))[:10])
+			d = day(r.get("date"))
+			if d and d > dates.setdefault(o, {}).get(it, ""):
+				dates[o][it] = d
 		else:
 			got[o][it] = got[o].get(it, True) and st == "Dispatched"
 	line_writes = []
 	order_writes = []
+	date_lines = []
+	date_orders = []
 	for o in sorted(got):
 		doc = orders.get(o)
 		if not doc:
@@ -141,6 +152,7 @@ def plan(source, rows, orders):
 			k = squash(l.get("item_code")).upper()
 			count[k] = count.get(k, 0) + 1
 		statuses = []
+		ahead = []
 		for l in doc["lines"]:
 			k = squash(l.get("item_code")).upper()
 			ht = squash(l.get("ht_stage"))
@@ -149,6 +161,8 @@ def plan(source, rows, orders):
 				if k in got[o]:
 					notes.append("%s %s: on %d lines of the order - no status, the chain cannot tell them apart" % (o, k, count[k]))
 				statuses.append(squash(l.get("status")))
+				if squash(l.get("status")) not in ("Cancelled", "Dispatched") and day(l.get("delivery_date")):
+					ahead.append(day(l.get("delivery_date")))
 				continue
 			if source == "hitech":
 				ht = got[o].get(k, "")
@@ -162,20 +176,30 @@ def plan(source, rows, orders):
 				fields["custom_sap_mt_dispatched"] = disp
 			if new != squash(l.get("status")):
 				fields["custom_sap_line_status"] = new
-			if source == "hitech":
-				date = got_dates.get(o, {}).get(k, "")
-				if date != squash(l.get("ship_date"))[:10]:
-					fields["custom_sap_ship_date"] = date or None
 			if fields:
 				line_writes.append({"order": o, "row": l["name"], "item": k, "fields": fields})
 			statuses.append(new)
+			was = day(l.get("delivery_date"))
+			to = dates.get(o, {}).get(k) or was
+			if to != was:
+				date_lines.append({"order": o, "row": l["name"], "item": k, "from": was, "to": to})
+			if new not in ("Cancelled", "Dispatched") and to:
+				ahead.append(to)
 		for k in got[o]:
 			if k not in count:
 				notes.append("%s %s: in SAP but not on the ERPNext order" % (o, k))
 		st = order_status(statuses)
 		if st != squash(doc.get("status")):
 			order_writes.append({"name": o, "status": st})
-	return {"lines": line_writes, "orders": order_writes, "notes": notes}
+		# The order's own date only when Hi-Tech said something about this order's
+		# dates: an order whose lines are all closed there keeps what it has.
+		if dates.get(o) and ahead:
+			was = day(doc.get("delivery_date"))
+			to = max(ahead)
+			if to != was:
+				date_orders.append({"name": o, "from": was, "to": to,
+					"original": was if was and not day(doc.get("original_delivery_date")) else ""})
+	return {"lines": line_writes, "orders": order_writes, "notes": notes, "date_lines": date_lines, "date_orders": date_orders}
 
 
 def run():
@@ -196,15 +220,24 @@ def run():
 	dry = frappe.utils.cint(body.get("dry_run")) == 1
 	names = list({squash(r.get("order")) for r in rows if squash(r.get("order"))})
 	orders = {}
+	# A site that never had the dashboard's production page has no such field; then
+	# the order's date still moves and nothing is kept of the old one but the comment.
+	# Asked of Custom Field, not get_meta: a Server Script gets the real Meta on one Frappe version and a
+	# plain dict of it on another (safe_exec), and this must run on the local bench and on the site alike.
+	keeps_original = bool(frappe.get_all("Custom Field", filters={"dt": "Sales Order", "fieldname": "custom_original_delivery_date"}, limit_page_length=1))
 	if names:
-		for so in frappe.get_all("Sales Order", filters={"name": ["in", names], "docstatus": ["<", 2]}, fields=["name", "custom_sap_order_status"], limit_page_length=0):
-			orders[so.name] = {"status": so.custom_sap_order_status, "lines": []}
+		so_fields = ["name", "custom_sap_order_status", "delivery_date"] + (["custom_original_delivery_date"] if keeps_original else [])
+		for so in frappe.get_all("Sales Order", filters={"name": ["in", names], "docstatus": ["<", 2]}, fields=so_fields, limit_page_length=0):
+			orders[so.name] = {"status": so.custom_sap_order_status, "delivery_date": so.delivery_date,
+				"original_delivery_date": so.get("custom_original_delivery_date") if keeps_original else "", "lines": []}
 		if orders:
 			for l in frappe.get_all("Sales Order Item", filters={"parent": ["in", list(orders.keys())], "parenttype": "Sales Order"},
-					fields=["name", "parent", "item_code", "custom_sap_ht_stage", "custom_sap_mt_dispatched", "custom_sap_line_status", "custom_sap_ship_date"], limit_page_length=0):
+					fields=["name", "parent", "item_code", "custom_sap_ht_stage", "custom_sap_mt_dispatched", "custom_sap_line_status", "delivery_date"], limit_page_length=0):
 				orders[l.parent]["lines"].append({"name": l.name, "item_code": l.item_code, "ht_stage": l.custom_sap_ht_stage,
-					"dispatched": l.custom_sap_mt_dispatched, "status": l.custom_sap_line_status, "ship_date": l.custom_sap_ship_date})
+					"dispatched": l.custom_sap_mt_dispatched, "status": l.custom_sap_line_status, "delivery_date": l.delivery_date})
 	p = plan(source, rows, orders)
+	switch = str(frappe.db.get_single_value("SAP Sync Control", "custom_b1if_writes") or "").lower().replace(",", " ").split()
+	dates_on = (not dry) and "dates" in switch
 	if not dry:
 		stamp = frappe.utils.now()
 		for w in p["lines"]:
@@ -214,8 +247,29 @@ def run():
 			frappe.db.set_value("Sales Order", w["name"], "custom_sap_order_status", w["status"], update_modified=False)
 		for n in touched:
 			frappe.db.set_value("Sales Order", n, "custom_sap_status_synced_at", stamp, update_modified=False)
+	if dates_on:
+		moved = {}
+		for w in p["date_lines"]:
+			frappe.db.set_value("Sales Order Item", w["row"], "delivery_date", w["to"], update_modified=False)
+			moved.setdefault(w["order"], []).append("%s %s to %s" % (w["item"], w["from"] or "no date", w["to"]))
+		for w in p["date_orders"]:
+			fields = {"delivery_date": w["to"]}
+			if keeps_original and w["original"]:
+				fields["custom_original_delivery_date"] = w["original"]
+			frappe.db.set_value("Sales Order", w["name"], fields, update_modified=False)
+			moved.setdefault(w["name"], []).insert(0, "order %s to %s" % (w["from"] or "no date", w["to"]))
+		# set_value leaves no version, so the order's own timeline says that the date
+		# moved, from what, and where. A comment that cannot be added must not undo it.
+		for n in moved:
+			try:
+				frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Sales Order", "reference_name": n,
+					"content": "Delivery date changed in Hi-Tech's sales order (SAP): " + "; ".join(moved[n][:20])}).insert(ignore_permissions=True)
+			except Exception:
+				pass
 	frappe.response["message"] = {"dry_run": dry, "source": source, "orders_named": len(names), "orders_found": len(orders),
-		"line_writes": p["lines"], "order_writes": p["orders"], "notes": p["notes"][:50], "notes_total": len(p["notes"])}
+		"line_writes": p["lines"], "order_writes": p["orders"], "notes": p["notes"][:50], "notes_total": len(p["notes"]),
+		"dates_written": dates_on, "date_lines_total": len(p["date_lines"]), "date_orders_total": len(p["date_orders"]),
+		"date_line_writes": p["date_lines"][:200], "date_order_writes": p["date_orders"][:200]}
 
 
 if not frappe.flags.get("manna_test"):

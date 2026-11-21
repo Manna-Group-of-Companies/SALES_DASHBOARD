@@ -1,0 +1,65 @@
+{
+  "about": "The 10-day payment commitment ladder (17 Nov 2026): one Manna Payment Commitment per commitment given on an order - by the Manager, or by the GM - never overwritten. Its child table keeps the audit history. Everything is read and written through the manna_payment_commitment Server Scripts (payment_commitment.py, payment_commitment_order.py, payment_commitment_watch.py); the doctypes are System Manager's, and SAP Sync Bot reads them. The rule is shared/fixtures/payment_commitment.json. Child table first.",
+  "doctypes": [
+    {
+      "doctype": "DocType",
+      "name": "Manna Payment Commitment Log",
+      "module": "Selling",
+      "custom": 1,
+      "istable": 1,
+      "fields": [
+        { "fieldname": "action", "label": "Action", "fieldtype": "Data", "in_list_view": 1 },
+        { "fieldname": "actor_role", "label": "Role", "fieldtype": "Data", "in_list_view": 1 },
+        { "fieldname": "by_user", "label": "By", "fieldtype": "Link", "options": "User", "in_list_view": 1 },
+        { "fieldname": "at", "label": "At", "fieldtype": "Datetime", "in_list_view": 1 },
+        { "fieldname": "remarks", "label": "Remarks", "fieldtype": "Small Text" }
+      ],
+      "permissions": []
+    },
+    {
+      "doctype": "DocType",
+      "name": "Manna Payment Commitment",
+      "module": "Selling",
+      "custom": 1,
+      "autoname": "format:PC-{#####}",
+      "track_changes": 1,
+      "title_field": "customer_name",
+      "fields": [
+        { "fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "Pending\nRunning\nUnchecked\nKept\nMissed\nCancelled", "default": "Pending", "description": "Pending: entered with the approval; Running once the order's approval is saved (manna_payment_commitment_order)", "in_list_view": 1, "in_standard_filter": 1 },
+        { "fieldname": "customer", "label": "Customer", "fieldtype": "Link", "options": "Customer", "in_list_view": 1, "in_standard_filter": 1 },
+        { "fieldname": "customer_name", "label": "Customer Name", "fieldtype": "Data" },
+        { "fieldname": "bp_code", "label": "SAP BP Code", "fieldtype": "Data" },
+        { "fieldname": "sales_order", "label": "Sales Order", "fieldtype": "Link", "options": "Sales Order", "in_list_view": 1 },
+        { "fieldname": "order_date", "label": "Order Date", "fieldtype": "Date" },
+        { "fieldname": "order_amount", "label": "Order Amount", "fieldtype": "Currency" },
+        { "fieldname": "sales_person", "label": "Rep", "fieldtype": "Link", "options": "Sales Person" },
+        { "fieldname": "team", "label": "Team", "fieldtype": "Data" },
+        { "fieldname": "sb_reason", "fieldtype": "Section Break", "label": "Why it was needed" },
+        { "fieldname": "reason", "label": "Reason", "fieldtype": "Data", "description": "Overdue more than 30 days past terms / Over the credit limit / both / a missed commitment not yet cleared" },
+        { "fieldname": "outstanding_at", "label": "Outstanding at Approval", "fieldtype": "Currency" },
+        { "fieldname": "overdue_at", "label": "Overdue Past Terms at Approval", "fieldtype": "Currency" },
+        { "fieldname": "overdue_days_at", "label": "Overdue Days at Approval", "fieldtype": "Int" },
+        { "fieldname": "credit_limit_at", "label": "Credit Limit at Approval", "fieldtype": "Currency" },
+        { "fieldname": "excess_at", "label": "Over the Limit by", "fieldtype": "Currency" },
+        { "fieldname": "sb_approval", "fieldtype": "Section Break", "label": "Approval" },
+        { "fieldname": "approver_role", "label": "Approved by (role)", "fieldtype": "Select", "options": "\nmanager\ngm", "in_list_view": 1 },
+        { "fieldname": "approved_by", "label": "Approved by", "fieldtype": "Link", "options": "User" },
+        { "fieldname": "approved_on", "label": "Commitment Given On", "fieldtype": "Datetime" },
+        { "fieldname": "days", "label": "Days Given", "fieldtype": "Int" },
+        { "fieldname": "commitment_date", "label": "Payment Due Date", "fieldtype": "Date", "in_list_view": 1 },
+        { "fieldname": "remarks", "label": "Remarks", "fieldtype": "Small Text" },
+        { "fieldname": "sb_outcome", "fieldtype": "Section Break", "label": "Outcome" },
+        { "fieldname": "kept_on", "label": "Kept On", "fieldtype": "Datetime" },
+        { "fieldname": "missed_on", "label": "Missed On", "fieldtype": "Datetime" },
+        { "fieldname": "cleared_on", "label": "Overdue Cleared On", "fieldtype": "Datetime", "description": "After a miss: the first synced figures showing nothing overdue. Until then the customer's orders go to the GM." },
+        { "fieldname": "overdue_last", "label": "Overdue at Last Check", "fieldtype": "Currency" },
+        { "fieldname": "last_checked", "label": "SAP Figures Synced At", "fieldtype": "Datetime" },
+        { "fieldname": "log", "label": "History", "fieldtype": "Table", "options": "Manna Payment Commitment Log" }
+      ],
+      "permissions": [
+        { "role": "System Manager", "read": 1, "write": 1, "create": 1, "report": 1, "export": 1 },
+        { "role": "SAP Sync Bot", "read": 1 }
+      ]
+    }
+  ]
+}

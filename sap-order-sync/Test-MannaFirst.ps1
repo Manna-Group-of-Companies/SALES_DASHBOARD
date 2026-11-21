@@ -1,8 +1,7 @@
 <#
 .SYNOPSIS
-  Proves PASS M - the Manna Treads Sales Order made once an ERPNext order
-  is approved (order_flow.mode = manna_first, 3 Nov 2026; on approval since
-  19 Nov 2026 - it used to be as soon as the order existed).
+  Proves PASS M - the Manna Treads Sales Order made as soon as an ERPNext
+  order exists (order_flow.mode = manna_first, 3 Nov 2026).
 
 .DESCRIPTION
   OFFLINE. Extracts the real functions from Sync-SapOrders.ps1 by AST (its
@@ -14,8 +13,7 @@
       manna_first, the defaults (Manna Treads, Rejected skipped, KL CG+SG@18,
       anything else IGST@18);
     * which orders are PASS M's - and so not PASS A's: unit and creation date;
-    * what makes PASS M leave an order alone - not approved yet among them
-      (19 Nov 2026);
+    * what makes PASS M leave an order alone;
     * the tax code by bill-to state;
     * the plan: kilos, the rate as amount / kilos, net of GST, and the
       problems that refuse the whole order;
@@ -54,6 +52,7 @@ $flow = Get-FlowSettings -Config (Cfg '{"order_flow":{"mode":"manna_first","sinc
 Write-Host "`norder_flow settings" -ForegroundColor Cyan
 
 $none = Get-FlowSettings -Config (Cfg '{}')
+$flowAny = Get-FlowSettings -Config (Cfg '{"order_flow":{"mode":"manna_first","since":"2026-11-03","require_approval":false}}')
 Check 'no order_flow block is the old flow, hitech_direct' ($none.Mode -eq 'hitech_direct') $none.Mode
 Check 'manna_first without since is refused - it would send every old order' (Throws { Get-FlowSettings -Config (Cfg '{"order_flow":{"mode":"manna_first"}}') })
 Check 'since that is not yyyy-MM-dd is refused' (Throws { Get-FlowSettings -Config (Cfg '{"order_flow":{"mode":"manna_first","since":"03/11/2026"}}') })
@@ -83,19 +82,12 @@ $doc = { param([hashtable] $f)
                      custom_po_status = 'Pending Approval'; custom_mt_sales_order = $null; custom_mt_sync_error = $null }
     foreach ($k in $f.Keys) { $d[$k] = $f[$k] }
     [pscustomobject]$d }
-# 19 Nov 2026: PASS M waits for approval. SAL-ORD-2026-00163 / 00164 went to
-# Manna Treads SAP (SO 578 / 579) while still at 'Pending GM Approval'.
-$ok = @{ custom_po_status = 'PO Approved - Ready for SAP' }
-Check 'an approved order is taken' ((Get-MfSkipReason -Doc (& $doc $ok) -Flow $flow) -eq '') (Get-MfSkipReason -Doc (& $doc $ok) -Flow $flow)
-foreach ($pending in @('Pending Approval', 'Pending Rate Approval', 'Pending Final Approval', 'Pending GM Approval', '')) {
-    $why = Get-MfSkipReason -Doc (& $doc @{ custom_po_status = $pending }) -Flow $flow
-    Check ("an order at '{0}' is NOT taken - it waits for approval" -f $pending) ($why -match 'not approved yet') $why
-}
-Check 'the approval status is PO Approved - Ready for SAP by default' ($flow.ApprovedStatus -eq 'PO Approved - Ready for SAP') $flow.ApprovedStatus
-$gated = Get-FlowSettings -Config (Cfg '{"order_sync":{"po_status_gate":"Approved X"},"order_flow":{"mode":"manna_first","since":"2026-11-03"}}')
-Check 'the approval status follows order_sync.po_status_gate - the same gate as PASS A' ($gated.ApprovedStatus -eq 'Approved X') $gated.ApprovedStatus
-Check '... and an order at the old default is then not taken' ((Get-MfSkipReason -Doc (& $doc $ok) -Flow $gated) -match 'not approved yet')
-Check '... while one at that gate is' ((Get-MfSkipReason -Doc (& $doc @{ custom_po_status = 'Approved X' }) -Flow $gated) -eq '')
+Check 'with require_approval off, a new unapproved order is taken - as soon as it is created' ((Get-MfSkipReason -Doc (& $doc @{}) -Flow $flowAny) -eq '') (Get-MfSkipReason -Doc (& $doc @{}) -Flow $flowAny)
+Check 'by default (17 Nov 2026) an unapproved order waits for approval' ((Get-MfSkipReason -Doc (& $doc @{}) -Flow $flow) -match 'waits for approval') (Get-MfSkipReason -Doc (& $doc @{}) -Flow $flow)
+Check 'an approved order is taken' ((Get-MfSkipReason -Doc (& $doc @{ custom_po_status = 'PO Approved - Ready for SAP' }) -Flow $flow) -eq '') (Get-MfSkipReason -Doc (& $doc @{ custom_po_status = 'PO Approved - Ready for SAP' }) -Flow $flow)
+Check 'a GM-approved order not yet pushed by the Manager waits' ((Get-MfSkipReason -Doc (& $doc @{ custom_po_status = 'Pending Final Approval' }) -Flow $flow) -match 'waits for approval')
+Check 'the commitment goes in the Comments line' ((Get-MfCommitmentText -Rows @([pscustomobject]@{ name = 'PC-00001'; commitment_date = '2026-11-27'; approver_role = 'manager' })) -eq 'payment commitment PC-00001: pays by 2026-11-27 (Manager)')
+Check 'no commitment, no line' ((Get-MfCommitmentText -Rows @()) -eq '')
 Check 'one that already has its Manna Treads order is skipped' ((Get-MfSkipReason -Doc (& $doc @{ custom_mt_sales_order = '561' }) -Flow $flow) -match '561')
 Check 'one with an error on it waits for somebody to clear it' ((Get-MfSkipReason -Doc (& $doc @{ custom_mt_sync_error = 'no code' }) -Flow $flow) -match 'custom_mt_sync_error')
 Check 'a cancelled order is skipped' ((Get-MfSkipReason -Doc (& $doc @{ docstatus = 2 }) -Flow $flow) -match 'cancelled')
@@ -175,6 +167,21 @@ Check 'no weights given at all: as before, custom_total_weight' (Near $p.Lines[0
 
 $p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @(& $roll 'HMD001240' 0 0 300) }) -WeightPerRoll @{}
 Check 'a roll line with no rolls refuses the order' ($p.Problems.Count -eq 1 -and $p.Problems[0] -match 'no rolls') ($p.Problems -join '; ')
+
+# SAL-ORD-2026-00162 (20 Nov 2026): hot rubber sold by the kilo - qty 600 =
+# custom_total_weight 600, no rolls, at 313/kg - with 30 kg a roll in
+# Hi-Tech SAP reached Manna Treads SO 588 as 18,000 kg.
+$kilo = { param($code, $kg, $perKg, $row = 'k1')
+    [pscustomobject]@{ name = $row; item_code = $code; item_name = 'HOT MANNA DOUBLE BLUE 40 16 (BLACK PEARL)'; custom_product_category = 'CTR'
+        qty = $kg; rate = $perKg; amount = $kg * $perKg; custom_rate_per_kg = $perKg
+        custom_total_weight = $kg; custom_rolls = 0; custom_loose_belts = 0 } }
+Check 'a CTR sold by the kilo is not a roll line' (-not (Test-MfRollLine -Item (& $kilo 'HMD001170' 600 313)))
+Check 'a CTR in rolls still is' (Test-MfRollLine -Item (& $roll 'HMD001240' 25 7500 300))
+Check 'PCTR with loose belts only still is' (Test-MfRollLine -Item (& $roll 'PMB00101002' 0.5 0 255 'PCTR' 12.1 'row1' 2))
+$p = Get-MfOrderPlan -Doc ([pscustomobject]@{ items = @((& $kilo 'HMD001170' 600 313), (& $kilo 'HMD001340' 37.5 313 'k2')) }) -WeightPerRoll @{ 'HMD001170' = 30.0; 'HMD001340' = 35.0 }
+Check 'sold by the kilo: 600 kg goes as 600, whatever SAP''s weight per roll' ((Near $p.Lines[0].Kg 600) -and (Near $p.Lines[1].Kg 37.5)) ("{0} / {1}" -f $p.Lines[0].Kg, $p.Lines[1].Kg)
+Check 'sold by the kilo: at the order''s 313/kg, so SAP''s total is the order''s' ((Near $p.Lines[0].Rate 313) -and (Near $p.Total (600 * 313 + 37.5 * 313))) ("{0} / {1}" -f $p.Lines[0].Rate, $p.Total)
+Check 'sold by the kilo: PerUnit 0, so nothing is written back to the line' ((Near $p.Lines[0].PerUnit 0) -and (Near $p.Lines[1].PerUnit 0)) ("{0} / {1}" -f $p.Lines[0].PerUnit, $p.Lines[1].PerUnit)
 
 $wp = Get-MfWeightPerRoll -Rows @([pscustomobject]@{ ItemCode = 'a1'; U_WeightPerRoll = 10 }, [pscustomobject]@{ ItemCode = 'B2'; U_WeightPerRoll = 0 }, [pscustomobject]@{ ItemCode = 'C3'; U_WeightPerRoll = $null })
 Check 'SAP weights: upper-cased, and blank or 0 left out (so 1:1)' ($wp.Count -eq 1 -and (Near $wp['A1'] 10)) ("{0} key(s)" -f $wp.Count)

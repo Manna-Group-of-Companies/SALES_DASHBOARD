@@ -61,6 +61,15 @@ bool isMappableLatLng(double lat, double lng) =>
   return (center: center, zoom: zoom);
 }
 
+/// Opens Google Maps on a pin at [lat],[lng] (14 Nov 2026, the user: a lead's
+/// location, tapped, opens in Google Maps). A pin, not directions, so it
+/// opens the same whether or not the phone knows where it is.
+Future<void> openInGoogleMaps(double lat, double lng) async {
+  final uri = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+  await launchUrl(uri, mode: LaunchMode.externalApplication);
+}
+
 Future<void> navigateTo(double lat, double lng) async {
   final uri = Uri.parse(
       'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng');

@@ -31,6 +31,8 @@ import { RatesPage } from '@/features/rates/RatesPage';
 import { GmFollowUpOrderPage } from '@/features/orders/GmFollowUpOrderPage';
 import { MannaTreadsOrdersPage } from '@/features/accounts/MannaTreadsOrdersPage';
 import { ItemRequestsPage } from '@/features/accounts/ItemRequestsPage';
+import { CreditPeriodRequestsPage } from '@/features/credit/CreditPeriodRequestsPage';
+import { PaymentCommitmentsPage } from '@/features/credit/PaymentCommitmentsPage';
 import { LocationVerificationPage } from '@/features/approvals/LocationVerificationPage';
 import { TeamRegularizationsPage } from '@/features/approvals/TeamRegularizationsPage';
 import { ProductionQueuePage } from '@/features/production/ProductionQueuePage';
@@ -107,6 +109,19 @@ function TargetsRoute({ children }: { children: ReactElement }) {
   const user = useAppSelector(selectUser);
   if (!user) return <Navigate to="/login" replace />;
   if (user.role !== 'general_manager' && !canOpenAs(user.role, user.managedTeam, 'targets')) {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
+
+/**
+ * Credit-period requests (16 Nov 2026): a team's manager (manager scope
+ * 'credit'), or the GM, who decides 31-40 days and has no team screens.
+ */
+function CreditRoute({ children }: { children: ReactElement }) {
+  const user = useAppSelector(selectUser);
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== 'general_manager' && !canOpenAs(user.role, user.managedTeam, 'credit')) {
     return <Navigate to="/" replace />;
   }
   return children;
@@ -192,6 +207,8 @@ const HR_SHARED: Role[] = ['hr', 'accounts_staff'];
 // Managers and the GM approve new requests before the accountant sees them (12 Nov 2026).
 // Not the accountant since 12 Nov 2026 (the user): the accounts staff answer them now.
 const ITEM_REQUESTS: Role[] = ['hr', 'accounts_staff', 'sales_manager', 'general_manager'];
+// Temporary credit extensions (16 Nov 2026): every manager and the GM; the server decides the rest.
+const CREDIT_EXTENSIONS: Role[] = ['sales_manager', 'general_manager'];
 
 export function AppRoutes() {
   const user = useAppSelector(selectUser);
@@ -394,6 +411,25 @@ export function AppRoutes() {
             </RoleRoute>
           }
         />
+        <Route
+          path="credit-periods"
+          element={
+            <CreditRoute>
+              <CreditPeriodRequestsPage />
+            </CreditRoute>
+          }
+        />
+        {/* The temporary credit extension merged into the payment commitment
+            ladder (17 Nov 2026); its old address still lands there. */}
+        <Route
+          path="payment-commitments"
+          element={
+            <RoleRoute allow={CREDIT_EXTENSIONS}>
+              <PaymentCommitmentsPage />
+            </RoleRoute>
+          }
+        />
+        <Route path="credit-extensions" element={<Navigate to="/payment-commitments" replace />} />
         <Route
           path="item-requests"
           element={

@@ -36,6 +36,25 @@ export function itemRequestLabel(status: string): string {
 /** Whether the accountant may answer it: only once the manager has approved. */
 export const accountantAnswers = (status: string) => status === WITH_ACCOUNTANT;
 
+/**
+ * How many requests wait on this login now - the count on the Item Requests
+ * menu item, which is how a manager's approval reaches the accountant (17 Nov
+ * 2026, the user: show the accountant when the manager has approved). The
+ * accounts staff: approved by a manager and not yet answered. A manager or
+ * the GM: waiting for their approval (the server's `can_approve`). Anyone
+ * else, HR included, only reads the list: 0.
+ */
+export function itemRequestsWaitingOn(
+  role: string | undefined,
+  rows: Pick<ItemRequest, 'status' | 'canApprove'>[],
+): number {
+  if (role === 'accounts_staff') return rows.filter((r) => accountantAnswers(r.status)).length;
+  if (role === 'sales_manager' || role === 'general_manager') {
+    return rows.filter((r) => r.status === WITH_MANAGER && r.canApprove).length;
+  }
+  return 0;
+}
+
 export interface ItemRequest {
   name: string;
   status: ItemRequestStatus;

@@ -60,6 +60,7 @@ import {
 } from '@/domain/stageWatch';
 import { lineStatusFromSap, reachedSap } from '@/domain/sapOrderState';
 import { formatDate } from '@/domain/orderRules';
+import { lineAmountAt, weightUnit } from '@/domain/solutionLine';
 import { Api } from '@/api/client';
 import { markOrderSeen } from '@/api/orderSeen';
 import { useAppSelector } from '@/store/hooks';
@@ -70,10 +71,17 @@ import { RefreshButton } from '@/components/common/RefreshButton';
 import { AgingBoxes } from '@/components/common/AgingBoxes';
 import { StatusPill } from '@/components/common/StatusPill';
 import { CommitmentThread } from './CommitmentThread';
+import { TemporaryCreditNote } from '@/features/credit/TemporaryCreditNote';
+import { getOrderRoute, giveCommitment, type OrderRoute } from '@/api/paymentCommitments';
+import { PC_MESSAGES, pcCheckApproval } from '@/domain/paymentCommitment';
+import { serverNow } from '@/domain/serverClock';
 import { OrderLinesEditor } from './OrderLinesEditor';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import './orders.css';
+
+const isoDay = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /** "4 rolls + 2 belts", or "—" when there is nothing. */
 function qty(q: Qty): string {
@@ -105,6 +113,10 @@ export function OrderDetailPage() {
   const [editing, setEditing] = useState(false);
   /** A note for the GM, sent as a comment on the rep's commitment with Send to GM. */
   const [gmNote, setGmNote] = useState('');
+  /** The server's word on where this order goes (the 10-day commitment ladder, 17 Nov 2026). */
+  const [route, setRoute] = useState<OrderRoute | null>(null);
+  const [pcDate, setPcDate] = useState('');
+  const [pcRemarks, setPcRemarks] = useState('');
   /** Bumped when this page posts a comment, so the thread re-reads. */
   const [threadKey, setThreadKey] = useState(0);
   const [tick, setTick] = useState(0);
@@ -177,6 +189,9 @@ export function OrderDetailPage() {
         if (!live) return;
         setCustomer(parties.find((c) => c.id === o.customer) ?? null);
         setPool(stock);
+        // Unreadable leaves the old reading below (needs the GM), never Approve.
+        const r = await getOrderRoute(o.id).catch(() => null);
+        if (live) setRoute(r);
       })
       .catch((e: unknown) => {
         if (live) setError(e instanceof Error ? e.message : 'Could not read this order.');
@@ -258,18 +273,58 @@ export function OrderDetailPage() {
       const edited = rateEdits[l.id];
       const rateMoved = edited != null && edited > 0 && edited !== l.ratePerKg;
       if (rateMoved) changed = true;
-      total += rateMoved ? l.totalWeight * edited : l.amount;
+      total += rateMoved ? lineAmountAt(l, edited) : l.amount;
     }
     return { total, changed };
   }, [order, rateEdits]);
 
   // ------------------------------------------------------------ actions ---
 
+  /**
+   * The Manager's note on an order already with the GM — sent there straight
+   * when raised, since only the GM may decide it (17 Nov 2026, the user). It
+   * lands on the order's thread, which the GM reads before deciding.
+   */
+  const sendGmNote = async () => {
+    if (!order || !gmNote.trim()) return;
+    setBusy('note');
+    setError(null);
+    try {
+      await Api.sales.addCreditComment({
+        salesOrder: order.id,
+        comment: gmNote,
+        role: user?.role,
+        author: user?.name || user?.id || 'Sales Manager',
+      });
+      setGmNote('');
+      setThreadKey((k) => k + 1);
+      setDone({ text: 'Note sent to the General Manager.', tone: 'ok' });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not send the note.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const decide = async (decision: 'approve' | 'reject' | 'escalate') => {
     if (!order) return;
     setBusy(decision);
     setError(null);
     try {
+      /*
+       * An order that needs a payment commitment (overdue more than 30 days
+       * past terms, or over the limit within the Manager's authority) is
+       * approved only with one. It is entered first and becomes Running when
+       * the approval saves; without it the server refuses the approval.
+       */
+      if (decision === 'approve' && needsCommitment) {
+        const problem = pcCheckApproval({ approvedOn: isoDay(serverNow()), commitment: pcDate, remarks: pcRemarks });
+        if (problem) {
+          setError(PC_MESSAGES[problem]);
+          return;
+        }
+        await giveCommitment(order.id, pcDate, pcRemarks.trim());
+      }
       /*
        * The note goes first. If it lands and the escalation does not, the
        * manager presses Send again and the note is already there; the other
@@ -298,7 +353,11 @@ export function OrderDetailPage() {
       setDone(
         decision === 'approve'
           ? {
-              text: gmApproved ? 'Pushed to SAP. Rates are final.' : 'Approved. Rates are final.',
+              text: gmApproved
+                ? 'Pushed to SAP. Rates are final.'
+                : needsCommitment
+                  ? `Approved with a payment commitment to ${pcDate}. Rates are final.`
+                  : 'Approved. Rates are final.',
               tone: 'ok',
             }
           : decision === 'reject'
@@ -346,7 +405,9 @@ export function OrderDetailPage() {
   const owed = agingOf(customerRow).total;
   // "Over limit" here means "needs the GM": the limit, or overdue past the
   // payment terms (11 Oct 2026). The two reasons are told apart for display.
-  const overLimit = order ? creditEscalates(customerRow, order.total) : false;
+  // Since 17 Nov 2026 the server's route decides: only 'gm' takes Approve
+  // away; until it has answered, the old reading holds (needs the GM).
+  const overLimit = route ? route.route === 'gm' : order ? creditEscalates(customerRow, order.total) : false;
   const why = order ? escalationOf(customerRow, order.total) : { overLimit: false, pastTerms: false };
   const whyText = order ? escalationReason(customerRow, order.total) : '';
 
@@ -365,6 +426,8 @@ export function OrderDetailPage() {
    * move is Push to SAP, at the GM's figures.
    */
   const gmApproved = (order?.poStatus ?? '').trim() === PO_STATUS.finalApproval;
+  /** The Manager may approve, but only with a 10-day payment commitment. */
+  const needsCommitment = !gmApproved && route?.route === 'manager_commitment';
 
   return (
     <div>
@@ -445,6 +508,9 @@ export function OrderDetailPage() {
           {/* -------------------------------------------- Block 3 — credit --- */}
           <div style={{ marginBottom: 14 }}>
             <Alert
+              // Red on the facts - over the limit, or overdue more than 30 days -
+              // not on who decides: since 17 Nov 2026 the Manager may approve
+              // such an order with a commitment, and it is still not green.
               tone={overLimit ? 'danger' : customer?.creditLimit ? 'ok' : 'info'}
               title={
                 !customer
@@ -497,7 +563,14 @@ export function OrderDetailPage() {
             the counter; the sales manager reads it before sending the order
             on, and may add to it.
           */}
-          <CommitmentThread order={order} overLimit={overLimit} reloadKey={threadKey} />
+          {/* With the GM, the Manager writes in Note for GM below instead. */}
+          <CommitmentThread
+            order={order}
+            overLimit={overLimit}
+            reloadKey={threadKey}
+            allowAdd={!(withGm && !acts.approve)}
+          />
+          <TemporaryCreditNote orderId={order.id} />
 
           {/*
             What production moved since this browser last had the order open.
@@ -550,7 +623,7 @@ export function OrderDetailPage() {
                        * 17 September 2026 and the rep's rate is already net.
                        */
                       const rateMoved = edited != null && edited > 0 && edited !== l.ratePerKg;
-                      const lineTotal = rateMoved ? l.totalWeight * edited : l.amount;
+                      const lineTotal = rateMoved ? lineAmountAt(l, edited) : l.amount;
                       const pos = positionFor(l.itemCode, stock);
                       const split = splitOf(l, pos.available, stock.get(l.itemCode)?.beltsPerRoll ?? 0);
                       const mode = servedFrom(l);
@@ -565,7 +638,7 @@ export function OrderDetailPage() {
                           <td className="right num">
                             {l.rolls ? `${l.rolls} roll${l.rolls === 1 ? '' : 's'}` : `${l.qty}`}
                             {l.looseBelts ? ` + ${l.looseBelts} belt${l.looseBelts === 1 ? '' : 's'}` : ''}
-                            <div className="tiny dim">{l.totalWeight} kg</div>
+                            <div className="tiny dim">{l.totalWeight} {weightUnit(l.category)}</div>
                           </td>
                           <td className="right">
                             {/* Read-only once the GM has approved: the push goes
@@ -923,14 +996,100 @@ export function OrderDetailPage() {
              * already escalated. They can still add what they know, above.
              */
             <div className="mt-16">
-              <Alert tone="info" title="With the General Manager for credit approval" />
+              <Alert tone="info" title="With the General Manager for credit approval">
+                {route?.route === 'gm' &&
+                  (() => {
+                    const why = route.gmLock
+                      ? ['the customer missed a payment commitment that is not cleared']
+                      : [
+                          route.needs.overLimit && !(route.authority > 0 && route.needs.excess <= route.authority)
+                            ? `over the credit limit by ${money(route.needs.excess, 0)}, more than your authority of ${money(route.authority, 0)}`
+                            : '',
+                          route.needs.overdue30 ? 'overdue more than 30 days past the payment terms' : '',
+                          route.cap.reached ? 'your limit of payment commitments for this customer is reached' : '',
+                        ].filter(Boolean);
+                    const s = why.join('; ');
+                    return `${s.charAt(0).toUpperCase()}${s.slice(1)}. Only the GM may decide it.`;
+                  })()}
+              </Alert>
+              {acts.comment && (
+                <Card title="Note for GM" className="mt-16">
+                  <Textarea
+                    rows={2}
+                    value={gmNote}
+                    onChange={(e) => setGmNote(e.target.value)}
+                    placeholder="Context for the General Manager"
+                    aria-label="Note for GM"
+                    disabled={!!busy}
+                  />
+                  <div className="decide__bar">
+                    <Button
+                      variant="primary"
+                      onClick={() => void sendGmNote()}
+                      loading={busy === 'note'}
+                      disabled={!!busy || !gmNote.trim()}
+                    >
+                      Send note to GM
+                    </Button>
+                  </div>
+                </Card>
+              )}
             </div>
           ) : (
             <Card title="Decision" className="mt-16">
+              {acts.approve && needsCommitment && route && (
+                <>
+                  <div className="decide__warn">
+                    <Alert
+                      tone="warn"
+                      title={`Payment commitment required · up to ${route.maxDays} days`}
+                    >
+                      {(() => {
+                        const why = [
+                          route.needs.overdue30 ? 'overdue more than 30 days past the payment terms' : '',
+                          route.needs.overLimit
+                            ? `over the credit limit by ${money(route.needs.excess, 0)} (your authority ${money(route.authority, 0)})`
+                            : '',
+                        ]
+                          .filter(Boolean)
+                          .join('; ');
+                        return why.charAt(0).toUpperCase() + why.slice(1);
+                      })()}
+                      . Approve with the customer&apos;s payment date, or reject it.
+                    </Alert>
+                  </div>
+                  <Field label="Payment commitment date (required)">
+                    <Input
+                      type="date"
+                      value={pcDate}
+                      min={isoDay(serverNow())}
+                      max={isoDay(new Date(serverNow().getTime() + route.maxDays * 86_400_000))}
+                      onChange={(e) => setPcDate(e.target.value)}
+                      disabled={!!busy || editing}
+                    />
+                  </Field>
+                  <Field label="Remarks (required)">
+                    <Textarea
+                      rows={2}
+                      value={pcRemarks}
+                      onChange={(e) => setPcRemarks(e.target.value)}
+                      placeholder="What the customer committed to"
+                      disabled={!!busy || editing}
+                    />
+                  </Field>
+                </>
+              )}
               {acts.escalate && (
                 <>
                   <div className="decide__warn">
-                    <Alert tone="warn" title="Over credit limit · GM approval required" />
+                    <Alert
+                      tone="warn"
+                      title={
+                        route?.gmLock
+                          ? 'Missed a payment commitment · GM approval required'
+                          : 'Over credit limit · GM approval required'
+                      }
+                    />
                   </div>
                   <Field label="Note for GM (optional)">
                     <Textarea
@@ -951,7 +1110,8 @@ export function OrderDetailPage() {
                     loading={busy === 'approve'}
                     disabled={!!busy || editing}
                   >
-                    Approve
+                    {/* The approval asks the order sync to send it to SAP at once (requestOrderSync). */}
+                    {needsCommitment ? 'Approve with commitment & Push to SAP' : 'Approve & Push to SAP'}
                   </Button>
                 )}
                 {acts.escalate && (

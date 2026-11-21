@@ -69,3 +69,20 @@ String? tripStartRefusal(List<RunningTrip> running) {
   return '${running.length} trips still running '
       '($listed${rest > 0 ? ', and $rest more' : ''}). End them first.';
 }
+
+/// Whether a vehicle leg may be started or ended from its dialog (13 Nov
+/// 2026). An odometer leg needs its photo to have reached the server — or to
+/// be kept on the phone to go when it can — before the leg is saved.
+///
+/// The dialogs held the button only while a photo was uploading. One that
+/// had failed, or was never taken, let the leg be saved with no photo, and
+/// the web showed "No photo" on a pay claim (the user: "the odometer image
+/// does not reach the website"). Rounded towards holding: a rep who cannot
+/// get a photo through is shown why, with Retry; a leg saved without one is
+/// a claim HR cannot check.
+bool canSaveOdometerLeg({
+  required bool odometerLeg,
+  required bool photoReady,
+  required bool uploading,
+}) =>
+    !uploading && (!odometerLeg || photoReady);

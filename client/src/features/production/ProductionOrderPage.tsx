@@ -33,6 +33,7 @@ import { modeLabel, modeTone, servedFrom } from '@/domain/minimumStock';
 import { lineStatusFromSap } from '@/domain/sapOrderState';
 import { queueState, QUEUE_STATE_LABEL, type QueueState } from '@/domain/productionQueue';
 import { formatDate } from '@/domain/orderRules';
+import { weightUnit } from '@/domain/solutionLine';
 import { Api } from '@/api/client';
 import { Alert, Badge, Button, Card, Empty, Input, type BadgeTone } from '@/components/ui';
 import { money } from '@/components/common/format';
@@ -297,7 +298,7 @@ export function ProductionOrderPage() {
                   <div className="prod__facts">
                     <span className="num">
                       {l.rolls ? `${l.rolls} roll${l.rolls === 1 ? '' : 's'}` : `${l.qty}`}
-                      {l.looseBelts ? ` + ${l.looseBelts} belts` : ''} · {l.totalWeight} kg
+                      {l.looseBelts ? ` + ${l.looseBelts} belts` : ''} · {l.totalWeight} {weightUnit(l.category)}
                     </span>
                     <span className="num dim">{money(l.ratePerKg, 2)} / kg</span>
                   </div>

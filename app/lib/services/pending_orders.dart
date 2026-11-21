@@ -44,6 +44,13 @@ class OrderRefused implements Exception {
   String toString() => message;
 }
 
+/// Why a kept order was held when it was sent: the customer is over their
+/// credit limit as they stand now, and the order has no commitment. Unsent
+/// Orders offers to add one on a draft refused with exactly this sentence.
+const String kNeedsCommitmentNow =
+    "Now over the customer's credit limit. Add the customer's commitment, "
+    'then send it again.';
+
 class PendingOrder {
   /// Local id. Not an order number — this has never reached the server.
   final String id;
@@ -67,6 +74,11 @@ class PendingOrder {
   final String? commitment;
   final String? commitmentDue;
 
+  /// Freight, Paid or To Pay, and how it travels, By Road / By KSRTC /
+  /// By Railway (core/delivery_mode.dart).
+  final String? deliveryMode;
+  final String? transportMode;
+
   /// Lines saved with no signal that take SAP's price when sent, by item code:
   /// `{'f': rate per kg -> line rate factor, 'n': product name}`.
   final Map<String, Map<String, dynamic>> sapPending;
@@ -87,6 +99,8 @@ class PendingOrder {
     this.lastError,
     this.commitment,
     this.commitmentDue,
+    this.deliveryMode,
+    this.transportMode,
     this.sapPending = const {},
     this.refused = false,
   });
@@ -111,6 +125,8 @@ class PendingOrder {
         if (lastError != null) 'last_error': lastError,
         if (commitment != null) 'commitment': commitment,
         if (commitmentDue != null) 'commitment_due': commitmentDue,
+        if (deliveryMode != null) 'delivery_mode': deliveryMode,
+        if (transportMode != null) 'transport_mode': transportMode,
         if (sapPending.isNotEmpty) 'sap_pending': sapPending,
         if (refused) 'refused': true,
       };
@@ -131,6 +147,8 @@ class PendingOrder {
       lastError: json['last_error'] as String?,
       commitment: json['commitment'] as String?,
       commitmentDue: json['commitment_due'] as String?,
+      deliveryMode: json['delivery_mode'] as String?,
+      transportMode: json['transport_mode'] as String?,
       sapPending: {
         if (json['sap_pending'] is Map)
           for (final e in (json['sap_pending'] as Map).entries)
@@ -152,6 +170,8 @@ class PendingOrder {
         lastError: error,
         commitment: commitment,
         commitmentDue: commitmentDue,
+        deliveryMode: deliveryMode,
+        transportMode: transportMode,
         sapPending: sapPending,
         refused: refused,
       );
@@ -212,6 +232,8 @@ class PendingOrders {
     bool isLead = false,
     String? commitment,
     String? commitmentDue,
+    String? deliveryMode,
+    String? transportMode,
     Map<String, Map<String, dynamic>> sapPending = const {},
   }) async {
     final now = serverNow();
@@ -237,6 +259,8 @@ class PendingOrders {
       isLead: isLead,
       commitment: commitment,
       commitmentDue: commitmentDue,
+      deliveryMode: deliveryMode,
+      transportMode: transportMode,
       sapPending: sapPending,
     );
     await _replaceAll([...existing, draft]);
@@ -259,15 +283,56 @@ class PendingOrders {
           throw OrderRefused('No price in SAP for ${wait['n'] ?? code}.');
         }
         final factor = (wait['f'] as num?)?.toDouble() ?? 1;
+        // SAP's rate in the rate box's unit: x the tin size for solution,
+        // which SAP holds per litre and the box shows per can (20 Nov 2026).
+        final box = r.scaled((wait['k'] as num?)?.toDouble() ?? 1).rate;
         final qty = (item['qty'] as num?)?.toDouble() ?? 0;
-        final lineRate = r.rate * factor;
+        final lineRate = box * factor;
         copy['rate'] = double.parse(lineRate.toStringAsFixed(4));
         copy['amount'] = double.parse((qty * lineRate).toStringAsFixed(2));
-        copy['custom_rate_per_kg'] = r.rate;
+        copy['custom_rate_per_kg'] = box;
       }
       out.add(copy);
     }
     return out;
+  }
+
+  /// What the draft came to at the prices on the phone when it was taken, or
+  /// null when a line SAP prices had no price then — there is nothing to
+  /// compare SAP's price at sending against.
+  static double? pricedTotal(PendingOrder d) {
+    for (final item in d.items) {
+      final code = '${item['item_code'] ?? ''}';
+      if (!d.sapPending.containsKey(code)) continue;
+      if (((item['rate'] as num?)?.toDouble() ?? 0) <= 0) return null;
+    }
+    return totalOf(d.items);
+  }
+
+  /// Adds the customer's commitment to a held draft and lets it go again by
+  /// itself.
+  static Future<void> setCommitment(String id, String text, String? due) async {
+    final list = await _raw();
+    await _replaceAll([
+      for (final d in list)
+        d.id == id
+            ? PendingOrder(
+                id: d.id,
+                customer: d.customer,
+                customerName: d.customerName,
+                deliveryDate: d.deliveryDate,
+                items: d.items,
+                salesPerson: d.salesPerson,
+                savedAt: d.savedAt,
+                isLead: d.isLead,
+                commitment: text,
+                commitmentDue: due,
+                deliveryMode: d.deliveryMode,
+                transportMode: d.transportMode,
+                sapPending: d.sapPending,
+              )
+            : d
+    ]);
   }
 
   /// What [items] come to: quantity times line rate.

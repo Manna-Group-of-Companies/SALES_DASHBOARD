@@ -58,3 +58,32 @@ ActualPunch actualPunchOf(Map<String, dynamic>? log) {
               : ActualPunchKind.complete;
   return ActualPunch(kind, pin, pout);
 }
+
+/// Punched in this recently, a punch-out is far more likely a stray tap than
+/// the end of a day (13 Nov 2026), and the question says so.
+const Duration kEarlyPunchOut = Duration(minutes: 30);
+
+/// The question asked before a punch-out is written, or the one sentence of
+/// it that matters (13 Nov 2026).
+///
+/// Reps reported being punched out by themselves soon after punching in.
+/// Nothing in the app or on the server punches anyone out; but Punch In and
+/// Punch Out are the same button in the same place, and Punch Out acted on a
+/// single tap — so the second tap of an impatient punch-in, or a thumb on the
+/// card while the home screen redrew, ended the rep's day. Live: ATT-01248,
+/// punched out eight minutes after punching in. A punch-out is never written
+/// without the rep saying yes to this.
+String punchOutQuestion(String punchInAt, DateTime now) {
+  final inAt = DateTime.tryParse(punchInAt.trim().replaceFirst(' ', 'T'));
+  if (inAt == null) return 'Punch out now? This ends your working day.';
+  final since = now.difference(inAt);
+  final mins = since.inMinutes < 0 ? 0 : since.inMinutes;
+  final h = mins ~/ 60, m = mins % 60;
+  final ago = h == 0 ? '$m min' : '$h h $m min';
+  String two(int v) => v.toString().padLeft(2, '0');
+  final at = '${two(inAt.hour)}:${two(inAt.minute)}';
+  final head = since < kEarlyPunchOut
+      ? 'You punched in only $ago ago, at $at.'
+      : 'You punched in at $at, $ago ago.';
+  return '$head Punch out now? This ends your working day.';
+}

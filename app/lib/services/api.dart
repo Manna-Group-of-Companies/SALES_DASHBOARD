@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 
+import 'package:manna_field_sales/core/app_bus.dart';
 import 'package:manna_field_sales/core/app_version.dart';
 import 'package:manna_field_sales/core/attendance_rules.dart';
 import 'package:manna_field_sales/core/auth_store.dart';
@@ -15,12 +16,15 @@ import 'package:manna_field_sales/core/expenses.dart';
 import 'package:manna_field_sales/core/lead_delete.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/core/party_location.dart';
+import 'package:manna_field_sales/core/delivery_mode.dart';
 import 'package:manna_field_sales/core/duplicate_order.dart';
 import 'package:manna_field_sales/core/errors.dart' show isNetworkFailure;
 import 'package:manna_field_sales/core/leave_balance.dart';
 import 'package:manna_field_sales/core/trip_totals.dart';
 import 'package:manna_field_sales/core/production_stages.dart';
 import 'package:manna_field_sales/core/item_request.dart';
+import 'package:manna_field_sales/core/credit_extension.dart';
+import 'package:manna_field_sales/core/credit_period_request.dart';
 import 'package:manna_field_sales/core/pick_list.dart';
 import 'package:manna_field_sales/core/proximity.dart';
 import 'package:manna_field_sales/core/sales_target.dart';
@@ -34,11 +38,14 @@ import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/models/sap_rates.dart';
+import 'package:manna_field_sales/services/local_captures.dart';
+import 'package:manna_field_sales/services/net_cache.dart';
 import 'package:manna_field_sales/services/offline_cache.dart';
 import 'package:manna_field_sales/services/outbox.dart';
 import 'package:manna_field_sales/services/pending_orders.dart';
 import 'package:manna_field_sales/services/pending_punches.dart';
 import 'package:manna_field_sales/services/stock_service.dart';
+import 'package:manna_field_sales/services/sync_engine.dart';
 import 'package:manna_field_sales/services/trip_points.dart';
 
 /// Builds the REST path for an ERPNext doctype. Private to this library —
@@ -280,6 +287,7 @@ class Api {
     // belong to whoever was signed in, so they go with the session rather than
     // sitting there for the next person.
     await OfflineCache.clear(signOut: true);
+    await NetCache.clear();
     await PendingOrders.clear();
     // The home screen has already asked the rep before getting here — see
     // HomeDashboard._logout. Sent under the next login they would be filed
@@ -475,9 +483,12 @@ class Api {
   /// Callers must still run the live read and replace this when it lands —
   /// and say the copy is being refreshed, so nobody quotes a balance off it
   /// thinking it is live.
-  static Future<Cached<List<Map<String, dynamic>>>?> peekCustomers() =>
-      OfflineCache.peek<List<Map<String, dynamic>>>(
-          CacheKeys.customers, decodeRows);
+  static Future<Cached<List<Map<String, dynamic>>>?> peekCustomers() async {
+    final c = await OfflineCache.peek<List<Map<String, dynamic>>>(
+        CacheKeys.customers, decodeRows);
+    if (c != null) await LocalCaptures.overlay('Customer', c.value);
+    return c;
+  }
 
   static Future<Cached<List<Map<String, dynamic>>>> getCustomersCached() {
     // `custom_assigned_reps` is a Link to Sales Person now, holding a bare
@@ -506,11 +517,19 @@ class Api {
             'custom_verified_latitude',
             'custom_verified_longitude',
             'custom_phone',
+            // Lets this phone's own captures stand until the server has
+            // them (services/local_captures.dart).
+            'modified',
+            // Whose it is: a manager's list holds the team's customers too.
+            kFieldCustomerOwner,
             ...kOutstandingFields,
           ]),
           orderBy: 'customer_name asc'),
       decode: decodeRows,
-    );
+    ).then((c) async {
+      await LocalCaptures.overlay('Customer', c.value);
+      return c;
+    });
   }
 
   /// Sets who a customer belongs to. UAE only (see `core/visibility.dart`) —
@@ -518,7 +537,7 @@ class Api {
   /// Any pool member may assign any pool member, including themselves, which
   /// is what lets a freshly imported, unowned customer be claimed by
   /// whoever gets to it first.
-  static Future<void> assignCustomerOwner(String customerName, String rep) async {
+  static Future<void> _assignCustomerOwnerNow(String customerName, String rep) async {
     await _put('Customer', customerName, {kFieldCustomerOwner: rep});
     await OfflineCache.clear();
   }
@@ -623,7 +642,7 @@ class Api {
   /// place (it is named `<Rep> - <Place>`, one owner by construction), unlike
   /// a customer or lead. See [_visibleRows] for that case.
   static String? _visibleFilter(String field) {
-    final peers = Session.I.unitPeers;
+    final peers = Session.I.visibleOwners;
     if (peers.isEmpty) return null;
     return peers.length == 1
         ? '["$field","=","${peers.first}"]'
@@ -675,7 +694,7 @@ class Api {
     required String fields,
     String orderBy = 'creation desc',
   }) async {
-    final peers = Session.I.unitPeers;
+    final peers = Session.I.visibleOwners;
     if (peers.isEmpty) return const [];
 
     final ownedFuture = _list(doctype,
@@ -919,7 +938,7 @@ class Api {
   /// Checked as stored, as the dashboard's `undoOrderRejection` does: an Undo
   /// left on screen after the order moved on — resubmitted, or sent to the
   /// GM — must not pull it back.
-  static Future<void> undoOrderRejection(String name) async {
+  static Future<void> _undoOrderRejectionNow(String name) async {
     final stored = await getOrder(name);
     if ('${stored['custom_po_status'] ?? ''}' != 'Rejected') {
       throw Exception('This order is no longer rejected. Refresh to see '
@@ -956,7 +975,8 @@ class Api {
     return _list('Lead',
         fields: '["name","lead_name","company_name","$kFieldLeadOwner",'
             '"custom_sales_route","city","mobile_no","custom_location_status",'
-            '"customer"]',
+            '"customer","custom_latitude","custom_longitude",'
+            '"custom_verified_latitude","custom_verified_longitude"]',
         filters: '[["$kFieldLeadOwner","in",${_inList(team)}]]',
         orderBy: 'modified desc',
         limit: 500);
@@ -964,7 +984,7 @@ class Api {
 
   /// Puts a customer or a lead on a sales route — the dashboard's
   /// `assignRoute`.
-  static Future<void> assignRoute(
+  static Future<void> _assignRouteNow(
       {required bool lead, required String name, required String route}) async {
     await _put(lead ? 'Lead' : 'Customer', name, {'custom_sales_route': route});
     await OfflineCache.clear();
@@ -1008,7 +1028,7 @@ class Api {
   /// rather than duplicated, which also makes this safe to call twice.
   ///
   /// Returns the customer's name.
-  static Future<String> convertLeadToCustomer(String leadName) async {
+  static Future<String> _convertLeadToCustomerNow(String leadName) async {
     final lead = await getLeadDoc(leadName);
 
     final missing = missingLeadDetails(lead);
@@ -1088,7 +1108,7 @@ class Api {
   /// real behind it. A failure part-way leaves the lead order pending and
   /// re-approvable — which is recoverable, unlike an order marked approved with
   /// nothing downstream.
-  static Future<String?> approveLeadOrder(String name, bool approve) async {
+  static Future<String?> _approveLeadOrderNow(String name, bool approve) async {
     if (!approve) {
       await _put('Lead Order', name, {'status': 'Rejected'});
       return null;
@@ -1105,7 +1125,7 @@ class Api {
 
     String? customer;
     if (leadName.isNotEmpty && leadName != 'null') {
-      customer = await convertLeadToCustomer(leadName);
+      customer = await _convertLeadToCustomerNow(leadName);
     }
 
     String? salesOrder;
@@ -1188,6 +1208,11 @@ class Api {
       'company': company,
       'custom_sales_person': leadOrder['sales_person'] ?? Session.I.salesPerson,
       if (unit != null && unit.isNotEmpty) 'custom_company': unit,
+      // Who pays the courier, as the rep agreed it on the lead order.
+      if (deliveryModeOf(leadOrder[kFieldDeliveryMode]) case final m?)
+        kFieldDeliveryMode: m,
+      if (transportModeOf(leadOrder[kFieldTransportMode]) case final m?)
+        kFieldTransportMode: m,
       // The date the customer actually asked for, carried across rather than
       // invented — the rep agreed it with them when the order was taken.
       'delivery_date': delivery.length >= 10
@@ -1224,7 +1249,7 @@ class Api {
     return created;
   }
 
-  static Future<void> approveLeadOrderPO(String name, bool approve) => _put(
+  static Future<void> _approveLeadOrderPONow(String name, bool approve) => _put(
       'Lead Order',
       name,
       {'status': approve ? 'PO Approved - Ready for SAP' : 'Rejected'});
@@ -1252,7 +1277,7 @@ class Api {
   ///
   /// Works for an order against a customer or against a lead — the same
   /// decision either way.
-  static Future<void> setLineFulfilmentMode({
+  static Future<void> _setLineFulfilmentModeNow({
     required String orderName,
     required String itemCode,
     required String mode,
@@ -1322,24 +1347,29 @@ class Api {
     // depend on the customer's figures, so they are not read.
     final gmApproved = '${order['custom_po_status'] ?? ''}' == kPoFinalApproval;
     if (role == 'sales_manager' && decision != 'reject' && !gmApproved) {
-      Map<String, dynamic>? customer;
+      // Since 17 Nov 2026 the server decides where an order goes (the 10-day
+      // payment commitment ladder, payment_commitment.json): only its 'gm'
+      // route takes Approve away. An order that needs a commitment may be
+      // approved with one; manna_payment_commitment_order refuses the save
+      // without it. Unreadable: refused, never guessed at.
+      Map<String, dynamic>? route;
       try {
-        customer = await getCustomerDoc('${order['customer']}');
+        route = await getOrderRoute('${order['name']}');
       } catch (_) {
-        // Refused below rather than guessed at.
+        // Refused below.
       }
-      if (customer == null) {
+      if (route == null) {
         throw Exception("Could not read the customer's credit position, so "
             'this was not saved. Try again.');
       }
-      // "Needs the GM": the limit, or overdue past the payment terms (11 Oct 2026).
-      overLimit = creditEscalates(customer, _toNum(order['grand_total']));
+      overLimit = '${route['route']}' == 'gm';
     }
     final acts = orderActions(
         role: role, poStatus: order['custom_po_status'], overLimit: overLimit);
     final allowed = switch (decision) {
       'approve' => acts.approve,
       'gm_approve' => acts.gmApprove,
+      'gm_push' => acts.gmPush,
       'escalate' => acts.escalate,
       _ => acts.reject,
     };
@@ -1353,7 +1383,7 @@ class Api {
     }
   }
 
-  static Future<void> approveSalesOrderPO(String name, bool approve) async {
+  static Future<void> _approveSalesOrderPONow(String name, bool approve) async {
     final body = <String, dynamic>{
       'custom_po_status': approve ? 'PO Approved - Ready for SAP' : 'Rejected',
       'custom_rate_approved': approve ? 1 : 0,
@@ -1413,7 +1443,7 @@ class Api {
   // Approve a captured customer location: copy captured coords into the
   // verified fields so the 2 km check-in works against them. Reject sends
   // it back to "Not Captured" so the rep can re-capture.
-  static Future<void> approveLocation(
+  static Future<void> _approveLocationNow(
       String name, bool approve, dynamic lat, dynamic lng) {
     if (approve) {
       return _put('Customer', name, {
@@ -1427,7 +1457,7 @@ class Api {
 
   /// [recapture] carries the same meaning as on [captureCustomerLocation]:
   /// the pin on record is wrong and must stop outranking the new one.
-  static Future<void> captureLeadLocation({
+  static Future<void> _captureLeadLocationNow({
     required String lead,
     required String salesPerson,
     required double lat,
@@ -1471,7 +1501,7 @@ class Api {
         orderBy: 'modified desc');
   }
 
-  static Future<void> approveLeadLocation(
+  static Future<void> _approveLeadLocationNow(
       String name, bool approve, dynamic lat, dynamic lng) {
     if (approve) {
       return _put('Lead', name, {
@@ -1518,7 +1548,7 @@ class Api {
   static Future<void> submitItemRequest(Map<String, dynamic> fields, {String? photoPath}) async {
     String? photo;
     if (photoPath != null) {
-      photo = await uploadFileGetUrl(filePath: photoPath, filename: 'item_request.jpg');
+      photo = await _uploadFileGetUrlNow(filePath: photoPath, filename: 'item_request.jpg');
     }
     final r = await Session.I.dio.post('/api/method/manna_item_request',
         data: {...fields, 'action': 'submit', 'photo': ?photo});
@@ -1536,6 +1566,231 @@ class Api {
     });
     if (r.statusCode != 200) throw Exception(_frappeError(r));
   }
+
+  // -------- Credit-period requests (16 Nov 2026) --------
+  //
+  // Through the `manna_credit_period_request` Server Script
+  // (app/server/credit_period_request.py): a rep asks for a customer's new
+  // SAP payment term; the manager decides up to 30 days and pushes it to SAP,
+  // the GM from 31 to 40. See core/credit_period_request.dart.
+
+  /// The requests this login may see: a rep's own, a manager's team's, all
+  /// for the GM. [customer] narrows to one customer.
+  static Future<List<CreditPeriodRequest>> getCreditPeriodRequests({String? customer}) async {
+    final r = await Session.I.dio.post('/api/method/manna_credit_period_request',
+        data: {'action': 'list', 'customer': ?customer});
+    final m = r.data is Map ? r.data['message'] : null;
+    if (r.statusCode != 200 || m is! List) throw Exception(_frappeError(r));
+    return m.whereType<Map>().map(CreditPeriodRequest.fromJson).toList();
+  }
+
+  /// SAP's payment terms, as the credit sync last copied them.
+  static Future<List<SapPaymentTerm>> getSapPaymentTerms() async {
+    final r = await Session.I.dio.post('/api/method/manna_credit_period_request', data: {'action': 'terms'});
+    final m = r.data is Map ? r.data['message'] : null;
+    if (r.statusCode != 200 || m is! List) throw Exception(_frappeError(r));
+    return m.whereType<Map>().map(SapPaymentTerm.fromJson).toList();
+  }
+
+  /// A rep's request. Kept on the phone with no signal; the server judges
+  /// it when it is sent (one open request per customer, 40 days at most).
+  static Future<bool> submitCreditPeriodRequest({
+    required String customer,
+    required String customerName,
+    required SapPaymentTerm term,
+    String reason = '',
+  }) =>
+      sendOrQueue(
+        kind: 'credit_period_request',
+        label: 'Credit period — $customerName: ${term.name}',
+        args: {'customer': customer, 'term_code': term.code, 'reason': reason},
+      );
+
+  static Future<void> _submitCreditPeriodRequestNow(Map<String, dynamic> a) async {
+    final r = await Session.I.dio.post('/api/method/manna_credit_period_request',
+        data: {'action': 'submit', 'customer': a['customer'], 'term_code': a['term_code'], 'reason': a['reason'] ?? ''});
+    if (r.statusCode != 200) throw Exception(_frappeError(r));
+  }
+
+  /// A manager's or the GM's step on a request: decide (approve / reject),
+  /// escalate, or push to SAP. The server re-checks it when it arrives.
+  static Future<bool> creditPeriodAction(
+    String name,
+    String action, {
+    String note = '',
+    String customerName = '',
+  }) {
+    final what = switch (action) {
+      'approve' => 'approved',
+      'reject' => 'rejected',
+      'escalate' => 'sent to the GM',
+      _ => 'pushed to SAP',
+    };
+    return sendOrQueue(
+      kind: 'credit_period_action',
+      label: 'Credit period $name${customerName.isEmpty ? '' : ' ($customerName)'} $what',
+      args: {'name': name, 'action': action, 'note': note},
+    );
+  }
+
+  static Future<void> _creditPeriodActionNow(Map<String, dynamic> a) async {
+    final action = '${a['action']}';
+    final data = <String, dynamic>{'name': a['name'], 'note': a['note'] ?? ''};
+    if (action == 'approve' || action == 'reject') {
+      data['action'] = 'decide';
+      data['decision'] = action == 'approve' ? 'Approve' : 'Reject';
+    } else {
+      data['action'] = action;
+    }
+    final r = await Session.I.dio.post('/api/method/manna_credit_period_request', data: data);
+    if (r.statusCode != 200) throw Exception(_frappeError(r));
+  }
+
+  // -------- The 10-day payment commitment ladder (17 Nov 2026) --------
+  //
+  // Through the `manna_payment_commitment` Server Script
+  // (app/server/payment_commitment.py); see core/payment_commitment.dart.
+
+  static Future<dynamic> _pc(Map<String, dynamic> data) async {
+    final r = await Session.I.dio.post('/api/method/manna_payment_commitment', data: data);
+    if (r.statusCode != 200) throw Exception(_frappeError(r));
+    return r.data is Map ? r.data['message'] : null;
+  }
+
+  /// What an order needs, where it goes (manager | manager_commitment | gm),
+  /// the GM lock, the authority and cap, and its commitment if any.
+  static Future<Map<String, dynamic>> getOrderRoute(String salesOrder) async {
+    final m = await _pc({'action': 'route', 'sales_order': salesOrder});
+    if (m is! Map) throw Exception('Could not read where this order goes.');
+    return m.cast<String, dynamic>();
+  }
+
+  /// Entered with the approval and sent just before it; it becomes Running
+  /// when the approval saves. Kept for later with no signal, ahead of the
+  /// approval it belongs to.
+  static Future<bool> givePaymentCommitment(String salesOrder, String commitmentDate, String remarks,
+          {String customerName = ''}) =>
+      sendOrQueue(
+        kind: 'payment_commitment',
+        label: 'Payment commitment${customerName.isEmpty ? '' : ' - $customerName'} ($salesOrder)',
+        args: {'sales_order': salesOrder, 'commitment_date': commitmentDate, 'remarks': remarks},
+      );
+
+  /// Every commitment this login may see, newest first.
+  static Future<List<Map<String, dynamic>>> getPaymentCommitments() async {
+    final m = await _pc({'action': 'list'});
+    if (m is! List) throw Exception('Could not read the payment commitments.');
+    return m.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
+  /// One customer's whole commitment history, with the counts.
+  static Future<Map<String, dynamic>> getCommitmentHistory(String customer) async {
+    final m = await _pc({'action': 'history', 'customer': customer});
+    if (m is! Map) throw Exception('Could not read the history.');
+    return m.cast<String, dynamic>();
+  }
+
+  /// Each order's live commitment and SAP state, for the manager's list.
+  static Future<Map<String, dynamic>> getOrdersCommitments(List<String> orders) async {
+    if (orders.isEmpty) return const {};
+    final m = await _pc({'action': 'orders', 'names': jsonEncode(orders), 'customers': '[]'});
+    return m is Map ? m.cast<String, dynamic>() : const {};
+  }
+
+  /// This login's notifications about commitments and orders sent to the GM.
+  static Future<List<Map<String, dynamic>>> getLadderAlerts() async {
+    final m = await _pc({'action': 'alerts'});
+    if (m is! List) return const [];
+    return m.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
+  /// Not kept for later with no signal: an alert shown unread again is harmless.
+  static Future<void> markLadderAlertsSeen() async {
+    try {
+      await _pc({'action': 'seen'});
+    } catch (_) {}
+  }
+
+  // -------- Temporary credit extensions (16 Nov 2026) --------
+  //
+  // Through the `manna_credit_extension` Server Script
+  // (app/server/credit_extension.py). A separate workflow from order approval:
+  // see core/credit_extension.dart.
+
+  static Future<dynamic> _xt(Map<String, dynamic> data) async {
+    final r = await Session.I.dio.post('/api/method/manna_credit_extension', data: data);
+    if (r.statusCode != 200) throw Exception(_frappeError(r));
+    return r.data is Map ? r.data['message'] : null;
+  }
+
+  /// Extensions this login may see: a rep's own, a manager's team's, all for the GM.
+  static Future<List<CreditExtension>> getCreditExtensions({String? salesOrder}) async {
+    final m = await _xt({'action': 'list', 'sales_order': ?salesOrder});
+    if (m is! List) throw Exception('Could not read the temporary credit extensions.');
+    return m.whereType<Map>().map(CreditExtension.new).toList();
+  }
+
+  /// This login's notifications about extensions (17 Nov 2026): the Server
+  /// Script writes them to Frappe's Notification Log, which nothing read.
+  static Future<List<Map<String, dynamic>>> getExtensionAlerts() async {
+    final m = await _xt({'action': 'alerts'});
+    if (m is! List) return const [];
+    return m.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+  }
+
+  /// Marks them read. Not kept for later with no signal: an alert shown
+  /// unread once more is harmless.
+  static Future<void> markExtensionAlertsSeen() async {
+    try {
+      await _xt({'action': 'seen'});
+    } catch (_) {}
+  }
+
+  /// The approval authority and the manager cap; the GM sets them on the
+  /// dashboard.
+  static Future<Map<String, dynamic>> getExtensionSettings() async {
+    final m = await _xt({'action': 'settings'});
+    if (m is! Map) throw Exception('Could not read the approval authority.');
+    return m.cast<String, dynamic>();
+  }
+
+  /// Orders waiting for approval that take their customer past the credit limit.
+  static Future<List<EligibleOrder>> getExtensionEligibleOrders() async {
+    final m = await _xt({'action': 'eligible'});
+    if (m is! List) throw Exception('Could not read the orders.');
+    return m.whereType<Map>().map(EligibleOrder.new).toList();
+  }
+
+  /// One extension with the customer's figures, payments, audit history and
+  /// the customer's whole extension history.
+  static Future<Map<String, dynamic>> getCreditExtensionDetail(String name) async {
+    final m = await _xt({'action': 'detail', 'name': name});
+    if (m is! Map) throw Exception('Could not read the extension.');
+    return m.cast<String, dynamic>();
+  }
+
+  static Future<bool> requestCreditExtension(String salesOrder, String customerName, String reason) => sendOrQueue(
+        kind: 'credit_extension_request',
+        label: 'Temporary credit — $customerName ($salesOrder)',
+        args: {'sales_order': salesOrder, 'reason': reason},
+      );
+
+  /// approve (and push to SAP) | reject | escalate | retry. The server
+  /// re-checks every rule when it arrives.
+  static Future<bool> creditExtensionAction(String name, String action,
+          {double? amount, String? commitmentDate, String reason = '', String remarks = '', String customerName = ''}) =>
+      sendOrQueue(
+        kind: 'credit_extension_action',
+        label: 'Temporary credit $name${customerName.isEmpty ? '' : ' ($customerName)'}: $action',
+        args: {
+          'name': name,
+          'action': action,
+          'amount': ?amount,
+          'commitment_date': ?commitmentDate,
+          'reason': reason,
+          'remarks': remarks,
+        },
+      );
 
   // -------- Pick lists --------
   //
@@ -1574,7 +1829,7 @@ class Api {
 
   /// Submits a pick list for [salesOrder]; returns its name (`PICK-00001`).
   /// Each line is `{sales_order_item, picked_qty, available_qty}`.
-  static Future<String> submitPickList(
+  static Future<String> _submitPickListNow(
       String salesOrder, List<Map<String, dynamic>> lines) async {
     final r = await Session.I.dio.post('/api/method/manna_pick_list_submit',
         data: {'sales_order': salesOrder, 'lines': jsonEncode(lines)});
@@ -1587,7 +1842,7 @@ class Api {
   static String get teamCurrency =>
       Session.I.managedTeam == 'Renjith' ? 'AED' : 'INR';
 
-  static Future<void> upsertTarget({
+  static Future<void> _upsertTargetNow({
     required String salesPerson,
     required String month,
     required int year,
@@ -1663,6 +1918,20 @@ class Api {
 
   /// Every credit field of one customer (`kOutstandingFields`), as the rules in
   /// core/credit.dart read them. Empty when the customer is not found.
+  /// Each customer's outstanding, read the way the credit rule reads it, in
+  /// one call - for the manager's order list (17 Nov 2026).
+  static Future<Map<String, double>> getCustomersOutstanding(List<String> customers) async {
+    final names = customers.where((c) => c.isNotEmpty).toSet().toList();
+    if (names.isEmpty) return const {};
+    final l = await _list('Customer',
+        fields: jsonEncode(['name', ...kOutstandingFields]),
+        filters: jsonEncode([
+          ['name', 'in', names]
+        ]),
+        limit: names.length);
+    return {for (final r in l) '${r['name']}': agingOf(r).total};
+  }
+
   static Future<Map<String, dynamic>> getCustomerCreditRow(
       String customer) async {
     final l = await _list('Customer',
@@ -1681,13 +1950,13 @@ class Api {
     return ((l.first['custom_credit_limit'] ?? 0) as num).toDouble();
   }
 
-  static Future<void> upsertOutstandingLimit(String rep, double amount) =>
+  static Future<void> _upsertOutstandingLimitNow(String rep, double amount) =>
       _put('Sales Person', rep, {'custom_outstanding_limit': amount});
 
   // Escalation: the order takes the customer past their credit limit, so it
   // needs the General Manager before it can go to SAP. Checked against the
   // order as stored, like approval — see [_checkOrderDecision].
-  static Future<void> escalateSalesOrderPOToGM(String name) async {
+  static Future<void> _escalateSalesOrderPOToGMNow(String name) async {
     await _checkOrderDecision(await getOrder(name), 'escalate');
     await _put(
         'Sales Order', name, {'custom_po_status': 'Pending GM Approval'});
@@ -1708,19 +1977,32 @@ class Api {
   /// approval the GM believes they gave, reversed because a condition would
   /// not save, is the worse failure. Returns whether it landed — null when
   /// there was none to write — so the screen can say so.
-  static Future<bool?> approveEscalatedOrder(
+  /// [push] (17 Nov 2026, the user): the GM approves AND pushes to SAP in
+  /// one step - the order goes to 'PO Approved - Ready for SAP', its rates
+  /// lock and SAP is asked for it, as the sales manager's push does -
+  /// instead of going back to the sales manager.
+  static Future<bool?> _approveEscalatedOrderNow(
     String name, {
     String? condition,
     String? dueDateIso,
+    bool push = false,
   }) async {
     final stored = await getOrder(name);
-    await _checkOrderDecision(stored, 'gm_approve');
+    await _checkOrderDecision(stored, push ? 'gm_push' : 'gm_approve');
     final problem = approvalConditionProblem(
         stored['custom_credit_commitment'], condition);
     if (problem != null) throw Exception(problem);
 
     await _put('Sales Order', name, {
-      'custom_po_status': kPoFinalApproval,
+      'custom_po_status': push ? 'PO Approved - Ready for SAP' : kPoFinalApproval,
+      if (push) 'custom_rate_approved': 1,
+      if (push)
+        'items': [
+          // Whole lines, as the sales manager's push sends them: a row
+          // with only some fields would lose the rest.
+          for (final it in ((stored['items'] as List?) ?? const []).whereType<Map>())
+            {...it.cast<String, dynamic>(), 'custom_rate_approved': 1}
+        ],
       // Whose approval the sales manager is acting on when they push.
       'custom_gm_approved_by': Session.I.salesPersonLabel ??
           Session.I.salesPerson ??
@@ -1728,6 +2010,7 @@ class Api {
       'custom_gm_approved_on': nowStamp(),
     });
     await OfflineCache.clear();
+    if (push) _askSapForApprovedOrder(name);
 
     final terms = (condition ?? '').trim();
     if (terms.isEmpty) return null;
@@ -1787,7 +2070,7 @@ class Api {
       // Could not look — fall through and make one. A duplicate the GM can
       // close beats an approval with no condition behind it.
     }
-    final made = await addCreditCondition(
+    final made = await _addCreditConditionNow(
       customer: customer,
       salesPerson: salesPerson,
       condition: condition,
@@ -1803,7 +2086,7 @@ class Api {
       final live = (await _orderConditions(salesOrder))
           .where((c) => '${c['status']}' != 'Closed');
       for (final c in live) {
-        await decideCondition('${c['name']}',
+        await _decideConditionNow('${c['name']}',
             closed: true,
             note: 'The GM rejected the order, so nothing is owed on it.');
       }
@@ -1812,7 +2095,7 @@ class Api {
     }
   }
 
-  static Future<void> escalateLeadOrderPOToGM(String name) =>
+  static Future<void> _escalateLeadOrderPOToGMNow(String name) =>
       _put('Lead Order', name, {'status': 'Pending GM Approval'});
 
   // GM queues: anything sitting at "Pending GM Approval".
@@ -1877,8 +2160,10 @@ class Api {
   /// ([SapRates.listOnly]): lead orders are taken at the list price.
   /// The script answers only the party's own rep (or a manager), only for
   /// Manna Treads, for every item in the snapshot (11 Nov 2026; only item
-  /// group ZZ - Test before). Not cached: a stale rate is worse than none, and
-  /// without signal the screen simply shows no rates.
+  /// group ZZ - Test before). Kept on the phone like every read (net_cache),
+  /// and read ahead for every customer and lead (_prewarmDetails, 14 Nov
+  /// 2026), so a dead zone still shows the price; a kept order is re-priced
+  /// from SAP the day it is sent, so the copy is never what is charged.
   static Future<SapRates> getSapRates(String party, {bool lead = false}) async {
     final r = await Session.I.dio.get('/api/method/manna_customer_rates',
         queryParameters: {lead ? 'lead' : 'customer': party});
@@ -2131,7 +2416,7 @@ class Api {
     );
   }
 
-  static Future<String> createCustomer({
+  static Future<String> _createCustomerNow({
     required String name,
     required String group,
     required String territory,
@@ -2281,7 +2566,7 @@ class Api {
           orderBy: 'creation desc',
           limit: 0));
 
-  static Future<void> saveTripTaggedReps(
+  static Future<void> _saveTripTaggedRepsNow(
       String tripName, List<String> reps) async {
     final rows = reps.map((r) => {'sales_person': r}).toList();
     final csv = reps.isEmpty ? '' : '|${reps.join('|')}|';
@@ -2337,6 +2622,19 @@ class Api {
   /// The two doctypes are mapped onto one shape here rather than in the widget:
   /// a Lead Order names its party in `lead_name` and its state in `status`,
   /// where a Sales Order uses `customer` and `custom_po_status`.
+  /// One customer's latest Sales Orders, whoever took them - for the
+  /// payment-due list (14 Nov 2026), where a manager sees the team's
+  /// customers. Cancelled orders are left out. Kept for no signal like
+  /// every read (services/net_cache.dart).
+  static Future<List<Map<String, dynamic>>> getCustomerOrders(String customer) =>
+      _list('Sales Order',
+          fields: '["name","customer","grand_total","transaction_date",'
+              '"delivery_date","custom_po_status","custom_sales_person",'
+              '"custom_sap_sales_order","custom_sap_invoice","docstatus"]',
+          filters: '[["customer","=",${jsonEncode(customer)}],["docstatus","!=",2]]',
+          orderBy: 'transaction_date desc',
+          limit: 20);
+
   static Future<List<Map<String, dynamic>>> getMyOrders() => _cachedRows(
         CacheKeys.orders,
         () async {
@@ -2493,22 +2791,6 @@ class Api {
     return out;
   }
 
-  /// A customer's recent orders, newest first, for the Previous Orders screen
-  /// (19 Nov 2026) — whoever raised them, as far as this login may read.
-  /// Cancelled orders are left out: nobody copies an order that was undone.
-  /// The lines are not listed here (`Sales Order Item` cannot be listed by
-  /// the phone); [getOrder] reads them when the rep opens one.
-  static Future<List<Map<String, dynamic>>> getCustomerOrders(
-      String customer) {
-    final c = jsonEncode(customer);
-    return _list('Sales Order',
-        fields: '["name","transaction_date","delivery_date","grand_total",'
-            '"custom_po_status","custom_sap_sales_order","docstatus"]',
-        filters: '[["customer","=",$c],["docstatus","!=",2]]',
-        orderBy: 'transaction_date desc, creation desc',
-        limit: 30);
-  }
-
   static Future<Map<String, dynamic>> getOrder(String name) async {
     final r = await Session.I.dio.get(_res('Sales Order') + '/$name');
     final d = (r.data is Map) ? r.data['data'] : null;
@@ -2530,7 +2812,7 @@ class Api {
     throw Exception(_frappeError(r));
   }
 
-  static Future<void> setOrderField(
+  static Future<void> _setOrderFieldNow(
       String name, Map<String, dynamic> body) async {
     final r =
     await Session.I.dio.put(_res('Sales Order') + '/$name', data: body);
@@ -2571,7 +2853,7 @@ class Api {
    * discount, so the figure their editor builds is already the whole price.
    */
 
-  static Future<void> updateOrderLines({
+  static Future<void> _updateOrderLinesNow({
     required String orderName,
     required List<Map<String, dynamic>> items,
     required bool returnForApproval,
@@ -2579,6 +2861,8 @@ class Api {
     bool isLead = false,
     String? commitment,
     String? commitmentDue,
+    String? deliveryMode,
+    String? transportMode,
   }) async {
     final ref = OrderRef(orderName, isLead: isLead);
 
@@ -2619,6 +2903,8 @@ class Api {
       'items': items,
     };
     if (deliveryDate != null) body['delivery_date'] = deliveryDate;
+    if (deliveryModeOf(deliveryMode) case final m?) body[kFieldDeliveryMode] = m;
+    if (transportModeOf(transportMode) case final m?) body[kFieldTransportMode] = m;
     // Correcting a rejected order is sending it again: it goes back to the
     // sales manager, as the dashboard's `saveOrderLines` does. Until 26 Sep
     // 2026 the phone left it at Rejected, where nobody would look at it.
@@ -2694,7 +2980,7 @@ class Api {
   /// Written after the approval, never before, and never able to fail it: an
   /// approval the GM believes they gave and the rep cannot see is worse than
   /// a condition nobody recorded.
-  static Future<String?> addCreditCondition({
+  static Future<String?> _addCreditConditionNow({
     required String customer,
     required String salesPerson,
     required String condition,
@@ -2768,7 +3054,7 @@ class Api {
   /// Only the Manna Treads team, and System Manager, may ask — the script
   /// tests the Sales Person's company, not a role, and throws for anyone else,
   /// which is why the button is offered only to [Session.isTreadsUnit].
-  static Future<Map<String, dynamic>> requestSapSync() async {
+  static Future<Map<String, dynamic>> _requestSapSyncNow() async {
     final r = await Session.I.dio.post('/api/method/manna_sap_request_sync');
     final m = r.data is Map ? r.data['message'] : null;
     if (m is Map) return Map<String, dynamic>.from(m);
@@ -2788,7 +3074,7 @@ class Api {
   // is delayed, never dropped. The dashboard's twins are in client.ts.
 
   /// Ask for the order sync: push approved orders, pull invoices. Anyone may.
-  static Future<Map<String, dynamic>> requestOrderSync() async {
+  static Future<Map<String, dynamic>> _requestOrderSyncNow() async {
     final r = await Session.I.dio.post('/api/method/manna_sap_order_request_sync');
     final m = r.data is Map ? r.data['message'] : null;
     if (m is Map) return Map<String, dynamic>.from(m);
@@ -2804,7 +3090,7 @@ class Api {
 
   /// Ask for a stock fetch from SAP. Offered to the Treads team only, like the
   /// credit refresh: the stock lands in Manna Treads' warehouse.
-  static Future<Map<String, dynamic>> requestStockSync() async {
+  static Future<Map<String, dynamic>> _requestStockSyncNow() async {
     final r = await Session.I.dio.post('/api/method/manna_stock_request_sync');
     final m = r.data is Map ? r.data['message'] : null;
     if (m is Map) return Map<String, dynamic>.from(m);
@@ -2833,7 +3119,9 @@ class Api {
     Duration pollEvery = const Duration(seconds: 4),
     Duration giveUpAfter = const Duration(minutes: 4),
   }) async {
-    await requestStockSync();
+    // Kept with no signal: there is nothing to wait for until it is asked,
+    // and the order screen carries on with the stock it already has.
+    if ((await requestStockSync())['kept'] == true) return;
     final since = DateTime.now();
     while (true) {
       await Future<void>.delayed(pollEvery);
@@ -2858,7 +3146,7 @@ class Api {
   /// more, so a failure is logged rather than eaten: the order then waits for
   /// the next press of Sync. The dashboard does the same in `decideOrder`.
   static void _askSapForApprovedOrder(String what) {
-    unawaited(requestOrderSync().then<void>((_) {}).catchError((Object e) {
+    unawaited(_requestOrderSyncNow().then<void>((_) {}).catchError((Object e) {
       debugPrint('$what: approved, but SAP could not be asked to pick it up - press Sync. $e');
     }));
   }
@@ -2962,7 +3250,7 @@ class Api {
   /// A note given when sending one back also goes on the order's thread, so
   /// the rep reads why under the condition — the card only ever showed a
   /// note on closing (credit_commitment.json → follow_up).
-  static Future<void> decideCondition(String name,
+  static Future<void> _decideConditionNow(String name,
       {required bool closed,
       String? note,
       String? salesOrder,
@@ -3035,7 +3323,7 @@ class Api {
 
   /// Who may comment is `orderActions(...).comment`, asked here of the order
   /// as stored: the sales manager and the GM, until the order is approved.
-  static Future<void> addCreditComment({
+  static Future<void> _addCreditCommentNow({
     required String salesOrder,
     required String comment,
   }) async {
@@ -3185,7 +3473,7 @@ class Api {
   ///
   /// Stored on the order, not the phone, so it stays dismissed on every device
   /// and survives a reinstall.
-  static Future<void> ignoreDuplicate(String orderName) async {
+  static Future<void> _ignoreDuplicateNow(String orderName) async {
     await _put('Sales Order', orderName, {'custom_duplicate_ignored': 1});
     await OfflineCache.clear();
   }
@@ -3213,7 +3501,7 @@ class Api {
   ///
   /// The caller decides who may do this; [canDeleteOrder] in core/order_rules
   /// is the rule.
-  static Future<void> deleteOrder(String orderName) async {
+  static Future<void> _deleteOrderNow(String orderName) async {
     // Checked against the order as stored, like an edit (26 Sep 2026): the
     // sales manager may have sent it to the GM while this screen sat open, and
     // an escalated or GM-approved order is not the rep's to throw away.
@@ -3243,17 +3531,18 @@ class Api {
             // the screen and came back — it read the absent status as "Not
             // Captured" and asked them to do it again.
             fields:
-                '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status","custom_location_status","custom_latitude","custom_longitude","custom_verified_latitude","custom_verified_longitude"]'));
+                '["name","lead_name","company_name","mobile_no","email_id","custom_gstin","custom_address","custom_payment_terms","territory","custom_sales_route","status","custom_location_status","custom_latitude","custom_longitude","custom_verified_latitude","custom_verified_longitude","modified"]'))
+        .then((rows) => LocalCaptures.overlay('Lead', rows));
   }
 
   /// Sets who a lead belongs to. UAE only (see `core/visibility.dart`) —
   /// callers must check `canAssignOwner` first; this does not re-check it.
-  static Future<void> assignLeadOwner(String leadName, String rep) async {
+  static Future<void> _assignLeadOwnerNow(String leadName, String rep) async {
     await _put('Lead', leadName, {kFieldLeadOwner: rep});
     await OfflineCache.clear();
   }
 
-  static Future<String> createLead({
+  static Future<String> _createLeadNow({
     required String leadName,
     String? company,
     String? mobile,
@@ -3340,7 +3629,7 @@ class Api {
     throw Exception(_frappeError(r));
   }
 
-  static Future<String> createLeadOrder({
+  static Future<String> _createLeadOrderNow({
     required String lead,
     required List<Map<String, dynamic>> items,
     required double total,
@@ -3359,12 +3648,12 @@ class Api {
     throw Exception(_frappeError(r));
   }
 
-  static Future<void> uploadLeadOrderPO({
+  static Future<void> _uploadLeadOrderPONow({
     required String name,
     required String filePath,
     String? poNumber,
   }) async {
-    await uploadPhoto(
+    await _uploadPhotoNow(
         docname: name,
         fieldname: 'po_attachment',
         filePath: filePath,
@@ -3444,7 +3733,7 @@ class Api {
     return const ['Cash', 'Cheque', 'Credit Card', 'Wire Transfer', 'Bank Draft'];
   }
 
-  static Future<String> createSalesVisit({
+  static Future<String> _createSalesVisitNow({
     required String customer,
     required String salesPerson,
     required double lat,
@@ -3454,7 +3743,7 @@ class Api {
     String? site,
   }) async {
     final stamp =
-    DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
+    nowStamp();
     final body = {
       'visit_date': stamp.substring(0, 10),
       'sales_person': salesPerson,
@@ -3762,18 +4051,49 @@ class Api {
   /// Lines saved with no signal take SAP's price now ([PendingOrders.
   /// priceFromSap]); a product SAP has no price for refuses the draft. A lost
   /// signal on the way propagates as a network failure, and the draft waits.
-  static Future<String> sendPendingOrder(PendingOrder draft) async {
+  /// Told when a kept order was sent at a SAP price other than the one the
+  /// rep saw when they took it: (customer, total then, total sent).
+  static void Function(String customer, double before, double after)?
+      onRepriced;
+
+  static Future<String> sendPendingOrder(PendingOrder saved) =>
+      NetCache.liveOnly(() => _sendPendingOrderLive(saved));
+
+  static Future<String> _sendPendingOrderLive(PendingOrder saved) async {
+    // Against a lead made in the same dead zone: with its real name.
+    final draft =
+        PendingOrder.fromJson(await Outbox.resolve(saved.toJson())) ?? saved;
     var items = draft.items;
     if (draft.sapPending.isNotEmpty) {
+      // SAP's price now, not the one on the phone when the order was taken
+      // (the user, 13 Nov 2026). Read live: NetCache.liveOnly.
       final rates = await getSapRates(draft.customer, lead: draft.isLead);
       items = PendingOrders.priceFromSap(draft, rates);
+    }
+    final total = PendingOrders.totalOf(items);
+    if (!draft.isLead) {
+      // Credit judged again on the customer as they stand now. An order
+      // taken under the limit on what the phone last saw may be over it
+      // today, and an over-limit order does not go without the customer's
+      // commitment — not with a signal, and not without one.
+      final customer = await getCustomerDoc(draft.customer);
+      if (commitmentRequired(customer, total) &&
+          !hasCommitment(draft.commitment)) {
+        throw const OrderRefused(kNeedsCommitmentNow);
+      }
+    }
+    final before = PendingOrders.pricedTotal(draft);
+    if (before != null && (before - total).abs() >= 0.5) {
+      onRepriced?.call(draft.customerName, before, total);
     }
     if (draft.isLead) {
       return placeLeadOrder(
         lead: draft.customer,
         items: items,
         deliveryDate: draft.deliveryDate,
-        total: PendingOrders.totalOf(items),
+        total: total,
+        deliveryMode: draft.deliveryMode,
+        transportMode: draft.transportMode,
       );
     }
     final company = await getCompany();
@@ -3784,6 +4104,8 @@ class Api {
       deliveryDate: draft.deliveryDate,
       commitment: draft.commitment,
       commitmentDue: draft.commitmentDue,
+      deliveryMode: draft.deliveryMode,
+      transportMode: draft.transportMode,
     );
   }
 
@@ -3798,14 +4120,211 @@ class Api {
     required String label,
     required Map<String, dynamic> args,
     Map<String, String> files = const {},
-  }) async {
-    // An app opened with no signal has no CSRF token until its sign-in is
-    // re-confirmed; a write before that is refused by the server and would be
-    // lost. Not re-confirmed yet means not really back: keep it.
-    if (Session.I.offlineStart && !await recoverAfterOfflineStart()) {
-      await Outbox.add(kind: kind, label: label, args: args, files: files);
-      return false;
+  }) async =>
+      (await writeOrQueue(
+              kind: kind,
+              label: label,
+              args: Map<String, dynamic>.from(args),
+              files: files))
+          .sent;
+
+  // ------------------------------------------ every write, with or without --
+  //
+  // The user, 13 Nov 2026: "When the net is gone they must still be able to do
+  // everything in the app ... once the net comes back it should send by
+  // itself." Every write a screen can make is below. Each is sent at once when
+  // it can be; when it cannot it is kept in the outbox, rehearsed on the phone
+  // (see `DryRun` in net_cache.dart) so the screen carries on as it would
+  // have, and sent later by the same `_...Now` function the live path runs —
+  // its rules checked again against what the server says then.
+  //
+  // The kinds are stored on the phone. Renaming one strands whatever a phone
+  // is holding under the old name, so add, never rename.
+
+  /// Reads every list a screen opens on, so each one has a copy on the phone
+  /// before the signal goes (13 Nov 2026). A screen first opened in a dead
+  /// zone has nothing else to show. Called when the app has a signal — after
+  /// sign-in and whenever what was kept has been sent — and at most every
+  /// [_prewarmGap], one read at a time so a rep on one bar is not swamped.
+  ///
+  /// Every failure is ignored: this only fills the copies `NetCache` keeps.
+  static Future<void> prewarm({bool force = false}) {
+    final now = DateTime.now();
+    if (!force &&
+        _lastPrewarm != null &&
+        now.difference(_lastPrewarm!) < _prewarmGap) {
+      return Future.value();
     }
+    if (_prewarming != null) return _prewarming!;
+    _lastPrewarm = now;
+    return _prewarming = _prewarm().whenComplete(() => _prewarming = null);
+  }
+
+  static const Duration _prewarmGap = Duration(minutes: 30);
+  static DateTime? _lastPrewarm;
+  static Future<void>? _prewarming;
+
+  static Future<void> _prewarm() async {
+    if (NetState.knownOffline || Session.I.email.isEmpty) return;
+    final s = Session.I;
+    final reads = <Future<Object?> Function()>[
+      getCompany,
+      getCustomers,
+      getItems,
+      getMyOrders,
+      getLeads,
+      getMyVisitsIncludingTagged,
+      getMyTrips,
+      getActiveTrips,
+      getMyLeaves,
+      getMyCollections,
+      getMyExpenses,
+      getModesOfPayment,
+      getCustomerGroups,
+      getMySalesRoutes,
+      getMinimumStock,
+      getItemRequests,
+      getCreditPeriodRequests,
+      getSapPaymentTerms,
+      getTripRates,
+      myCreditConditions,
+      if (kPickListsReleased) getPickLists,
+      if (s.salesPerson != null) () => getTodayAttendance(s.salesPerson!),
+      if (s.salesPerson != null) () => getLeaveBalance(s.salesPerson!),
+      // This month's calendar and target (13 Nov 2026): opened for the first
+      // time in a dead zone, the calendar had nothing kept and showed every
+      // day red, and the home card said the target could not load.
+      // ServerClock, as the calendar and the home card use, so the month kept
+      // is the month they ask for.
+      if (s.salesPerson != null) ...[
+        () => getAttendanceForMonth(s.salesPerson!, ServerClock.I.now().year, ServerClock.I.now().month),
+        () => getRegularizationsForMonth(s.salesPerson!, ServerClock.I.now().year, ServerClock.I.now().month),
+        () => getLeavesForMonth(s.salesPerson!, ServerClock.I.now().year, ServerClock.I.now().month),
+      ],
+      () => getTargetMonth(kTargetMonths[ServerClock.I.now().month - 1], ServerClock.I.now().year),
+      if (s.isManager) ...[
+        getPendingLeadOrderApprovals,
+        getPendingLeadOrderPOs,
+        getPendingSalesOrderPOs,
+        getTeamWaitingOrders,
+        getTeamCustomers,
+        getTeamLeads,
+        getPendingLocationVerifications,
+        getPendingSiteVerifications,
+        getPendingLeaveForManager,
+      ],
+      if (s.isGM) ...[getPendingGMSalesOrderPOs, getPendingGMLeadOrderPOs],
+      if (s.isHR) ...[
+        getPendingLeaveForHR,
+        getPendingRegularizationsForHR,
+        getTeamLeavesForHR,
+        getAllTripsForHR,
+      ],
+      if (s.isProductionManager) getApprovedPOsForProduction,
+    ];
+    for (final read in reads) {
+      if (NetState.knownOffline) return;
+      try {
+        await read();
+      } catch (_) {}
+    }
+    await _prewarmDetails();
+  }
+
+  /// How many of the newest orders and trips are kept whole on the phone.
+  static const int kPrewarmOrders = 60;
+  static const int kPrewarmTrips = 20;
+
+  /// SAP prices are read for every customer and lead at most this often: one
+  /// call per party, so a rep with 150 shops is 150 calls - fine twice a day,
+  /// not every half hour.
+  static const Duration _ratesGap = Duration(hours: 6);
+  static DateTime? _lastRatesPrewarm;
+
+  /// The pages a list only links to, kept before a dead zone (14 Nov 2026).
+  ///
+  /// The lists were kept, but an order, a trip or a party's SAP prices was
+  /// kept only once it had been opened with signal - so in a dead zone an
+  /// order the rep had not opened that day said "Not loaded yet", a trip
+  /// "Could not load trip", and a lead's order screen showed no price at all
+  /// ("Price from SAP when it is sent"). Each is read here exactly as its
+  /// screen reads it, so the kept copy is found under the same key.
+  static Future<void> _prewarmDetails() async {
+    Future<void> each(Iterable<Future<Object?> Function()> reads) async {
+      for (final read in reads) {
+        if (NetState.knownOffline) return;
+        try {
+          await read();
+        } catch (_) {}
+      }
+    }
+
+    List<Map<String, dynamic>> orders = const [];
+    try {
+      orders = await getMyOrders();
+    } catch (_) {}
+    final orderNames = [
+      for (final r in orders)
+        if (r['is_lead'] != true && r['is_combined'] != true && '${r['name'] ?? ''}'.isNotEmpty) '${r['name']}',
+    ].take(kPrewarmOrders).toList();
+    final customers = {for (final r in orders) '${r['customer'] ?? ''}'}..removeWhere((c) => c.isEmpty || c == 'null');
+    await each([
+      for (final n in orderNames) ...[
+        () => getOrder(n),
+        () => conditionsForOrder(n),
+        () => creditComments([n]),
+      ],
+      for (final c in customers) () => getCustomerDoc(c),
+    ]);
+
+    List<Map<String, dynamic>> trips = const [];
+    try {
+      trips = await getMyTrips();
+    } catch (_) {}
+    await each([
+      for (final t in trips.take(kPrewarmTrips)) ...[
+        () => getTrip('${t['name']}'),
+        () => getVisitsForTrip('${t['name']}'),
+      ],
+    ]);
+
+    final now = DateTime.now();
+    if (!Session.I.isTreadsUnit ||
+        (_lastRatesPrewarm != null && now.difference(_lastRatesPrewarm!) < _ratesGap)) {
+      return;
+    }
+    List<Map<String, dynamic>> shops = const [];
+    List<Map<String, dynamic>> leads = const [];
+    try {
+      shops = await getCustomers();
+    } catch (_) {}
+    try {
+      leads = await getLeads();
+    } catch (_) {}
+    if (NetState.knownOffline) return;
+    await each([
+      for (final c in shops)
+        if ('${c['name'] ?? ''}'.isNotEmpty) () => getSapRates('${c['name']}'),
+      for (final l in leads)
+        if ('${l['name'] ?? ''}'.isNotEmpty) () => getSapRates('${l['name']}', lead: true),
+    ]);
+    if (!NetState.knownOffline) _lastRatesPrewarm = now;
+  }
+
+  /// Sends [kind] now, or keeps it on the phone. [result] is what the write
+  /// returned — or, when kept, what it returned when rehearsed: a local name
+  /// for anything it creates ([creates] guarantees one), which later writes
+  /// may carry until the server gives the real one.
+  ///
+  /// A refusal by one of the write's own rules is thrown either way, exactly
+  /// as with a signal. Only the network failing keeps it.
+  static Future<({bool sent, dynamic result})> writeOrQueue({
+    required String kind,
+    required String label,
+    required Map<String, dynamic> args,
+    Map<String, String> files = const {},
+    bool creates = false,
+  }) async {
     final item = OutboxItem(
       id: 'now',
       kind: kind,
@@ -3815,21 +4334,924 @@ class Api {
       salesPerson: Session.I.salesPerson ?? '',
       savedAt: serverNow(),
     );
+    if (await _canSendNow(args)) {
+      try {
+        final resolved = await Outbox.resolve(Map<String, dynamic>.from(args));
+        item.args
+          ..clear()
+          ..addAll(resolved);
+        return (sent: true, result: await _runItem(item));
+      } catch (e) {
+        if (!isNetworkFailure(e)) rethrow;
+      }
+    }
+
+    final dry = DryRun();
+    dynamic result;
     try {
-      await sendOutboxItem(item);
-      return true;
-    } catch (e) {
+      result = await dry.run(() => _runItem(item, rehearsal: true));
+    } on Exception catch (e) {
+      // A rule said no on what the phone last saw: the rep is told now, as
+      // they would have been with a signal, and nothing is kept.
       if (!isNetworkFailure(e)) rethrow;
+      // A read the write needs has never been made with a signal, so it
+      // could not be rehearsed. Kept all the same; the server decides.
+    } catch (_) {
+      // An Error, not a refusal: the rehearsal tripped on an answer it did
+      // not expect. Rounded towards keeping — losing what the rep typed is
+      // worse than a screen that does not show it until it is sent.
+    }
+    if (creates && !isLocalName(result is String ? result : null)) {
+      result = Outbox.newLocalName();
+    }
+    await Outbox.add(
+      kind: kind,
+      label: label,
       // item.args carries a first step already done (`created`), if any.
-      await Outbox.add(kind: kind, label: label, args: item.args, files: files);
+      args: item.args,
+      files: files,
+      effects: dry.effects,
+      localName: result is String && isLocalName(result) ? result : null,
+    );
+    AppBus.I.bump();
+    unawaited(SyncEngine.I.kick());
+    return (sent: false, result: result);
+  }
+
+  /// Whether a write may go straight to the server. Not while anything older
+  /// is still waiting: it is sent first, so writes land in the order they
+  /// were made — a lead before the order against it.
+  static Future<bool> _canSendNow(Map<String, dynamic> args) async {
+    if (NetState.knownOffline) return false;
+    // An app opened with no signal has no CSRF token until its sign-in is
+    // re-confirmed; a write before that is refused by the server and would be
+    // lost. Not re-confirmed yet means not really back: keep it.
+    if (Session.I.offlineStart && !await recoverAfterOfflineStart()) {
       return false;
     }
+    try {
+      await Outbox.resolve(Map<String, dynamic>.from(args));
+    } on OutboxRefused {
+      return false;
+    }
+    if (await Outbox.autoCount() > 0) {
+      await SyncEngine.I.sendNow();
+      if (await Outbox.autoCount() > 0) return false;
+    }
+    return true;
+  }
+
+  /// Runs one item's write, as of when it was made (`ServerClock.at`), and
+  /// records the real name of anything it created under the local one.
+  static Future<dynamic> _runItem(OutboxItem item,
+      {bool rehearsal = false}) async {
+    Future<dynamic> run() => ServerClock.at(item.savedAt, () => _dispatch(item));
+    final result = rehearsal ? await run() : await NetCache.liveOnly(run);
+    if (!rehearsal &&
+        item.localName != null &&
+        result is String &&
+        result.isNotEmpty &&
+        !isLocalName(result)) {
+      await Outbox.recordName(item.localName!, result);
+    }
+    return result;
+  }
+
+  /// Refuses a kept write that would put a place on the map where one is
+  /// already on record — the check `ensureNothingNearby` makes at the
+  /// counter, made again when the write is finally sent.
+  static Future<void> _refuseIfDuplicate(
+      double lat, double lng, Set<String> exclude) async {
+    final near = await nearbyPlaces(lat: lat, lng: lng, exclude: exclude);
+    if (near.isEmpty) return;
+    throw OutboxRefused('Not saved: ${near.first.label} is already on record '
+        'here. Use that one, or ask the office.');
+  }
+
+  static List<Map<String, dynamic>> _maps(dynamic v) => [
+        for (final e in (v as List? ?? const []))
+          if (e is Map) Map<String, dynamic>.from(e)
+      ];
+  static List<String> _strs(dynamic v) =>
+      [for (final e in (v as List? ?? const [])) '$e'];
+  static Map<String, dynamic> _map(dynamic v) =>
+      v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
+  static double? _dn(dynamic v) => v is num ? v.toDouble() : null;
+  static String? _sn(dynamic v) => v == null ? null : '$v';
+
+  /// The senders of every kind added on 13 Nov 2026, by kind.
+  static final Map<String, Future<dynamic> Function(Map<String, dynamic> a, OutboxItem i)>
+      _senders = {
+    'credit_period_request': (a, _) => _submitCreditPeriodRequestNow(a),
+    'credit_extension_request': (a, _) =>
+        _xt({'action': 'submit', 'sales_order': a['sales_order'], 'reason': a['reason'] ?? ''}),
+    'credit_extension_action': (a, _) => _xt({...a, 'action': a['action']}),
+    'payment_commitment': (a, _) => _pc({...a, 'action': 'approve'}),
+    'credit_period_action': (a, _) => _creditPeriodActionNow(a),
+    'assign_customer_owner': (a, _) =>
+        _assignCustomerOwnerNow('${a['customer']}', '${a['rep']}'),
+    'undo_order_rejection': (a, _) => _undoOrderRejectionNow('${a['name']}'),
+    'assign_route': (a, _) => _assignRouteNow(
+        lead: a['lead'] == true, name: '${a['name']}', route: '${a['route']}'),
+    'convert_lead': (a, _) => _convertLeadToCustomerNow('${a['lead']}'),
+    'approve_lead_order': (a, _) =>
+        _approveLeadOrderNow('${a['name']}', a['approve'] == true),
+    'approve_lead_order_po': (a, _) =>
+        _approveLeadOrderPONow('${a['name']}', a['approve'] == true),
+    'line_fulfilment': (a, _) => _setLineFulfilmentModeNow(
+        orderName: '${a['order_name']}',
+        itemCode: '${a['item_code']}',
+        mode: '${a['mode']}',
+        isLead: a['is_lead'] == true),
+    'approve_sales_order': (a, _) =>
+        _approveSalesOrderPONow('${a['name']}', a['approve'] == true),
+    'approve_location': (a, _) => _approveLocationNow(
+        '${a['name']}', a['approve'] == true, a['lat'], a['lng']),
+    'lead_location': (a, i) async {
+      // Kept with no signal, the duplicate check may not have been able to
+      // run at the counter (proximity_gate.dart lets it through then). It
+      // runs here, on the server's records, before the pin is written.
+      if (i.id != 'now') {
+        await _refuseIfDuplicate(
+            _dn(a['lat']) ?? 0, _dn(a['lng']) ?? 0, {'${a['lead']}'});
+      }
+      return _captureLeadLocationNow(
+        lead: '${a['lead']}',
+        salesPerson: '${a['sales_person']}',
+        lat: _dn(a['lat']) ?? 0,
+        lng: _dn(a['lng']) ?? 0,
+        recapture: a['recapture'] == true,
+        existingLat: _dn(a['existing_lat']),
+        existingLng: _dn(a['existing_lng']));
+    },
+    'approve_lead_location': (a, _) => _approveLeadLocationNow(
+        '${a['name']}', a['approve'] == true, a['lat'], a['lng']),
+    'upsert_target': (a, _) => _upsertTargetNow(
+        salesPerson: '${a['sales_person']}',
+        month: '${a['month']}',
+        year: (a['year'] as num).toInt(),
+        amount: _dn(a['amount']) ?? 0,
+        unit: '${a['unit']}'),
+    'outstanding_limit': (a, _) =>
+        _upsertOutstandingLimitNow('${a['rep']}', _dn(a['amount']) ?? 0),
+    'escalate_order': (a, _) => _escalateSalesOrderPOToGMNow('${a['name']}'),
+    'gm_approve': (a, _) => _approveEscalatedOrderNow('${a['name']}',
+        condition: _sn(a['condition']), dueDateIso: _sn(a['due']), push: a['push'] == true),
+    'escalate_lead_order': (a, _) =>
+        _escalateLeadOrderPOToGMNow('${a['name']}'),
+    'create_customer': (a, _) => _createCustomerNow(
+        name: '${a['name']}',
+        group: '${a['group']}',
+        territory: '${a['territory']}',
+        phone: _sn(a['phone'])),
+    'trip_tagged': (a, _) =>
+        _saveTripTaggedRepsNow('${a['trip']}', _strs(a['reps'])),
+    'order_field': (a, _) => _setOrderFieldNow('${a['name']}', _map(a['body'])),
+    'order_lines': (a, _) => _updateOrderLinesNow(
+        orderName: '${a['order_name']}',
+        items: _maps(a['items']),
+        returnForApproval: a['return_for_approval'] == true,
+        deliveryDate: _sn(a['delivery_date']),
+        isLead: a['is_lead'] == true,
+        commitment: _sn(a['commitment']),
+        commitmentDue: _sn(a['commitment_due']),
+        deliveryMode: _sn(a['delivery_mode']),
+        transportMode: _sn(a['transport_mode'])),
+    'credit_condition': (a, _) => _addCreditConditionNow(
+        customer: '${a['customer']}',
+        salesPerson: '${a['sales_person']}',
+        condition: '${a['condition']}',
+        dueDateIso: '${a['due']}',
+        salesOrder: _sn(a['sales_order'])),
+    'decide_condition': (a, _) => _decideConditionNow('${a['name']}',
+        closed: a['closed'] == true,
+        note: _sn(a['note']),
+        salesOrder: _sn(a['sales_order']),
+        customer: _sn(a['customer'])),
+    'credit_comment': (a, _) => _addCreditCommentNow(
+        salesOrder: '${a['sales_order']}', comment: '${a['comment']}'),
+    'ignore_duplicate': (a, _) => _ignoreDuplicateNow('${a['order']}'),
+    'delete_order': (a, _) => _deleteOrderNow('${a['order']}'),
+    'assign_lead_owner': (a, _) =>
+        _assignLeadOwnerNow('${a['lead']}', '${a['rep']}'),
+    'create_lead': (a, _) => _createLeadNow(
+        leadName: '${a['lead_name']}',
+        company: _sn(a['company']),
+        mobile: _sn(a['mobile']),
+        email: _sn(a['email']),
+        gstin: _sn(a['gstin']),
+        address: _sn(a['address']),
+        paymentTerms: _sn(a['payment_terms']),
+        territory: _sn(a['territory']),
+        salesRoute: _sn(a['sales_route'])),
+    'create_lead_order': (a, _) => _createLeadOrderNow(
+        lead: '${a['lead']}',
+        items: _maps(a['items']),
+        total: _dn(a['total']) ?? 0),
+    'lead_order_po': (a, i) => _uploadLeadOrderPONow(
+        name: '${a['name']}',
+        filePath: i.files['file'] ?? '${a['file']}',
+        poNumber: _sn(a['po_number'])),
+    'create_visit': (a, _) => _createSalesVisitNow(
+        customer: '${a['customer']}',
+        salesPerson: '${a['sales_person']}',
+        lat: _dn(a['lat']) ?? 0,
+        lng: _dn(a['lng']) ?? 0,
+        purpose: _sn(a['purpose']) ?? 'General',
+        trip: _sn(a['trip']),
+        site: _sn(a['site'])),
+    'pick_list': (a, _) =>
+        _submitPickListNow('${a['sales_order']}', _maps(a['lines'])),
+    'create_trip': (a, _) => _createTripNow(
+        tripDate: '${a['trip_date']}',
+        purpose: '${a['purpose']}',
+        route: _sn(a['route']),
+        startOdometer: _dn(a['start_odometer']) ?? 0,
+        lat: _dn(a['lat']),
+        lng: _dn(a['lng'])),
+    'end_trip': (a, _) => _endTripNow(
+        name: '${a['name']}', lat: _dn(a['lat']), lng: _dn(a['lng'])),
+    'cancel_trip': (a, _) => _cancelTripNow('${a['name']}'),
+    'update_trip': (a, _) => _updateTripNow('${a['name']}', _map(a['body'])),
+    'trip_rates': (a, _) => _saveTripRatesNow(_map(a['body'])),
+    'trip_legs': (a, _) => _saveTripLegsNow('${a['trip']}', _maps(a['legs'])),
+    'trip_expenses': (a, _) =>
+        _saveTripExpensesNow('${a['trip']}', _maps(a['expenses'])),
+    'trip_start': (a, _) => _createTripStartNow(
+        salesPerson: '${a['sales_person']}',
+        vehicleNo: '${a['vehicle_no']}',
+        startOdo: _dn(a['start_odo']) ?? 0,
+        lat: _dn(a['lat']) ?? 0,
+        lng: _dn(a['lng']) ?? 0),
+    'trip_end': (a, _) => _tripEndNow(
+        tripName: '${a['trip_name']}',
+        startOdo: _dn(a['start_odo']) ?? 0,
+        endOdo: _dn(a['end_odo']) ?? 0,
+        lat: _dn(a['lat']) ?? 0,
+        lng: _dn(a['lng']) ?? 0),
+    'upload_photo': (a, i) => _uploadPhotoNow(
+        docname: '${a['docname']}',
+        fieldname: '${a['fieldname']}',
+        filePath: i.files['file'] ?? '${a['file']}',
+        doctype: '${a['doctype']}',
+        filename: '${a['filename']}'),
+    'upload_file': (a, i) => _uploadFileGetUrlNow(
+        filePath: i.files['file'] ?? '${a['file']}',
+        doctype: _sn(a['doctype']),
+        docname: _sn(a['docname']),
+        filename: '${a['filename']}'),
+    'approve_regularization': (a, _) =>
+        _approveRegularizationNow(_map(a['reg']), a['approve'] == true),
+    'approve_leave': (a, _) =>
+        _approveLeaveNow('${a['name']}', a['approve'] == true),
+    'hr_leave': (a, _) => _hrCreateLeaveNow(
+        rep: '${a['rep']}',
+        leaveDate: '${a['leave_date']}',
+        halfDay: a['half_day'] == true,
+        halfPeriod: _sn(a['half_period']),
+        reason: '${a['reason'] ?? ''}'),
+    'site_route': (a, _) => _setSiteRouteNow('${a['site']}', '${a['route']}'),
+    'delete_site': (a, _) => _deleteSiteNow('${a['name']}'),
+    'approve_site': (a, _) => _approveSiteNow(
+        '${a['name']}', a['approve'] == true, a['lat'], a['lng']),
+    'ungroup_order': (a, _) => _ungroupOrderNow('${a['order']}'),
+    'production_date': (a, _) =>
+        _setProductionDeliveryDateNow('${a['order']}', '${a['date']}'),
+    'item_packing': (a, _) => _saveItemPackingNow(
+        itemCode: '${a['item_code']}',
+        weightPerRoll: _dn(a['weight_per_roll']),
+        beltsPerRoll: (a['belts_per_roll'] as num?)?.toInt(),
+        packLitres: _dn(a['pack_litres'])),
+    'delete_visit': (a, _) => _deleteVisitNow('${a['name']}'),
+    'delete_lead': (a, _) => _deleteLeadNow('${a['name']}'),
+    'create_route': (a, _) => _createSalesRouteNow('${a['area']}'),
+    'delete_route': (a, _) => _deleteSalesRouteNow('${a['name']}'),
+    'ack_order_change': (a, _) => _acknowledgeOrderChangeNow('${a['order']}'),
+    'retread_proforma': (a, _) => _createRetreadProformaNow(
+        customer: '${a['customer']}',
+        customerName: _sn(a['customer_name']),
+        rates: _maps(a['rates']),
+        notes: _sn(a['notes'])),
+    'supersede_proforma': (a, _) => _supersedeProformaNow('${a['name']}'),
+    'retread_order': (a, _) => _placeRetreadOrderNow(_strs(a['tyres']), {
+          for (final e in _map(a['rates']).entries)
+            e.key: (e.value as num).toDouble()
+        }),
+    'sap_sync': (a, _) => _requestSapSyncNow(),
+    'order_sync': (a, _) => _requestOrderSyncNow(),
+    'stock_sync': (a, _) => _requestStockSyncNow(),
+  };
+
+  // -- the public faces: what every screen calls --------------------------
+
+  static Future<void> assignCustomerOwner(String customerName, String rep) =>
+      writeOrQueue(
+          kind: 'assign_customer_owner',
+          label: '$customerName given to $rep',
+          args: {'customer': customerName, 'rep': rep});
+
+  static Future<void> undoOrderRejection(String name) => writeOrQueue(
+      kind: 'undo_order_rejection',
+      label: 'Rejection of $name taken back',
+      args: {'name': name});
+
+  static Future<void> assignRoute(
+          {required bool lead, required String name, required String route}) =>
+      writeOrQueue(
+          kind: 'assign_route',
+          label: '$name put on route $route',
+          args: {'lead': lead, 'name': name, 'route': route});
+
+  static Future<String> convertLeadToCustomer(String leadName) async =>
+      '${(await writeOrQueue(kind: 'convert_lead', label: 'Lead $leadName made a customer', args: {'lead': leadName}, creates: true)).result}';
+
+  static Future<String?> approveLeadOrder(String name, bool approve) async =>
+      _sn((await writeOrQueue(
+              kind: 'approve_lead_order',
+              label: 'Lead order $name ${approve ? 'approved' : 'rejected'}',
+              args: {'name': name, 'approve': approve}))
+          .result);
+
+  static Future<void> approveLeadOrderPO(String name, bool approve) =>
+      writeOrQueue(
+          kind: 'approve_lead_order_po',
+          label: 'Lead order $name ${approve ? 'approved' : 'rejected'}',
+          args: {'name': name, 'approve': approve});
+
+  static Future<void> setLineFulfilmentMode({
+    required String orderName,
+    required String itemCode,
+    required String mode,
+    bool isLead = false,
+  }) =>
+      writeOrQueue(
+          kind: 'line_fulfilment',
+          label: '$orderName: $itemCode set to $mode',
+          args: {
+            'order_name': orderName,
+            'item_code': itemCode,
+            'mode': mode,
+            'is_lead': isLead,
+          });
+
+  static Future<void> approveSalesOrderPO(String name, bool approve) =>
+      writeOrQueue(
+          kind: 'approve_sales_order',
+          label: 'Order $name ${approve ? 'approved' : 'rejected'}',
+          args: {'name': name, 'approve': approve});
+
+  static Future<void> approveLocation(
+          String name, bool approve, dynamic lat, dynamic lng) =>
+      writeOrQueue(
+          kind: 'approve_location',
+          label: 'Location of $name ${approve ? 'verified' : 'sent back'}',
+          args: {'name': name, 'approve': approve, 'lat': lat, 'lng': lng});
+
+  static Future<void> captureLeadLocation({
+    required String lead,
+    required String salesPerson,
+    required double lat,
+    required double lng,
+    bool recapture = false,
+    double? existingLat,
+    double? existingLng,
+  }) async {
+    await writeOrQueue(kind: 'lead_location', label: 'Location of $lead', args: {
+      'lead': lead,
+      'sales_person': salesPerson,
+      'lat': lat,
+      'lng': lng,
+      'recapture': recapture,
+      'existing_lat': existingLat,
+      'existing_lng': existingLng,
+    });
+    // Sent or kept, the lists must show it captured from now on
+    // (services/local_captures.dart).
+    await LocalCaptures.record(
+        doctype: 'Lead',
+        name: lead,
+        status: _capturedStatus,
+        lat: lat,
+        lng: lng,
+        selfVerified: _selfVerifies,
+        recapture: recapture);
+  }
+
+  static Future<void> approveLeadLocation(
+          String name, bool approve, dynamic lat, dynamic lng) =>
+      writeOrQueue(
+          kind: 'approve_lead_location',
+          label: 'Location of $name ${approve ? 'verified' : 'rejected'}',
+          args: {'name': name, 'approve': approve, 'lat': lat, 'lng': lng});
+
+  static Future<void> upsertTarget({
+    required String salesPerson,
+    required String month,
+    required int year,
+    required double amount,
+    required String unit,
+  }) =>
+      writeOrQueue(
+          kind: 'upsert_target',
+          label: 'Target for $salesPerson, $month $year',
+          args: {
+            'sales_person': salesPerson,
+            'month': month,
+            'year': year,
+            'amount': amount,
+            'unit': unit,
+          });
+
+  static Future<void> upsertOutstandingLimit(String rep, double amount) =>
+      writeOrQueue(
+          kind: 'outstanding_limit',
+          label: 'Outstanding limit for $rep',
+          args: {'rep': rep, 'amount': amount});
+
+  static Future<void> escalateSalesOrderPOToGM(String name) => writeOrQueue(
+      kind: 'escalate_order',
+      label: 'Order $name sent to the GM',
+      args: {'name': name});
+
+  static Future<bool?> approveEscalatedOrder(
+    String name, {
+    String? condition,
+    String? dueDateIso,
+    bool push = false,
+  }) async {
+    final r = await writeOrQueue(
+        kind: 'gm_approve',
+        label: push ? 'Order $name approved by the GM and pushed to SAP' : 'Order $name approved by the GM',
+        args: {'name': name, 'condition': condition, 'due': dueDateIso, if (push) 'push': true});
+    final v = r.result;
+    return v is bool ? v : null;
+  }
+
+  static Future<void> escalateLeadOrderPOToGM(String name) => writeOrQueue(
+      kind: 'escalate_lead_order',
+      label: 'Lead order $name sent to the GM',
+      args: {'name': name});
+
+  static Future<String> createCustomer({
+    required String name,
+    required String group,
+    required String territory,
+    String? phone,
+  }) async =>
+      '${(await writeOrQueue(kind: 'create_customer', label: 'New customer $name', args: {
+        'name': name,
+        'group': group,
+        'territory': territory,
+        'phone': phone,
+      }, creates: true)).result}';
+
+  static Future<void> saveTripTaggedReps(String tripName, List<String> reps) =>
+      writeOrQueue(
+          kind: 'trip_tagged',
+          label: 'Who was on trip $tripName',
+          args: {'trip': tripName, 'reps': reps});
+
+  static Future<void> setOrderField(String name, Map<String, dynamic> body) =>
+      writeOrQueue(
+          kind: 'order_field',
+          label: 'Order $name changed',
+          args: {'name': name, 'body': body});
+
+  static Future<void> updateOrderLines({
+    required String orderName,
+    required List<Map<String, dynamic>> items,
+    required bool returnForApproval,
+    String? deliveryDate,
+    bool isLead = false,
+    String? commitment,
+    String? commitmentDue,
+    String? deliveryMode,
+    String? transportMode,
+  }) =>
+      writeOrQueue(
+          kind: 'order_lines',
+          label: 'Order $orderName edited',
+          args: {
+            'order_name': orderName,
+            'items': items,
+            'return_for_approval': returnForApproval,
+            'delivery_date': deliveryDate,
+            'is_lead': isLead,
+            'commitment': commitment,
+            'commitment_due': commitmentDue,
+            'delivery_mode': deliveryMode,
+            'transport_mode': transportMode,
+          });
+
+  static Future<String?> addCreditCondition({
+    required String customer,
+    required String salesPerson,
+    required String condition,
+    required String dueDateIso,
+    String? salesOrder,
+  }) async =>
+      _sn((await writeOrQueue(
+              kind: 'credit_condition',
+              label: 'Condition for $customer',
+              args: {
+                'customer': customer,
+                'sales_person': salesPerson,
+                'condition': condition,
+                'due': dueDateIso,
+                'sales_order': salesOrder,
+              }))
+          .result);
+
+  static Future<void> decideCondition(String name,
+          {required bool closed,
+          String? note,
+          String? salesOrder,
+          String? customer}) =>
+      writeOrQueue(
+          kind: 'decide_condition',
+          label: 'Condition $name ${closed ? 'closed' : 'sent back'}',
+          args: {
+            'name': name,
+            'closed': closed,
+            'note': note,
+            'sales_order': salesOrder,
+            'customer': customer,
+          });
+
+  static Future<void> addCreditComment({
+    required String salesOrder,
+    required String comment,
+  }) =>
+      writeOrQueue(
+          kind: 'credit_comment',
+          label: 'Comment on $salesOrder',
+          args: {'sales_order': salesOrder, 'comment': comment});
+
+  static Future<void> ignoreDuplicate(String orderName) => writeOrQueue(
+      kind: 'ignore_duplicate',
+      label: 'Order $orderName kept as not a duplicate',
+      args: {'order': orderName});
+
+  static Future<void> deleteOrder(String orderName) => writeOrQueue(
+      kind: 'delete_order',
+      label: 'Order $orderName deleted',
+      args: {'order': orderName});
+
+  static Future<void> assignLeadOwner(String leadName, String rep) =>
+      writeOrQueue(
+          kind: 'assign_lead_owner',
+          label: 'Lead $leadName given to $rep',
+          args: {'lead': leadName, 'rep': rep});
+
+  static Future<String> createLead({
+    required String leadName,
+    String? company,
+    String? mobile,
+    String? email,
+    String? gstin,
+    String? address,
+    String? paymentTerms,
+    String? territory,
+    String? salesRoute,
+  }) async =>
+      '${(await writeOrQueue(kind: 'create_lead', label: 'New lead $leadName', args: {
+        'lead_name': leadName,
+        'company': company,
+        'mobile': mobile,
+        'email': email,
+        'gstin': gstin,
+        'address': address,
+        'payment_terms': paymentTerms,
+        'territory': territory,
+        'sales_route': salesRoute,
+      }, creates: true)).result}';
+
+  static Future<String> createLeadOrder({
+    required String lead,
+    required List<Map<String, dynamic>> items,
+    required double total,
+  }) async =>
+      '${(await writeOrQueue(kind: 'create_lead_order', label: 'Lead order for $lead', args: {
+        'lead': lead,
+        'items': items,
+        'total': total,
+      }, creates: true)).result}';
+
+  static Future<void> uploadLeadOrderPO({
+    required String name,
+    required String filePath,
+    String? poNumber,
+  }) =>
+      writeOrQueue(
+          kind: 'lead_order_po',
+          label: 'Purchase order for $name',
+          args: {'name': name, 'file': filePath, 'po_number': poNumber},
+          files: {'file': filePath});
+
+  static Future<String> createSalesVisit({
+    required String customer,
+    required String salesPerson,
+    required double lat,
+    required double lng,
+    String purpose = 'General',
+    String? trip,
+    String? site,
+  }) async =>
+      '${(await writeOrQueue(kind: 'create_visit', label: 'Visit to $customer', args: {
+        'customer': customer,
+        'sales_person': salesPerson,
+        'lat': lat,
+        'lng': lng,
+        'purpose': purpose,
+        'trip': trip,
+        'site': site,
+      }, creates: true)).result}';
+
+  static Future<String> submitPickList(
+          String salesOrder, List<Map<String, dynamic>> lines) async =>
+      '${(await writeOrQueue(kind: 'pick_list', label: 'Pick list for $salesOrder', args: {
+        'sales_order': salesOrder,
+        'lines': lines,
+      }, creates: true)).result}';
+
+  static Future<String> createTrip({
+    required String tripDate,
+    required String purpose,
+    String? route,
+    double startOdometer = 0,
+    double? lat,
+    double? lng,
+  }) async =>
+      '${(await writeOrQueue(kind: 'create_trip', label: 'Trip started, $tripDate', args: {
+        'trip_date': tripDate,
+        'purpose': purpose,
+        'route': route,
+        'start_odometer': startOdometer,
+        'lat': lat,
+        'lng': lng,
+      }, creates: true)).result}';
+
+  static Future<void> endTrip({
+    required String name,
+    double? lat,
+    double? lng,
+  }) =>
+      writeOrQueue(
+          kind: 'end_trip',
+          label: 'Trip ended',
+          args: {'name': name, 'lat': lat, 'lng': lng});
+
+  static Future<void> cancelTrip(String name) => writeOrQueue(
+      kind: 'cancel_trip', label: 'Trip cancelled', args: {'name': name});
+
+  static Future<void> updateTrip(String name, Map<String, dynamic> body) =>
+      writeOrQueue(
+          kind: 'update_trip',
+          label: 'Trip changed',
+          args: {'name': name, 'body': body});
+
+  static Future<void> saveTripRates(Map<String, dynamic> body) => writeOrQueue(
+      kind: 'trip_rates', label: 'Trip rates', args: {'body': body});
+
+  static Future<void> saveTripLegs(
+          String tripName, List<Map<String, dynamic>> legs) =>
+      writeOrQueue(
+          kind: 'trip_legs',
+          label: 'Trip legs',
+          args: {'trip': tripName, 'legs': legs});
+
+  /// Saves a trip's expenses. With a signal and a [modified], only if nobody
+  /// has saved the trip since it was read: false means someone has, and the
+  /// caller re-applies its change to their copy (see `_saveTripExpensesNow`).
+  /// With no signal it is kept and sent later as it was before tagged reps
+  /// could add expenses — a kept save cannot re-read the trip, and losing the
+  /// rep's own expense would be worse than the rare overwrite.
+  static Future<bool> saveTripExpenses(
+      String tripName, List<Map<String, dynamic>> expenses,
+      {String? modified}) async {
+    if (!NetState.knownOffline) {
+      try {
+        return await _saveTripExpensesNow(tripName, expenses,
+            modified: modified);
+      } catch (e) {
+        if (!isNetworkFailure(e)) rethrow;
+      }
+    }
+    await writeOrQueue(
+        kind: 'trip_expenses',
+        label: 'Trip expenses',
+        args: {'trip': tripName, 'expenses': expenses});
+    return true;
+  }
+
+  static Future<String> createTripStart({
+    required String salesPerson,
+    required String vehicleNo,
+    required double startOdo,
+    required double lat,
+    required double lng,
+  }) async =>
+      '${(await writeOrQueue(kind: 'trip_start', label: 'Trip started', args: {
+        'sales_person': salesPerson,
+        'vehicle_no': vehicleNo,
+        'start_odo': startOdo,
+        'lat': lat,
+        'lng': lng,
+      }, creates: true)).result}';
+
+  static Future<void> tripEnd({
+    required String tripName,
+    required double startOdo,
+    required double endOdo,
+    required double lat,
+    required double lng,
+  }) =>
+      writeOrQueue(kind: 'trip_end', label: 'Trip ended', args: {
+        'trip_name': tripName,
+        'start_odo': startOdo,
+        'end_odo': endOdo,
+        'lat': lat,
+        'lng': lng,
+      });
+
+  static Future<void> uploadPhoto({
+    required String docname,
+    required String fieldname,
+    required String filePath,
+    String doctype = 'Trip Log',
+    String filename = 'photo.jpg',
+  }) =>
+      writeOrQueue(
+          kind: 'upload_photo',
+          label: 'Photo',
+          args: {
+            'docname': docname,
+            'fieldname': fieldname,
+            'file': filePath,
+            'doctype': doctype,
+            'filename': filename,
+          },
+          files: {'file': filePath});
+
+  /// Kept with no signal, this answers a local name in place of the URL; a
+  /// write that stores it is sent after the upload, with the real one.
+  static Future<String?> uploadFileGetUrl({
+    required String filePath,
+    String? doctype,
+    String? docname,
+    String filename = 'bill.jpg',
+  }) async =>
+      _sn((await writeOrQueue(
+              kind: 'upload_file',
+              label: 'Photo',
+              args: {
+                'file': filePath,
+                'doctype': doctype,
+                'docname': docname,
+                'filename': filename,
+              },
+              files: {'file': filePath},
+              creates: true))
+          .result);
+
+  static Future<void> approveRegularization(
+          Map<String, dynamic> reg, bool approve) =>
+      writeOrQueue(
+          kind: 'approve_regularization',
+          label: 'Regularization ${approve ? 'approved' : 'rejected'}',
+          args: {'reg': reg, 'approve': approve});
+
+  static Future<void> approveLeave(String name, bool approve) => writeOrQueue(
+      kind: 'approve_leave',
+      label: 'Leave ${approve ? 'approved' : 'rejected'}',
+      args: {'name': name, 'approve': approve});
+
+  static Future<String> hrCreateLeave({
+    required String rep,
+    required String leaveDate,
+    required bool halfDay,
+    String? halfPeriod,
+    required String reason,
+  }) async =>
+      '${(await writeOrQueue(kind: 'hr_leave', label: 'Leave for $rep, $leaveDate', args: {
+        'rep': rep,
+        'leave_date': leaveDate,
+        'half_day': halfDay,
+        'half_period': halfPeriod,
+        'reason': reason,
+      }, creates: true)).result}';
+
+  static Future<void> setSiteRoute(String siteName, String route) =>
+      writeOrQueue(
+          kind: 'site_route',
+          label: '$siteName put on route $route',
+          args: {'site': siteName, 'route': route});
+
+  static Future<void> deleteSite(String name) => writeOrQueue(
+      kind: 'delete_site', label: 'Site $name deleted', args: {'name': name});
+
+  static Future<void> approveSite(
+          String name, bool approve, dynamic lat, dynamic lng) =>
+      writeOrQueue(
+          kind: 'approve_site',
+          label: 'Site $name ${approve ? 'verified' : 'rejected'}',
+          args: {'name': name, 'approve': approve, 'lat': lat, 'lng': lng});
+
+  static Future<void> ungroupOrder(String orderName) => writeOrQueue(
+      kind: 'ungroup_order',
+      label: 'Order $orderName taken out of its group',
+      args: {'order': orderName});
+
+  static Future<void> setProductionDeliveryDate(
+          String orderName, String deliveryDate) =>
+      writeOrQueue(
+          kind: 'production_date',
+          label: 'Delivery date of $orderName',
+          args: {'order': orderName, 'date': deliveryDate});
+
+  static Future<Map<String, dynamic>> saveItemPacking({
+    required String itemCode,
+    double? weightPerRoll,
+    int? beltsPerRoll,
+    double? packLitres,
+  }) async =>
+      _map((await writeOrQueue(
+              kind: 'item_packing',
+              label: 'Packing of $itemCode',
+              args: {
+                'item_code': itemCode,
+                'weight_per_roll': weightPerRoll,
+                'belts_per_roll': beltsPerRoll,
+                'pack_litres': packLitres,
+              }))
+          .result);
+
+  static Future<void> deleteVisit(String name) => writeOrQueue(
+      kind: 'delete_visit', label: 'Visit $name deleted', args: {'name': name});
+
+  static Future<void> deleteLead(String name) => writeOrQueue(
+      kind: 'delete_lead', label: 'Lead $name deleted', args: {'name': name});
+
+  static Future<String> createSalesRoute(String area) async =>
+      '${(await writeOrQueue(kind: 'create_route', label: 'New route $area', args: {'area': area}, creates: true)).result}';
+
+  static Future<void> deleteSalesRoute(String name) => writeOrQueue(
+      kind: 'delete_route', label: 'Route $name deleted', args: {'name': name});
+
+  static Future<void> acknowledgeOrderChange(String orderName) => writeOrQueue(
+      kind: 'ack_order_change',
+      label: 'Change to $orderName seen',
+      args: {'order': orderName});
+
+  static Future<String> createRetreadProforma({
+    required String customer,
+    String? customerName,
+    required List<Map<String, dynamic>> rates,
+    String? notes,
+  }) async =>
+      '${(await writeOrQueue(kind: 'retread_proforma', label: 'Proforma for ${customerName ?? customer}', args: {
+        'customer': customer,
+        'customer_name': customerName,
+        'rates': rates,
+        'notes': notes,
+      }, creates: true)).result}';
+
+  static Future<void> supersedeProforma(String name) => writeOrQueue(
+      kind: 'supersede_proforma',
+      label: 'Proforma $name replaced',
+      args: {'name': name});
+
+  static Future<void> placeRetreadOrder(
+          List<String> tyreNames, Map<String, double> rateByName) =>
+      writeOrQueue(
+          kind: 'retread_order',
+          label: 'Retread order, ${tyreNames.length} tyres',
+          args: {'tyres': tyreNames, 'rates': rateByName});
+
+  /// The Sync buttons. Kept with no signal like anything else, and asked for
+  /// when the signal is back. `kept` is true in the answer when it was kept,
+  /// so the button does not sit waiting for a run that has not been asked.
+  static Future<Map<String, dynamic>> requestSapSync() =>
+      _sync('sap_sync', 'Credit sync with SAP');
+  static Future<Map<String, dynamic>> requestOrderSync() =>
+      _sync('order_sync', 'Order sync with SAP');
+  static Future<Map<String, dynamic>> requestStockSync() =>
+      _sync('stock_sync', 'Stock sync with SAP');
+
+  static Future<Map<String, dynamic>> _sync(String kind, String label) async {
+    final r = await writeOrQueue(kind: kind, label: label, args: {});
+    if (r.sent) return _map(r.result);
+    return {'message': 'Sync requested.', 'kept': true};
   }
 
   /// Sends one outbox item: the write its [OutboxItem.kind] names, with its
   /// arguments. The sender behind [Outbox.flush] and [sendOrQueue].
-  static Future<void> sendOutboxItem(OutboxItem item) async {
+  static Future<void> sendOutboxItem(OutboxItem item) => _runItem(item);
+
+  static Future<dynamic> _dispatch(OutboxItem item) async {
     final a = item.args;
+    final sender = _senders[item.kind];
+    if (sender != null) return sender(a, item);
     String? s(String k) {
       final v = a[k];
       return v == null ? null : '$v';
@@ -3879,7 +5301,8 @@ class Api {
           reason: s('reason') ?? '',
         );
       case 'item_request':
-        await submitItemRequest(Map<String, dynamic>.from(a['fields'] as Map));
+        await submitItemRequest(Map<String, dynamic>.from(a['fields'] as Map),
+            photoPath: item.files['photo']);
       case 'condition_answer':
         await respondToCondition(s('name')!, s('response')!,
             salesOrder: s('sales_order'),
@@ -3900,7 +5323,7 @@ class Api {
         }
         final photo = item.files['photo'];
         if (photo != null) {
-          await uploadPhoto(
+          await _uploadPhotoNow(
             doctype: 'Customer',
             docname: s('customer')!,
             fieldname: 'custom_banner_photo',
@@ -3924,7 +5347,7 @@ class Api {
         }
         final photo = item.files['photo'];
         if (photo != null) {
-          await uploadPhoto(
+          await _uploadPhotoNow(
             doctype: 'Customer Site',
             docname: site,
             fieldname: 'banner_photo',
@@ -3973,7 +5396,13 @@ class Api {
   /// A lead visit whose duplicate check could not run at the punch runs it
   /// here, before anything is written, and is refused if it fails — see
   /// `pending_punches.dart`.
-  static Future<String?> sendPendingPunch(PendingPunch p) async {
+  static Future<String?> sendPendingPunch(PendingPunch saved) =>
+      NetCache.liveOnly(() => _sendPendingPunchLive(saved));
+
+  static Future<String?> _sendPendingPunchLive(PendingPunch saved) async {
+    // At a lead or customer made in the same dead zone: with its real name.
+    final p = PendingPunch.fromJson(await Outbox.resolve(saved.toJson())) ??
+        saved;
     switch (p.kind) {
       case PunchKind.attendanceIn:
         final existing = await _list('Attendance Log',
@@ -4084,8 +5513,12 @@ class Api {
     String? deliveryDate,
     String? commitment,
     String? commitmentDue,
+    String? deliveryMode,
+    String? transportMode,
   }) async {
     final body = {
+      if (deliveryModeOf(deliveryMode) case final m?) kFieldDeliveryMode: m,
+      if (transportModeOf(transportMode) case final m?) kFieldTransportMode: m,
       // What the customer promised, in the rep's words, when this order takes
       // them past their credit limit. The GM decides the order on it and the
       // approval turns it into the rep's condition — credit_commitment.json.
@@ -4159,6 +5592,8 @@ class Api {
     required String deliveryDate,
     String? commitment,
     String? commitmentDue,
+    String? deliveryMode,
+    String? transportMode,
   }) async {
     await _requireRoute('Customer', customer);
     final name = await createSalesOrder(
@@ -4167,7 +5602,9 @@ class Api {
         items: items,
         deliveryDate: deliveryDate,
         commitment: commitment,
-        commitmentDue: commitmentDue);
+        commitmentDue: commitmentDue,
+        deliveryMode: deliveryMode,
+        transportMode: transportMode);
 
     // Best-effort — see refreshDuplicateFlag.
     await refreshDuplicateFlag(name);
@@ -4183,9 +5620,13 @@ class Api {
     required List<Map<String, dynamic>> items,
     required String deliveryDate,
     required double total,
+    String? deliveryMode,
+    String? transportMode,
   }) async {
     await _requireRoute('Lead', lead);
     final body = {
+      if (deliveryModeOf(deliveryMode) case final m?) kFieldDeliveryMode: m,
+      if (transportModeOf(transportMode) case final m?) kFieldTransportMode: m,
       'lead': lead,
       'sales_person': Session.I.salesPerson,
       'status': 'Pending Approval',
@@ -4299,7 +5740,7 @@ class Api {
     return null;
   }
 
-  static Future<String> createTrip({
+  static Future<String> _createTripNow({
     required String tripDate,
     required String purpose,
     String? route,
@@ -4316,7 +5757,7 @@ class Api {
     if (refusal != null) throw Exception(refusal);
 
     final now =
-    DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
+    nowStamp();
     final body = {
       'sales_person': Session.I.salesPerson,
       'trip_date': tripDate,
@@ -4335,13 +5776,13 @@ class Api {
     throw Exception(_frappeError(r));
   }
 
-  static Future<void> endTrip({
+  static Future<void> _endTripNow({
     required String name,
     double? lat,
     double? lng,
   }) async {
     final now =
-    DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
+    nowStamp();
     final body = {
       'status': 'Completed',
       'end_time': now,
@@ -4351,13 +5792,13 @@ class Api {
     await _put('Trip', name, body);
   }
 
-  static Future<void> cancelTrip(String name) async {
+  static Future<void> _cancelTripNow(String name) async {
     final now =
-    DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
+    nowStamp();
     await _put('Trip', name, {'status': 'Cancelled', 'end_time': now});
   }
 
-  static Future<void> updateTrip(String name, Map<String, dynamic> body) =>
+  static Future<void> _updateTripNow(String name, Map<String, dynamic> body) =>
       _put('Trip', name, body);
 
   // ---- Trip rates (office-controlled, single-doctype) ----
@@ -4370,7 +5811,7 @@ class Api {
     return {};
   }
 
-  static Future<void> saveTripRates(Map<String, dynamic> body) =>
+  static Future<void> _saveTripRatesNow(Map<String, dynamic> body) =>
       _put('Trip Rate Settings', 'Trip Rate Settings', body);
 
   static double rateForMode(Map<String, dynamic> rates, String? mode) {
@@ -4409,7 +5850,7 @@ class Api {
   }
 
   // Replace the trip's vehicle legs and recompute distance + cost estimate.
-  static Future<void> saveTripLegs(
+  static Future<void> _saveTripLegsNow(
       String tripName, List<Map<String, dynamic>> legs) async {
     final rates = await getTripRates();
     final forTotals = <TripLegInput>[];
@@ -4461,7 +5902,7 @@ class Api {
   }
 
   // Upload a file attached to a parent doc, return its file_url (for child rows).
-  static Future<String?> uploadFileGetUrl({
+  static Future<String?> _uploadFileGetUrlNow({
     required String filePath,
     String? doctype,
     String? docname,
@@ -4546,8 +5987,9 @@ class Api {
   /// false. That matters because the table is replaced wholesale: since tagged
   /// reps can add their own expenses, the owner and a passenger can both be
   /// writing, and an unconditional save from a stale copy silently deletes
-  /// whatever the other one added.
-  static Future<bool> saveTripExpenses(
+  /// whatever the other one added. A kept save replayed by the sync engine
+  /// carries no [modified] and writes as it always did.
+  static Future<bool> _saveTripExpensesNow(
       String tripName, List<Map<String, dynamic>> expenses,
       {String? modified}) async {
     double total = 0;
@@ -4645,7 +6087,7 @@ class Api {
       filters: _mineFilter(),
       limit: 50);
 
-  static Future<String> createTripStart({
+  static Future<String> _createTripStartNow({
     required String salesPerson,
     required String vehicleNo,
     required double startOdo,
@@ -4653,7 +6095,7 @@ class Api {
     required double lng,
   }) async {
     final stamp =
-    DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
+    nowStamp();
     final body = {
       'trip_date': stamp.substring(0, 10),
       'sales_person': salesPerson,
@@ -4670,7 +6112,7 @@ class Api {
     throw Exception(_frappeError(r));
   }
 
-  static Future<void> tripEnd({
+  static Future<void> _tripEndNow({
     required String tripName,
     required double startOdo,
     required double endOdo,
@@ -4678,7 +6120,7 @@ class Api {
     required double lng,
   }) async {
     final stamp =
-    DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
+    nowStamp();
     final body = {
       'end_time': stamp,
       'end_odometer': endOdo,
@@ -4738,7 +6180,7 @@ class Api {
     if (!verdict.allowed) throw CaptureRefused(verdict);
 
     final stamp =
-    DateTime.now().toIso8601String().substring(0, 19).replaceFirst('T', ' ');
+    nowStamp();
     final body = {
       'custom_latitude': lat,
       'custom_longitude': lng,
@@ -4771,7 +6213,7 @@ class Api {
     }
   }
 
-  static Future<void> uploadPhoto({
+  static Future<void> _uploadPhotoNow({
     required String docname,
     required String fieldname,
     required String filePath,
@@ -4939,7 +6381,7 @@ class Api {
         orderBy: 'attendance_date asc');
   }
 
-  static Future<void> approveRegularization(
+  static Future<void> _approveRegularizationNow(
       Map<String, dynamic> reg, bool approve) async {
     final name = reg['name'] as String;
     if (!approve) {
@@ -5029,6 +6471,20 @@ class Api {
           'and request a regularization for the earlier time.');
     }
     final stamp = _stamp(now);
+    // One record a day. A punch-in on a day that already has one — the home
+    // card had not loaded it yet, another phone, a reply that was lost — is
+    // that record, not a second one beside it (13 Nov 2026). Two records for
+    // a day left HR reading whichever came first, and a punch-out on the
+    // other one read as the rep's day ending early. The queued path did this
+    // already; now the direct one does too.
+    final existing = await _list('Attendance Log',
+        fields: '["name"]',
+        filters: jsonEncode([
+          ['sales_person', '=', salesPerson],
+          ['attendance_date', '=', stamp.substring(0, 10)],
+        ]),
+        limit: 1);
+    if (existing.isNotEmpty) return '${existing.first['name']}';
     final body = {
       'attendance_date': stamp.substring(0, 10),
       'sales_person': salesPerson,
@@ -5189,8 +6645,20 @@ class Api {
   /// arrival would draw the route through wherever the rep happened to regain
   /// signal rather than where they had been.
   static Future<void> appendTripGpsPoints(
+          String tripName, List<TripPoint> points) =>
+      NetCache.liveOnly(() => _appendTripGpsPointsLive(tripName, points));
+
+  // Live only: the points already on the trip are read and written back
+  // whole, so a kept copy of the trip would write the newer points away.
+  static Future<void> _appendTripGpsPointsLive(
       String tripName, List<TripPoint> points) async {
     if (points.isEmpty) return;
+    // A trip started with no signal is drawn once the server has it; until
+    // then its points wait (refused here, kept and retried by TripPoints).
+    tripName = await Outbox.realName(tripName);
+    if (isLocalName(tripName)) {
+      throw const OutboxRefused('Waiting for the trip to be sent first.');
+    }
     final trip = await getTrip(tripName);
     final existing =
         ((trip?['gps_points'] as List?) ?? []).cast<Map<String, dynamic>>();
@@ -5350,12 +6818,12 @@ class Api {
       orderBy: 'leave_date desc',
       limit: 40);
 
-  static Future<void> approveLeave(String name, bool approve) => _put(
+  static Future<void> _approveLeaveNow(String name, bool approve) => _put(
       'Leave Request',
       name,
       {'status': approve ? 'Approved' : 'Rejected', 'decided_by': Session.I.email});
 
-  static Future<String> hrCreateLeave({
+  static Future<String> _hrCreateLeaveNow({
     required String rep,
     required String leaveDate,
     required bool halfDay,
@@ -5414,7 +6882,7 @@ class Api {
   /// Every location that is captured can carry its own route, because every
   /// one of them is a separate place a van has to reach. A customer's second
   /// yard may be on an entirely different run from their office.
-  static Future<void> setSiteRoute(String siteName, String route) =>
+  static Future<void> _setSiteRouteNow(String siteName, String route) =>
       _put('Customer Site', siteName, {'route': route});
 
   static Future<String> createCustomerSite({
@@ -5448,7 +6916,7 @@ class Api {
   ///
   /// Deleted rather than disabled: a site that was never a real drop should not
   /// keep appearing in a route list for somebody to plan a van around.
-  static Future<void> deleteSite(String name) async {
+  static Future<void> _deleteSiteNow(String name) async {
     final r = await Session.I.dio
         .delete('${_res('Customer Site')}/${Uri.encodeComponent(name)}');
     if (r.statusCode != 200 && r.statusCode != 202) {
@@ -5470,7 +6938,7 @@ class Api {
         orderBy: 'modified desc');
   }
 
-  static Future<void> approveSite(
+  static Future<void> _approveSiteNow(
       String name, bool approve, dynamic lat, dynamic lng) {
     if (approve) {
       return _put('Customer Site', name, {
@@ -5646,7 +7114,7 @@ class Api {
           orderBy: 'transaction_date asc');
 
   /// Takes one order back out of its group.
-  static Future<void> ungroupOrder(String orderName) async {
+  static Future<void> _ungroupOrderNow(String orderName) async {
     await _put('Sales Order', orderName, {'custom_combined_order': ''});
     await OfflineCache.clear();
   }
@@ -5709,7 +7177,7 @@ class Api {
   /// Only the delivery date is sent. `custom_order_placed_at` never is: the
   /// moment the order was raised is not production's to move, and it is what
   /// every deadline on the order is measured from.
-  static Future<void> setProductionDeliveryDate(
+  static Future<void> _setProductionDeliveryDateNow(
       String orderName, String deliveryDate) async {
     final order = await getOrder(orderName);
     final body = <String, dynamic>{'delivery_date': deliveryDate};
@@ -5782,7 +7250,7 @@ class Api {
   ///
   /// Returns the fields that were actually written, so the caller can update
   /// its copy without a re-fetch.
-  static Future<Map<String, dynamic>> saveItemPacking({
+  static Future<Map<String, dynamic>> _saveItemPackingNow({
     required String itemCode,
     double? weightPerRoll,
     int? beltsPerRoll,
@@ -5854,7 +7322,7 @@ class Api {
   /// Deleted rather than cancelled: a visit recorded against the wrong shop is
   /// not a thing that happened, and leaving it as a cancelled row would still
   /// count it on the day map and in the visit totals.
-  static Future<void> deleteVisit(String name) async {
+  static Future<void> _deleteVisitNow(String name) async {
     final r = await Session.I.dio
         .delete('${_res('Sales Visit')}/${Uri.encodeComponent(name)}');
     if (r.statusCode != 200 && r.statusCode != 202) {
@@ -5910,7 +7378,7 @@ class Api {
   /// re-reads the lead and checks again anyway, because there are no Server
   /// Scripts here and the gap between asking and acting is where a colleague's
   /// visit lands.
-  static Future<void> deleteLead(String name) async {
+  static Future<void> _deleteLeadNow(String name) async {
     final fresh = await getLeadDoc(name);
     final blockers = await getLeadDeleteBlockers(fresh);
     final refusal = leadDeleteRefusal(blockers);
@@ -5940,7 +7408,7 @@ class Api {
   /// follows and what makes a route list readable when a manager sees several
   /// reps' routes at once. The rep supplies the area only; prefixing their own
   /// name is not their job to remember.
-  static Future<String> createSalesRoute(String area) async {
+  static Future<String> _createSalesRouteNow(String area) async {
     final rep = Session.I.salesPerson;
     if (rep == null || rep.isEmpty) {
       throw Exception('No sales person linked to this login.');
@@ -5970,7 +7438,7 @@ class Api {
   /// customer would leave production with nothing to plan a delivery by. The
   /// refusal surfaces as a readable message rather than being pre-empted here,
   /// because the app cannot see every doctype that might link to it.
-  static Future<void> deleteSalesRoute(String name) async {
+  static Future<void> _deleteSalesRouteNow(String name) async {
     final r = await Session.I.dio
         .delete('${_res('Sales Route')}/${Uri.encodeComponent(name)}');
     if (r.statusCode != 200 && r.statusCode != 202) {
@@ -6009,10 +7477,10 @@ class Api {
   }
 
   /// The production manager confirming they have seen a post-approval change.
-  static Future<void> acknowledgeOrderChange(String orderName) =>
+  static Future<void> _acknowledgeOrderChangeNow(String orderName) =>
       _put('Sales Order', orderName, {'custom_changed_after_approval': 0});
 
-  static Future<String> createRetreadProforma({
+  static Future<String> _createRetreadProformaNow({
     required String customer,
     String? customerName,
     required List<Map<String, dynamic>> rates,
@@ -6049,7 +7517,7 @@ class Api {
     return (r.data['data'] as Map).cast<String, dynamic>();
   }
 
-  static Future<void> supersedeProforma(String name) =>
+  static Future<void> _supersedeProformaNow(String name) =>
       _put('Retread Proforma', name, {'status': 'Superseded'});
 
   static Future<List<Map<String, dynamic>>> getMyReadyTyres() {
@@ -6062,7 +7530,7 @@ class Api {
         orderBy: 'customer asc');
   }
 
-  static Future<void> placeRetreadOrder(
+  static Future<void> _placeRetreadOrderNow(
       List<String> tyreNames, Map<String, double> rateByName) async {
     final orderRef = 'RO-${DateTime.now().millisecondsSinceEpoch}';
     final orderDate = today();

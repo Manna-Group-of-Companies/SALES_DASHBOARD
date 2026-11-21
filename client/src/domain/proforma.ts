@@ -25,6 +25,7 @@
  */
 
 import type { ProductCategory } from './types';
+import { isSolutionCategory } from './solutionLine';
 
 /** A line as ERPNext returns it. */
 export type ProformaRow = Record<string, unknown>;
@@ -84,7 +85,7 @@ export function proformaCells(line: ProformaRow): ProformaCells {
   // `qty` is the can count, not `custom_cans`: on the live orders those two
   // disagree (qty 3 against custom_cans 2 on SAL-ORD-2026-00129) and `qty` is
   // the one the amount was computed from.
-  if (category === 'VS') {
+  if (isSolutionCategory(category)) {
     return {
       rolls: '',
       belts: '',
@@ -122,7 +123,7 @@ export function proformaCells(line: ProformaRow): ProformaCells {
  */
 export function reconcilesOn(line: ProformaRow): 'cans' | 'weight' | 'qty' {
   const category = String(line[PROFORMA_FIELD.category] ?? '');
-  if (category === 'VS') return 'cans';
+  if (isSolutionCategory(category)) return 'cans';
   return num(line[PROFORMA_FIELD.ratePerKg]) > 0 && num(line[PROFORMA_FIELD.weight]) > 0
     ? 'weight'
     : 'qty';

@@ -15,6 +15,7 @@ import {
   badRules,
   diffRules,
   hitechByQuality,
+  HITECH_PRICE_LIST,
   staleRules,
   hitechPrice,
   itemKind,
@@ -187,6 +188,17 @@ describe('the plan', () => {
     expect(plan.problems[0].kind).toBe('conflict');
   });
 
+  it("writes a local test's stand-in prices into SAP, changed or not; SAP's own prices only when changed", () => {
+    const stand = { ...item('S', [2], 180), listPriceSource: 'placeholder' as const };
+    const sap = { ...item('A', [2], 175), listPriceSource: 'sap' as const };
+    const moved = { ...item('B', [1], 190), listPriceSource: 'placeholder' as const };
+    const plan = buildPlan(snapshot([stand, sap, moved]), [], [change(1, 5)]);
+    expect(plan.listChanges.map((c) => [c.item.code, c.newPrice, c.delta])).toEqual([
+      ['S', 180, 0],
+      ['B', 195, 5],
+    ]);
+  });
+
   it('never lets a list price fall to zero or below', () => {
     const plan = buildPlan(snapshot([item('BP', [1], 4)]), [], [change(1, -5)]);
     expect(plan.listChanges).toHaveLength(0);
@@ -199,6 +211,19 @@ describe('the plan', () => {
     expect(plan.orphans[0].cardName).toBe('Dealer B');
   });
 
+  it('does not list a special price on an item outside every group as one with no rule behind it', () => {
+    // Manna Treads' old codes carry the old percentage prices; no rule here could stand behind them (14 Nov 2026).
+    const plan = buildPlan(snapshot([item('BP', [1], 185)], [fixed('B', 'I-1234', 177), fixed('B', 'BP', 177)]), [], []);
+    expect(plan.orphans.map((o) => o.special.item)).toEqual(['BP']);
+  });
+
+  it('keeps no Hi-Tech price list: the screen is built with none, and says why', () => {
+    expect(HITECH_PRICE_LIST).toBe(false);
+    const plan = buildPlan(snapshot([item('BP', [1], 185, 'BP')], [], [hitechItem('BP', 170)]), [], [change(1, 5)], null);
+    expect(plan.hitechRows).toHaveLength(0);
+    expect(plan.hitechSkipped).toContain("Manna Treads' purchase order");
+  });
+
   it('works out no Hi-Tech price without a margin, or from a snapshot without Hi-Tech', () => {
     const withHitech = snapshot([item('BP', [1], 185, 'BP')], [], [hitechItem('BP', 170)]);
     const a = buildPlan(withHitech, [], [], null);
@@ -206,7 +231,7 @@ describe('the plan', () => {
     expect(a.hitechSkipped).toContain('margin');
     const b = buildPlan(snapshot([item('BP', [1], 185, 'BP')]), [], [], 12);
     expect(b.hitechRows).toHaveLength(0);
-    expect(b.hitechSkipped).toContain('Sync from SAP');
+    expect(b.hitechSkipped).toContain('no Hi-Tech Pretreads prices');
   });
 
   it('counts a Manna Treads item with no twin, and makes it no Hi-Tech price', () => {
