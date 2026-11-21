@@ -32,6 +32,10 @@ function New-SapSession {
         throw "no usable sap.url / sap.username / sap.password in $ConfigPath"
     }
     $tag = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    # Optional sap.pinned_pubkey (12 Nov 2026): base64 SHA-256 of the Service Layer's public key. -k stays (the
+    # certificate is self-signed), but curl refuses any other server before the password is sent - the same pin
+    # Manna_CMMS/sap-sync/Sync-SapItemCategories.ps1 takes. Live's config leaves it unset and runs as before.
+    $pin = if ($sap.PSObject.Properties['pinned_pubkey'] -and "$($sap.pinned_pubkey)".Trim()) { "sha256//$("$($sap.pinned_pubkey)".Trim())" } else { '' }
     $s = [pscustomobject]@{
         Base      = "$($sap.url)".TrimEnd('/')
         Root      = ([Uri]"$($sap.url)").GetLeftPart([UriPartial]::Authority)
@@ -39,6 +43,7 @@ function New-SapSession {
         Jar       = Join-Path $env:TEMP "sap-pricing-$tag.jar"
         Tag       = $tag
         CompanyDb = $CompanyDb
+        Pin       = $pin
         Open      = $false
     }
     # Optional sap.password_overrides.<CompanyDb>: a test company whose password is not the others'.
@@ -71,6 +76,7 @@ function Invoke-SapCurl {
     $a = @('-k', '-s', '--globoff', '--connect-timeout', '15', '--max-time', '180',
            '-H', 'Expect:', '-H', 'Prefer: odata.maxpagesize=500',
            '-o', $resp, '-w', "%{http_code}$($script:SapUS)%{time_total}", '-X', $Method)
+    if ($Session.PSObject.Properties['Pin'] -and $Session.Pin) { $a += @('--pinnedpubkey', $Session.Pin) }
     if ($SaveCookies) { $a += @('-c', $Session.Jar) } else { $a += @('-b', $Session.Jar) }
     if ($BodyFile) { $a += @('-H', 'Content-Type: application/json', '--data-binary', "@$BodyFile") }
     $a += $Url

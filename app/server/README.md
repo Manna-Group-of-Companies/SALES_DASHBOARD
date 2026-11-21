@@ -122,6 +122,14 @@ The eight photos stranded before this (TRP-00260, 00290, 00307 ×2, 00328,
 00615, 00616, 00630) were linked by hand the same day, each checked against
 the trip's Version history; no reading, distance or cost changed.
 
+A third rule, MISFILED, was **installed** 19 Nov 2026. Reps who ended a leg
+without a photo opened Edit leg and photographed the closing reading into its
+first box, "Start odometer photo", replacing the morning's start photo
+(TRP-00828, 00849, 01098). Now a new start photo on an ended leg, with the
+start reading unchanged, goes to the empty end slot and the start photo stays.
+The phone's Edit leg dialog hides that box for ended legs too, but only builds
+from 19 Nov 2026 have that change.
+
 For anything they leave — a multi-leg trip they will not guess on — the HR
 odometer page finds these photos (it lists each trip's unlinked
 `start_odo…`/`end_odo…` files) and offers "Use this photo".

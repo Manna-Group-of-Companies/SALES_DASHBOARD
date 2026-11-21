@@ -201,6 +201,73 @@ ExpenseSplit splitExpenses(List<Map<String, dynamic>> expenses) {
 double personalExpense(List<Map<String, dynamic>> expenses, String person) =>
     splitExpenses(expenses).own[person] ?? 0;
 
+// ------------------------------------------------ who may key an expense ---
+
+/// Where somebody stands on a trip, for the purpose of its expenses.
+enum TripExpenseRole { owner, tagged, none }
+
+/// The rep who made the trip runs it. A colleague tagged on it travelled too
+/// and paid for things too, so may record what they spent — but only that.
+///
+/// Until 19 Nov 2026 a tagged rep could add nothing at all: the whole trip was
+/// view-only to them, and a lunch they paid for could only be claimed by
+/// asking the owner to key it in on their behalf (TRP-01108).
+TripExpenseRole tripExpenseRole({
+  required String? owner,
+  required Iterable<String> tagged,
+  required String? me,
+}) {
+  final who = _link(me);
+  if (who == null) return TripExpenseRole.none;
+  if (_link(owner) == who) return TripExpenseRole.owner;
+  return tagged.contains(who) ? TripExpenseRole.tagged : TripExpenseRole.none;
+}
+
+bool canAddTripExpense(TripExpenseRole role) => role != TripExpenseRole.none;
+
+/// Whether [me] may attach a bill to, or delete, an expense already posted.
+///
+/// A tagged rep only touches rows tagged to themselves. A common row belongs
+/// to the journey and stays the owner's to manage, even if the tagged rep was
+/// the one who keyed it — otherwise one passenger could delete the team's
+/// toll off the driver's claim.
+bool canChangeTripExpense(
+  TripExpenseRole role,
+  Map<String, dynamic> expense,
+  String? me,
+) {
+  switch (role) {
+    case TripExpenseRole.owner:
+      return true;
+    case TripExpenseRole.tagged:
+      final who = _link(me);
+      return who != null && expenseOwner(expense) == who;
+    case TripExpenseRole.none:
+      return false;
+  }
+}
+
+/// Whom an expense may be put against, besides common.
+///
+/// The owner can attribute to anyone on board, as before. A tagged rep can
+/// only claim for themselves: putting money on a colleague's sheet is for that
+/// colleague, or the trip's owner, to do.
+List<String> expenseOwnerChoices(
+  TripExpenseRole role,
+  List<String> travellers,
+  String? me,
+) {
+  switch (role) {
+    case TripExpenseRole.owner:
+      return travellers;
+    case TripExpenseRole.tagged:
+      final who = _link(me);
+      return who == null ? const [] : [who];
+    case TripExpenseRole.none:
+      return const [];
+  }
+}
+
 /// The reps tagged on a trip.
 ///
 /// `tagged_csv` is pipe-WRAPPED — `|Pareeth Kb|`, `|A|B|` — so that an exact
