@@ -2493,6 +2493,22 @@ class Api {
     return out;
   }
 
+  /// A customer's recent orders, newest first, for the Previous Orders screen
+  /// (19 Nov 2026) — whoever raised them, as far as this login may read.
+  /// Cancelled orders are left out: nobody copies an order that was undone.
+  /// The lines are not listed here (`Sales Order Item` cannot be listed by
+  /// the phone); [getOrder] reads them when the rep opens one.
+  static Future<List<Map<String, dynamic>>> getCustomerOrders(
+      String customer) {
+    final c = jsonEncode(customer);
+    return _list('Sales Order',
+        fields: '["name","transaction_date","delivery_date","grand_total",'
+            '"custom_po_status","custom_sap_sales_order","docstatus"]',
+        filters: '[["customer","=",$c],["docstatus","!=",2]]',
+        orderBy: 'transaction_date desc, creation desc',
+        limit: 30);
+  }
+
   static Future<Map<String, dynamic>> getOrder(String name) async {
     final r = await Session.I.dio.get(_res('Sales Order') + '/$name');
     final d = (r.data is Map) ? r.data['data'] : null;

@@ -312,6 +312,50 @@ bool orderSignedOff(Map<String, dynamic> order, {required bool isLead}) {
 bool ratesLocked(Map<String, dynamic> order) =>
     !Session.I.isGM && (order['custom_rate_approved'] ?? 0) == 1;
 
+/// Whether an item belongs in a Manna Treads order screen's catalogue at all
+/// (13 Nov 2026) — the rule `sap-pricing/README.md` already documents and
+/// `shared/fixtures/sap_catalogue_visibility.json` pins: Manna Treads' SAP
+/// has its quality ticked, it has a Price List 01 price, and Hi-Tech has an
+/// active item of the same code and name (the twin). `manna_customer_rates`
+/// already enforces all three together before it puts a code in its `rates`
+/// answer, so [hasSapRate] stands in for the whole rule — a missing rate for
+/// a per-kg Treads item means the rule failed, not just "type it by hand".
+///
+/// Three things keep an item visible regardless, because hiding it would
+/// take away more than the rule means to:
+///  - [isTreadsUnit] false or [rateUnit] not `kg`: SAP never prices this item
+///    at all (another unit, or a family sold by the can or in belts);
+///  - [ratesAnswered] false or [ratesOffline] true: the catalogue could not be
+///    checked this time (no signal, a server error, or the fetch never ran) —
+///    an unpriced item beats a rep unable to order anything;
+///  - [anySapRates] false: the answer came back with no prices at all.
+///    `manna_customer_rates` answers that way, without an error, when the
+///    party has no Manna Treads code or there is no copy of SAP's prices yet.
+///    That is the whole price list missing, not one item failing the rule,
+///    and hiding on it would empty the screen;
+///  - [alreadyOnOrder] true: a manager editing an order must not watch a line
+///    vanish because its price or twin was pulled after the order was raised.
+///
+/// Every doubt falls towards showing the item: the rate box still refuses a
+/// per-kg Treads line with no SAP price, so showing too much costs a refusal,
+/// while hiding too much leaves the rep with nothing to order.
+bool sapCatalogueVisible({
+  required bool isTreadsUnit,
+  required String rateUnit,
+  required bool ratesAnswered,
+  required bool ratesOffline,
+  required bool anySapRates,
+  required bool alreadyOnOrder,
+  required bool hasSapRate,
+}) {
+  if (!isTreadsUnit) return true;
+  if (rateUnit != 'kg') return true;
+  if (!ratesAnswered || ratesOffline) return true;
+  if (!anySapRates) return true;
+  if (alreadyOnOrder) return true;
+  return hasSapRate;
+}
+
 // A note on what this does and does not guarantee.
 //
 // Every check here runs on the phone, and the dashboard repeats it; nothing on

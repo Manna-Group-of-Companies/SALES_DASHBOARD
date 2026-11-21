@@ -14,6 +14,7 @@ import 'package:manna_field_sales/screens/collections/collection_screen.dart';
 import 'package:manna_field_sales/screens/customers/customer_edit_screen.dart';
 import 'package:manna_field_sales/screens/complaints/complaint_screen.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
+import 'package:manna_field_sales/screens/orders/previous_orders_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/outbox.dart';
@@ -468,6 +469,18 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               icon: const Icon(Icons.shopping_cart),
               label: const Padding(
                   padding: EdgeInsets.all(12), child: Text('New Order')),
+            ),
+            const SizedBox(height: 10),
+            // What this customer ordered before, and a new order started from
+            // any of them (19 Nov 2026). Offered wherever New Order is.
+            OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => PreviousOrdersScreen(
+                      party: OrderParty.customer(c)))),
+              icon: const Icon(Icons.history),
+              label: const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Text('Previous Orders')),
             ),
             const SizedBox(height: 16),
           ],

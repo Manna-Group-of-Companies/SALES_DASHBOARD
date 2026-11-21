@@ -1,0 +1,33 @@
+{
+  "about": "Which items a Manna Treads order screen offers at all. Decided 13 Nov 2026, after the item list and the rate box disagreed: the rate box already refused an unpriced item, but the product list above it still listed items SAP could never price or weigh, and items whose code collides between Manna Treads and Hi-Tech.",
+
+  "the_rule": "sap-pricing/README.md already documented this before either app enforced it in the list: an item belongs in the catalogue only when, in Manna Treads' SAP, (1) it has its quality ticked, (2) it has a Price List 01 price, and (3) Hi-Tech has an active item of the same code and name (the twin). `manna_customer_rates` already enforces all three together before it puts a code in its `rates` answer, so a missing rate for a per-kg Treads item IS the rule failing - not just 'type it by hand', which is what a missing rate means for anything SAP does not price at all.",
+
+  "why_the_twin_matters": "manna_sap_items.py: 'Manna's I-1048 and Hi-Tech's I-1048 are different items... ERPNext's I- codes are Hi-Tech's.' The app's catalogue is built from ERPNext Items, which are Hi-Tech's code space. Filtering by Manna Treads' own code alone, without requiring the twin link, risks showing a Hi-Tech item under a quality it never actually has in Manna's SAP - exactly the collision this comment warns about.",
+
+  "left_alone": "Four cases keep an item visible even though `rates` has nothing for it, because hiding it would take away more than the rule means to: (1) an item SAP never prices per kg at all - another unit, or a family sold by the can or in belts rather than by weight; (2) the whole catalogue when rates could not be checked this time - no signal, a server error, or the fetch never ran (not a Treads party yet) - since showing an unpriced item is better than a rep unable to order anything; (3) the whole catalogue when the answer holds no rates at all - `manna_customer_rates` answers that way, with a note and no error, for a party with no Manna Treads code or when there is no copy of SAP's prices yet, which is the price list missing, not every item failing the rule; (4) a line already on the order being edited, so a manager does not watch a line vanish under them because its price or twin was pulled after the order was raised.",
+
+  "which_way_it_fails": "Towards showing. The rate box still refuses a per-kg Treads line with no SAP price, so showing too much costs the rep a refusal; hiding too much leaves the rep with nothing to order. The first version (13 Nov 2026, never released) treated any returned fetch as checked, so a server error or an empty answer hid every per-kg item.",
+
+  "cases": [
+    { "why": "priced and twinned - the ordinary case", "is_treads_unit": true, "rate_unit": "kg", "rates_answered": true, "rates_offline": false, "any_sap_rates": true, "already_on_order": false, "has_sap_rate": true, "visible": true },
+    { "why": "ticked in Manna's SAP but no Hi-Tech twin, or no price - the rule fails, so it is hidden", "is_treads_unit": true, "rate_unit": "kg", "rates_answered": true, "rates_offline": false, "any_sap_rates": true, "already_on_order": false, "has_sap_rate": false, "visible": false },
+    { "why": "not a Treads unit - this rule says nothing about it", "is_treads_unit": false, "rate_unit": "kg", "rates_answered": false, "rates_offline": false, "any_sap_rates": false, "already_on_order": false, "has_sap_rate": false, "visible": true },
+    { "why": "bonding gum and vulcanizing solution are never priced per kg by this rule - untouched", "is_treads_unit": true, "rate_unit": "can", "rates_answered": true, "rates_offline": false, "any_sap_rates": true, "already_on_order": false, "has_sap_rate": false, "visible": true },
+    { "why": "no signal this time - better to show an unpriced item than hide the whole catalogue", "is_treads_unit": true, "rate_unit": "kg", "rates_answered": false, "rates_offline": true, "any_sap_rates": false, "already_on_order": false, "has_sap_rate": false, "visible": true },
+    { "why": "the server failed with a signal (an error, not a timeout) - not checked, so nothing is hidden", "is_treads_unit": true, "rate_unit": "kg", "rates_answered": false, "rates_offline": false, "any_sap_rates": false, "already_on_order": false, "has_sap_rate": false, "visible": true },
+    { "why": "answered with no rates at all (no Manna Treads code, or no copy of SAP's prices yet) - the price list is missing, so nothing is hidden", "is_treads_unit": true, "rate_unit": "kg", "rates_answered": true, "rates_offline": false, "any_sap_rates": false, "already_on_order": false, "has_sap_rate": false, "visible": true },
+    { "why": "marked offline even though an answer is held - same as not checked", "is_treads_unit": true, "rate_unit": "kg", "rates_answered": true, "rates_offline": true, "any_sap_rates": true, "already_on_order": false, "has_sap_rate": false, "visible": true },
+    { "why": "unpriced now, but already on the order being edited - stays so the manager can still see and change it", "is_treads_unit": true, "rate_unit": "kg", "rates_answered": true, "rates_offline": false, "any_sap_rates": true, "already_on_order": true, "has_sap_rate": false, "visible": true }
+  ],
+
+  "fields": {
+    "is_treads_unit": "Session.I.isTreadsUnit",
+    "rate_unit": "ProductCategory.rateUnit ('kg', 'can', ...)",
+    "rates_answered": "a manna_customer_rates fetch for this party returned without an error",
+    "rates_offline": "that fetch failed for want of a signal",
+    "any_sap_rates": "the answer held at least one rate",
+    "already_on_order": "the item is on the order as it was when this edit began",
+    "has_sap_rate": "SapRates has a usable entry for this item code"
+  }
+}
