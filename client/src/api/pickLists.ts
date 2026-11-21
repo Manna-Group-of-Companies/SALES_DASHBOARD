@@ -3,7 +3,7 @@
  * now. Made by reps on the phone; read here through
  * app/server/pick_lists.py.
  */
-import { http } from './client';
+import { getDoc, http } from './client';
 
 export interface PickListItem {
   salesOrderItem: string;
@@ -88,4 +88,25 @@ export async function listPickLists(salesOrder?: string): Promise<PickList[]> {
     params: salesOrder ? { sales_order: salesOrder } : {},
   });
   return (data.message ?? []).map(toPickList);
+}
+
+/**
+ * `Manna App Settings.pick_lists_since`: orders placed before it never get a
+ * pick list (13 Nov 2026). '' when it is not set; null when it could not be
+ * read. Read once per page load - it changes about never.
+ */
+let since: Promise<string | null> | null = null;
+export function getPickListsSince(): Promise<string | null> {
+  if (!since) {
+    since = getDoc<Record<string, unknown>>('Manna App Settings', 'Manna App Settings')
+      .then((d) => {
+        const v = str(d.pick_lists_since).trim();
+        return v === 'null' ? '' : v;
+      })
+      .catch(() => {
+        since = null; // try again next time rather than remember a failure
+        return null;
+      });
+  }
+  return since;
 }

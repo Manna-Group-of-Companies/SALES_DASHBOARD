@@ -41,6 +41,7 @@ import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import { COND_AWAITING } from '@/domain/creditCondition';
 import { CreditBar } from './CreditBar';
+import { OrderTrackLine, usePickListsByOrder } from './OrderTrack';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import '@/components/common/status.css';
@@ -117,6 +118,11 @@ export function GmQueuePage() {
   }, [tick]);
 
   const byId = useMemo(() => new Map(customers.map((c) => [c.id, c])), [customers]);
+  /** Pick lists for each card's stage track, read once; null = not known. */
+  const pickLists = usePickListsByOrder(
+    useMemo(() => orders.map((o) => o.id), [orders]),
+    tick,
+  );
   /** Per customer: commitments given, missed, days, and whether a miss is still open. */
   const history = useMemo(() => {
     const m = new Map<string, { given: number; missed: number; days: number; open: boolean; last?: CommitmentRow }>();
@@ -317,6 +323,8 @@ export function GmQueuePage() {
                 {hasCommitment(o.creditCommitment) && o.creditCommitmentDue && (
                   <div className="gmq__due">Promised by {formatDate(o.creditCommitmentDue)}</div>
                 )}
+                {/* Where the order stands, from real fields only (21 Nov 2026). */}
+                <OrderTrackLine order={o} lists={pickLists[o.id] ?? null} />
               </div>
 
               <footer className="gmq__foot">

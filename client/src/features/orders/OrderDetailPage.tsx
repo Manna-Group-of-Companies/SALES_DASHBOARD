@@ -79,6 +79,7 @@ import { OrderLinesEditor } from './OrderLinesEditor';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import './orders.css';
+import { OrderTrackPanel, useOrderPickLists } from './OrderTrack';
 
 const isoDay = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -120,6 +121,8 @@ export function OrderDetailPage() {
   /** Bumped when this page posts a comment, so the thread re-reads. */
   const [threadKey, setThreadKey] = useState(0);
   const [tick, setTick] = useState(0);
+  /** This order's pick lists, for its stage track; null = not known. */
+  const pickLists = useOrderPickLists(orderId, tick);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -497,6 +500,8 @@ export function OrderDetailPage() {
 
       {!loading && order && (
         <>
+          {/* Where the order stands, from real fields only (21 Nov 2026). */}
+          <OrderTrackPanel order={order} lists={pickLists} />
           {order.changedAfterApproval && (
             <div style={{ marginBottom: 14 }}>
               <Alert tone="danger" title="Changed after approval">

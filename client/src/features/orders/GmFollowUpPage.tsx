@@ -33,6 +33,7 @@ import { StatusPill } from '@/components/common/StatusPill';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import './orders.css';
+import { OrderTrackLine, usePickListsByOrder } from './OrderTrack';
 
 type Filter = FollowUpBucket | 'all';
 
@@ -63,6 +64,12 @@ export function GmFollowUpPage() {
   }, [tick]);
 
   const today = serverNow();
+
+  /** Pick lists for every row's stage track, read once; null = not known. */
+  const pickLists = usePickListsByOrder(
+    useMemo(() => rows.map((f) => f.order.id), [rows]),
+    tick,
+  );
 
   const sorted = useMemo(() => {
     const withBucket = rows.map((f) => ({
@@ -205,6 +212,9 @@ export function GmFollowUpPage() {
                         */}
                         {f.order.sapSalesOrder ? (
                           <b className="mono">SAP {f.order.sapSalesOrder}</b>
+                        ) : f.order.mtSalesOrder ? (
+                          // In Manna Treads SAP only: "Not in SAP" would be false.
+                          <b className="mono">Manna Treads SAP {f.order.mtSalesOrder}</b>
                         ) : (
                           <span className="dim">Not in SAP</span>
                         )}
@@ -215,6 +225,7 @@ export function GmFollowUpPage() {
                             {f.order.sapInvoiceDate ? ` · ${formatDate(f.order.sapInvoiceDate)}` : ''}
                           </div>
                         )}
+                        <OrderTrackLine order={f.order} lists={pickLists[f.order.id] ?? null} />
                       </td>
                       <td className="fu__cond">
                         {c ? (

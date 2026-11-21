@@ -361,6 +361,19 @@ export const SALES_ORDER_FIELD = {
    * screens say so. Read here; written only by the sync.
    */
   mtSalesOrder: 'custom_mt_sales_order',
+  /**
+   * Why PASS M or PASS P (Manna Treads' order, its purchase order to Hi-Tech)
+   * last refused the order; and Manna Treads' invoice to the customer. Read by
+   * the stage track (`domain/orderTrack.ts`); written only by the sync.
+   */
+  mtSyncError: 'custom_mt_sync_error',
+  mtInvoice: 'custom_mt_invoice',
+  /**
+   * B1iF's order status (9 Nov 2026): In SAP, Partially Picked, Picked,
+   * Partially Dispatched, Dispatched, Cancelled - or blank. A Select written
+   * by `manna_sap_status`, so its values are ours to read.
+   */
+  sapOrderStatus: 'custom_sap_order_status',
 } as const;
 
 /** The six values `custom_proforma_status` accepts. */

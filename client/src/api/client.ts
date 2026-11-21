@@ -2895,6 +2895,10 @@ function toTeamOrder(r: Record<string, unknown>): TeamOrder {
     sapSalesOrder: str(r[SALES_ORDER_FIELD.sapSalesOrder]),
     sapSalesOrderStatus: str(r[SALES_ORDER_FIELD.sapSalesOrderStatus]),
     mtSalesOrder: notNull(str(r[SALES_ORDER_FIELD.mtSalesOrder])),
+    mtSyncError: notNull(str(r[SALES_ORDER_FIELD.mtSyncError])),
+    mtInvoice: notNull(str(r[SALES_ORDER_FIELD.mtInvoice])),
+    sapOrderStatus: notNull(str(r[SALES_ORDER_FIELD.sapOrderStatus])),
+    sapSyncError: notNull(str(r[SALES_ORDER_FIELD.sapSyncError])),
     sapInvoice: str(r[SALES_ORDER_FIELD.sapInvoice]),
     // Frappe reads an unset field back as the string 'null' on some paths,
     // which would print literally as the rep's commitment.
