@@ -108,7 +108,10 @@ def build(mt, ht, rules, margin, now):
 	items = []
 	twins = []
 	for r in sorted(rows_of(mt, "I"), key=lambda r: str(r[0])):
-		code, name, flags = str(r[0]), str(r[1]), str(r[13])
+		# One name per line: safe_exec has no tuple unpacking on assignment (NameError _unpack_sequence_).
+		code = str(r[0])
+		name = str(r[1])
+		flags = str(r[13])
 		ticked = [n for n in named if n <= len(flags) and flags[n - 1] == "Y"]
 		if not ticked:
 			continue
