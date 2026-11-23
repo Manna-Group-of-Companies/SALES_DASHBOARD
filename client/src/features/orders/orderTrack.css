@@ -161,3 +161,17 @@
     grid-column: 2 / -1;
   }
 }
+
+/* In SAP before approval: the one thing on the track that must never happen. */
+.otrack__warn {
+  color: var(--hue-red);
+  background: color-mix(in srgb, var(--hue-red) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--hue-red) 35%, transparent);
+  border-radius: var(--r-sm);
+  padding: 4px 8px;
+  font-weight: 600;
+}
+
+.otrack__facts + .otrack__warn {
+  margin-bottom: 10px;
+}

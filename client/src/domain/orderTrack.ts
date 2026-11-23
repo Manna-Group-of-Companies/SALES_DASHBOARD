@@ -134,6 +134,13 @@ export interface OrderTrack {
   pickList: string;
   action: { text: string; who: Responsible | null };
   outcome: Outcome;
+  /**
+   * SAP has the order but it was never approved: the order sync sent it
+   * early (it did on 18 and 23 Nov 2026, from an old copy on the SAP server).
+   * The user's rule: nothing reaches SAP before the manager - and the GM,
+   * when escalated - approves. Shown as a warning wherever the track is.
+   */
+  sentBeforeApproval: boolean;
 }
 
 const clean = (v: string | null | undefined): string => {
@@ -256,7 +263,10 @@ export function orderTrack(o: OrderTrackInput): OrderTrack {
 
   // --- SAP order creation ------------------------------------------------
   let sap: [StageState, string];
-  if (inSap) sap = ['done', cancelled ? `${sapLine} · Cancelled in SAP` : sapLine];
+  const sentBeforeApproval = inSap && po !== PO_STATUS.approved && !cancelled;
+  if (inSap) {
+    sap = ['done', cancelled ? `${sapLine} · Cancelled in SAP` : sentBeforeApproval ? `${sapLine} · sent before approval` : sapLine];
+  }
   else if (po === PO_STATUS.approved) sap = ['current', sapError ? 'The SAP sync failed' : 'Waiting for the order sync'];
   else if (!KNOWN.includes(po)) sap = ['unknown', 'Not known'];
   else sap = ['waiting', 'After approval'];
@@ -271,6 +281,9 @@ export function orderTrack(o: OrderTrackInput): OrderTrack {
   let pick: [StageState, string];
   if (hasList) pick = ['done', submitted.length === 1 ? submitted[0].name : `${submitted.length} pick lists`];
   else if (cancelled) pick = ['na', 'Order cancelled in SAP'];
+  // A pick list needs an approved order (manna_pick_list_submit refuses
+  // anything else), even one SAP was sent early.
+  else if (po !== PO_STATUS.approved && !invoiced) pick = ['waiting', 'After approval'];
   else if (lists === null) pick = ['unknown', 'Pick lists could not be read'];
   else if (invoiced) pick = ['na', 'Invoiced without a pick list'];
   // Hi-Tech picks an older-route order by hand in SAP; B1iF still reports it.
@@ -368,6 +381,7 @@ export function orderTrack(o: OrderTrackInput): OrderTrack {
     pickList,
     action,
     outcome,
+    sentBeforeApproval,
   };
 }
 

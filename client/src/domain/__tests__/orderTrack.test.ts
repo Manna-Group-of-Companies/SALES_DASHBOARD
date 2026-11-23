@@ -65,6 +65,8 @@ describe('an order track', () => {
       expect(t.sap).toEqual({ mannaTreads: c.expect.sap.manna_treads, hitech: c.expect.sap.hitech });
       expect(t.action.who).toBe(c.expect.who);
       expect(t.outcome).toBe(c.expect.outcome);
+      const early = (c.expect as { early_sap?: boolean }).early_sap;
+      if (early !== undefined) expect(t.sentBeforeApproval).toBe(early);
     });
   }
 });

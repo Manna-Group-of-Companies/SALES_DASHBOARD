@@ -163,6 +163,17 @@ function Steps({ track }: { track: OrderTrack }) {
   );
 }
 
+/** The order is in SAP but was never approved. Red, because it must not happen. */
+function EarlyWarning({ track }: { track: OrderTrack }) {
+  if (!track.sentBeforeApproval) return null;
+  return (
+    <div className="otrack__warn" role="alert">
+      ⚠ In SAP before approval ({track.sapLine}). The order sync sent it early. If it is rejected, cancel it in
+      SAP by hand — rejecting here does not touch SAP.
+    </div>
+  );
+}
+
 function NextStep({ track, rep }: { track: OrderTrack; rep?: string }) {
   const who = responsibleText(track.action.who, rep);
   return (
@@ -189,6 +200,7 @@ export function OrderTrackLine({ order, lists }: { order: TeamOrder; lists: Pick
         <span className="dim"> · Pick list: {track.pickList}</span>
       </div>
       <Steps track={track} />
+      <EarlyWarning track={track} />
       <NextStep track={track} rep={order.rep} />
     </div>
   );
@@ -227,6 +239,7 @@ export function OrderTrackPanel({ order, lists }: { order: TeamOrder; lists: Pic
             </dd>
           </div>
         </dl>
+        <EarlyWarning track={track} />
         <ol className="otrack__rows" aria-label="Order stages">
           {track.stages.map((s) => (
             <li key={s.key} className={`otrack__row otrack__row--${s.state}`}>
