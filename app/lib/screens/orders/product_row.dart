@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:manna_field_sales/core/constants.dart';
 import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/pool_allocation.dart';
+import 'package:manna_field_sales/core/product_grade.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/models/sap_rates.dart';
@@ -389,12 +390,13 @@ class _ProductRowState extends State<ProductRow> {
   /// SAP's and locked, typed only where the phone has no SAP price.
   @override
   Widget build(BuildContext context) {
+    final mark = _mark;
     final primary = Theme.of(context).colorScheme.primary;
     // A white card per product, as the app's other cards are (radius 16,
     // hairline border).
     return Container(
       margin: const EdgeInsets.fromLTRB(10, 5, 10, 5),
-      padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -404,7 +406,11 @@ class _ProductRowState extends State<ProductRow> {
               color: Color(0x0A000000), blurRadius: 6, offset: Offset(0, 2)),
         ],
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      child: Stack(children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(mark == null ? 16 : 19, 14, 14, 14),
+          child:
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Always one line (19 Nov 2026, the user's request): a long name is
         // shrunk to fit the card rather than wrapped or cut off, so the whole
         // name is still there to read.
@@ -421,7 +427,13 @@ class _ProductRowState extends State<ProductRow> {
                   color: Colors.black87)),
         ),
         const SizedBox(height: 4),
-        _specLine(),
+        Row(children: [
+          if (mark != null) ...[
+            _gradeChip(mark),
+            const SizedBox(width: 8),
+          ],
+          Expanded(child: _specLine()),
+        ]),
         if (!p.isMisconfigured) ...[
           const SizedBox(height: 10),
           // Price on the left, ADD (or the stepper) on the right of it.
@@ -504,8 +516,62 @@ class _ProductRowState extends State<ProductRow> {
           ],
         ],
       ]),
+        ),
+        // The grade's colour down the left edge (23 Nov 2026, the user: a
+        // colour is useful for telling products apart).
+        if (mark != null)
+          Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 5,
+              child: ColoredBox(color: mark.color)),
+      ]),
     );
   }
+
+  /// A colour per grade, and per family where a family has no grade, so a
+  /// rep finds Black Pearl or Poly Gold in a long list by colour before
+  /// reading a word (23 Nov 2026). A product whose name names no grade gets
+  /// no colour rather than a guessed one.
+  ({String label, Color color})? get _mark {
+    final grade = productGrade(p.name, '${p.doc['item_group'] ?? ''}');
+    if (grade != null) {
+      final c = _gradeColours[grade];
+      if (c != null) return (label: grade, color: c);
+    }
+    switch (p.category) {
+      case ProductCategory.bondingGum:
+        return (label: 'BONDING GUM', color: const Color(0xFF795548));
+      case ProductCategory.vulcanizingSolution:
+        return (label: 'SOLUTION', color: const Color(0xFF5E35B1));
+      default:
+        return null;
+    }
+  }
+
+  static const Map<String, Color> _gradeColours = {
+    'BLACK PEARL': Color(0xFF212121),
+    'PLATINUM': Color(0xFF1565C0),
+    'SILVER': Color(0xFF8E8E8E),
+    'POLY GOLD': Color(0xFFC79100),
+    'DIAMOND': Color(0xFF00A3BF),
+    'MEDIUM': Color(0xFF558B2F),
+  };
+
+  Widget _gradeChip(({String label, Color color}) mark) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: mark.color,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(mark.label,
+            style: const TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.4,
+                color: Colors.white)),
+      );
 
   // ------------------------------------------------------------- spec ---
 

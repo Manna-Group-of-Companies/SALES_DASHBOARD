@@ -30,6 +30,7 @@
 // order quietly shorter.
 
 import 'package:manna_field_sales/core/constants.dart';
+import 'package:manna_field_sales/core/product_grade.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 
 class OrderCopyResult {
@@ -51,18 +52,6 @@ int _asInt(dynamic v) =>
 double _asDouble(dynamic v) =>
     v is num ? v.toDouble() : (double.tryParse('${v ?? ''}') ?? 0);
 
-/// The grade a name is in, from either naming style. Spellings in the item
-/// master are not consistent ("POLY GOLD", "POLYGOLD", "POLYCOLD").
-const Map<String, String> _grades = {
-  'BLACKPEARL': 'BLACK PEARL',
-  'PLATINUM': 'PLATINUM',
-  'POLYGOLD': 'POLY GOLD',
-  'POLYCOLD': 'POLY GOLD',
-  'SILVER': 'SILVER',
-  'DIAMOND': 'DIAMOND',
-  'MEDIUM': 'MEDIUM',
-};
-
 /// Words that say what family or grade a name is, not which product. Dropped
 /// before the pattern is compared.
 const Set<String> _noise = {
@@ -78,11 +67,7 @@ const Set<String> _noise = {
 ({String grade, String numbers, Set<String> words})? itemMatchKey(
     String name) {
   final up = name.toUpperCase();
-  final squashed = up.replaceAll(RegExp(r'[^A-Z]'), '');
-  final grades = {
-    for (final e in _grades.entries)
-      if (squashed.contains(e.key)) e.value,
-  };
+  final grades = gradesIn(name);
   if (grades.length != 1) return null;
 
   final tokens = RegExp(r'[A-Z0-9]+').allMatches(up).map((m) => m.group(0)!);
