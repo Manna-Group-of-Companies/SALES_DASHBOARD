@@ -34,6 +34,7 @@ import { onDbChange } from '@/api/mock/db';
 import { Button, Icon, type IconName } from '@/components/ui';
 import { initials } from '@/components/common/format';
 import { useTheme } from '@/app/theme';
+import { useNewBuild } from '@/app/newBuild';
 import { NotificationPanel } from '@/features/notifications/NotificationPanel';
 import { ToastHost } from '@/features/notifications/ToastHost';
 import { Api } from '@/api/client';
@@ -64,6 +65,8 @@ interface NavItem {
 export function AppShell() {
   const dispatch = useAppDispatch();
   const location = useLocation();
+  /** A deploy since this tab opened: reload on the next screen change (24 Nov 2026). */
+  const build = useNewBuild(location.pathname);
   const user = useAppSelector(selectUser);
   const unread = useAppSelector(selectUnreadCount);
   const pendingAcks = useAppSelector(selectPendingAcks);
@@ -414,6 +417,14 @@ export function AppShell() {
         )}
 
         <main className="content">
+          {build.stale && (
+            <div className="newbuild" role="status">
+              <span>A new version of the dashboard is ready.</span>
+              <button type="button" className="btn btn--sm btn--primary" onClick={build.reload}>
+                Reload
+              </button>
+            </div>
+          )}
           <Outlet />
         </main>
       </div>

@@ -172,6 +172,21 @@
   padding: 28px;
 }
 .content--flush { padding: 0; }
+
+/* A deploy since this tab opened (newBuild.ts). */
+.newbuild {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--hue-blue) 35%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--hue-blue) 10%, transparent);
+  color: var(--hue-blue);
+  font-weight: 600;
+}
 /* An alert placed straight into a page is spaced from whatever follows it. */
 .content > div > .alert { margin-bottom: 14px; }
 
