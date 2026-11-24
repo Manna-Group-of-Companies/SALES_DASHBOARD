@@ -78,6 +78,59 @@ void main() {
     });
   });
 
+  group('a trip left running from an earlier day', () {
+    // 24 Nov 2026: Nikhil Tk's trip of 14 Nov ran until the 16th and his trip
+    // of 11 Nov until the 19th. The visits of the 16th and the 18th went onto
+    // those old trips, and the Trips list showed no trip on either day.
+    const today = '2026-11-16';
+
+    test('says nothing when the only running trip is today\'s', () {
+      const running = [RunningTrip(name: 'TRP-01080', date: today)];
+      expect(tripsLeftOpen(running, today), isEmpty);
+      expect(tripLeftOpenWarning(running, today), isNull);
+    });
+
+    test('says nothing when no trip is running', () {
+      expect(tripLeftOpenWarning(const [], today), isNull);
+    });
+
+    test('warns about a trip from yesterday or before, and names its day', () {
+      const running = [RunningTrip(name: 'TRP-01072', date: '2026-11-14')];
+      final w = tripLeftOpenWarning(running, today)!;
+      expect(w, contains('2026-11-14'));
+      expect(w, contains('End it'));
+      expect(w, isNot(contains('TRP-')));
+    });
+
+    test('names every old trip, oldest first, so one End does not hide another',
+        () {
+      const running = [
+        RunningTrip(name: 'TRP-01072', date: '2026-11-14'),
+        RunningTrip(name: 'TRP-01041', date: '2026-11-11'),
+      ];
+      expect(tripsLeftOpen(running, today).map((t) => t.name),
+          ['TRP-01041', 'TRP-01072']);
+      final w = tripLeftOpenWarning(running, today)!;
+      expect(w, contains('2 trips'));
+      expect(w.indexOf('2026-11-11'), lessThan(w.indexOf('2026-11-14')));
+    });
+
+    test('leaves today\'s trip out of the warning when an old one is open too',
+        () {
+      const running = [
+        RunningTrip(name: 'TRP-01080', date: today),
+        RunningTrip(name: 'TRP-01072', date: '2026-11-14'),
+      ];
+      expect(tripsLeftOpen(running, today).map((t) => t.name), ['TRP-01072']);
+    });
+
+    test('a trip with no date is not warned about — there is no day to name',
+        () {
+      const running = [RunningTrip(name: 'TRP-01000')];
+      expect(tripLeftOpenWarning(running, today), isNull);
+    });
+  });
+
   group('how a trip is named back to the rep', () {
     test('reads like the Trips list: date, then purpose', () {
       expect(

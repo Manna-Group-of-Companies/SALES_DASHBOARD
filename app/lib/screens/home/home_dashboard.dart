@@ -10,6 +10,7 @@ import 'package:manna_field_sales/core/responsive.dart';
 import 'package:manna_field_sales/core/sales_target.dart';
 import 'package:manna_field_sales/core/server_clock.dart';
 import 'package:manna_field_sales/core/session.dart';
+import 'package:manna_field_sales/core/trip_rules.dart';
 import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/screens/attendance/attendance_calendar_screen.dart';
 import 'package:manna_field_sales/screens/attendance/regularization_approvals_screen.dart';
@@ -43,6 +44,7 @@ import 'package:manna_field_sales/screens/retread/retread_proforma_list_screen.d
 import 'package:manna_field_sales/screens/retread/retread_ready_tyres_screen.dart';
 import 'package:manna_field_sales/screens/trips/expense_summary_screen.dart';
 import 'package:manna_field_sales/screens/trips/hr_trip_expenses_screen.dart';
+import 'package:manna_field_sales/screens/trips/trip_detail_screen.dart';
 import 'package:manna_field_sales/screens/trips/trip_rates_screen.dart';
 import 'package:manna_field_sales/screens/trips/trips_screen.dart';
 import 'package:manna_field_sales/screens/orders/unsent_orders_screen.dart';
@@ -70,6 +72,10 @@ class _HomeDashboardState extends State<HomeDashboard>
     with WidgetsBindingObserver {
   late Future<List<int>> _counts;
   late Future<Map<String, dynamic>?> _activeTrip;
+
+  /// This rep's trips still running from an earlier day (24 Nov 2026) — see
+  /// `tripsLeftOpen` for the trips this went unnoticed on.
+  late Future<List<RunningTrip>> _oldTrips;
   // Held in state, not created in build(). A future made inside build() is a
   // new request on every setState, and its card dropped back to a loading
   // placeholder each time, which is part of what made this screen flicker.
@@ -135,6 +141,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     setState(() {
       _counts = _loadCounts();
       _activeTrip = _loadActiveTrip();
+      _oldTrips = _loadOldTrips();
       _target = _loadTarget();
       _due = _loadDue();
     });
@@ -195,6 +202,7 @@ class _HomeDashboardState extends State<HomeDashboard>
     _lastRefresh = DateTime.now();
     _counts = _loadCounts();
     _activeTrip = _loadActiveTrip();
+    _oldTrips = _loadOldTrips();
     _target = _loadTarget();
     _due = _loadDue();
     _loadAtt();
@@ -459,6 +467,65 @@ class _HomeDashboardState extends State<HomeDashboard>
       return null;
     }
   }
+
+  /// Rounded towards silence: a failed read shows no warning rather than a
+  /// wrong one. The one-trip rule still refuses a second trip, and the next
+  /// refresh asks again.
+  Future<List<RunningTrip>> _loadOldTrips() async {
+    if (Session.I.salesPerson == null) return const [];
+    try {
+      return tripsLeftOpen(await Api.getActiveTrips(), today());
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Red, above attendance, while a trip from an earlier day is still running.
+  /// Tapping opens that trip (or the Trips list, when there are several),
+  /// where End Trip is.
+  Widget _oldTripCard() => FutureBuilder<List<RunningTrip>>(
+        future: _oldTrips,
+        builder: (_, snap) {
+          final old = snap.data ?? const <RunningTrip>[];
+          final warning = tripLeftOpenWarning(old, today());
+          if (warning == null) return const SizedBox.shrink();
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Card(
+              color: const Color(0xFFFEE2E2),
+              child: ListTile(
+                leading: const Icon(Icons.warning_amber_rounded,
+                    color: Color(0xFFB91C1C)),
+                title: Text(
+                    old.length == 1
+                        ? 'Trip from ${old.first.date} not ended'
+                        : '${old.length} old trips not ended',
+                    style: const TextStyle(
+                        color: Color(0xFF991B1B),
+                        fontWeight: FontWeight.bold)),
+                subtitle: Text(warning,
+                    style: const TextStyle(color: Color(0xFF7F1D1D))),
+                trailing: const Icon(Icons.chevron_right,
+                    color: Color(0xFF991B1B)),
+                onTap: () {
+                  final screen = old.length == 1
+                      ? TripDetailScreen(tripName: old.first.name)
+                      : const TripsScreen();
+                  Navigator.of(context)
+                      .push(MaterialPageRoute(builder: (_) => screen))
+                      .then((_) {
+                    if (!mounted) return;
+                    setState(() {
+                      _oldTrips = _loadOldTrips();
+                      _activeTrip = _loadActiveTrip();
+                    });
+                  });
+                },
+              ),
+            ),
+          );
+        },
+      );
 
   Widget _attendanceCard() {
     final status = (_att?['status'] ?? '').toString();
@@ -901,6 +968,7 @@ class _HomeDashboardState extends State<HomeDashboard>
                 ),
               ),
             if (Session.I.isHR) const SizedBox(height: 16),
+            if (isRep) _oldTripCard(),
             if (isRep) _attendanceCard(),
             if (isRep) const SizedBox(height: 12),
             if (isRep)

@@ -70,6 +70,44 @@ String? tripStartRefusal(List<RunningTrip> running) {
       '($listed${rest > 0 ? ', and $rest more' : ''}). End them first.';
 }
 
+/// Trips still running from a day before [today] (`YYYY-MM-DD`), oldest first.
+///
+/// The one-trip rule stops a second trip being started; it does nothing about
+/// a rep who never presses End Trip. Nikhil Tk's trip of 14 Nov 2026 ran until
+/// the evening of the 16th, and his trip of 11 Nov until the 19th. Every visit
+/// in between was linked to the old trip, so the Trips list (which shows a
+/// trip on the day it started) showed no trip on the 16th or the 18th while
+/// the attendance calendar showed him at work, and the 14th's trip claimed
+/// two days' kilometres.
+///
+/// A trip with no date is left out rather than warned about: the warning has
+/// to say which day the trip is from, and `trip_date` is always set by the
+/// app. Plain string comparison is right for ISO dates.
+List<RunningTrip> tripsLeftOpen(List<RunningTrip> running, String today) {
+  final old = running
+      .where((t) => t.date.trim().isNotEmpty && t.date.compareTo(today) < 0)
+      .toList()
+    ..sort((a, b) => a.date.compareTo(b.date));
+  return old;
+}
+
+/// What the home screen says about [tripsLeftOpen], or null when there is
+/// nothing to say.
+String? tripLeftOpenWarning(List<RunningTrip> running, String today) {
+  final old = tripsLeftOpen(running, today);
+  if (old.isEmpty) return null;
+  if (old.length == 1) {
+    return 'Your trip from ${old.first.date} is still running. '
+        'End it, then start today\'s trip — until then today\'s visits '
+        'go onto that day\'s trip.';
+  }
+  final listed = old.take(3).map((t) => t.date).join(', ');
+  final rest = old.length - 3;
+  return '${old.length} trips from earlier days are still running '
+      '($listed${rest > 0 ? ', and $rest more' : ''}). End them, then start '
+      'today\'s trip.';
+}
+
 /// Whether a vehicle leg may be started or ended from its dialog (13 Nov
 /// 2026). An odometer leg needs its photo to have reached the server — or to
 /// be kept on the phone to go when it can — before the leg is saved.
