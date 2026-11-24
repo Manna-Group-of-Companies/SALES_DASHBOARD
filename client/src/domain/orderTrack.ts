@@ -239,9 +239,21 @@ export function orderTrack(o: OrderTrackInput): OrderTrack {
     [mt && `Manna Treads SAP SO ${mt}`, ht && `Hi-Tech SAP SO ${ht}`].filter(Boolean).join(' · ') ||
     'Not in SAP yet';
 
+  // SAP already has an order ERPNext still shows as waiting for approval
+  // (the order sync sent it early, 18 and 23 Nov 2026). The user's call,
+  // 24 Nov 2026: such an order shows its approval steps as passed - SAP is
+  // past them, as the GM queue already treats it (19 Nov) - with the red
+  // warning and ERPNext's own status kept in the note. Not a rejected one.
+  const sentBeforeApproval = inSap && po !== PO_STATUS.approved && !cancelled;
+  const early =
+    sentBeforeApproval && (BEFORE_MANAGER.includes(po) || NOT_SENT.includes(po) || po === PO_STATUS.pendingGm);
+  const erpSays = `ERPNext still says ${po || 'not sent for approval'}`;
+
   // --- Manager -----------------------------------------------------------
   let manager: [StageState, string];
-  if (PAST_MANAGER.includes(po)) {
+  if (early && po !== PO_STATUS.pendingGm) {
+    manager = ['done', `Passed in SAP · ${erpSays}`];
+  } else if (PAST_MANAGER.includes(po)) {
     manager = ['done', po === PO_STATUS.pendingGm || gmBy || po === PO_STATUS.finalApproval ? 'Sent to the GM' : 'Approved'];
   } else if (po === PO_STATUS.rejected) {
     manager = ['current', 'Rejected'];
@@ -255,7 +267,8 @@ export function orderTrack(o: OrderTrackInput): OrderTrack {
 
   // --- GM ----------------------------------------------------------------
   let gm: [StageState, string];
-  if (po === PO_STATUS.pendingGm) gm = ['current', 'Waiting for the GM'];
+  if (early && po === PO_STATUS.pendingGm) gm = ['done', `Passed in SAP · ${erpSays}`];
+  else if (po === PO_STATUS.pendingGm) gm = ['current', 'Waiting for the GM'];
   else if (po === PO_STATUS.finalApproval || gmBy) gm = ['done', gmNote];
   else if (po === PO_STATUS.rejected || !KNOWN.includes(po)) gm = ['unknown', 'Not known'];
   else if (po === PO_STATUS.approved) gm = ['na', 'No GM approval on record'];
@@ -263,7 +276,6 @@ export function orderTrack(o: OrderTrackInput): OrderTrack {
 
   // --- SAP order creation ------------------------------------------------
   let sap: [StageState, string];
-  const sentBeforeApproval = inSap && po !== PO_STATUS.approved && !cancelled;
   if (inSap) {
     sap = ['done', cancelled ? `${sapLine} · Cancelled in SAP` : sentBeforeApproval ? `${sapLine} · sent before approval` : sapLine];
   }
@@ -283,7 +295,7 @@ export function orderTrack(o: OrderTrackInput): OrderTrack {
   else if (cancelled) pick = ['na', 'Order cancelled in SAP'];
   // A pick list needs an approved order (manna_pick_list_submit refuses
   // anything else), even one SAP was sent early.
-  else if (po !== PO_STATUS.approved && !invoiced) pick = ['waiting', 'After approval'];
+  else if (po !== PO_STATUS.approved && !invoiced) pick = ['waiting', early ? 'After approval in ERPNext' : 'After approval'];
   else if (lists === null) pick = ['unknown', 'Pick lists could not be read'];
   else if (invoiced) pick = ['na', 'Invoiced without a pick list'];
   // Hi-Tech picks an older-route order by hand in SAP; B1iF still reports it.
@@ -320,6 +332,17 @@ export function orderTrack(o: OrderTrackInput): OrderTrack {
       : { who: 'rep', text: 'Rejected — change the order and send it again' };
   } else if (!KNOWN.includes(po)) {
     action = { who: null, text: 'Not known' };
+  } else if (early && !ht) {
+    const err = clean(o.mtSyncError);
+    action = err
+      ? { who: 'office', text: `Hi-Tech's sales order not made: ${err}` }
+      : { who: 'office', text: "Waiting for Hi-Tech's sales order (B1if)" };
+  } else if (early) {
+    // manna_pick_list_submit refuses a list until ERPNext says approved.
+    action = {
+      who: po === PO_STATUS.pendingGm ? 'gm' : 'sales_manager',
+      text: 'Approve it in ERPNext too — the pick list needs that approval',
+    };
   } else if (NOT_SENT.includes(po)) {
     action = { who: 'rep', text: 'Send it for approval' };
   } else if (po === PO_STATUS.pendingRate) {

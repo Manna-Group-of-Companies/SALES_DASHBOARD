@@ -20,12 +20,12 @@
     "production_approval_is_not_a_step": "Since 9 Nov 2026 the sync no longer reads a pick list's approval_status; Hi-Tech's store confirms the list in SAP. Shown, never waited on.",
     "unread_pick_lists_are_unknown": "When pick lists could not be read, or the read may not hold this order's (the endpoint returns the newest 200), the stage is unknown, never 'no pick list'.",
     "done_means_invoiced": "Order Processing is done only on custom_sap_invoice, custom_mt_invoice or B1iF's custom_sap_order_status = Dispatched - each an invoice for the whole order. A delivery is not dispatch (sap_order_state.json).",
-    "never_in_sap_before_approval": "The user's rule (23 Nov 2026): nothing goes to SAP until the manager - and the GM, when escalated - has approved, i.e. custom_po_status is 'PO Approved - Ready for SAP'. An order SAP has while it is at any other status was sent early by the order sync; expect.early_sap says so and the screens show it as a warning. Its pick list waits for approval, because manna_pick_list_submit refuses one before it.",
+    "never_in_sap_before_approval": "The user's rule (23 Nov 2026): nothing goes to SAP until the manager - and the GM, when escalated - has approved, i.e. custom_po_status is 'PO Approved - Ready for SAP'. An order SAP has while it is at any other status was sent early by the order sync; expect.early_sap says so and the screens show it as a warning. Its pick list waits for approval, because manna_pick_list_submit refuses one before it. The user's call, 24 Nov 2026: such an order (unless rejected) shows its Manager and GM steps as passed, since SAP is past them, with ERPNext's status in the note and the warning kept; the next step is the approval in ERPNext the pick list needs.",
     "cancelled_ends_it": "bost_Cancelled in custom_sap_sales_order_status, or Cancelled in custom_sap_order_status, ends the order: the later stages are na and nothing waits on anyone."
   },
   "cases": [
     {
-      "why": "SAL-ORD-2026-00166 on 21 Nov 2026: still with the manager, but PASS M already made Manna Treads SO 587",
+      "why": "SAL-ORD-2026-00166 on 21 Nov 2026: still with the manager in ERPNext, but PASS M already made Manna Treads SO 587 - the approval shows as passed, and the next step is B1if's",
       "order": {
         "custom_po_status": "Pending Approval",
         "custom_mt_sales_order": "587",
@@ -34,9 +34,9 @@
       },
       "pick_lists": [],
       "expect": {
-        "stages": ["current", "na", "done", "waiting", "waiting"],
+        "stages": ["done", "na", "done", "waiting", "waiting"],
         "sap": { "manna_treads": "587", "hitech": "" },
-        "who": "sales_manager",
+        "who": "office",
         "outcome": "open",
         "early_sap": true
       }
@@ -129,7 +129,7 @@
       }
     },
     {
-      "why": "SAL-ORD-2026-00172 on 23 Nov 2026: still with the manager, yet the sync made Manna Treads SO 595 and B1if Hi-Tech SO 603 - flagged, and no pick list is asked for before approval",
+      "why": "SAL-ORD-2026-00172 on 23 Nov 2026: still with the manager, yet the sync made Manna Treads SO 595 and B1if Hi-Tech SO 603 - approval shown as passed (24 Nov 2026), flagged, and the pick list waits for the approval in ERPNext",
       "order": {
         "custom_po_status": "Pending Approval",
         "custom_mt_sales_order": "595",
@@ -139,7 +139,7 @@
       },
       "pick_lists": [],
       "expect": {
-        "stages": ["current", "na", "done", "waiting", "waiting"],
+        "stages": ["done", "na", "done", "waiting", "waiting"],
         "sap": { "manna_treads": "595", "hitech": "603" },
         "who": "sales_manager",
         "outcome": "open",
@@ -147,7 +147,24 @@
       }
     },
     {
-      "why": "SAL-ORD-2026-00167 on 23 Nov 2026: with the GM, already Manna Treads SO 591 / Hi-Tech SO 599 - flagged; the GM still decides",
+      "why": "SAL-ORD-2026-00172 on 24 Nov 2026: SAP has invoiced it while ERPNext still says Pending Approval - approval shown as passed, the order complete, the warning kept",
+      "order": {
+        "custom_po_status": "Pending Approval",
+        "custom_mt_sales_order": "595",
+        "custom_sap_sales_order": "603",
+        "custom_sap_order_status": "Dispatched"
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "done", "na", "done"],
+        "sap": { "manna_treads": "595", "hitech": "603" },
+        "who": null,
+        "outcome": "complete",
+        "early_sap": true
+      }
+    },
+    {
+      "why": "SAL-ORD-2026-00167 on 23 Nov 2026: with the GM, already Manna Treads SO 591 / Hi-Tech SO 599 - the GM step shows as passed, flagged; the pick list waits for the GM's approval in ERPNext",
       "order": {
         "custom_po_status": "Pending GM Approval",
         "custom_mt_sales_order": "591",
@@ -156,7 +173,7 @@
       },
       "pick_lists": [],
       "expect": {
-        "stages": ["done", "current", "done", "waiting", "waiting"],
+        "stages": ["done", "done", "done", "waiting", "waiting"],
         "sap": { "manna_treads": "591", "hitech": "599" },
         "who": "gm",
         "outcome": "open",

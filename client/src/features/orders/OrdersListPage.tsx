@@ -500,12 +500,28 @@ export function OrdersListPage() {
                   */}
                   {r.kind === 'sales' && r.bucket !== 'cancelled' ? (
                     (() => {
-                      const stage = pcOrderStage({
-                        poStatus: r.status,
-                        pushed: pc.pushed.has(r.id) || !!r.sapSalesOrder,
-                        commitment: pc.orders[r.id]?.status ?? '',
-                      });
-                      return <Badge tone={STAGE_TONE[stage] ?? 'accent'}>{stage}</Badge>;
+                      // SAP already has it though ERPNext still waits for
+                      // approval (24 Nov 2026, the user): the stage is SAP
+                      // Pushed; ERPNext's own status is in the tooltip and
+                      // the track's red warning.
+                      const o = orderById.get(r.id);
+                      const early =
+                        !!o && r.status !== 'Rejected' && trackOf(o, pickLists[r.id] ?? null).sentBeforeApproval;
+                      const stage = early
+                        ? ORDER_STAGE.pushed
+                        : pcOrderStage({
+                            poStatus: r.status,
+                            pushed: pc.pushed.has(r.id) || !!r.sapSalesOrder,
+                            commitment: pc.orders[r.id]?.status ?? '',
+                          });
+                      return (
+                        <Badge
+                          tone={STAGE_TONE[stage] ?? 'accent'}
+                          title={early ? `In SAP before approval - ERPNext still says ${r.status}` : undefined}
+                        >
+                          {stage}
+                        </Badge>
+                      );
                     })()
                   ) : (
                     <StatusPill status={r.status} sapStatus={r.sapSalesOrderStatus} />
