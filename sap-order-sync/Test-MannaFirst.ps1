@@ -242,6 +242,54 @@ Check 'ERPNext microseconds on the time are ignored' (-not (Test-B1ifLate -Since
 Check 'a time that cannot be read is late, so somebody is told' (Test-B1ifLate -Since '' -Now $now -Minutes 30)
 
 # ------------------------------------------------------------------------------
+Write-Host "`nA 'B1if is late' error is looked at again, and cleared when the document turns up (24 Nov 2026)" -ForegroundColor Cyan
+
+# What PASS P stores: Write-MfRefusal puts the prefix in front and limits it to 250 characters.
+$pLate = Limit-MtMessage ("Purchase order to Hi-Tech: " + (Format-B1ifLateMessage -Pass 'P' -Minutes 30 -Number '588')) 250
+$hLate = Limit-MtMessage (Format-B1ifLateMessage -Pass 'H' -Minutes 30 -Number '263') 250
+Check "PASS P's own late message is recognised as late" (Test-B1ifLateError -Message $pLate -Pass 'P') $pLate
+Check "PASS H's own late message is recognised as late" (Test-B1ifLateError -Message $hLate -Pass 'H') $hLate
+Check 'the message read back from ERPNext 24 Nov is recognised' (Test-B1ifLateError -Message "Purchase order to Hi-Tech: B1if has not made it in 30 minutes - see B1if's message log for Manna Treads SO 588, and @MANNA_IC in Manna Treads SAP." -Pass 'P')
+Check 'a longer wait in the message is still recognised' (Test-B1ifLateError -Message (Limit-MtMessage ("Purchase order to Hi-Tech: " + (Format-B1ifLateMessage -Pass 'P' -Minutes 120 -Number '9'))) -Pass 'P')
+Check "PASS H's late message is not PASS P's, nor the other way round" (-not (Test-B1ifLateError -Message $hLate -Pass 'P') -and -not (Test-B1ifLateError -Message $pLate -Pass 'H'))
+Check 'a real refusal still waits for a person' (-not (Test-B1ifLateError -Message 'Purchase order to Hi-Tech: Manna Treads SAP has 2 live purchase orders with NumAtCard SAL-ORD-2026-00001 - 251, 252. Cancel the wrong one in SAP, then clear this.' -Pass 'P'))
+Check 'a PASS M error is not a late error' (-not (Test-B1ifLateError -Message 'Customer has no Manna Treads BP code (custom_bp_code)' -Pass 'P'))
+Check 'no error is not a late error' (-not (Test-B1ifLateError -Message '' -Pass 'P') -and -not (Test-B1ifLateError -Message $null -Pass 'H'))
+Check 'the words somewhere in the middle are not enough' (-not (Test-B1ifLateError -Message ("Note: " + $pLate) -Pass 'P'))
+
+$lf = Get-LinkListFilters -Flow $flow -Has 'custom_mt_sales_order' -Missing 'custom_mt_purchase_order' -ErrField 'custom_mt_sync_error' -Pass 'P'
+$clean = $lf.Clean | ConvertFrom-Json
+$late  = $lf.Late  | ConvertFrom-Json
+Check 'both filters are valid JSON' ($null -ne $clean -and $null -ne $late)
+Check 'the first read is orders with no error' (@($clean | Where-Object { $_[0] -eq 'custom_mt_sync_error' -and $_[1] -eq 'in' }).Count -eq 1)
+Check "the second is orders whose error starts with PASS P's late prefix" (@($late | Where-Object { $_[0] -eq 'custom_mt_sync_error' -and $_[1] -eq 'like' -and $_[2] -eq 'Purchase order to Hi-Tech: B1if has not made it in %' }).Count -eq 1) $lf.Late
+Check 'both keep the rest of the scope: unit, since, sales order set, no purchase order, not cancelled, not Rejected' (
+    @($late | Where-Object { $_[0] -eq 'custom_mt_sales_order' -and $_[1] -eq 'is' }).Count -eq 1 -and
+    @($late | Where-Object { $_[0] -eq 'custom_mt_purchase_order' -and $_[1] -eq 'in' }).Count -eq 1 -and
+    @($late | Where-Object { $_[0] -eq 'creation' -and $_[2] -eq '2026-11-03 00:00:00' }).Count -eq 1 -and
+    @($late | Where-Object { $_[0] -eq 'docstatus' }).Count -eq 1 -and
+    @($late | Where-Object { $_[0] -eq 'custom_po_status' -and $_[1] -eq 'not in' }).Count -eq 1)
+$hf = Get-LinkListFilters -Flow $flow -Has 'custom_mt_purchase_order' -Missing 'custom_sap_sales_order' -ErrField 'custom_sap_sync_error' -Pass 'H'
+Check "PASS H's like-pattern keeps the apostrophe in Hi-Tech's" (@(($hf.Late | ConvertFrom-Json) | Where-Object { $_[1] -eq 'like' -and $_[2] -eq "B1if has not made Hi-Tech's order in %" }).Count -eq 1) $hf.Late
+
+$joined = @(Join-ErpRows -First @([pscustomobject]@{ name = 'SAL-ORD-2026-00170' }, [pscustomobject]@{ name = 'SAL-ORD-2026-00162' }) -Second @([pscustomobject]@{ name = 'SAL-ORD-2026-00162' }, [pscustomobject]@{ name = 'SAL-ORD-2026-00164' }))
+Check 'the two reads are joined: each order once, in name order' (($joined | ForEach-Object { $_.name }) -join ',' -eq 'SAL-ORD-2026-00162,SAL-ORD-2026-00164,SAL-ORD-2026-00170') (($joined | ForEach-Object { $_.name }) -join ',')
+Check 'two empty reads are an empty list' (@(Join-ErpRows -First @() -Second @()).Count -eq 0)
+
+# Get-MpList itself, against a stand-in for ERPNext that answers by filter.
+$script:F_MT_SO = 'custom_mt_sales_order'; $script:F_MT_PO = 'custom_mt_purchase_order'; $script:F_MT_ERR = 'custom_mt_sync_error'
+$script:erpCalls = @()
+function Get-ErpList {
+    param([string] $Filters, [string[]] $Fields)
+    $script:erpCalls += $Filters
+    if ($Filters -match '"like"') { return @([pscustomobject]@{ name = 'SAL-ORD-2026-00162' }, [pscustomobject]@{ name = 'SAL-ORD-2026-00164' }) }
+    return @([pscustomobject]@{ name = 'SAL-ORD-2026-00175' })
+}
+$mp = @(Get-MpList -Flow $flow)
+Check 'PASS P reads both: the clean orders and the late ones' ($script:erpCalls.Count -eq 2)
+Check "PASS P's list has the late orders back in it" (($mp | ForEach-Object { $_.name }) -join ',' -eq 'SAL-ORD-2026-00162,SAL-ORD-2026-00164,SAL-ORD-2026-00175') (($mp | ForEach-Object { $_.name }) -join ',')
+
+# ------------------------------------------------------------------------------
 Write-Host "`nTest companies with the local ERPNext only" -ForegroundColor Cyan
 
 Check 'TEST_ companies with the local copy: allowed' (-not (Throws { Assert-SapErpPairing -ErpSite 'http://127.0.0.1:8000' -CompanyDbs @('TEST_HITECH_PRETREADS', 'TEST_MANNA_TREADS') }))
