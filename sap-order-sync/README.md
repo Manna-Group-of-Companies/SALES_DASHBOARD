@@ -83,6 +83,7 @@ POST body and the ERPNext writes it would make, and changes nothing.
 | `Invoke-FlagWatch.ps1` | The watcher. Every minute Task Scheduler starts one per sync; it reads that sync's request flag every 5 s (15 until 25 Sep 2026) and starts its poller only when the flag is up. Shared by the order, stock, credit and pricing syncs. |
 | `Register-FlagWatchTasks.ps1` | **Run elevated, by hand.** Removes every timed order/stock/credit/products task and registers the four watchers (orders, stock, credit, pricing). Previews unless given `-Apply`. |
 | `Test-FlagWatch.ps1` | Offline. When the watcher starts a poller and when it does not. 9 assertions. |
+| `Enable-FlagSync.ps1` | **Already run, 24 Sep 2026.** The release switch that put the flag-only sync live: swapped in `release-2026-09-24\`, ran the tests and a dry run, then `Register-FlagWatchTasks.ps1 -Apply`. Kept as the record; refuses to run, because it would copy the September scripts over the live ones. |
 | `Register-OrderSyncTasks.ps1` | **Superseded 24 Sep 2026** by `Register-FlagWatchTasks.ps1`; refuses to run, because it would restore the timed sync. |
 | `config.example.json` / `config.json` | Job config. `config.json` holds live creds and is git-ignored. |
 | `poller.config.example.json` / `poller.config.json` | Poller config. Git-ignored. |
