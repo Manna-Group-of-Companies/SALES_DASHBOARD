@@ -23,7 +23,10 @@ code for making them was removed on 4 Nov 2026, so the two cannot conflict.
 PASS P and PASS H only **find** what B1if made, by NumAtCard (the ERPNext
 order's name, which B1if copies across), and write it back to ERPNext. PASS B
 keeps following Hi-Tech's order as before. An order B1if has not followed in
-`order_flow.b1if_wait_minutes` (30) gets an error on the ERPNext order.
+`order_flow.b1if_wait_minutes` (30) gets an error on the ERPNext order. The
+sync keeps looking for it, though, and clears the error itself when B1if's
+document turns up. So re-sending an event, or B1if catching up, needs nothing
+done in ERPNext.
 
 ## What it decides
 
@@ -236,7 +239,10 @@ Everything here runs against the test copies only.
 
 To switch off, set `ENABLED = N` in either company. The script will not take
 over: after 30 minutes PASS P puts an error on each ERPNext order still
-without a purchase order, and those are made by hand until B1if is back on.
+without a purchase order. When B1if is back on, re-send those orders' events
+(or make a harmless edit to the sales order, such as its Journal Remark: an
+update sends the event again, and step 1 makes nothing twice). The sync then
+finds the purchase orders and clears the errors itself.
 
 ## Step 5: invoices and payments → ERPNext (10 Nov 2026)
 
