@@ -559,7 +559,11 @@ Manna Treads sells, Hi-Tech makes and holds the stock. So an order goes:
    PASS A's** — status, line reconcile, invoices, Hi-Tech's kilos. An order
    B1if has not followed within `order_flow.b1if_wait_minutes` (30) is
    refused: PASS P's in `custom_mt_sync_error`, PASS H's in
-   `custom_sap_sync_error`, naming B1if's message log.
+   `custom_sap_sync_error`, naming B1if's message log. That refusal is the
+   one that does **not** stop the order: both passes still look for it every
+   run, and when B1if's document turns up they link it and clear the error
+   themselves (24 Nov 2026 — two orders added before the B1if package was
+   switched on sat behind their error until it was cleared by hand).
 5. *Not built yet:* the pick list, Hi-Tech's invoice for what was picked,
    Manna Treads' goods receipt and delivery note.
 
@@ -611,7 +615,11 @@ PASS M):
 Both `read_only`, `allow_on_submit`, `no_copy`, after
 `custom_mt_sales_order_entry`. A refusal by either pass goes in
 `custom_mt_sync_error` — PASS P's start *"Purchase order to Hi-Tech:"* — and
-the order is not tried again until somebody clears it. The dashboard does not
+the order is not tried again until somebody clears it. The exception is
+*"B1if has not made it in N minutes"* (PASS P) and *"B1if has not made
+Hi-Tech's order in N minutes"* (PASS H): those orders are looked for again
+every run and the error is cleared when the document appears
+(`Test-B1ifLateError`). The dashboard does not
 show these yet.
 
 **Not handled yet:** an order edited, rejected or cancelled in ERPNext after
