@@ -49,6 +49,8 @@ import { money } from '@/components/common/format';
 import { StatusPill, CompletionTick } from '@/components/common/StatusPill';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import { ExportButton } from '@/features/reports/ExportButton';
+import { OrderTrackLine, trackOf, usePickListsByOrder } from './OrderTrack';
+import { responsibleText } from '@/domain/orderTrack';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import '@/components/common/status.css';
@@ -193,6 +195,17 @@ export function OrdersListPage() {
     [weeks, weekStart],
   );
 
+  /*
+   * Each Sales Order's stage track (21 Nov 2026): which SAP holds it, the
+   * stages, who acts next - from real fields only. Pick lists are read once
+   * for the page; a failed read shows "not known", never "no pick list".
+   */
+  const orderById = useMemo(() => new Map(orders.map((o) => [o.id, o])), [orders]);
+  const pickLists = usePickListsByOrder(
+    useMemo(() => orders.map((o) => o.id), [orders]),
+    tick,
+  );
+
   const staff = useMemo(() => activeSalesPeople(people), [people]);
   const myTeam = useMemo(() => teamOf(people, user?.salesPerson), [people, user]);
 
@@ -334,6 +347,17 @@ export function OrdersListPage() {
                 State: ORDER_BUCKET_LABEL[r.bucket],
                 Production: r.productionStatus ?? '',
                 'Combined order': r.combinedOrder ?? '',
+                ...(() => {
+                  const o = r.kind === 'sales' ? orderById.get(r.id) : undefined;
+                  if (!o) return { 'SAP sales order': '', 'Pick list': '', 'Next step': '', 'Waiting on': '' };
+                  const t = trackOf(o, pickLists[r.id] ?? null);
+                  return {
+                    'SAP sales order': t.sapLine,
+                    'Pick list': t.pickList,
+                    'Next step': t.action.text,
+                    'Waiting on': responsibleText(t.action.who, o.rep),
+                  };
+                })(),
               }))
             }
           />
@@ -476,12 +500,28 @@ export function OrdersListPage() {
                   */}
                   {r.kind === 'sales' && r.bucket !== 'cancelled' ? (
                     (() => {
-                      const stage = pcOrderStage({
-                        poStatus: r.status,
-                        pushed: pc.pushed.has(r.id) || !!r.sapSalesOrder,
-                        commitment: pc.orders[r.id]?.status ?? '',
-                      });
-                      return <Badge tone={STAGE_TONE[stage] ?? 'accent'}>{stage}</Badge>;
+                      // SAP already has it though ERPNext still waits for
+                      // approval (24 Nov 2026, the user): the stage is SAP
+                      // Pushed; ERPNext's own status is in the tooltip and
+                      // the track's red warning.
+                      const o = orderById.get(r.id);
+                      const early =
+                        !!o && r.status !== 'Rejected' && trackOf(o, pickLists[r.id] ?? null).sentBeforeApproval;
+                      const stage = early
+                        ? ORDER_STAGE.pushed
+                        : pcOrderStage({
+                            poStatus: r.status,
+                            pushed: pc.pushed.has(r.id) || !!r.sapSalesOrder,
+                            commitment: pc.orders[r.id]?.status ?? '',
+                          });
+                      return (
+                        <Badge
+                          tone={STAGE_TONE[stage] ?? 'accent'}
+                          title={early ? `In SAP before approval - ERPNext still says ${r.status}` : undefined}
+                        >
+                          {stage}
+                        </Badge>
+                      );
                     })()
                   ) : (
                     <StatusPill status={r.status} sapStatus={r.sapSalesOrderStatus} />
@@ -503,6 +543,11 @@ export function OrdersListPage() {
 
                 {isSet(r.combinedOrder) && (
                   <div className="ordrow__comb">Combined order {r.combinedOrder}</div>
+                )}
+
+                {/* Lead orders never reach SAP, so they have no track. */}
+                {r.kind === 'sales' && orderById.get(r.id) && (
+                  <OrderTrackLine order={orderById.get(r.id)!} lists={pickLists[r.id] ?? null} />
                 )}
               </div>
             );

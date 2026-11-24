@@ -1,0 +1,484 @@
+{
+  "about": "Where an order stands, stage by stage, and who the next step waits on (21 Nov 2026). Manager Approval -> GM Approval (escalated orders only) -> SAP Order Creation -> Pick List Generation -> Order Processing. Each stage is done, current, waiting, na (not applicable) or unknown. Read only from fields the apps, the SAP order sync and B1if already write; nothing is inferred.",
+  "why": "The GM and the sales managers asked for each order's real status: which SAP holds it, how far it has gone, and who has to act. A guessed stage is worse than none, so a stage is done only when a field says so, and an empty or unreadable field gives unknown or waiting. Implemented in client/src/domain/orderTrack.ts. The phone does not show this track yet; when it does, its implementation must load these cases.",
+  "the_shape": {
+    "order": "Raw Sales Order fields: custom_po_status, custom_gm_approved_by, custom_gm_approved_on, custom_mt_sales_order (Manna Treads SAP DocNum, PASS M), custom_mt_sync_error, custom_mt_invoice, custom_sap_sales_order (Hi-Tech SAP DocNum, PASS A or PASS H), custom_sap_sales_order_status, custom_sap_order_status (B1iF), custom_sap_invoice, custom_sap_sync_error.",
+    "pick_lists": "The order's Manna Pick Lists as manna_pick_lists returns them, or null when they could not be read.",
+    "today": "The server's date. Absent: the pick-list window is not applied.",
+    "pick_lists_since": "Manna App Settings.pick_lists_since. Absent or '': every order gets a pick list.",
+    "expect.stages": "States in order: manager, gm, sap, pick, processing.",
+    "expect.sap": "Which SAP holds the order: the DocNum in each, '' when that SAP does not have it.",
+    "expect.who": "Who the next step waits on: rep, sales_manager, gm, office (the office and SAP: the sync, B1if, Hi-Tech's store), or null when nothing waits.",
+    "expect.outcome": "open, complete (invoiced), cancelled (in SAP) or rejected."
+  },
+  "rules": {
+    "which_sap": "custom_mt_sales_order is Manna Treads SAP; custom_sap_sales_order is Hi-Tech SAP. An order on the Manna Treads first route has both once B1if has made Hi-Tech's order. Neither is derived from the other or from custom_company.",
+    "gm_only_when_recorded": "GM Approval applies when the order is at Pending GM Approval or Pending Final Approval, or carries custom_gm_approved_by. An approved order with no GM stamp is na ('No GM approval on record'); a rejected one is unknown, because nothing records whether it reached the GM.",
+    "in_sap_is_a_fact_whatever_the_approval": "Until 19 Nov 2026 PASS M sent an order to Manna Treads SAP before approval, so an order still with the manager can already be in SAP. The SAP stage says so; the next step is still the approval.",
+    "pick_list_needs_hitech": "A pick list goes against Hi-Tech's sales order, so without custom_sap_sales_order the pick-list stage waits, and the next step is the office's (B1if), not the rep's.",
+    "the_pick_list_window": "A pick list opens two days before the order's delivery_date and only for orders placed from pick_lists_since (pick_list_window.json, enforced by manna_pick_list_submit). Before the window the stage waits and says the day it opens; an order older than the start date gets none, and the next step is not the rep's.",
+    "production_approval_is_not_a_step": "Since 9 Nov 2026 the sync no longer reads a pick list's approval_status; Hi-Tech's store confirms the list in SAP. Shown, never waited on.",
+    "unread_pick_lists_are_unknown": "When pick lists could not be read, or the read may not hold this order's (the endpoint returns the newest 200), the stage is unknown, never 'no pick list'.",
+    "done_means_invoiced": "Order Processing is done only on custom_sap_invoice, custom_mt_invoice or B1iF's custom_sap_order_status = Dispatched - each an invoice for the whole order. A delivery is not dispatch (sap_order_state.json).",
+    "never_in_sap_before_approval": "The user's rule (23 Nov 2026): nothing goes to SAP until the manager - and the GM, when escalated - has approved, i.e. custom_po_status is 'PO Approved - Ready for SAP'. An order SAP has while it is at any other status was sent early by the order sync; expect.early_sap says so and the screens show it as a warning. Its pick list waits for approval, because manna_pick_list_submit refuses one before it. The user's call, 24 Nov 2026: such an order (unless rejected) shows its Manager and GM steps as passed, since SAP is past them, with ERPNext's status in the note and the warning kept; the next step is the approval in ERPNext the pick list needs.",
+    "cancelled_ends_it": "bost_Cancelled in custom_sap_sales_order_status, or Cancelled in custom_sap_order_status, ends the order: the later stages are na and nothing waits on anyone."
+  },
+  "cases": [
+    {
+      "why": "SAL-ORD-2026-00166 on 21 Nov 2026: still with the manager in ERPNext, but PASS M already made Manna Treads SO 587 - the approval shows as passed, and the next step is B1if's",
+      "order": {
+        "custom_po_status": "Pending Approval",
+        "custom_mt_sales_order": "587",
+        "custom_mt_sync_error": "Purchase order to Hi-Tech: B1if has not made it in 30 minutes - see B1if's message log for Manna Treads SO 587, and @MANNA_IC in Manna Treads SAP.",
+        "custom_sap_order_status": ""
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "done", "waiting", "waiting"],
+        "sap": { "manna_treads": "587", "hitech": "" },
+        "who": "office",
+        "outcome": "open",
+        "early_sap": true
+      }
+    },
+    {
+      "why": "SAL-ORD-2026-00165: approved, not in SAP, the sync refused it - the office has to act, and it is not shown as created",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_mt_sync_error": "The customer has no Manna Treads customer code (Customer.custom_bp_code) - set it on the Customer; it is never guessed from the name."
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "current", "waiting", "waiting"],
+        "sap": { "manna_treads": "", "hitech": "" },
+        "who": "office",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "SAL-ORD-2026-00163: in Manna Treads SAP (SO 578), Hi-Tech's order never made, so no pick list is possible yet",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_mt_sales_order": "578",
+        "custom_mt_sync_error": "Purchase order to Hi-Tech: B1if has not made it in 30 minutes - see B1if's message log for Manna Treads SO 578, and @MANNA_IC in Manna Treads SAP."
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "done", "waiting", "waiting"],
+        "sap": { "manna_treads": "578", "hitech": "" },
+        "who": "office",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "SAL-ORD-2026-00162: escalated and approved by the GM, in Manna Treads SAP as SO 588, waiting on B1if for Hi-Tech's order",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_gm_approved_by": "Rajiv",
+        "custom_gm_approved_on": "2026-11-19 22:06:36",
+        "custom_mt_sales_order": "588",
+        "custom_mt_sync_error": ""
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "done", "done", "waiting", "waiting"],
+        "sap": { "manna_treads": "588", "hitech": "" },
+        "who": "office",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "SAL-ORD-2026-00156: GM-approved, Hi-Tech SAP order 489 cancelled - the order is over and nothing waits",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_gm_approved_by": "Rajiv",
+        "custom_gm_approved_on": "2026-10-12 11:34:15",
+        "custom_sap_sales_order": "489",
+        "custom_sap_sales_order_status": "bost_Cancelled",
+        "custom_sap_order_status": "Cancelled"
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "done", "done", "na", "na"],
+        "sap": { "manna_treads": "", "hitech": "489" },
+        "who": null,
+        "outcome": "cancelled"
+      }
+    },
+    {
+      "why": "SAL-ORD-2026-00158: rejected - back to the rep; whether it reached the GM is not recorded",
+      "order": { "custom_po_status": "Rejected", "custom_gm_approved_by": "" },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["current", "unknown", "waiting", "waiting", "waiting"],
+        "sap": { "manna_treads": "", "hitech": "" },
+        "who": "rep",
+        "outcome": "rejected"
+      }
+    },
+    {
+      "why": "rejected while already in SAP: the SAP order has to be cancelled by hand, so the office acts, not the rep",
+      "order": { "custom_po_status": "Rejected", "custom_mt_sales_order": "587" },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["current", "unknown", "done", "waiting", "waiting"],
+        "sap": { "manna_treads": "587", "hitech": "" },
+        "who": "office",
+        "outcome": "rejected",
+        "early_sap": true
+      }
+    },
+    {
+      "why": "SAL-ORD-2026-00172 on 23 Nov 2026: still with the manager, yet the sync made Manna Treads SO 595 and B1if Hi-Tech SO 603 - approval shown as passed (24 Nov 2026), flagged, and the pick list waits for the approval in ERPNext",
+      "order": {
+        "custom_po_status": "Pending Approval",
+        "custom_mt_sales_order": "595",
+        "custom_sap_sales_order": "603",
+        "custom_sap_sales_order_status": "bost_Open",
+        "custom_sap_order_status": "In SAP"
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "done", "waiting", "waiting"],
+        "sap": { "manna_treads": "595", "hitech": "603" },
+        "who": "sales_manager",
+        "outcome": "open",
+        "early_sap": true
+      }
+    },
+    {
+      "why": "SAL-ORD-2026-00172 on 24 Nov 2026: SAP has invoiced it while ERPNext still says Pending Approval - approval shown as passed, the order complete, the warning kept",
+      "order": {
+        "custom_po_status": "Pending Approval",
+        "custom_mt_sales_order": "595",
+        "custom_sap_sales_order": "603",
+        "custom_sap_order_status": "Dispatched"
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "done", "na", "done"],
+        "sap": { "manna_treads": "595", "hitech": "603" },
+        "who": null,
+        "outcome": "complete",
+        "early_sap": true
+      }
+    },
+    {
+      "why": "SAL-ORD-2026-00167 on 23 Nov 2026: with the GM, already Manna Treads SO 591 / Hi-Tech SO 599 - the GM step shows as passed, flagged; the pick list waits for the GM's approval in ERPNext",
+      "order": {
+        "custom_po_status": "Pending GM Approval",
+        "custom_mt_sales_order": "591",
+        "custom_sap_sales_order": "599",
+        "custom_sap_order_status": "In SAP"
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "done", "done", "waiting", "waiting"],
+        "sap": { "manna_treads": "591", "hitech": "599" },
+        "who": "gm",
+        "outcome": "open",
+        "early_sap": true
+      }
+    },
+    {
+      "why": "SAL-ORD-2026-00173: approved, then sent - as it should be, no flag",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_gm_approved_by": "Rajiv",
+        "custom_mt_sales_order": "596",
+        "custom_sap_sales_order": "604",
+        "custom_sap_order_status": "In SAP"
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "done", "done", "current", "waiting"],
+        "sap": { "manna_treads": "596", "hitech": "604" },
+        "who": "rep",
+        "outcome": "open",
+        "early_sap": false
+      }
+    },
+    {
+      "why": "with the GM",
+      "order": { "custom_po_status": "Pending GM Approval" },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "current", "waiting", "waiting", "waiting"],
+        "sap": { "manna_treads": "", "hitech": "" },
+        "who": "gm",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "approved by the GM and handed back: the sales manager pushes it",
+      "order": { "custom_po_status": "Pending Final Approval", "custom_gm_approved_by": "Rajiv" },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "done", "waiting", "waiting", "waiting"],
+        "sap": { "manna_treads": "", "hitech": "" },
+        "who": "sales_manager",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "approved, nothing from the sync yet and no error: waiting for it, not failed",
+      "order": { "custom_po_status": "PO Approved - Ready for SAP" },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "current", "waiting", "waiting"],
+        "sap": { "manna_treads": "", "hitech": "" },
+        "who": "office",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "in both SAPs, no pick list yet: the rep makes it",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_mt_sales_order": "590",
+        "custom_sap_sales_order": "569",
+        "custom_sap_order_status": "In SAP"
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "done", "current", "waiting"],
+        "sap": { "manna_treads": "590", "hitech": "569" },
+        "who": "rep",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "pick lists could not be read: not known, never 'no pick list'",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_mt_sales_order": "590",
+        "custom_sap_sales_order": "569"
+      },
+      "pick_lists": null,
+      "expect": {
+        "stages": ["done", "na", "done", "unknown", "waiting"],
+        "sap": { "manna_treads": "590", "hitech": "569" },
+        "who": null,
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "a cancelled pick list is not a pick list",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_mt_sales_order": "590",
+        "custom_sap_sales_order": "569"
+      },
+      "pick_lists": [{ "name": "PICK-00490", "status": "Cancelled" }],
+      "expect": {
+        "stages": ["done", "na", "done", "current", "waiting"],
+        "sap": { "manna_treads": "590", "hitech": "569" },
+        "who": "rep",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "a pick list made, waiting for production's approval: approval is not a step, SAP taking the list is",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_mt_sales_order": "590",
+        "custom_sap_sales_order": "569"
+      },
+      "pick_lists": [{ "name": "PICK-00493", "status": "Submitted", "approval_status": "Pending" }],
+      "expect": {
+        "stages": ["done", "na", "done", "done", "current"],
+        "sap": { "manna_treads": "590", "hitech": "569" },
+        "who": "office",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "SAL-ORD-2026-00183 on TEST, 12 Nov 2026: picked and delivered, not yet invoiced - still processing",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_mt_sales_order": "590",
+        "custom_sap_sales_order": "569",
+        "custom_sap_order_status": "Picked"
+      },
+      "pick_lists": [
+        {
+          "name": "PICK-00493",
+          "status": "Submitted",
+          "approval_status": "Approved",
+          "sap_pick_list": "18",
+          "hitech_invoice": "500",
+          "mt_goods_receipt": "259",
+          "mt_delivery": "12"
+        }
+      ],
+      "expect": {
+        "stages": ["done", "na", "done", "done", "current"],
+        "sap": { "manna_treads": "590", "hitech": "569" },
+        "who": "office",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "B1iF says every line was invoiced by Manna Treads: complete",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_mt_sales_order": "590",
+        "custom_sap_sales_order": "569",
+        "custom_sap_order_status": "Dispatched"
+      },
+      "pick_lists": [{ "name": "PICK-00493", "status": "Submitted", "mt_delivery": "12" }],
+      "expect": {
+        "stages": ["done", "na", "done", "done", "done"],
+        "sap": { "manna_treads": "590", "hitech": "569" },
+        "who": null,
+        "outcome": "complete"
+      }
+    },
+    {
+      "why": "an older Hi-Tech-only order, invoiced without a pick list: the pick list is not applicable, not missing",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_sap_sales_order": "412",
+        "custom_sap_invoice": "INV-900"
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "done", "na", "done"],
+        "sap": { "manna_treads": "", "hitech": "412" },
+        "who": null,
+        "outcome": "complete"
+      }
+    },
+    {
+      "why": "a partial delivery is not dispatch: B1iF's Partially Dispatched keeps the order processing; Hi-Tech picked this older-route order by hand, so no pick list is asked of the rep",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_sap_sales_order": "412",
+        "custom_sap_order_status": "Partially Dispatched"
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "done", "na", "current"],
+        "sap": { "manna_treads": "", "hitech": "412" },
+        "who": "office",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "Frappe's string null is nothing - not an SAP order, not a GM",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_gm_approved_by": "null",
+        "custom_mt_sales_order": "null",
+        "custom_sap_sales_order": " null "
+      },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "current", "waiting", "waiting"],
+        "sap": { "manna_treads": "", "hitech": "" },
+        "who": "office",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "a status the apps do not know is reported as not known, never guessed",
+      "order": { "custom_po_status": "Something New" },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["unknown", "unknown", "unknown", "waiting", "waiting"],
+        "sap": { "manna_treads": "", "hitech": "" },
+        "who": null,
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "in Hi-Tech SAP, delivery five days out: the pick list is locked until two days before, so it waits and says when",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_mt_sales_order": "590",
+        "custom_sap_sales_order": "569",
+        "transaction_date": "2026-11-20",
+        "delivery_date": "2026-11-26"
+      },
+      "today": "2026-11-21",
+      "pick_lists_since": "2026-11-14",
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "done", "waiting", "waiting"],
+        "sap": { "manna_treads": "590", "hitech": "569" },
+        "who": "rep",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "on the day the window opens, the rep makes it",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_sap_sales_order": "569",
+        "transaction_date": "2026-11-20",
+        "delivery_date": "2026-11-23"
+      },
+      "today": "2026-11-21",
+      "pick_lists_since": "2026-11-14",
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "done", "current", "waiting"],
+        "sap": { "manna_treads": "", "hitech": "569" },
+        "who": "rep",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "placed before pick_lists_since: never gets a pick list, so none is asked of the rep",
+      "order": {
+        "custom_po_status": "PO Approved - Ready for SAP",
+        "custom_sap_sales_order": "412",
+        "transaction_date": "2026-11-10",
+        "delivery_date": "2026-11-12"
+      },
+      "today": "2026-11-21",
+      "pick_lists_since": "2026-11-14",
+      "pick_lists": [],
+      "expect": {
+        "stages": ["done", "na", "done", "na", "waiting"],
+        "sap": { "manna_treads": "", "hitech": "412" },
+        "who": "office",
+        "outcome": "open"
+      }
+    },
+    {
+      "why": "not sent for approval: the rep sends it",
+      "order": { "custom_po_status": "No PO Yet" },
+      "pick_lists": [],
+      "expect": {
+        "stages": ["current", "na", "waiting", "waiting", "waiting"],
+        "sap": { "manna_treads": "", "hitech": "" },
+        "who": "rep",
+        "outcome": "open"
+      }
+    }
+  ],
+  "pick_lists_by_order": [
+    {
+      "why": "a read shorter than the limit is complete: an order with no lists has none",
+      "lists": ["SAL-1"],
+      "limit": 200,
+      "orders": ["SAL-1", "SAL-2"],
+      "expect": { "SAL-1": 1, "SAL-2": 0 }
+    },
+    {
+      "why": "a read that hit the limit may be missing older lists: an order not in it is not known",
+      "lists": ["SAL-1", "SAL-1"],
+      "limit": 2,
+      "orders": ["SAL-1", "SAL-2"],
+      "expect": { "SAL-1": 2, "SAL-2": null }
+    },
+    {
+      "why": "a failed read: every order not known",
+      "lists": null,
+      "limit": 200,
+      "orders": ["SAL-1"],
+      "expect": { "SAL-1": null }
+    }
+  ]
+}

@@ -344,6 +344,14 @@ export interface TeamOrder {
    * 19 Nov 2026), which is why the GM's screens show it.
    */
   mtSalesOrder?: string;
+  /** Why the sync last refused the order's Manna Treads side (`custom_mt_sync_error`). */
+  mtSyncError?: string;
+  /** Manna Treads' invoice to the customer (`custom_mt_invoice`). */
+  mtInvoice?: string;
+  /** B1iF's order status (`custom_sap_order_status`). See `domain/orderTrack.ts`. */
+  sapOrderStatus?: string;
+  /** Why the last push to, or read from, Hi-Tech SAP failed (`custom_sap_sync_error`). */
+  sapSyncError?: string;
   /**
    * The SAP invoice that completed the order — written only once every line
    * has been invoiced. What makes a list show it Dispatched; see `orderProgress`.

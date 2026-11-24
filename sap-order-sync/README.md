@@ -78,6 +78,7 @@ POST body and the ERPNext writes it would make, and changes nothing.
 | File | Purpose |
 | --- | --- |
 | `Sync-SapOrders.ps1` | The whole job. Dry-run first, then `-Limit 2`, then unrestricted. |
+| `Update-ServerCopy.ps1` | **Run on the SAP server, over RDP.** Puts this folder's `Sync-SapOrders.ps1` into the live copy (`C:\Users\eldhose\sap-order-sync`), which is not a git checkout and drifts behind main. Stops if `config.json` has `order_flow.require_approval: false` or a sync is running; keeps the old script as `.bak-<time>`; then a `-DryRun` that lists every order PASS M would send. Added 23 Nov 2026, when the older server copy sent four unapproved orders to SAP. |
 | `Invoke-SapOrderSyncPoller.ps1` | Reads `SAP Order Sync Control`, claims a run, executes the job as a child process with a hard timeout, reports status back. Same shape as `sap-credit-sync\Invoke-SapSyncPoller.ps1`. Started by the watcher, not by a timer. |
 | `Invoke-FlagWatch.ps1` | The watcher. Every minute Task Scheduler starts one per sync; it reads that sync's request flag every 5 s (15 until 25 Sep 2026) and starts its poller only when the flag is up. Shared by the order, stock, credit and pricing syncs. |
 | `Register-FlagWatchTasks.ps1` | **Run elevated, by hand.** Removes every timed order/stock/credit/products task and registers the four watchers (orders, stock, credit, pricing). Previews unless given `-Apply`. |

@@ -246,10 +246,12 @@ $script:Result = [ordered]@{
     mpAdopted         = 0
     mpRefused         = 0
     mpWaiting         = 0
+    mpStillLate       = 0
     htInScope         = 0
     htAdopted         = 0
     htRefused         = 0
     htWaiting         = 0
+    htStillLate       = 0
     pkInScope         = 0
     pkSent            = 0
     pkLinkDue         = 0
@@ -2434,6 +2436,49 @@ function Test-B1ifLate {
     return (($Now - $t).TotalMinutes -ge $Minutes)
 }
 
+function Format-B1ifLateMessage {
+    # The refusal PASS P / PASS H record when B1if has not made its document in
+    # time. Test-B1ifLateError recognises exactly these, so keep them together.
+    # PASS P's goes through Write-MfRefusal, which puts "Purchase order to
+    # Hi-Tech: " in front. Pure.
+    param([Parameter(Mandatory = $true)] [ValidateSet('P', 'H')] [string] $Pass, [Parameter(Mandatory = $true)] [int] $Minutes, [string] $Number)
+    if ($Pass -eq 'P') { return ("B1if has not made it in {0} minutes - see B1if's message log for Manna Treads SO {1}, and @MANNA_IC in Manna Treads SAP." -f $Minutes, $Number) }
+    return ("B1if has not made Hi-Tech's order in {0} minutes - see B1if's message log for Manna Treads PO {1}, and @MANNA_IC in Hi-Tech SAP." -f $Minutes, $Number)
+}
+
+function Get-B1ifLatePrefix {
+    # How a "B1if is late" error starts, as stored on the order. Pure.
+    param([Parameter(Mandatory = $true)] [ValidateSet('P', 'H')] [string] $Pass)
+    if ($Pass -eq 'P') { return 'Purchase order to Hi-Tech: B1if has not made it in ' }
+    return "B1if has not made Hi-Tech's order in "
+}
+
+function Test-B1ifLateError {
+    # Whether the error recorded on an order is only "B1if has not made it
+    # yet". That is not a real refusal: B1if may still make the document (its
+    # package was off, or the event is re-sent), so PASS P / PASS H keep
+    # looking for these orders and clear the error themselves when the
+    # document turns up (24 Nov 2026). Any other error still waits for a
+    # person. Pure.
+    param([string] $Message, [Parameter(Mandatory = $true)] [ValidateSet('P', 'H')] [string] $Pass)
+    return "$Message".Trim().StartsWith((Get-B1ifLatePrefix -Pass $Pass), [System.StringComparison]::Ordinal)
+}
+
+function Join-ErpRows {
+    # Two ERPNext list reads as one: each order once, sorted by name. Pure.
+    param([object[]] $First, [object[]] $Second)
+    $seen = @{}
+    $out = New-Object System.Collections.ArrayList
+    foreach ($r in (@($First) + @($Second))) {
+        if ($null -eq $r) { continue }
+        $n = "$($r.name)"
+        if ($seen.ContainsKey($n)) { continue }
+        $seen[$n] = $true
+        [void]$out.Add($r)
+    }
+    return @($out | Sort-Object { "$($_.name)" })
+}
+
 function Test-MfOwns {
     # Whether an ERPNext order (a list row or a full read with name, creation
     # and custom_company) is PASS M's - and so NOT PASS A's. Pure.
@@ -2943,14 +2988,30 @@ function Write-PkRefusal {
 # NumAtCard = the ERPNext name and write them back to the order; Hi-Tech's goes
 # in custom_sap_sales_order like PASS A's, so PASS B follows it as it always has.
 
+function Get-LinkListFilters {
+    # PASS P's / PASS H's two ERPNext filters: orders with no error, and
+    # orders whose only error is "B1if is late" (looked at again every run,
+    # see Test-B1ifLateError). $Has must be set and $Missing empty. Pure.
+    param([Parameter(Mandatory = $true)] $Flow, [Parameter(Mandatory = $true)] [string] $Has, [Parameter(Mandatory = $true)] [string] $Missing,
+          [Parameter(Mandatory = $true)] [string] $ErrField, [Parameter(Mandatory = $true)] [ValidateSet('P', 'H')] [string] $Pass)
+    $base = '[["custom_company","in",' + (ConvertTo-Json -InputObject @($Flow.Units) -Compress) + '],["creation",">=","' + $Flow.Since + ' 00:00:00"],["' + $Has + '","is","set"],["' + $Missing + '","in",["",null]],["docstatus","<",2]'
+    $tail = ''
+    if (@($Flow.SkipStatuses).Count -gt 0) { $tail = ',["custom_po_status","not in",' + (ConvertTo-Json -InputObject @($Flow.SkipStatuses) -Compress) + ']' }
+    $like = ConvertTo-Json -InputObject ((Get-B1ifLatePrefix -Pass $Pass) + '%') -Compress
+    return [pscustomobject]@{
+        Clean = $base + ',["' + $ErrField + '","in",["",null]]' + $tail + ']'
+        Late  = $base + ',["' + $ErrField + '","like",' + $like + ']' + $tail + ']'
+    }
+}
+
 function Get-HtList {
     # PASS H's working set: orders with Manna Treads' purchase order and no
-    # Hi-Tech sales order yet, and no Hi-Tech error recorded.
+    # Hi-Tech sales order yet, and either no Hi-Tech error recorded or only
+    # "B1if has not made Hi-Tech's order" (looked for until it turns up).
     param([Parameter(Mandatory = $true)] $Flow)
-    $f = '[["custom_company","in",' + (ConvertTo-Json -InputObject @($Flow.Units) -Compress) + '],["creation",">=","' + $Flow.Since + ' 00:00:00"],["' + $script:F_MT_PO + '","is","set"],["' + $script:F_SO + '","in",["",null]],["' + $script:F_ERR + '","in",["",null]],["docstatus","<",2]'
-    if (@($Flow.SkipStatuses).Count -gt 0) { $f += ',["custom_po_status","not in",' + (ConvertTo-Json -InputObject @($Flow.SkipStatuses) -Compress) + ']' }
-    $f += ']'
-    return @(Get-ErpList -Filters $f -Fields @('name', 'creation', 'custom_company', $script:F_MT_PO) | Sort-Object { "$($_.name)" })
+    $f = Get-LinkListFilters -Flow $Flow -Has $script:F_MT_PO -Missing $script:F_SO -ErrField $script:F_ERR -Pass 'H'
+    $fields = @('name', 'creation', 'custom_company', $script:F_MT_PO)
+    return @(Join-ErpRows -First @(Get-ErpList -Filters $f.Clean -Fields $fields) -Second @(Get-ErpList -Filters $f.Late -Fields $fields))
 }
 
 function Write-HtRefusal {
@@ -3018,12 +3079,12 @@ function Get-MtInvoiceLinks {
 
 function Get-MpList {
     # PASS P's working set: PASS M's orders that have their Manna Treads sales
-    # order and no purchase order yet, and no error recorded.
+    # order and no purchase order yet, and either no error recorded or only
+    # "B1if has not made it" (looked for until it turns up).
     param([Parameter(Mandatory = $true)] $Flow)
-    $f = '[["custom_company","in",' + (ConvertTo-Json -InputObject @($Flow.Units) -Compress) + '],["creation",">=","' + $Flow.Since + ' 00:00:00"],["' + $script:F_MT_SO + '","is","set"],["' + $script:F_MT_PO + '","in",["",null]],["' + $script:F_MT_ERR + '","in",["",null]],["docstatus","<",2]'
-    if (@($Flow.SkipStatuses).Count -gt 0) { $f += ',["custom_po_status","not in",' + (ConvertTo-Json -InputObject @($Flow.SkipStatuses) -Compress) + ']' }
-    $f += ']'
-    return @(Get-ErpList -Filters $f -Fields @('name', 'customer', 'creation', 'custom_company', $script:F_MT_SO) | Sort-Object { "$($_.name)" })
+    $f = Get-LinkListFilters -Flow $Flow -Has $script:F_MT_SO -Missing $script:F_MT_PO -ErrField $script:F_MT_ERR -Pass 'P'
+    $fields = @('name', 'customer', 'creation', 'custom_company', $script:F_MT_SO)
+    return @(Join-ErpRows -First @(Get-ErpList -Filters $f.Clean -Fields $fields) -Second @(Get-ErpList -Filters $f.Late -Fields $fields))
 }
 
 function Write-MfRefusal {
@@ -4423,7 +4484,10 @@ try {
         # finds it, by NumAtCard = the ERPNext name, which B1if copies across,
         # and writes it back to the order. One still missing after
         # order_flow.b1if_wait_minutes is refused, prefixed "Purchase order to
-        # Hi-Tech:", so somebody looks at B1if's message log. Read again here so
+        # Hi-Tech:", so somebody looks at B1if's message log - but it is still
+        # looked for every run, and the error is cleared when B1if's purchase
+        # order turns up (24 Nov 2026: two orders B1if made days late sat
+        # behind their error until it was cleared by hand). Read again here so
         # an order PASS M created this run is looked for in the same run.
         if ($flow.Mode -eq 'manna_first' -and $runPass['P'] -and ($mpList.Count -gt 0 -or $script:Result.mfCreated -gt 0 -or $script:Result.mfAdopted -gt 0)) {
             try { $mpList = @(Get-MpList -Flow $flow) }
@@ -4469,10 +4533,15 @@ try {
                         $mtEntry = ConvertTo-CleanText (Get-JsonProp $doc $script:F_MT_ENTRY)
                         if ($hasPo -ne '') { Write-Log INFO ("PASS P {0}: already has purchase order {1} - skipping." -f $name, $hasPo); continue }
                         if ($mtSo -eq '' -or $mtEntry -eq '') { Write-Log INFO ("PASS P {0}: no Manna Treads sales order recorded - skipping." -f $name); continue }
-                        if ((ConvertTo-CleanText (Get-JsonProp $doc $script:F_MT_ERR)) -ne '') { Write-Log INFO ("PASS P {0}: an error is recorded on it - skipping." -f $name); continue }
+                        $mpErr = ConvertTo-CleanText (Get-JsonProp $doc $script:F_MT_ERR)
+                        $mpLate = $false
+                        if ($mpErr -ne '') {
+                            if (Test-B1ifLateError -Message $mpErr -Pass 'P') { $mpLate = $true }
+                            else { Write-Log INFO ("PASS P {0}: an error is recorded on it - skipping." -f $name); continue }
+                        }
                         if ([int](ConvertTo-Number (Get-JsonProp $doc 'docstatus')) -eq 2) { Write-Log INFO ("PASS P {0}: cancelled (docstatus 2) - skipping." -f $name); continue }
                         if (@($flow.SkipStatuses) -contains (ConvertTo-CleanText (Get-JsonProp $doc 'custom_po_status'))) { Write-Log INFO ("PASS P {0}: approval status is '{1}' - skipping." -f $name, (Get-JsonProp $doc 'custom_po_status')); continue }
-                        [void]$mpWork.Add(@{ Name = $name; Doc = $doc; MtSo = $mtSo; MtEntry = $mtEntry })
+                        [void]$mpWork.Add(@{ Name = $name; Doc = $doc; MtSo = $mtSo; MtEntry = $mtEntry; Late = $mpLate })
                     } catch {
                         Write-Log ERROR ("PASS P {0}: could not be read - left for the next run: {1}" -f $name, "$_")
                         $script:Result.failures++
@@ -4506,7 +4575,8 @@ try {
                                         Write-Log INFO ("PASS P {0}: WOULD write {1}={2}, {3}={4}, {5}." -f $name, $script:F_MT_PO, $aNum, $script:F_MT_PO_ENTRY, $aEntry, $script:F_MT_SYNCED)
                                     } else {
                                         try {
-                                            Update-ErpSalesOrder -Name $name -Fields @{ $script:F_MT_PO = $aNum; $script:F_MT_PO_ENTRY = $aEntry; $script:F_MT_SYNCED = $mpNow }
+                                            # Clears a "B1if is late" error too: the purchase order has turned up.
+                                            Update-ErpSalesOrder -Name $name -Fields @{ $script:F_MT_PO = $aNum; $script:F_MT_PO_ENTRY = $aEntry; $script:F_MT_SYNCED = $mpNow; $script:F_MT_ERR = '' }
                                         } catch {
                                             Write-Log ERROR ("PASS P {0}: could not record purchase order DocNum {1} - the next run finds it again: {2}" -f $name, $aNum, "$_")
                                             $script:Result.writeErrors++; $script:Result.failures++
@@ -4517,8 +4587,12 @@ try {
                                     continue
                                 }
 
-                                if (Test-B1ifLate -Since (Get-JsonProp $w.Doc $script:F_MT_SYNCED) -Now (Get-Date) -Minutes $flow.B1ifWait) {
-                                    $null = Write-MfRefusal -Name $name -Message ("B1if has not made it in {0} minutes - see B1if's message log for Manna Treads SO {1}, and @MANNA_IC in Manna Treads SAP." -f $flow.B1ifWait, $w.MtSo) -When $mpNow -IsDryRun ([bool]$DryRun) -Pass 'P'
+                                if ($w.Late) {
+                                    # Already said; look again next run and write nothing.
+                                    Write-Log INFO ("PASS P {0}: still no purchase order from B1if - the 'B1if has not made it' error stays." -f $name)
+                                    $script:Result.mpStillLate++
+                                } elseif (Test-B1ifLate -Since (Get-JsonProp $w.Doc $script:F_MT_SYNCED) -Now (Get-Date) -Minutes $flow.B1ifWait) {
+                                    $null = Write-MfRefusal -Name $name -Message (Format-B1ifLateMessage -Pass 'P' -Minutes $flow.B1ifWait -Number $w.MtSo) -When $mpNow -IsDryRun ([bool]$DryRun) -Pass 'P'
                                 } else {
                                     Write-Log INFO ("PASS P {0}: no purchase order with NumAtCard = '{0}' yet - waiting for B1if." -f $name)
                                     $script:Result.mpWaiting++
@@ -4596,9 +4670,14 @@ try {
                         $poNum = ConvertTo-CleanText (Get-JsonProp $doc $script:F_MT_PO)
                         if ($hasSo -ne '') { Write-Log INFO ("PASS H {0}: already has Hi-Tech order {1} - skipping." -f $name, $hasSo); continue }
                         if ($poNum -eq '') { Write-Log INFO ("PASS H {0}: no Manna Treads purchase order recorded - skipping." -f $name); continue }
-                        if ((ConvertTo-CleanText (Get-JsonProp $doc $script:F_ERR)) -ne '') { Write-Log INFO ("PASS H {0}: a Hi-Tech error is recorded on it - skipping." -f $name); continue }
+                        $htErr = ConvertTo-CleanText (Get-JsonProp $doc $script:F_ERR)
+                        $htLate = $false
+                        if ($htErr -ne '') {
+                            if (Test-B1ifLateError -Message $htErr -Pass 'H') { $htLate = $true }
+                            else { Write-Log INFO ("PASS H {0}: a Hi-Tech error is recorded on it - skipping." -f $name); continue }
+                        }
                         if ([int](ConvertTo-Number (Get-JsonProp $doc 'docstatus')) -eq 2) { Write-Log INFO ("PASS H {0}: cancelled (docstatus 2) - skipping." -f $name); continue }
-                        [void]$htWork.Add(@{ Name = $name; Doc = $doc; PoNum = $poNum })
+                        [void]$htWork.Add(@{ Name = $name; Doc = $doc; PoNum = $poNum; Late = $htLate })
                     } catch {
                         Write-Log ERROR ("PASS H {0}: could not be read - left for the next run: {1}" -f $name, "$_")
                         $script:Result.failures++
@@ -4638,8 +4717,11 @@ try {
                                     continue
                                 }
 
-                                if (Test-B1ifLate -Since (Get-JsonProp $w.Doc $script:F_MT_SYNCED) -Now (Get-Date) -Minutes $flow.B1ifWait) {
-                                    Write-HtRefusal -Name $name -Message ("B1if has not made Hi-Tech's order in {0} minutes - see B1if's message log for Manna Treads PO {1}, and @MANNA_IC in Hi-Tech SAP." -f $flow.B1ifWait, $w.PoNum) -When $htNow -IsDryRun ([bool]$DryRun)
+                                if ($w.Late) {
+                                    Write-Log INFO ("PASS H {0}: still no Hi-Tech order from B1if - the 'B1if has not made it' error stays." -f $name)
+                                    $script:Result.htStillLate++
+                                } elseif (Test-B1ifLate -Since (Get-JsonProp $w.Doc $script:F_MT_SYNCED) -Now (Get-Date) -Minutes $flow.B1ifWait) {
+                                    Write-HtRefusal -Name $name -Message (Format-B1ifLateMessage -Pass 'H' -Minutes $flow.B1ifWait -Number $w.PoNum) -When $htNow -IsDryRun ([bool]$DryRun)
                                 } else {
                                     Write-Log INFO ("PASS H {0}: no Hi-Tech order with NumAtCard = '{0}' yet - waiting for B1if." -f $name)
                                     $script:Result.htWaiting++
@@ -5285,7 +5367,7 @@ try {
             $modeWord, $companyName, $r.inScopeNew, $r.created, $r.adopted, $r.createFailed, $r.repUnmatched, $r.openPolled, $r.linesInvoiced, $r.ordersInvoiced, $r.linesWritten, $r.linesCorrected, $r.linesRemoved, $r.invoiceUnresolved, $r.writeErrors, $r.failures,
             $r.linesKgWritten, $r.mtRequested, $r.mtCreated, $r.mtAdopted, $r.mtRefused, $r.followPolled, $r.mtFailedWaiting)
         if ($flow.Mode -eq 'manna_first') {
-            $summary += (" | manna_first new: {0} | mf created: {1} | mf adopted: {2} | mf refused: {3} | po due: {4} | po linked: {5} | po waiting for b1if: {6} | po refused: {7} | hitech due: {8} | hitech linked: {9} | hitech waiting for b1if: {10} | hitech refused: {11} | mt invoice due: {12} | mt invoice lines linked: {13}" -f $r.mfInScope, $r.mfCreated, $r.mfAdopted, $r.mfRefused, $r.mpInScope, $r.mpAdopted, $r.mpWaiting, $r.mpRefused, $r.htInScope, $r.htAdopted, $r.htWaiting, $r.htRefused, $r.miInScope, $r.miLinked)
+            $summary += (" | manna_first new: {0} | mf created: {1} | mf adopted: {2} | mf refused: {3} | po due: {4} | po linked: {5} | po waiting for b1if: {6} | po refused: {7} | po still late: {14} | hitech due: {8} | hitech linked: {9} | hitech waiting for b1if: {10} | hitech refused: {11} | hitech still late: {15} | mt invoice due: {12} | mt invoice lines linked: {13}" -f $r.mfInScope, $r.mfCreated, $r.mfAdopted, $r.mfRefused, $r.mpInScope, $r.mpAdopted, $r.mpWaiting, $r.mpRefused, $r.htInScope, $r.htAdopted, $r.htWaiting, $r.htRefused, $r.miInScope, $r.miLinked, $r.mpStillLate, $r.htStillLate)
             if ($flow.PickListsSince -ne '') {
                 $summary += (" | pick lists due: {0} | pick lists sent: {1} | b1if docs due: {2} | b1if docs linked: {3} | pick waiting: {4} | pick refused: {5}" -f $r.pkInScope, $r.pkSent, $r.pkLinkDue, $r.pkLinked, $r.pkWaiting, $r.pkRefused)
             }

@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { MinStockLine, OrderDetail, SalesCustomer } from '@/domain/types';
-import { creditPicture, EDIT_LOCK, isApproved, PO_STATUS } from '@/domain/orderStatus';
+import { creditPicture, EDIT_LOCK, isApproved, isSet, PO_STATUS } from '@/domain/orderStatus';
 import { agingOf, creditEscalates, escalationOf, pastTermsPhrase } from '@/domain/credit';
 import {
   approvalConditionProblem,
@@ -54,6 +54,7 @@ import { OrderLinesEditor } from './OrderLinesEditor';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import './orders.css';
+import { OrderTrackPanel, useOrderPickLists } from './OrderTrack';
 
 const isoToday = () => {
   const d = serverNow();
@@ -88,6 +89,8 @@ export function GmOrderPage() {
   const [smNote, setSmNote] = useState('');
   const [threadKey, setThreadKey] = useState(0);
   const [tick, setTick] = useState(0);
+  /** This order's pick lists, for its stage track; null = not known. */
+  const pickLists = useOrderPickLists(orderId, tick);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -487,6 +490,9 @@ export function GmOrderPage() {
         </div>
       )}
 
+      {/* Where the order stands, from real fields only (21 Nov 2026). */}
+      {order && <OrderTrackPanel order={order} lists={pickLists} />}
+
       {order && (
         <div className="gmrev">
           {/* ---------------------------------------------- 1. credit --- */}
@@ -672,7 +678,13 @@ export function GmOrderPage() {
           {/* --------------------------------------------- 4. decision --- */}
           <div className="gmrev__decision">
           {approved ? (
-            <Card title="In SAP">
+            // Approved is not "in SAP": an order the sync refused has no SAP
+            // number (SAL-ORD-2026-00165). The title follows the numbers.
+            <Card
+              title={
+                isSet(order.sapSalesOrder) || isSet(order.mtSalesOrder) ? 'In SAP' : 'Approved — not in SAP yet'
+              }
+            >
               {conditionsBlock}
               <div className="mt-16">
                 <Link to={`/follow-up/${order.id}`} className="btn btn--sm">
