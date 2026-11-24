@@ -131,6 +131,45 @@ void main() {
     });
   });
 
+  group('punching out with a trip still running', () {
+    // 24 Nov 2026, the user: one trip at a time, and the trip is ended before
+    // the rep punches out. Nikhil Tk punched out every evening from 11 to 19
+    // Nov with his 11 Nov trip still running.
+
+    test('a rep with no trip running may punch out', () {
+      expect(punchOutRefusal(const []), isNull);
+    });
+
+    test('today\'s running trip stops the punch-out, and the trip is named', () {
+      final r = punchOutRefusal(const [
+        RunningTrip(name: 'TRP-01138', date: '2026-11-24'),
+      ]);
+      expect(r, isNotNull);
+      expect(r, contains('2026-11-24'));
+      expect(r, contains('End the trip first'));
+      expect(r, isNot(contains('TRP-')));
+    });
+
+    test('a trip left running from an earlier day stops it too', () {
+      final r = punchOutRefusal(const [
+        RunningTrip(name: 'TRP-01041', date: '2026-11-11'),
+      ]);
+      expect(r, contains('2026-11-11'));
+    });
+
+    test('names every running trip, so ending one does not just move the '
+        'refusal', () {
+      final r = punchOutRefusal(const [
+        RunningTrip(name: 'TRP-01072', date: '2026-11-14'),
+        RunningTrip(name: 'TRP-01041', date: '2026-11-11'),
+      ])!;
+      expect(r, contains('2 of your trips'));
+      expect(r, contains('2026-11-14'));
+      expect(r, contains('2026-11-11'));
+      expect(r, contains('End them first'));
+    });
+  });
+
   group('how a trip is named back to the rep', () {
     test('reads like the Trips list: date, then purpose', () {
       expect(

@@ -70,6 +70,29 @@ String? tripStartRefusal(List<RunningTrip> running) {
       '($listed${rest > 0 ? ', and $rest more' : ''}). End them first.';
 }
 
+/// Why the rep may not punch out yet, or null when they may.
+///
+/// The day ends in this order: End Trip, then punch out (the user, 24 Nov
+/// 2026). A punch-out with a trip still running is how a trip stays open
+/// overnight — Nikhil Tk punched out every evening while his trip of 11 Nov
+/// ran until the 19th — and the next day's visits then land on the old trip.
+///
+/// Every running trip counts, today's or older: an old one is the case that
+/// matters most. Only the rep's own trips are passed in; a trip they are
+/// tagged on is somebody else's to end.
+String? punchOutRefusal(List<RunningTrip> running) {
+  if (running.isEmpty) return null;
+  if (running.length == 1) {
+    return 'Your trip ${describeRunningTrip(running.first)} is still running. '
+        'End the trip first, then punch out.';
+  }
+  final listed = running.take(3).map(describeRunningTrip).join(', ');
+  final rest = running.length - 3;
+  return '${running.length} of your trips are still running '
+      '($listed${rest > 0 ? ', and $rest more' : ''}). '
+      'End them first, then punch out.';
+}
+
 /// Trips still running from a day before [today] (`YYYY-MM-DD`), oldest first.
 ///
 /// The one-trip rule stops a second trip being started; it does nothing about

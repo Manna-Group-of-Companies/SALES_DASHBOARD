@@ -353,9 +353,66 @@ class _HomeDashboardState extends State<HomeDashboard>
     }
   }
 
+  /// The trips that must be ended before this rep punches out (24 Nov 2026),
+  /// read with what the phone is holding laid over it, so a trip ended with
+  /// no signal no longer counts.
+  ///
+  /// Rounded towards letting the punch-out through when the trips cannot be
+  /// read at all — not even a kept copy: a rep refused a punch-out loses the
+  /// day's hours over a lookup, and the red old-trip card still says which
+  /// trip is open.
+  Future<List<RunningTrip>> _tripsBlockingPunchOut() async {
+    if (Session.I.salesPerson == null) return const [];
+    try {
+      return await Api.getActiveTrips();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Says which trip is in the way and opens it, because End Trip is on the
+  /// trip's own screen and a rep told only "end your trip" has to go looking.
+  Future<void> _refusePunchOut(List<RunningTrip> running) async {
+    final open = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('End your trip first'),
+        content: Text(punchOutRefusal(running)!),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Close')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(running.length == 1 ? 'Open trip' : 'Open trips')),
+        ],
+      ),
+    );
+    if (open != true || !mounted) return;
+    final screen = running.length == 1
+        ? TripDetailScreen(tripName: running.first.name)
+        : const TripsScreen();
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+    if (!mounted) return;
+    setState(() {
+      _oldTrips = _loadOldTrips();
+      _activeTrip = _loadActiveTrip();
+    });
+  }
+
   Future<void> _punchOut() async {
     final att = _att;
     if (att == null || _attBusy) return;
+    // End Trip, then punch out (the user, 24 Nov 2026). Checked before the
+    // "Punch out?" question, so the rep is not asked to confirm something
+    // that is then refused. Not checked again when a kept punch-out is sent
+    // later: by then the rep has punched out, and dropping the punch would
+    // cost them the day's hours.
+    setState(() => _attBusy = true);
+    final running = await _tripsBlockingPunchOut();
+    if (!mounted) return;
+    setState(() => _attBusy = false);
+    if (running.isNotEmpty) return _refusePunchOut(running);
     final again = att['punch_out_time'] != null;
     // Never on one tap (13 Nov 2026): see punchOutQuestion. Asked before
     // anything else, so a stray tap costs the rep a "Not yet" and nothing more.
