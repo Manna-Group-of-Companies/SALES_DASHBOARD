@@ -21,7 +21,13 @@ export const selectProducts = (s: RootState) => s.catalog.products;
 export const selectCustomers = (s: RootState) => s.catalog.customers;
 export const selectOrders = (s: RootState) => s.orders.list;
 export const selectMinStockItems = (s: RootState) => s.minStock.items;
-export const selectNotificationFeed = (s: RootState) => s.notifications.feed;
+const selectServerFeed = (s: RootState) => s.notifications.feed;
+const selectLocalFeed = (s: RootState) => s.notifications.local;
+
+/** The server's feed and this browser's own (orders reaching SAP), newest first. */
+export const selectNotificationFeed = createSelector(selectServerFeed, selectLocalFeed, (feed, local) =>
+  local.length ? [...feed, ...local].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : feed,
+);
 
 /** Item code → what SAP has, for O(1) lookups while rendering the product grid. */
 export const selectMinStockByCode = createSelector(

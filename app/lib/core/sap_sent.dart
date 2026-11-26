@@ -85,3 +85,34 @@ SapSent sapSent({
   return SapSent(
       sent: sent, label: label, approvedBy: approvedBy, numbers: numbers);
 }
+
+// ------------------------------------------------------------------ news ---
+
+/// Which orders reached SAP since this device last looked. For the sales
+/// managers and the GM only (the user, 26 Nov 2026); reps are not told.
+///
+/// There is no server push, so this is a diff, like `stage_watch.dart`:
+/// [seen] is the orders this device has already shown as in SAP. Null - never
+/// looked - reports nothing and takes the baseline, so a first sign-in is not
+/// a flood of last month's orders. [seen] only grows, so an order that leaves
+/// the window read and comes back is not news twice. Fixture: `news` in
+/// sap_sent.json; the TypeScript twin is `sapSentNews`.
+({List<Map<String, dynamic>> news, List<String> seen}) sapSentNews(
+    List<String>? seen, List<Map<String, dynamic>> orders) {
+  final sent = orders.where((o) => SapSent.fromOrder(o).sent).toList();
+  final known = {...?seen};
+  final news = seen == null
+      ? <Map<String, dynamic>>[]
+      : sent.where((o) => !known.contains('${o['name']}')).toList();
+  final next = [...?seen];
+  for (final o in sent) {
+    if (!known.contains('${o['name']}')) next.add('${o['name']}');
+  }
+  return (news: news, seen: next);
+}
+
+/// "Sent to SAP · Manna Treads SO 591 · GM Approved", for one news line.
+String sapSentHeadline(Map<String, dynamic> o) {
+  final s = SapSent.fromOrder(o);
+  return [s.label, s.numbers, s.approvedBy].where((x) => x.isNotEmpty).join(' · ');
+}

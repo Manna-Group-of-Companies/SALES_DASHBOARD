@@ -1010,6 +1010,7 @@ const DEFAULT_SEVERITY: Record<NotificationKind, NotificationSeverity> = {
   order_approved: 'info',
   order_rejected: 'warning',
   order_edited_post_approval: 'critical',
+  sent_to_sap: 'info',
   delivery_date_changed: 'warning',
   stage_advanced: 'info',
   order_dispatched: 'info',

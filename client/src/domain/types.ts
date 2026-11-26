@@ -1031,7 +1031,9 @@ export type NotificationKind =
   | 'edit_freeze_imminent'
   | 'leave_applied'
   | 'leave_decided'
-  | 'attendance_unmarked';
+  | 'attendance_unmarked'
+  /** An order reached SAP - for the sales managers and the GM (26 Nov 2026). */
+  | 'sent_to_sap';
 
 export type NotificationSeverity = 'info' | 'warning' | 'critical';
 
@@ -1046,6 +1048,8 @@ export interface AppNotification {
   /** Narrow further to one person when the message is personal. */
   audienceUserId?: string;
   orderId?: string;
+  /** Where opening it goes, when not the manager's order page. */
+  link?: string;
   itemCode?: string;
   createdAt: string;
   readAt?: string;

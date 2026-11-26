@@ -61,6 +61,7 @@ import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/trip_tracker.dart';
 import 'package:manna_field_sales/widgets/home_tile.dart';
 import 'package:manna_field_sales/widgets/trip_recording_indicator.dart';
+import 'package:manna_field_sales/widgets/sap_sent_news_card.dart';
 
 class HomeDashboard extends StatefulWidget {
   const HomeDashboard({super.key});
@@ -950,6 +951,11 @@ class _HomeDashboardState extends State<HomeDashboard>
                 ),
               ),
             if (Session.I.isGM) const SizedBox(height: 16),
+            // Orders that reached SAP since the last look - the sales managers
+            // and the GM only, not reps (26 Nov 2026). Keyed on the refresh so
+            // every refresh of home looks again.
+            if (Session.I.isManager || Session.I.isGM)
+              SapSentNewsCard(key: ValueKey(_lastRefresh)),
             if (Session.I.isProductionManager)
               Card(
                 color: const Color(0xFF7C3AED),

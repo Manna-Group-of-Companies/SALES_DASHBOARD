@@ -55,3 +55,33 @@ export function sapSent(o: SapSentInput): SapSent {
   const label: SapSentLabel = sent ? 'Sent to SAP' : po === PO_STATUS.approved ? 'Waiting for SAP' : '';
   return { sent, label, approvedBy, numbers };
 }
+
+// ------------------------------------------------------------------ news ---
+
+/**
+ * Which orders reached SAP since this device last looked. For the sales
+ * managers and the GM only (the user, 26 Nov 2026); reps are not told.
+ *
+ * There is no server push, so this is a diff, like `stageWatch`: `seen` is
+ * the orders this device has already shown as in SAP. `null` - never looked -
+ * reports nothing and takes the baseline, so a first sign-in is not a flood of
+ * last month's orders. `seen` only grows, so an order that leaves the window
+ * read and comes back is not news twice. Fixture: `news` in sap_sent.json.
+ */
+export function sapSentNews<T extends SapSentInput & { id: string }>(
+  seen: string[] | null,
+  orders: T[],
+): { news: T[]; seen: string[] } {
+  const sent = orders.filter((o) => sapSent(o).sent);
+  const known = new Set(seen ?? []);
+  const news = seen === null ? [] : sent.filter((o) => !known.has(o.id));
+  const next = [...(seen ?? [])];
+  for (const o of sent) if (!known.has(o.id)) next.push(o.id);
+  return { news, seen: next };
+}
+
+/** "Sent to SAP · Manna Treads SO 591 · GM Approved", for one news line. */
+export function sapSentHeadline(o: SapSentInput): string {
+  const s = sapSent(o);
+  return [s.label, s.numbers, s.approvedBy].filter(Boolean).join(' · ');
+}

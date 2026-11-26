@@ -71,5 +71,61 @@
       "po_status": "PO Approved - Ready for SAP", "gm_approved_by": "null", "mt_sales_order": "null", "sap_sales_order": " ",
       "expect": { "sent": false, "label": "Waiting for SAP", "approved_by": "Manager Approved", "numbers": "" }
     }
+  ],
+  "news_rules": {
+    "who": "Asked for by the user on 26 Nov 2026: for now only the sales managers and the GM are told when an order reaches SAP. Reps are not notified.",
+    "news_is_a_diff": "There is no server push. Each device remembers which orders it has already seen in SAP, and an order SAP has now that is not in that list is the news - the same approach as stage_watch.json.",
+    "first_look_is_the_baseline": "A device that has never looked (seen is null) reports nothing and remembers every order already in SAP. A manager signing in for the first time must not get fifty notifications for last month's orders.",
+    "seen_only_grows": "Orders stay in the seen list after they drop out of what is read, so an old order that comes back into the window is not news again.",
+    "only_sent_counts": "An order without a SAP number is neither news nor remembered; it becomes news the first time a number appears."
+  },
+  "news": [
+    {
+      "why": "the first look reports nothing and remembers what is already in SAP",
+      "seen": null,
+      "orders": [
+        { "id": "SO-1", "po_status": "PO Approved - Ready for SAP", "mt_sales_order": "588", "sap_sales_order": "" },
+        { "id": "SO-2", "po_status": "PO Approved - Ready for SAP", "mt_sales_order": "", "sap_sales_order": "" }
+      ],
+      "expect_news": [],
+      "expect_seen": ["SO-1"]
+    },
+    {
+      "why": "an order that got its SAP number since the last look is news",
+      "seen": ["SO-1"],
+      "orders": [
+        { "id": "SO-1", "po_status": "PO Approved - Ready for SAP", "mt_sales_order": "588", "sap_sales_order": "" },
+        { "id": "SO-2", "po_status": "PO Approved - Ready for SAP", "mt_sales_order": "590", "sap_sales_order": "" }
+      ],
+      "expect_news": ["SO-2"],
+      "expect_seen": ["SO-1", "SO-2"]
+    },
+    {
+      "why": "Hi-Tech's number arriving on an order already seen in Manna Treads SAP is not news again",
+      "seen": ["SO-1"],
+      "orders": [
+        { "id": "SO-1", "po_status": "PO Approved - Ready for SAP", "mt_sales_order": "588", "sap_sales_order": "599" }
+      ],
+      "expect_news": [],
+      "expect_seen": ["SO-1"]
+    },
+    {
+      "why": "an approved order still waiting for SAP is neither news nor remembered",
+      "seen": [],
+      "orders": [
+        { "id": "SO-3", "po_status": "PO Approved - Ready for SAP", "mt_sales_order": "null", "sap_sales_order": "" }
+      ],
+      "expect_news": [],
+      "expect_seen": []
+    },
+    {
+      "why": "an order no longer read stays remembered, so it cannot come back as news",
+      "seen": ["SO-0"],
+      "orders": [
+        { "id": "SO-4", "po_status": "Pending GM Approval", "mt_sales_order": "601", "sap_sales_order": "" }
+      ],
+      "expect_news": ["SO-4"],
+      "expect_seen": ["SO-0", "SO-4"]
+    }
   ]
 }

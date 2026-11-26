@@ -37,6 +37,7 @@ import { useTheme } from '@/app/theme';
 import { useNewBuild } from '@/app/newBuild';
 import { NotificationPanel } from '@/features/notifications/NotificationPanel';
 import { ToastHost } from '@/features/notifications/ToastHost';
+import { useSapSentWatch } from '@/features/notifications/useSapSentWatch';
 import { Api } from '@/api/client';
 import { COND_AWAITING } from '@/domain/creditCondition';
 import logoInk from '@/assets/manna-logo.png';
@@ -71,6 +72,8 @@ export function AppShell() {
   const unread = useAppSelector(selectUnreadCount);
   const pendingAcks = useAppSelector(selectPendingAcks);
   const panelOpen = useAppSelector((s) => s.notifications.panelOpen);
+  // Orders reaching SAP, for the sales managers and the GM (26 Nov 2026).
+  useSapSentWatch(user);
 
   const myOrders = useAppSelector(selectVisibleOrders);
   const headcount = useAppSelector(selectActiveEmployees).length;

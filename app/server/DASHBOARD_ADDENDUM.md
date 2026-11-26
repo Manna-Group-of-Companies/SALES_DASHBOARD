@@ -852,3 +852,23 @@ No new ERPNext field: all three already existed. Drawn by `SapSentLine`
 and `SapSentChips` (phone: My Orders, the order page, Team Orders, the
 manager's review). The phone's My Orders and Team Orders queries now also
 fetch `custom_mt_sales_order` and `custom_gm_approved_by`.
+
+### Telling the managers and the GM (26 Nov 2026)
+
+The user then asked for a notification when an order reaches SAP — **for now
+the sales managers and the GM only; reps are not told.** There is no push
+service (no Firebase, no notification plugin on the phone) and the
+dashboard's bell reads a `Sales Notification` doctype that does not exist on
+the site, so each device works the news out itself, like `stage_watch`:
+`sapSentNews` (fixture `news` in `sap_sent.json`) compares the orders changed
+in the last week with the ones this device has already seen in SAP. The first
+look on a device only takes the baseline.
+
+- **Dashboard** (`useSapSentWatch`, mounted in `AppShell`): every minute while
+  a tab is open, for the GM (every order) and anyone who opens Team Orders
+  (their team). News goes into the bell (kept in localStorage per user, ids
+  `local:`), as a toast, and as a desktop notification once the user turns
+  that on from the bell.
+- **Phone** (`SapSentNewsCard` on home, managers and the GM): a green card
+  listing the orders sent since the last look, until cleared. In-app only —
+  a notification while the app is closed needs a plugin and a new APK.

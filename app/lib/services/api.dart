@@ -888,6 +888,27 @@ class Api {
     return rows;
   }
 
+  /// Orders changed in the last week, for telling a sales manager or the GM
+  /// which reached SAP (26 Nov 2026; `sapSentNews`). The team's for a
+  /// manager, every one for the GM; a manager whose team is unknown reads
+  /// nothing, never everyone. The sync's write-back of the SAP number is a
+  /// change, so a week of `modified` holds every order that could be news.
+  static Future<List<Map<String, dynamic>>> getSentToSapCandidates() async {
+    final gm = Session.I.isGM;
+    final team = Session.I.teamReps;
+    if (!gm && team.isEmpty) return [];
+    final since = DateTime.now().subtract(const Duration(days: 7));
+    final day = since.toIso8601String().substring(0, 10);
+    return _list('Sales Order',
+        fields: '["name","customer","customer_name","custom_sales_person",'
+            '"custom_po_status","custom_gm_approved_by",'
+            '"custom_mt_sales_order","custom_sap_sales_order"]',
+        filters: '[["modified",">=","$day 00:00:00"],["docstatus","<",2]'
+            '${gm ? '' : ',["custom_sales_person","in",${_inList(team)}]'}]',
+        orderBy: 'modified desc',
+        limit: 500);
+  }
+
   /// Every order waiting on this manager, of either kind and from any week.
   ///
   /// The manager workspace's home summarises this. Team Orders shows a week

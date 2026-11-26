@@ -32,6 +32,26 @@ void main() {
     }
   });
 
+  group('which orders reached SAP since this device last looked', () {
+    for (final c in (fixture['news'] as List).cast<Map<String, dynamic>>()) {
+      test(c['why'] as String, () {
+        final orders = [
+          for (final o in (c['orders'] as List).cast<Map<String, dynamic>>())
+            {
+              'name': o['id'],
+              'custom_po_status': o['po_status'],
+              'custom_mt_sales_order': o['mt_sales_order'],
+              'custom_sap_sales_order': o['sap_sales_order'],
+            }
+        ];
+        final seen = (c['seen'] as List?)?.cast<String>();
+        final got = sapSentNews(seen, orders);
+        expect(got.news.map((o) => o['name']).toList(), c['expect_news']);
+        expect(got.seen, c['expect_seen']);
+      });
+    }
+  });
+
   test('a list row with none of the fields fetched says nothing', () {
     expect(SapSent.fromOrder(const {}).isEmpty, isTrue);
   });

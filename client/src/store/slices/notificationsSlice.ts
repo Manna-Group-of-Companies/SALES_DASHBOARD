@@ -12,6 +12,12 @@ export interface Toast {
 
 interface NotificationsState {
   feed: AppNotification[];
+  /**
+   * Notifications this browser worked out for itself - an order reaching SAP
+   * (26 Nov 2026, `useSapSentWatch`). No server store holds them; the watcher
+   * keeps them in localStorage. Ids start `local:`.
+   */
+  local: AppNotification[];
   toasts: Toast[];
   status: 'idle' | 'loading' | 'ready';
   panelOpen: boolean;
@@ -19,6 +25,7 @@ interface NotificationsState {
 
 const initialState: NotificationsState = {
   feed: [],
+  local: [],
   toasts: [],
   status: 'idle',
   panelOpen: false,
@@ -38,6 +45,10 @@ export const loadNotifications = createAsyncThunk(
 export const markNotificationRead = createAsyncThunk(
   'notifications/markRead',
   async (input: { id: string; user: User }, { dispatch }) => {
+    if (isLocalNotification(input.id)) {
+      dispatch(markLocalRead(input.id));
+      return;
+    }
     await Api.notify.markRead(input.id);
     void dispatch(loadNotifications(input.user));
   },
@@ -46,6 +57,7 @@ export const markNotificationRead = createAsyncThunk(
 export const markAllNotificationsRead = createAsyncThunk(
   'notifications/markAllRead',
   async (user: User, { dispatch }) => {
+    dispatch(markLocalRead(undefined));
     await Api.notify.markAllRead(user);
     void dispatch(loadNotifications(user));
   },
@@ -58,6 +70,8 @@ export const acknowledgeNotification = createAsyncThunk(
     void dispatch(loadNotifications(input.user));
   },
 );
+
+export const isLocalNotification = (id: string) => id.startsWith('local:');
 
 let toastSeq = 0;
 
@@ -76,6 +90,16 @@ const notificationsSlice = createSlice({
     },
     dismissToast(state, action: PayloadAction<string>) {
       state.toasts = state.toasts.filter((t) => t.id !== action.payload);
+    },
+    setLocalNotifications(state, action: PayloadAction<AppNotification[]>) {
+      state.local = action.payload;
+    },
+    /** One local notification read, or every one when the id is undefined. */
+    markLocalRead(state, action: PayloadAction<string | undefined>) {
+      const at = new Date().toISOString();
+      for (const n of state.local) {
+        if (!n.readAt && (action.payload === undefined || n.id === action.payload)) n.readAt = at;
+      }
     },
     togglePanel(state, action: PayloadAction<boolean | undefined>) {
       state.panelOpen = action.payload ?? !state.panelOpen;
@@ -97,5 +121,6 @@ const notificationsSlice = createSlice({
   },
 });
 
-export const { pushToast, dismissToast, togglePanel } = notificationsSlice.actions;
+export const { pushToast, dismissToast, togglePanel, setLocalNotifications, markLocalRead } =
+  notificationsSlice.actions;
 export default notificationsSlice.reducer;

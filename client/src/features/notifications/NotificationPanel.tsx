@@ -8,7 +8,9 @@
  * production floor".
  */
 
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { watchesSapSent } from './useSapSentWatch';
 import type { AppNotification } from '@/domain/types';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import {
@@ -26,6 +28,9 @@ export function NotificationPanel() {
   const navigate = useNavigate();
   const user = useAppSelector(selectUser);
   const feed = useAppSelector(selectNotificationFeed);
+  const [desktopAsk, setDesktopAsk] = useState<NotificationPermission | 'unsupported'>(() =>
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+  );
 
   if (!user) return null;
 
@@ -38,8 +43,8 @@ export function NotificationPanel() {
 
   const open = (n: AppNotification) => {
     if (!n.readAt) dispatch(markNotificationRead({ id: n.id, user }));
-    if (n.orderId) {
-      navigate(`/orders/${n.orderId}`);
+    if (n.link || n.orderId) {
+      navigate(n.link ?? `/orders/${n.orderId}`);
       close();
     }
   };
@@ -57,6 +62,22 @@ export function NotificationPanel() {
           <Icon name="x" />
         </Button>
       </header>
+
+      {/* Desktop alerts for orders reaching SAP (26 Nov 2026). Asked for on a
+          click, because browsers refuse a permission prompt nobody asked for. */}
+      {watchesSapSent(user) && desktopAsk === 'default' && (
+        <div className="notif-panel__ask" style={{ padding: '8px 12px' }}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              void Notification.requestPermission().then((p) => setDesktopAsk(p));
+            }}
+          >
+            Turn on desktop alerts when an order reaches SAP
+          </Button>
+        </div>
+      )}
 
       <div className="notif-panel__list">
         {ordered.length === 0 && <Empty title="No notifications" />}
