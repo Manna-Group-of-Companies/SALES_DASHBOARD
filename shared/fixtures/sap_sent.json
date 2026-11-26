@@ -5,7 +5,9 @@
     "custom_po_status": "ERPNext's approval status.",
     "custom_gm_approved_by": "Stamped by the GM's approval (Approve, or Approve & Push to SAP since 17 Nov 2026); kept through the manager's push; cleared by a rejection or a fresh escalation.",
     "custom_mt_sales_order": "Manna Treads SAP's DocNum (MANNA_TREADS_LIVE), written by the order sync's PASS M.",
-    "custom_sap_sales_order": "Hi-Tech SAP's DocNum (HITECH_PRETREADS_LIVE), written by PASS A on the older route and PASS H on the Manna Treads first route."
+    "custom_sap_sales_order": "Hi-Tech SAP's DocNum (HITECH_PRETREADS_LIVE), written by PASS A on the older route and PASS H on the Manna Treads first route.",
+    "custom_sap_order_status": "B1iF's word for the whole order, from both companies' lines (manna_sap_status, every 5 minutes): In SAP, Partially Picked, Picked, Partially Dispatched, Dispatched or Cancelled.",
+    "custom_sap_sales_order_status": "Hi-Tech's sales order as a SAP document, from the order sync: bost_Open, bost_Close or bost_Cancelled."
   },
   "rules": {
     "sent_means_sap_has_a_number": "'Sent to SAP' shows only when SAP has written its order number back: custom_mt_sales_order or custom_sap_sales_order. Pressing Approve & Push only ASKS the order sync to send it; until a number comes back the order reads 'Waiting for SAP'. Nothing else counts - not the push request, not the approval status.",
@@ -13,63 +15,281 @@
     "both_numbers_are_shown": "When both companies hold the order, both numbers are shown, Manna Treads first. Neither is derived from the other: DocNum series differ by company.",
     "gm_approved_is_the_gm_stamp": "An approved order (PO Approved - Ready for SAP) reads 'GM Approved' when custom_gm_approved_by is set - the GM approved it, whether the GM or the sales manager then pushed it - and 'Manager Approved' when it is not. Pending Final Approval claims nothing here: the GM has approved and the manager has yet to push, and both apps already say 'GM Approved' for that status on their own stage pill.",
     "no_approver_without_an_approval": "Any status but PO Approved - Ready for SAP claims no approver here, even when SAP has the order. An order the sync sent before it was approved (18 and 23 Nov 2026) is not approved by anybody; the dashboard's track flags it in red.",
-    "unset_reads_three_ways": "An unset field reads back as null, '' or the string 'null'. All three are empty."
+    "unset_reads_three_ways": "An unset field reads back as null, '' or the string 'null'. All three are empty.",
+    "status_is_sap_s_word": "Asked for by the user on 26 Nov 2026: the order shows where it is in SAP. Cancelled first, from either field, because it is the terminal fact. Then B1iF's order status as B1iF wrote it. Before B1iF has reported, Hi-Tech's document state in words - Open, Closed - and any other value SAP sends verbatim. An order SAP has with neither field yet reads In SAP; one SAP does not have reads nothing."
   },
   "cases": [
     {
       "why": "a new order waiting for the manager says nothing about SAP",
-      "po_status": "Pending Approval", "gm_approved_by": "", "mt_sales_order": "", "sap_sales_order": "",
-      "expect": { "sent": false, "label": "", "approved_by": "", "numbers": "" }
+      "po_status": "Pending Approval",
+      "gm_approved_by": "",
+      "mt_sales_order": "",
+      "sap_sales_order": "",
+      "expect": {
+        "sent": false,
+        "label": "",
+        "approved_by": "",
+        "numbers": "",
+        "status": ""
+      },
+      "sap_order_status": "",
+      "sap_sales_order_status": ""
     },
     {
       "why": "a manager's approval with no SAP number yet is waiting for SAP, never sent",
-      "po_status": "PO Approved - Ready for SAP", "gm_approved_by": "", "mt_sales_order": "", "sap_sales_order": "",
-      "expect": { "sent": false, "label": "Waiting for SAP", "approved_by": "Manager Approved", "numbers": "" }
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "",
+      "mt_sales_order": "",
+      "sap_sales_order": "",
+      "expect": {
+        "sent": false,
+        "label": "Waiting for SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "",
+        "status": ""
+      },
+      "sap_order_status": "",
+      "sap_sales_order_status": ""
     },
     {
       "why": "a manager's approval that Manna Treads SAP has is sent, with its number",
-      "po_status": "PO Approved - Ready for SAP", "gm_approved_by": "", "mt_sales_order": "588", "sap_sales_order": "",
-      "expect": { "sent": true, "label": "Sent to SAP", "approved_by": "Manager Approved", "numbers": "Manna Treads SO 588" }
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "",
+      "mt_sales_order": "588",
+      "sap_sales_order": "",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "Manna Treads SO 588",
+        "status": "In SAP"
+      },
+      "sap_order_status": "",
+      "sap_sales_order_status": ""
     },
     {
       "why": "an order both companies hold shows both numbers, Manna Treads first",
-      "po_status": "PO Approved - Ready for SAP", "gm_approved_by": "", "mt_sales_order": "591", "sap_sales_order": "599",
-      "expect": { "sent": true, "label": "Sent to SAP", "approved_by": "Manager Approved", "numbers": "Manna Treads SO 591 · Hi-Tech SO 599" }
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "",
+      "mt_sales_order": "591",
+      "sap_sales_order": "599",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "Manna Treads SO 591 · Hi-Tech SO 599",
+        "status": "In SAP"
+      },
+      "sap_order_status": "",
+      "sap_sales_order_status": ""
     },
     {
       "why": "an order on the older route has only Hi-Tech's number, and that is enough",
-      "po_status": "PO Approved - Ready for SAP", "gm_approved_by": "", "mt_sales_order": "", "sap_sales_order": "407",
-      "expect": { "sent": true, "label": "Sent to SAP", "approved_by": "Manager Approved", "numbers": "Hi-Tech SO 407" }
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "",
+      "mt_sales_order": "",
+      "sap_sales_order": "407",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "Hi-Tech SO 407",
+        "status": "In SAP"
+      },
+      "sap_order_status": "",
+      "sap_sales_order_status": ""
     },
     {
       "why": "the GM's approve and push reads GM Approved once SAP has it",
-      "po_status": "PO Approved - Ready for SAP", "gm_approved_by": "Test GM", "mt_sales_order": "602", "sap_sales_order": "",
-      "expect": { "sent": true, "label": "Sent to SAP", "approved_by": "GM Approved", "numbers": "Manna Treads SO 602" }
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "Test GM",
+      "mt_sales_order": "602",
+      "sap_sales_order": "",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "GM Approved",
+        "numbers": "Manna Treads SO 602",
+        "status": "In SAP"
+      },
+      "sap_order_status": "",
+      "sap_sales_order_status": ""
     },
     {
       "why": "an order the GM approved and the manager pushed is still GM Approved",
-      "po_status": "PO Approved - Ready for SAP", "gm_approved_by": "General Manager", "mt_sales_order": "", "sap_sales_order": "",
-      "expect": { "sent": false, "label": "Waiting for SAP", "approved_by": "GM Approved", "numbers": "" }
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "General Manager",
+      "mt_sales_order": "",
+      "sap_sales_order": "",
+      "expect": {
+        "sent": false,
+        "label": "Waiting for SAP",
+        "approved_by": "GM Approved",
+        "numbers": "",
+        "status": ""
+      },
+      "sap_order_status": "",
+      "sap_sales_order_status": ""
     },
     {
       "why": "the GM has approved but the manager has not pushed: nothing here, the stage pill already says GM Approved",
-      "po_status": "Pending Final Approval", "gm_approved_by": "General Manager", "mt_sales_order": "", "sap_sales_order": "",
-      "expect": { "sent": false, "label": "", "approved_by": "", "numbers": "" }
+      "po_status": "Pending Final Approval",
+      "gm_approved_by": "General Manager",
+      "mt_sales_order": "",
+      "sap_sales_order": "",
+      "expect": {
+        "sent": false,
+        "label": "",
+        "approved_by": "",
+        "numbers": "",
+        "status": ""
+      },
+      "sap_order_status": "",
+      "sap_sales_order_status": ""
     },
     {
       "why": "an order the sync sent before approval is in SAP but approved by nobody",
-      "po_status": "Pending GM Approval", "gm_approved_by": "", "mt_sales_order": "578", "sap_sales_order": "",
-      "expect": { "sent": true, "label": "Sent to SAP", "approved_by": "", "numbers": "Manna Treads SO 578" }
+      "po_status": "Pending GM Approval",
+      "gm_approved_by": "",
+      "mt_sales_order": "578",
+      "sap_sales_order": "",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "",
+        "numbers": "Manna Treads SO 578",
+        "status": "In SAP"
+      },
+      "sap_order_status": "",
+      "sap_sales_order_status": ""
     },
     {
       "why": "a rejected order claims no approver, even with a number SAP still holds",
-      "po_status": "Rejected", "gm_approved_by": "", "mt_sales_order": "", "sap_sales_order": "550",
-      "expect": { "sent": true, "label": "Sent to SAP", "approved_by": "", "numbers": "Hi-Tech SO 550" }
+      "po_status": "Rejected",
+      "gm_approved_by": "",
+      "mt_sales_order": "",
+      "sap_sales_order": "550",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "",
+        "numbers": "Hi-Tech SO 550",
+        "status": "In SAP"
+      },
+      "sap_order_status": "",
+      "sap_sales_order_status": ""
     },
     {
       "why": "an unset field read back as the string null is empty, not an order number",
-      "po_status": "PO Approved - Ready for SAP", "gm_approved_by": "null", "mt_sales_order": "null", "sap_sales_order": " ",
-      "expect": { "sent": false, "label": "Waiting for SAP", "approved_by": "Manager Approved", "numbers": "" }
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "null",
+      "mt_sales_order": "null",
+      "sap_sales_order": " ",
+      "expect": {
+        "sent": false,
+        "label": "Waiting for SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "",
+        "status": ""
+      },
+      "sap_order_status": "",
+      "sap_sales_order_status": ""
+    },
+    {
+      "why": "B1iF's order status is shown as B1iF wrote it, ahead of Hi-Tech's document state",
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "",
+      "mt_sales_order": "588",
+      "sap_sales_order": "614",
+      "sap_order_status": "Partially Dispatched",
+      "sap_sales_order_status": "bost_Open",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "Manna Treads SO 588 · Hi-Tech SO 614",
+        "status": "Partially Dispatched"
+      }
+    },
+    {
+      "why": "before B1iF reports, Hi-Tech's open order reads Open",
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "",
+      "mt_sales_order": "588",
+      "sap_sales_order": "614",
+      "sap_order_status": "",
+      "sap_sales_order_status": "bost_Open",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "Manna Treads SO 588 · Hi-Tech SO 614",
+        "status": "Open"
+      }
+    },
+    {
+      "why": "a closed Hi-Tech order reads Closed",
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "",
+      "mt_sales_order": "588",
+      "sap_sales_order": "614",
+      "sap_order_status": "",
+      "sap_sales_order_status": "bost_Close",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "Manna Treads SO 588 · Hi-Tech SO 614",
+        "status": "Closed"
+      }
+    },
+    {
+      "why": "a value SAP adds later is shown verbatim, never guessed at",
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "",
+      "mt_sales_order": "588",
+      "sap_sales_order": "614",
+      "sap_order_status": "",
+      "sap_sales_order_status": "bost_Paid",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "Manna Treads SO 588 · Hi-Tech SO 614",
+        "status": "bost_Paid"
+      }
+    },
+    {
+      "why": "B1iF's Cancelled reads Cancelled",
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "",
+      "mt_sales_order": "588",
+      "sap_sales_order": "614",
+      "sap_order_status": "Cancelled",
+      "sap_sales_order_status": "bost_Open",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "Manna Treads SO 588 · Hi-Tech SO 614",
+        "status": "Cancelled"
+      }
+    },
+    {
+      "why": "Hi-Tech's cancelled document outranks B1iF's In SAP: cancellation is the terminal fact",
+      "po_status": "PO Approved - Ready for SAP",
+      "gm_approved_by": "",
+      "mt_sales_order": "588",
+      "sap_sales_order": "614",
+      "sap_order_status": "In SAP",
+      "sap_sales_order_status": "bost_Cancelled",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "Manna Treads SO 588 · Hi-Tech SO 614",
+        "status": "Cancelled"
+      }
     }
   ],
   "news_rules": {
@@ -84,48 +304,103 @@
       "why": "the first look reports nothing and remembers what is already in SAP",
       "seen": null,
       "orders": [
-        { "id": "SO-1", "po_status": "PO Approved - Ready for SAP", "mt_sales_order": "588", "sap_sales_order": "" },
-        { "id": "SO-2", "po_status": "PO Approved - Ready for SAP", "mt_sales_order": "", "sap_sales_order": "" }
+        {
+          "id": "SO-1",
+          "po_status": "PO Approved - Ready for SAP",
+          "mt_sales_order": "588",
+          "sap_sales_order": ""
+        },
+        {
+          "id": "SO-2",
+          "po_status": "PO Approved - Ready for SAP",
+          "mt_sales_order": "",
+          "sap_sales_order": ""
+        }
       ],
       "expect_news": [],
-      "expect_seen": ["SO-1"]
+      "expect_seen": [
+        "SO-1"
+      ]
     },
     {
       "why": "an order that got its SAP number since the last look is news",
-      "seen": ["SO-1"],
-      "orders": [
-        { "id": "SO-1", "po_status": "PO Approved - Ready for SAP", "mt_sales_order": "588", "sap_sales_order": "" },
-        { "id": "SO-2", "po_status": "PO Approved - Ready for SAP", "mt_sales_order": "590", "sap_sales_order": "" }
+      "seen": [
+        "SO-1"
       ],
-      "expect_news": ["SO-2"],
-      "expect_seen": ["SO-1", "SO-2"]
+      "orders": [
+        {
+          "id": "SO-1",
+          "po_status": "PO Approved - Ready for SAP",
+          "mt_sales_order": "588",
+          "sap_sales_order": ""
+        },
+        {
+          "id": "SO-2",
+          "po_status": "PO Approved - Ready for SAP",
+          "mt_sales_order": "590",
+          "sap_sales_order": ""
+        }
+      ],
+      "expect_news": [
+        "SO-2"
+      ],
+      "expect_seen": [
+        "SO-1",
+        "SO-2"
+      ]
     },
     {
       "why": "Hi-Tech's number arriving on an order already seen in Manna Treads SAP is not news again",
-      "seen": ["SO-1"],
+      "seen": [
+        "SO-1"
+      ],
       "orders": [
-        { "id": "SO-1", "po_status": "PO Approved - Ready for SAP", "mt_sales_order": "588", "sap_sales_order": "599" }
+        {
+          "id": "SO-1",
+          "po_status": "PO Approved - Ready for SAP",
+          "mt_sales_order": "588",
+          "sap_sales_order": "599"
+        }
       ],
       "expect_news": [],
-      "expect_seen": ["SO-1"]
+      "expect_seen": [
+        "SO-1"
+      ]
     },
     {
       "why": "an approved order still waiting for SAP is neither news nor remembered",
       "seen": [],
       "orders": [
-        { "id": "SO-3", "po_status": "PO Approved - Ready for SAP", "mt_sales_order": "null", "sap_sales_order": "" }
+        {
+          "id": "SO-3",
+          "po_status": "PO Approved - Ready for SAP",
+          "mt_sales_order": "null",
+          "sap_sales_order": ""
+        }
       ],
       "expect_news": [],
       "expect_seen": []
     },
     {
       "why": "an order no longer read stays remembered, so it cannot come back as news",
-      "seen": ["SO-0"],
-      "orders": [
-        { "id": "SO-4", "po_status": "Pending GM Approval", "mt_sales_order": "601", "sap_sales_order": "" }
+      "seen": [
+        "SO-0"
       ],
-      "expect_news": ["SO-4"],
-      "expect_seen": ["SO-0", "SO-4"]
+      "orders": [
+        {
+          "id": "SO-4",
+          "po_status": "Pending GM Approval",
+          "mt_sales_order": "601",
+          "sap_sales_order": ""
+        }
+      ],
+      "expect_news": [
+        "SO-4"
+      ],
+      "expect_seen": [
+        "SO-0",
+        "SO-4"
+      ]
     }
   ]
 }

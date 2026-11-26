@@ -21,7 +21,7 @@ export function SapSentLine({
   className?: string;
 }) {
   const s = sapSent(order);
-  if (!s.label && !s.approvedBy && !(numbers && s.numbers)) return null;
+  if (!s.label && !s.approvedBy && !s.status && !(numbers && s.numbers)) return null;
   return (
     <div className={className} style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
       {s.label && (
@@ -43,6 +43,15 @@ export function SapSentLine({
           title={s.approvedBy === 'GM Approved' && order.gmApprovedBy ? `Approved by ${order.gmApprovedBy}` : undefined}
         >
           {s.approvedBy}
+        </Badge>
+      )}
+      {/* Where the order is in SAP (26 Nov 2026): B1iF's word, or Hi-Tech's document state. */}
+      {s.status && (
+        <Badge
+          tone={s.status === 'Dispatched' ? 'ok' : s.status === 'Cancelled' ? 'danger' : 'neutral'}
+          title="SAP's status for this order"
+        >
+          SAP status: {s.status}
         </Badge>
       )}
       {numbers && s.numbers && (compact ? <b className="mono">{s.numbers}</b> : <span className="mono">SAP: <b>{s.numbers}</b></span>)}

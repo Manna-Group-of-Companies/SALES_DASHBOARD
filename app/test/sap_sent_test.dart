@@ -22,12 +22,15 @@ void main() {
           'custom_gm_approved_by': c['gm_approved_by'],
           'custom_mt_sales_order': c['mt_sales_order'],
           'custom_sap_sales_order': c['sap_sales_order'],
+          'custom_sap_order_status': c['sap_order_status'],
+          'custom_sap_sales_order_status': c['sap_sales_order_status'],
         });
         final want = c['expect'] as Map<String, dynamic>;
         expect(got.sent, want['sent']);
         expect(got.label, want['label']);
         expect(got.approvedBy, want['approved_by']);
         expect(got.numbers, want['numbers']);
+        expect(got.status, want['status']);
       });
     }
   });

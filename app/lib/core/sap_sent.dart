@@ -28,11 +28,16 @@ class SapSent {
   /// "Manna Treads SO 591 · Hi-Tech SO 599", or '' when SAP has neither.
   final String numbers;
 
+  /// Where the order is in SAP - "In SAP", "Partially Dispatched", "Open"...
+  /// - or ''. See [sapStatusOf].
+  final String status;
+
   const SapSent({
     required this.sent,
     required this.label,
     required this.approvedBy,
     required this.numbers,
+    this.status = '',
   });
 
   /// Straight off a Sales Order document or list row.
@@ -41,10 +46,13 @@ class SapSent {
         gmApprovedBy: o['custom_gm_approved_by'],
         mtSalesOrder: o['custom_mt_sales_order'],
         sapSalesOrder: o['custom_sap_sales_order'],
+        sapOrderStatus: o['custom_sap_order_status'],
+        sapSalesOrderStatus: o['custom_sap_sales_order_status'],
       );
 
   /// Nothing worth a line: a caller renders nothing rather than an empty row.
-  bool get isEmpty => label.isEmpty && approvedBy.isEmpty && numbers.isEmpty;
+  bool get isEmpty =>
+      label.isEmpty && approvedBy.isEmpty && numbers.isEmpty && status.isEmpty;
 }
 
 String _clean(dynamic v) {
@@ -52,11 +60,36 @@ String _clean(dynamic v) {
   return s == 'null' ? '' : s;
 }
 
+/// Hi-Tech's document states in words. Anything else SAP says is shown as said.
+const Map<String, String> _docState = {
+  'bost_open': 'Open',
+  'bost_close': 'Closed',
+  'bost_cancelled': 'Cancelled',
+};
+
+/// Where the order is in SAP (the user, 26 Nov 2026). Cancelled first, from
+/// either field: it is the terminal fact. Then B1iF's word for the whole
+/// order; before B1iF has reported, Hi-Tech's document state; with neither,
+/// an order SAP has is In SAP. Fixture: `status` in sap_sent.json; the
+/// TypeScript twin is `sapStatusOf`.
+String sapStatusOf(dynamic sapOrderStatus, dynamic sapSalesOrderStatus,
+    {required bool sent}) {
+  final b1if = _clean(sapOrderStatus);
+  final doc = _clean(sapSalesOrderStatus);
+  final docWord = _docState[doc.toLowerCase()] ?? doc;
+  if (b1if == 'Cancelled' || docWord == 'Cancelled') return 'Cancelled';
+  if (b1if.isNotEmpty) return b1if;
+  if (doc.isNotEmpty) return docWord;
+  return sent ? 'In SAP' : '';
+}
+
 SapSent sapSent({
   dynamic poStatus,
   dynamic gmApprovedBy,
   dynamic mtSalesOrder,
   dynamic sapSalesOrder,
+  dynamic sapOrderStatus,
+  dynamic sapSalesOrderStatus,
 }) {
   final po = _clean(poStatus);
   final mt = _clean(mtSalesOrder);
@@ -83,7 +116,12 @@ SapSent sapSent({
           ? kWaitingForSap
           : '';
   return SapSent(
-      sent: sent, label: label, approvedBy: approvedBy, numbers: numbers);
+      sent: sent,
+      label: label,
+      approvedBy: approvedBy,
+      numbers: numbers,
+      status:
+          sapStatusOf(sapOrderStatus, sapSalesOrderStatus, sent: sent));
 }
 
 /// Both companies' SAP numbers for any order, '' when SAP has neither:

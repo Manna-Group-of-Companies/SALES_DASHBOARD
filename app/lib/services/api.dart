@@ -850,7 +850,8 @@ class Api {
               '"custom_production_finish_date","custom_proforma_status",'
               '"custom_combined_order","custom_sap_sales_order",'
               '"custom_sap_sales_order_status","custom_sap_invoice",'
-              '"custom_mt_sales_order","custom_gm_approved_by"]',
+              '"custom_mt_sales_order","custom_gm_approved_by",'
+              '"custom_sap_order_status"]',
           filters: '[["custom_sales_person","in",${_inList(team)}],'
               '["transaction_date",">=","$from"],'
               '["transaction_date","<=","$to"]]',
@@ -2677,6 +2678,9 @@ class Api {
                     // Manna Treads' number and the GM's stamp, for the Sent to SAP
                     // chips (core/sap_sent.dart). Both fields exist on the site.
                     '"custom_mt_sales_order","custom_gm_approved_by",'
+                    // Where it is in SAP, for the SAP status chip (26 Nov
+                    // 2026). Both exist on the site.
+                    '"custom_sap_order_status","custom_sap_sales_order_status",'
                     // Over the credit limit: the list says whose desk it is on.
                     '"custom_credit_commitment"]',
                 filters: _mineFilter('custom_sales_person'),

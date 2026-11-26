@@ -18,6 +18,7 @@ class SapSentChips extends StatelessWidget {
     final s = SapSent.fromOrder(order);
     if (s.label.isEmpty &&
         s.approvedBy.isEmpty &&
+        s.status.isEmpty &&
         (!showNumbers || s.numbers.isEmpty)) {
       return const SizedBox.shrink();
     }
@@ -42,6 +43,11 @@ class SapSentChips extends StatelessWidget {
                   : const Color(0xFF1565C0),
               Icons.verified_rounded,
             ),
+          // Where the order is in SAP (26 Nov 2026): B1iF's word, or
+          // Hi-Tech's document state before B1iF has reported.
+          if (s.status.isNotEmpty)
+            _chip('SAP status: ${s.status}', _statusColour(s.status),
+                Icons.inventory_2_outlined),
           if (showNumbers && s.numbers.isNotEmpty)
             Text(s.numbers,
                 style: const TextStyle(
@@ -50,6 +56,14 @@ class SapSentChips extends StatelessWidget {
       ),
     );
   }
+
+  static Color _statusColour(String status) => switch (status) {
+        'Dispatched' => const Color(0xFF2E7D32),
+        'Cancelled' => const Color(0xFFC62828),
+        'Picked' || 'Partially Picked' || 'Partially Dispatched' =>
+          const Color(0xFF00838F),
+        _ => const Color(0xFF455A64),
+      };
 
   Widget _chip(String label, Color color, IconData icon) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),

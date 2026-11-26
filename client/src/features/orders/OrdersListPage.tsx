@@ -78,6 +78,8 @@ interface Row {
   /** Manna Treads SAP's number, and the GM's stamp: for the Sent to SAP line. */
   mtSalesOrder?: string;
   gmApprovedBy?: string;
+  /** B1iF's order status, for the SAP status badge. */
+  sapOrderStatus?: string;
   /** Which of the four filter buckets this row is in. See `orderBucket`. */
   bucket: OrderBucket;
   /** The customer, for their outstanding; empty on a lead. */
@@ -250,6 +252,7 @@ export function OrdersListPage() {
         sapSalesOrderStatus: o.sapSalesOrderStatus,
         mtSalesOrder: o.mtSalesOrder,
         gmApprovedBy: o.gmApprovedBy,
+        sapOrderStatus: o.sapOrderStatus,
         customer: o.customer,
         // The two doctypes disagree on what approved means, so each passes its
         // own answer — see `orderBucket`.
@@ -507,6 +510,8 @@ export function OrdersListPage() {
                       gmApprovedBy: r.gmApprovedBy,
                       mtSalesOrder: r.mtSalesOrder,
                       sapSalesOrder: r.sapSalesOrder,
+                      sapOrderStatus: r.sapOrderStatus,
+                      sapSalesOrderStatus: r.sapSalesOrderStatus,
                     }}
                   />
                 )}

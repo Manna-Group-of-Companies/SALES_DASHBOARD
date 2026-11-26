@@ -20,6 +20,10 @@ export interface SapSentInput {
   mtSalesOrder?: string | null;
   /** Hi-Tech SAP's DocNum (`custom_sap_sales_order`). */
   sapSalesOrder?: string | null;
+  /** B1iF's order status (`custom_sap_order_status`). */
+  sapOrderStatus?: string | null;
+  /** Hi-Tech's document state (`custom_sap_sales_order_status`), e.g. bost_Open. */
+  sapSalesOrderStatus?: string | null;
 }
 
 export type SapSentLabel = 'Sent to SAP' | 'Waiting for SAP' | '';
@@ -31,6 +35,31 @@ export interface SapSent {
   approvedBy: ApprovedByLabel;
   /** "Manna Treads SO 591 · Hi-Tech SO 599", or '' when SAP has neither. */
   numbers: string;
+  /** Where the order is in SAP - "In SAP", "Partially Dispatched", "Open"... - or ''. */
+  status: string;
+}
+
+/** Hi-Tech's document states in words. Anything else SAP says is shown as said. */
+const DOC_STATE: Record<string, string> = {
+  bost_open: 'Open',
+  bost_close: 'Closed',
+  bost_cancelled: 'Cancelled',
+};
+
+/**
+ * Where the order is in SAP (the user, 26 Nov 2026). Cancelled first, from
+ * either field: it is the terminal fact. Then B1iF's word for the whole order;
+ * before B1iF has reported, Hi-Tech's document state; with neither, an order
+ * SAP has is In SAP. Fixture: `status` in sap_sent.json.
+ */
+function sapStatusOf(o: SapSentInput, sent: boolean): string {
+  const b1if = clean(o.sapOrderStatus);
+  const doc = clean(o.sapSalesOrderStatus);
+  const docWord = DOC_STATE[doc.toLowerCase()] ?? doc;
+  if (b1if === 'Cancelled' || docWord === 'Cancelled') return 'Cancelled';
+  if (b1if) return b1if;
+  if (doc) return docWord;
+  return sent ? 'In SAP' : '';
 }
 
 const clean = (v: string | null | undefined): string => {
@@ -53,7 +82,7 @@ export function sapSent(o: SapSentInput): SapSent {
   if (po === PO_STATUS.approved) approvedBy = clean(o.gmApprovedBy) ? 'GM Approved' : 'Manager Approved';
 
   const label: SapSentLabel = sent ? 'Sent to SAP' : po === PO_STATUS.approved ? 'Waiting for SAP' : '';
-  return { sent, label, approvedBy, numbers };
+  return { sent, label, approvedBy, numbers, status: sapStatusOf(o, sent) };
 }
 
 /**

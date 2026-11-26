@@ -16,12 +16,15 @@ describe('what an order says about SAP', () => {
         gmApprovedBy: c.gm_approved_by,
         mtSalesOrder: c.mt_sales_order,
         sapSalesOrder: c.sap_sales_order,
+        sapOrderStatus: c.sap_order_status,
+        sapSalesOrderStatus: c.sap_sales_order_status,
       });
       expect(got).toEqual({
         sent: c.expect.sent,
         label: c.expect.label,
         approvedBy: c.expect.approved_by,
         numbers: c.expect.numbers,
+        status: c.expect.status,
       });
     });
   }
