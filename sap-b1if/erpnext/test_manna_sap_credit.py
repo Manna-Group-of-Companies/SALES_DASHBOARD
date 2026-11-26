@@ -61,3 +61,66 @@ def test_a_difference_under_half_a_paisa_is_not_a_change():
 
 def test_a_negative_bucket_is_written_as_it_is():
 	assert figures(row(b1="-250.129"))["buckets"][0] == -250.13
+
+
+# run() against a stand-in site, for SAP Sync Control.last_sync_at.
+
+class Row(dict):
+	__getattr__ = dict.get
+
+
+def run_on(customers, dry):
+	"""Run the endpoint once on a fake site; returns every db.set_value call."""
+	sets = []
+
+	def get_all(doctype, **kw):
+		return [Row(name="x")] if doctype == "Has Role" else [Row(c) for c in customers]
+
+	def throw(msg):
+		raise RuntimeError(msg)
+
+	fr = types.SimpleNamespace(
+		flags={"manna_test": True}, session=types.SimpleNamespace(user="sync@x"), get_all=get_all, throw=throw,
+		form_dict={"credit": [row(code="C-1")], "dry_run": 1 if dry else 0}, response={},
+		utils=types.SimpleNamespace(cint=lambda v: int(v or 0), now=lambda: "2026-11-26 10:49:01.000000"),
+		db=types.SimpleNamespace(set_value=lambda *a: sets.append(a)))
+	env = {"frappe": fr}
+	exec(open(os.path.join(HERE, "manna_sap_credit.py"), encoding="utf-8").read(), env)
+	env["run"]()
+	return sets
+
+
+def stamps(sets):
+	return [s for s in sets if s[0] == "SAP Sync Control"]
+
+
+SAME = {"name": "CUST-1", "custom_bp_code": "C-1", "custom_credit_limit": 50000, "custom_outstanding_balance": 12000.5,
+	"custom_outstanding_0_30": 8000, "custom_outstanding_30_60": 3000.5, "custom_outstanding_90_plus": 1000,
+	"custom_payment_terms": "Net-30", "custom_overdue_past_terms": 4000.5, "custom_overdue_days": 40}
+
+
+def test_an_applied_run_stamps_last_sync_at_so_payment_commitments_can_be_judged():
+	# 26 Nov 2026: only the old poller stamped it (last 20 Oct), so every
+	# commitment would have gone Unchecked while B1iF kept the figures current.
+	assert stamps(run_on([dict(SAME, custom_outstanding_balance=0)], dry=False)) == [
+		("SAP Sync Control", None, "last_sync_at", "2026-11-26 10:49:01.000000")]
+
+
+def test_an_applied_run_with_nothing_changed_still_stamps_because_the_figures_are_current():
+	sets = run_on([SAME], dry=False)
+	assert [s for s in sets if s[0] == "Customer"] == [] and len(stamps(sets)) == 1
+
+
+def test_a_dry_run_never_stamps_last_sync_at():
+	assert run_on([dict(SAME, custom_outstanding_balance=0)], dry=True) == []
+
+
+def test_a_duplicate_code_refusal_never_stamps_last_sync_at():
+	sets = []
+	try:
+		sets = run_on([SAME, dict(SAME, name="CUST-2")], dry=False)
+	except RuntimeError as e:
+		assert "duplicate" in str(e)
+	else:
+		raise AssertionError("expected the duplicate-code refusal")
+	assert stamps(sets) == []

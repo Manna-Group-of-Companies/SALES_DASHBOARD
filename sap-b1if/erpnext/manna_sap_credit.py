@@ -28,6 +28,15 @@
 #                                  the amount is 0
 #   custom_sap_last_synced      <- now, only on a customer something changed on
 #
+# SAP Sync Control.last_sync_at <- the same now, on EVERY applied run, changes or
+#   none (26 Nov 2026). manna_payment_commitment_watch judges whether the
+#   overdue figure is fresh by this stamp, and only the old PowerShell poller
+#   set it - last on 20 Oct - so no commitment could ever be Kept or Missed
+#   while B1iF wrote current figures every 15 minutes. An unchanged figure is
+#   current as of this run, so 0 changes still stamps. A dry run does not, a
+#   stale batch never gets here (manna_sap_in drops it), and a duplicate-code
+#   refusal throws before it. status / sync_requested stay the poller's.
+#
 # A customer SAP did not send is left completely alone. The standard
 # credit_limits child table is never touched (it would switch on ERPNext's own
 # order blocking). Written with db.set_value: these are figures, and saving 250
@@ -129,6 +138,7 @@ def run():
 		stamp = frappe.utils.now()
 		for w in writes:
 			frappe.db.set_value("Customer", w["name"], dict(w["fields"], custom_sap_last_synced=stamp))
+		frappe.db.set_value("SAP Sync Control", None, "last_sync_at", stamp)
 	count = {}
 	for w in writes:
 		for fn in w["fields"]:
