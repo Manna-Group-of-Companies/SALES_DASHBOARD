@@ -31,6 +31,7 @@ import { Tile } from '@/components/common/Tile';
 import { daysWaiting } from './dashboardRules';
 import '@/components/layout/layout.css';
 import './dashboard.css';
+import { sapNumbersOf } from '@/domain/sapSent';
 
 /*
  * The team's orders, read exactly as Team Orders reads them (11 Nov 2026).
@@ -205,8 +206,8 @@ export function SalesDashboardPage() {
   );
 }
 
-/** SAP's order number once SAP has it, the ERPNext name before. */
-const orderNo = (o: TeamOrder) => o.sapSalesOrder || o.id;
+/** Both SAP numbers once SAP has the order, the ERPNext name before. */
+const orderNo = (o: TeamOrder) => sapNumbersOf(o) || o.id;
 
 function OrderRow({ order, onOpen }: { order: TeamOrder; onOpen: () => void }) {
   const days = daysWaiting(order.placedOn);

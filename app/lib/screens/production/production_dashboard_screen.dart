@@ -8,6 +8,7 @@ import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/screens/production/production_order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/order_complete_tick.dart';
+import 'package:manna_field_sales/core/sap_sent.dart';
 
 class ProductionDashboardScreen extends StatefulWidget {
   const ProductionDashboardScreen({super.key});
@@ -37,16 +38,17 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
     final hay = [
       r['name'],
       r['custom_sap_sales_order'],
+      r['custom_mt_sales_order'],
       r['custom_sales_person'],
       r['destination'],
     ].map((e) => (e ?? '').toString().toLowerCase()).join(' ');
     return hay.contains(_q.toLowerCase());
   }
 
-  /// "SAP order 426" once SAP has it, else the ERPNext order number.
+  /// Both SAP numbers once SAP has it, else the ERPNext order number.
   static String _title(Map<String, dynamic> r) {
-    final sap = '${r['custom_sap_sales_order'] ?? ''}'.trim();
-    return sap.isEmpty || sap == 'null' ? '${r['name']}' : 'SAP order $sap';
+    final sap = sapNumbersOf(r);
+    return sap.isEmpty ? '${r['name']}' : sap;
   }
 
   static String _soldBy(Map<String, dynamic> r) {
@@ -180,8 +182,8 @@ class _ProductionDashboardScreenState extends State<ProductionDashboardScreen> {
   }
 }
 
-/// "SAP 558  ·  " once SAP has numbered the order, else nothing.
+/// Both SAP numbers and a separator once SAP has the order, else nothing.
 String _sapPrefix(Map r) {
-  final s = '${r['custom_sap_sales_order'] ?? ''}'.trim();
-  return s.isEmpty || s == 'null' ? '' : 'SAP $s  ·  ';
+  final s = sapNumbersOf(r);
+  return s.isEmpty ? '' : '$s  ·  ';
 }

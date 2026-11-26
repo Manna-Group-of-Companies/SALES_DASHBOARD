@@ -86,6 +86,16 @@ SapSent sapSent({
       sent: sent, label: label, approvedBy: approvedBy, numbers: numbers);
 }
 
+/// Both companies' SAP numbers for any order, '' when SAP has neither:
+/// "Manna Treads SO 591 · Hi-Tech SO 599". Every screen that showed
+/// Hi-Tech's number alone shows this instead (the user, 26 Nov 2026: both
+/// numbers, everywhere). Display only - what may be picked still asks for
+/// Hi-Tech's order in particular.
+String sapNumbersOf(Map o) => sapSent(
+        mtSalesOrder: o['custom_mt_sales_order'],
+        sapSalesOrder: o['custom_sap_sales_order'])
+    .numbers;
+
 // ------------------------------------------------------------------ news ---
 
 /// Which orders reached SAP since this device last looked. For the sales

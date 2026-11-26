@@ -28,6 +28,7 @@ import 'package:manna_field_sales/core/sap_order_state.dart';
 import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/core/order_rules.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/core/sap_sent.dart';
 
 class ProductionOrderDetailScreen extends StatefulWidget {
   final String orderName;
@@ -157,14 +158,20 @@ class _ProductionOrderDetailScreenState
   }
 
   String _title() {
-    final s = '${_order['custom_sap_sales_order'] ?? ''}'.trim();
-    return s.isEmpty || s == 'null' ? 'Order' : 'Order $s';
+    final s = sapNumbersOf(_order);
+    return s.isEmpty ? 'Order' : s;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: FutureBuilder<void>(future: _init, builder: (_, __) => Text(_title()))),
+      appBar: AppBar(
+          title: FutureBuilder<void>(
+              future: _init,
+              builder: (_, __) => FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(_title())))),
       body: FutureBuilder<void>(
         future: _init,
         builder: (context, snap) {

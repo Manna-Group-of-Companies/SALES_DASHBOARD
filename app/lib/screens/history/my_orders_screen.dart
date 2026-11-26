@@ -121,7 +121,12 @@ class MyOrdersScreen extends StatelessWidget {
          * empty row — an order waiting to be picked up looks the same as one
          * that failed to push, and only the error below distinguishes them.
          */
-        final sapLine = isLead ? null : sapSummary(SapOrderState.fromOrder(r));
+        // The invoice only: both SAP numbers are on the chips below.
+        final sapLine = isLead
+            ? null
+            : sapSummary(SapOrderState(
+                invoice: r['custom_sap_invoice'] as String?,
+                invoiceDate: r['custom_sap_invoice_date'] as String?));
         final sapErr =
             isLead ? '' : '${r['custom_sap_sync_error'] ?? ''}'.trim();
 

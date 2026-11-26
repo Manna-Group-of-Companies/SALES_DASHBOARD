@@ -98,6 +98,7 @@ export function GmFollowUpPage() {
         (!q ||
           f.order.id.toLowerCase().includes(q) ||
           (f.order.sapSalesOrder ?? '').toLowerCase().includes(q) ||
+          (f.order.mtSalesOrder ?? '').toLowerCase().includes(q) ||
           f.order.customerName.toLowerCase().includes(q) ||
           f.order.rep.toLowerCase().includes(q)),
     );

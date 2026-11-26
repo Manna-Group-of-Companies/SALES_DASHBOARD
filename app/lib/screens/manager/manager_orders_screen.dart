@@ -21,6 +21,7 @@ import 'package:manna_field_sales/screens/manager/manager_ui.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/sap_sent_chips.dart';
 import 'package:manna_field_sales/widgets/sync_all_button.dart';
+import 'package:manna_field_sales/core/sap_sent.dart';
 
 /// A Monday-to-Sunday window, with a label a human recognises.
 class _Week {
@@ -114,7 +115,7 @@ class OrderCard extends StatelessWidget {
     final r = order;
     final (pill, tone) = orderPill(r);
     final approved = bucketOf(r) == OrderBucket.approved;
-    final sapNo = textOf(r['custom_sap_sales_order']);
+    final sapNo = sapNumbersOf(r);
     final production = orderProgress(
         SapOrderState.fromOrder(r), r['custom_production_status']);
     final finish = textOf(r['custom_production_finish_date']);
@@ -139,12 +140,9 @@ class OrderCard extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
             [
-              if (sapNo.isNotEmpty)
-                'SAP $sapNo'
-              // In Manna Treads SAP only: it IS in SAP, and the chips below
-              // carry its number.
-              else if (textOf(r['custom_mt_sales_order']).isEmpty)
-                'Not in SAP yet',
+              // Both companies' numbers (26 Nov 2026), so an order in
+              // Manna Treads SAP only no longer reads "Not in SAP yet".
+              if (sapNo.isNotEmpty) sapNo else 'Not in SAP yet',
               textOf(r['custom_sales_person']),
               shortDate(r['transaction_date']),
               if (r['_outstanding'] is num) 'Outstanding ${money(numOf(r['_outstanding']))}',
@@ -174,7 +172,7 @@ class OrderCard extends StatelessWidget {
           if (trailingNote != null) trailingNote!,
         ]),
         // Sent to SAP, who approved it, SAP's numbers (26 Nov 2026).
-        if (r['is_lead'] != true) SapSentChips(order: r),
+        if (r['is_lead'] != true) SapSentChips(order: r, showNumbers: false),
         if (approved && r['is_lead'] != true) ...[
           const SizedBox(height: 8),
           Row(children: [

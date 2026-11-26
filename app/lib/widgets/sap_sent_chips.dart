@@ -8,12 +8,19 @@ import 'package:manna_field_sales/core/sap_sent.dart';
 /// Draws nothing when there is nothing to say, so a caller need not check.
 class SapSentChips extends StatelessWidget {
   final Map<String, dynamic> order;
-  const SapSentChips({super.key, required this.order});
+
+  /// False where the same screen already shows the numbers in its own line.
+  final bool showNumbers;
+  const SapSentChips({super.key, required this.order, this.showNumbers = true});
 
   @override
   Widget build(BuildContext context) {
     final s = SapSent.fromOrder(order);
-    if (s.isEmpty) return const SizedBox.shrink();
+    if (s.label.isEmpty &&
+        s.approvedBy.isEmpty &&
+        (!showNumbers || s.numbers.isEmpty)) {
+      return const SizedBox.shrink();
+    }
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: Wrap(
@@ -35,7 +42,7 @@ class SapSentChips extends StatelessWidget {
                   : const Color(0xFF1565C0),
               Icons.verified_rounded,
             ),
-          if (s.numbers.isNotEmpty)
+          if (showNumbers && s.numbers.isNotEmpty)
             Text(s.numbers,
                 style: const TextStyle(
                     fontSize: 12.5, fontWeight: FontWeight.w700)),
@@ -57,4 +64,22 @@ class SapSentChips extends StatelessWidget {
                   fontSize: 11.5, fontWeight: FontWeight.w600, color: color)),
         ]),
       );
+}
+
+/// An order page's title: both SAP numbers once SAP has the order, else
+/// [fallback]. Shrinks to fit rather than wrapping out of the app bar.
+class SapOrderTitle extends StatelessWidget {
+  final Map order;
+  final String fallback;
+  const SapOrderTitle({super.key, required this.order, this.fallback = 'Order'});
+
+  @override
+  Widget build(BuildContext context) {
+    final n = sapNumbersOf(order);
+    if (n.isEmpty) return Text(fallback);
+    return FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Text(n));
+  }
 }

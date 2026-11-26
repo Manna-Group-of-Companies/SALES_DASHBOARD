@@ -16,6 +16,7 @@ import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/route_required_gate.dart';
+import 'package:manna_field_sales/core/sap_sent.dart';
 
 class PreviousOrdersScreen extends StatefulWidget {
   final OrderParty party;
@@ -230,7 +231,7 @@ class _PreviousOrdersScreenState extends State<PreviousOrdersScreen> {
                 itemCount: rows.length,
                 itemBuilder: (_, i) {
                   final r = rows[i];
-                  final sap = _text(r['custom_sap_sales_order']);
+                  final sap = sapNumbersOf(r);
                   final status = approvalLabel(r['custom_po_status']);
                   return Card(
                     margin:
@@ -242,7 +243,7 @@ class _PreviousOrdersScreenState extends State<PreviousOrdersScreen> {
                       subtitle: Text(
                           '${_date(r['transaction_date'])}'
                           '${status.isEmpty ? '' : '  ·  $status'}'
-                          '${sap.isEmpty ? '' : '  ·  SAP $sap'}'),
+                          '${sap.isEmpty ? '' : '  ·  $sap'}'),
                       trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                         Text(_money(r['grand_total']),
                             style: const TextStyle(

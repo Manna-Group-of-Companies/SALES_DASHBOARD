@@ -29,6 +29,8 @@ export interface RepMonthOrder {
   sapInvoice?: string;
   /** SAP's order number, shown instead of the ERPNext name. */
   sapSalesOrder?: string;
+  /** Manna Treads SAP's number; shown with Hi-Tech's (26 Nov 2026). */
+  mtSalesOrder?: string;
 }
 
 /**
@@ -38,7 +40,7 @@ export interface RepMonthOrder {
  */
 export async function getRepOrders(rep: string, from: string, to: string): Promise<RepMonthOrder[]> {
   const rows = await listDocs<Record<string, unknown>>('Sales Order', {
-    fields: ['name', 'customer', 'customer_name', 'transaction_date', 'net_total', 'custom_sap_invoice', 'custom_sap_sales_order'],
+    fields: ['name', 'customer', 'customer_name', 'transaction_date', 'net_total', 'custom_sap_invoice', 'custom_sap_sales_order', 'custom_mt_sales_order'],
     filters: [
       ['custom_sales_person', '=', rep],
       ['transaction_date', 'between', [from, to]],
@@ -57,6 +59,8 @@ export async function getRepOrders(rep: string, from: string, to: string): Promi
     sapInvoice: r.custom_sap_invoice && r.custom_sap_invoice !== 'null' ? String(r.custom_sap_invoice) : undefined,
     sapSalesOrder:
       r.custom_sap_sales_order && r.custom_sap_sales_order !== 'null' ? String(r.custom_sap_sales_order) : undefined,
+    mtSalesOrder:
+      r.custom_mt_sales_order && r.custom_mt_sales_order !== 'null' ? String(r.custom_mt_sales_order) : undefined,
   }));
 }
 

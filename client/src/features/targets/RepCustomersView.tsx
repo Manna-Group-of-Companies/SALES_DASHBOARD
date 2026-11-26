@@ -14,6 +14,7 @@ import type { SalesCustomer } from '@/domain/types';
 import { Alert, Badge, Button, Card, Icon, Skeleton, type BadgeTone } from '@/components/ui';
 import { buildRepCustomers, initials, shortDate, statusOf, type RepCustomerRow } from './repCustomers';
 import './targets.css';
+import { sapNumbersOf } from '@/domain/sapSent';
 
 type Filter = 'all' | 'owes' | 'overdue' | 'clear';
 
@@ -537,7 +538,7 @@ function InvoiceTable({
             ))}
         {pending.map((o) => (
           <tr key={`so-${o.id}`}>
-            <td>{o.sapSalesOrder ? `SO ${o.sapSalesOrder}` : <span className="dim">Not in SAP yet</span>}</td>
+            <td>{sapNumbersOf(o) || <span className="dim">Not in SAP yet</span>}</td>
             <td>{shortDate(o.placedOn)}</td>
             <td>—</td>
             <td className="right">{m(o.netTotal)}</td>

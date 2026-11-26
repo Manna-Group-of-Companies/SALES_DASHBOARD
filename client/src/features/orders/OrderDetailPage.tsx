@@ -81,6 +81,7 @@ import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import './orders.css';
 import { OrderTrackPanel, useOrderPickLists } from './OrderTrack';
+import { sapNumbersOf } from '@/domain/sapSent';
 
 const isoDay = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -459,9 +460,9 @@ export function OrderDetailPage() {
                   only unique alongside its series and date, while an ERPNext
                   name must be unique forever.
                 */}
-                {order.sapSalesOrder ? (
+                {sapNumbersOf(order) ? (
                   <>
-                    <b className="mono">SAP {order.sapSalesOrder}</b>{' '}
+                    <b className="mono">{sapNumbersOf(order)}</b>{' '}
                     <span className="tiny dim">({order.id})</span>
                   </>
                 ) : (
@@ -472,7 +473,7 @@ export function OrderDetailPage() {
               orderId
             )}
           </div>
-          {order && <SapSentLine order={order} className="page-head__sub" />}
+          {order && <SapSentLine order={order} numbers={false} className="page-head__sub" />}
         </div>
         <div className="cal__nav ordhead__actions">
           {/* When SAP was last read is on the header's Sync button (11 Oct 2026). */}
@@ -889,7 +890,7 @@ export function OrderDetailPage() {
               approved ? (
                 <>
                   This order is approved and is with the factory. It cannot be changed here
-                  {order.sapSalesOrder ? ` — quote SAP order ${order.sapSalesOrder}` : ''}. To drop
+                  {sapNumbersOf(order) ? ` — quote ${sapNumbersOf(order)}` : ''}. To drop
                   or reduce an item, ring the manufacturing team: anything already made is
                   delivered and the rest of the order stays open.
                 </>

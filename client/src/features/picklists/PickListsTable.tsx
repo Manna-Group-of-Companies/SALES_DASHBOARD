@@ -22,7 +22,10 @@ export function PickListsTable({ lists }: { lists: PickList[] }) {
           {lists.map((l) => (
             <tr key={l.name}>
               <td className="nowrap">{day(l.pickedOn)}</td>
-              <td className="nowrap">{l.sapSalesOrder || <span className="dim">Not in SAP yet</span>}</td>
+              <td className="nowrap">
+                {/* A pick list goes against Hi-Tech's order, the only number the server gives. */}
+                {l.sapSalesOrder ? `Hi-Tech SO ${l.sapSalesOrder}` : <span className="dim">Not in SAP yet</span>}
+              </td>
               <td>{l.customerName || '—'}</td>
               <td className="nowrap">{l.salesPerson || '—'}</td>
               <td>

@@ -56,6 +56,7 @@ import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import '@/components/common/status.css';
 import './orders.css';
+import { sapNumbersOf } from '@/domain/sapSent';
 
 /** A Sales Order and a Lead Order flattened onto one shape for the list. */
 interface Row {
@@ -482,9 +483,9 @@ export function OrdersListPage() {
                     is the one a rep is asked about. The ERPNext name stays for
                     support to find the document by.
                   */}
-                  {r.sapSalesOrder ? (
+                  {sapNumbersOf(r) ? (
                     <>
-                      <b className="mono">SAP {r.sapSalesOrder}</b>{' '}
+                      <b className="mono">{sapNumbersOf(r)}</b>{' '}
                       <span className="dim">({r.id})</span>
                     </>
                   ) : (
@@ -499,6 +500,7 @@ export function OrdersListPage() {
                 {r.kind === 'sales' && (
                   <SapSentLine
                     compact
+                    numbers={false}
                     className="ordrow__meta"
                     order={{
                       poStatus: r.status,

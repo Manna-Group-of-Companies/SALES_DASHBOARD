@@ -923,7 +923,8 @@ class Api {
       _list('Sales Order',
           fields: '["name","customer","custom_sales_person","grand_total",'
               '"transaction_date","custom_po_status","custom_sap_sales_order",'
-              '"custom_sap_sales_order_status","creation"]',
+              '"custom_sap_sales_order_status","creation",'
+              '"custom_mt_sales_order","custom_gm_approved_by"]',
           filters: '[["custom_po_status","in",$waiting],'
               '["custom_sales_person","in",${_inList(team)}],'
               '["docstatus","<",2]]',
@@ -2652,7 +2653,8 @@ class Api {
       _list('Sales Order',
           fields: '["name","customer","grand_total","transaction_date",'
               '"delivery_date","custom_po_status","custom_sales_person",'
-              '"custom_sap_sales_order","custom_sap_invoice","docstatus"]',
+              '"custom_sap_sales_order","custom_sap_invoice","docstatus",'
+              '"custom_mt_sales_order"]',
           filters: '[["customer","=",${jsonEncode(customer)}],["docstatus","!=",2]]',
           orderBy: 'transaction_date desc',
           limit: 20);
@@ -6996,7 +6998,8 @@ class Api {
             '"delivery_date","custom_sales_person","custom_production_status",'
             '"custom_production_finish_date","custom_changed_after_approval",'
             '"custom_sap_sales_order","custom_sap_sales_order_status",'
-            '"custom_sap_invoice","custom_sap_invoice_date"]',
+            '"custom_sap_invoice","custom_sap_invoice_date",'
+            '"custom_mt_sales_order"]',
         filters:
             '[["custom_company","=","$unit"],["custom_po_status","=","PO Approved - Ready for SAP"]]',
         orderBy: 'transaction_date desc',
@@ -7134,7 +7137,8 @@ class Api {
           // order; without it every row would fall back to the in-app status.
           fields: '["name","customer","customer_name","transaction_date",'
               '"grand_total","custom_production_status","custom_sales_person",'
-              '"custom_sap_sales_order","custom_sap_invoice"]',
+              '"custom_sap_sales_order","custom_sap_invoice",'
+              '"custom_mt_sales_order"]',
           filters: '[["custom_combined_order","=","$name"]]',
           orderBy: 'transaction_date asc');
 

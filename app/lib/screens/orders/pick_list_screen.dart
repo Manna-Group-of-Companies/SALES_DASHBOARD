@@ -8,6 +8,7 @@ import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/core/pick_list.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/core/sap_sent.dart';
 
 const String _kApproved = 'PO Approved - Ready for SAP';
 const Color _kOrange = Color(0xFFF46A21);
@@ -22,10 +23,10 @@ String _day(Object? v) {
   return m == null ? '' : '${m[3]} ${_months[int.parse(m[2]!) - 1]}';
 }
 
-/// The order's SAP number, or a dash. Never the ERPNext name.
+/// Both SAP order numbers, or a dash. Never the ERPNext name.
 String _orderNo(Map o) {
-  final s = '${o['custom_sap_sales_order'] ?? ''}'.trim();
-  return s.isEmpty || s == 'null' ? '—' : s;
+  final s = sapNumbersOf(o);
+  return s.isEmpty ? '—' : s;
 }
 
 String _customer(Map o) => '${o['customer_name'] ?? o['customer'] ?? ''}';

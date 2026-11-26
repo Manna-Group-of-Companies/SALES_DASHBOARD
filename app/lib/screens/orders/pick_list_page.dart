@@ -9,6 +9,7 @@ import 'package:manna_field_sales/core/pick_list.dart';
 import 'package:manna_field_sales/models/min_stock.dart';
 import 'package:manna_field_sales/screens/orders/pick_list_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/core/sap_sent.dart';
 
 const String _kApproved = 'PO Approved - Ready for SAP';
 /// How long a finished (invoiced) order stays on the page after its last pick
@@ -30,8 +31,8 @@ String _text(Object? v) {
   return s == 'null' ? '' : s;
 }
 
-/// The SAP order number, or a dash. Never the ERPNext name.
-String _orderNo(Map o) => _text(o['custom_sap_sales_order']).isEmpty ? '—' : _text(o['custom_sap_sales_order']);
+/// Both SAP order numbers, or a dash. Never the ERPNext name.
+String _orderNo(Map o) => sapNumbersOf(o).isEmpty ? '—' : sapNumbersOf(o);
 
 String _customer(Map o) => _text(o['customer_name']).isNotEmpty ? _text(o['customer_name']) : _text(o['customer']);
 

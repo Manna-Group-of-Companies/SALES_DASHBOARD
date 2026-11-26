@@ -10,15 +10,18 @@ import { Badge } from '@/components/ui';
 export function SapSentLine({
   order,
   compact = false,
+  numbers = true,
   className,
 }: {
   order: SapSentInput;
   compact?: boolean;
+  /** False where the same screen already shows the numbers in its own line. */
+  numbers?: boolean;
   /** For the wrapper, so a row with nothing to say leaves no empty block. */
   className?: string;
 }) {
   const s = sapSent(order);
-  if (!s.label && !s.approvedBy && !s.numbers) return null;
+  if (!s.label && !s.approvedBy && !(numbers && s.numbers)) return null;
   return (
     <div className={className} style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
       {s.label && (
@@ -42,7 +45,7 @@ export function SapSentLine({
           {s.approvedBy}
         </Badge>
       )}
-      {s.numbers && (compact ? <b className="mono">{s.numbers}</b> : <span className="mono">SAP: <b>{s.numbers}</b></span>)}
+      {numbers && s.numbers && (compact ? <b className="mono">{s.numbers}</b> : <span className="mono">SAP: <b>{s.numbers}</b></span>)}
     </div>
   );
 }

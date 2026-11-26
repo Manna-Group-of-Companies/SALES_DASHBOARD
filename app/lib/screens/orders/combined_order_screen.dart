@@ -12,6 +12,7 @@ import 'package:manna_field_sales/core/errors.dart';
 import 'package:manna_field_sales/screens/orders/order_detail_screen.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/order_complete_tick.dart';
+import 'package:manna_field_sales/core/sap_sent.dart';
 
 class CombinedOrderScreen extends StatefulWidget {
   /// The combined order row as the list already had it, so the header can be
@@ -157,8 +158,8 @@ class _CombinedOrderScreenState extends State<CombinedOrderScreen> {
   }
 }
 
-/// "Order 558" once SAP has numbered it, else "Order".
+/// Both SAP numbers once SAP has the order, else "Order".
 String _orderTitle(Map o) {
-  final s = '${o['custom_sap_sales_order'] ?? ''}'.trim();
-  return s.isEmpty || s == 'null' ? 'Order' : 'Order $s';
+  final s = sapNumbersOf(o);
+  return s.isEmpty ? 'Order' : s;
 }

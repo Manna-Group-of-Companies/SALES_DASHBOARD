@@ -638,17 +638,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   /// has been issued four times in this company, twice in 2024 alone — so it is
   /// unique only alongside those, while the ERPNext name must be unique for
   /// ever.
-  Widget _title() {
-    final sap = '${_order['custom_sap_sales_order'] ?? ''}'.trim();
-    if (sap.isEmpty || sap == 'null') return const Text('Order');
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text('Order $sap'),
-      ],
-    );
-  }
+  Widget _title() => SapOrderTitle(order: _order);
+
 
   @override
   Widget build(BuildContext context) {

@@ -34,6 +34,7 @@ import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/sap_sent_chips.dart';
 import 'package:manna_field_sales/widgets/sync_all_button.dart';
+import 'package:manna_field_sales/core/sap_sent.dart';
 
 class ManagerOrderReviewScreen extends StatefulWidget {
   final String orderName;
@@ -598,7 +599,11 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: FutureBuilder<void>(future: _init, builder: (_, __) => Text(_title())),
+        title: FutureBuilder<void>(
+            future: _init,
+            builder: (_, __) => _isLead
+                ? Text(_title())
+                : SapOrderTitle(order: _order)),
         actions: const [SyncAppBarButton(), SizedBox(width: 4)],
       ),
       body: FutureBuilder<void>(
@@ -632,8 +637,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
             const SizedBox(height: 2),
             Text(
                 [
-                  if (_s(_order['custom_sap_sales_order']).isNotEmpty)
-                    'SAP ${_s(_order['custom_sap_sales_order'])}',
+                  if (sapNumbersOf(_order).isNotEmpty) sapNumbersOf(_order),
                   '${_order['custom_sales_person'] ?? _order['sales_person'] ?? '—'}',
                   if (_s(_order['delivery_date']).isNotEmpty)
                     'Delivery ${_s(_order['delivery_date'])}',
@@ -649,7 +653,7 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                     fontWeight: FontWeight.w600,
                     color: _statusColour)),
             // Sent to SAP, who approved it, SAP's numbers (26 Nov 2026).
-            if (!_isLead) SapSentChips(order: _order),
+            if (!_isLead) SapSentChips(order: _order, showNumbers: false),
             // How much this order has been churned before it reached approval.
             // An order rewritten five times is worth a second look at, and the
             // manager had no way to tell one from an order raised once.

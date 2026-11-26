@@ -56,6 +56,16 @@ export function sapSent(o: SapSentInput): SapSent {
   return { sent, label, approvedBy, numbers };
 }
 
+/**
+ * Both companies' SAP numbers, '' when SAP has neither: "Manna Treads SO 591 ·
+ * Hi-Tech SO 599". Every screen that showed Hi-Tech's number alone shows this
+ * instead (the user, 26 Nov 2026: both numbers, everywhere). Display only -
+ * what may be picked still asks for Hi-Tech's order in particular.
+ */
+export function sapNumbersOf(o: { mtSalesOrder?: string | null; sapSalesOrder?: string | null }): string {
+  return sapSent(o).numbers;
+}
+
 // ------------------------------------------------------------------ news ---
 
 /**

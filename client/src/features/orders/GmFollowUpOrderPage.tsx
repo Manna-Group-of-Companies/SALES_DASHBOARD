@@ -40,6 +40,7 @@ import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import './orders.css';
 import { OrderTrackPanel, useOrderPickLists } from './OrderTrack';
+import { sapNumbersOf } from '@/domain/sapSent';
 
 /** Frappe's `YYYY-MM-DD HH:MM:SS`, as a person reads it. */
 function when(at: string): string {
@@ -172,17 +173,10 @@ export function GmFollowUpOrderPage() {
           <div className="page-head__title">{order ? order.customerName : 'Loading…'}</div>
           <div className="page-head__sub">
             {order ? (
-              order.sapSalesOrder ? (
+              sapNumbersOf(order) ? (
+                // Both companies' numbers (26 Nov 2026).
                 <>
-                  <b className="mono">SAP {order.sapSalesOrder}</b>
-                  {' · '}
-                  <span className="mono">{order.id}</span>
-                </>
-              ) : order.mtSalesOrder ? (
-                // In Manna Treads SAP only (the Manna Treads first route): it IS
-                // in SAP, so "Not in SAP" would be false (21 Nov 2026).
-                <>
-                  <b className="mono">Manna Treads SAP {order.mtSalesOrder}</b>
+                  <b className="mono">{sapNumbersOf(order)}</b>
                   {' · '}
                   <span className="mono">{order.id}</span>
                 </>
@@ -195,7 +189,7 @@ export function GmFollowUpOrderPage() {
               orderId
             )}
           </div>
-          {order && <SapSentLine order={order} className="page-head__sub" />}
+          {order && <SapSentLine order={order} numbers={false} className="page-head__sub" />}
         </div>
         <div className="cal__nav">
           {order && <StatusPill status={order.poStatus} sapStatus={order.sapSalesOrderStatus} />}
@@ -357,11 +351,8 @@ export function GmFollowUpOrderPage() {
                   <tr>
                     <td className="dim">SAP order</td>
                     <td className="num">
-                      {order.sapSalesOrder ? (
-                        <b className="mono">{order.sapSalesOrder}</b>
-                      ) : order.mtSalesOrder ? (
-                        // In Manna Treads SAP only: "Awaiting push" would be false (21 Nov 2026).
-                        <b className="mono">Manna Treads {order.mtSalesOrder}</b>
+                      {sapNumbersOf(order) ? (
+                        <b className="mono">{sapNumbersOf(order)}</b>
                       ) : (
                         <span className="dim">Awaiting push</span>
                       )}
