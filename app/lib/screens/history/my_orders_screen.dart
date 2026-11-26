@@ -11,6 +11,7 @@ import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/history_list.dart';
 import 'package:manna_field_sales/widgets/order_complete_tick.dart';
 import 'package:manna_field_sales/widgets/gm_status.dart';
+import 'package:manna_field_sales/widgets/sap_sent_chips.dart';
 
 class MyOrdersScreen extends StatelessWidget {
   const MyOrdersScreen({super.key});
@@ -138,14 +139,22 @@ class MyOrdersScreen extends StatelessWidget {
             // "not finished" rather than "not applicable".
             if (!isLead) OrderCompleteTick(order: r, compact: true),
           ]),
-          subtitle: Text('${r['transaction_date'] ?? ''}$ddText\n$statusLine'
-              '${combined.isEmpty ? '' : '\nIn a week order'}'
-              // The delivery is what a rep repeats to a customer, so it gets
-              // its own line rather than being run into the status.
-              '${sapLine == null ? '' : '\n$sapLine'}'
-              // A failed push reads exactly like an order not yet picked up.
-              // Saying which is the whole point of keeping the error.
-              '${sapErr.isEmpty ? '' : '\nSAP: $sapErr'}'),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('${r['transaction_date'] ?? ''}$ddText\n$statusLine'
+                  '${combined.isEmpty ? '' : '\nIn a week order'}'
+                  // The delivery is what a rep repeats to a customer, so it
+                  // gets its own line rather than being run into the status.
+                  '${sapLine == null ? '' : '\n$sapLine'}'
+                  // A failed push reads exactly like an order not yet picked
+                  // up. Saying which is the whole point of keeping the error.
+                  '${sapErr.isEmpty ? '' : '\nSAP: $sapErr'}'),
+              // Sent to SAP, who approved it, SAP's numbers (26 Nov 2026).
+              if (!isLead) SapSentChips(order: r),
+            ],
+          ),
           isThreeLine: true,
           trailing: const Icon(Icons.chevron_right),
           onTap: () {

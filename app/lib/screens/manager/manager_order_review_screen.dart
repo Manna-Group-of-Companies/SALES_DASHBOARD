@@ -32,6 +32,7 @@ import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/screens/orders/order_screen.dart';
 import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/services/api.dart';
+import 'package:manna_field_sales/widgets/sap_sent_chips.dart';
 import 'package:manna_field_sales/widgets/sync_all_button.dart';
 
 class ManagerOrderReviewScreen extends StatefulWidget {
@@ -647,6 +648,8 @@ class _ManagerOrderReviewScreenState extends State<ManagerOrderReviewScreen> {
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     color: _statusColour)),
+            // Sent to SAP, who approved it, SAP's numbers (26 Nov 2026).
+            if (!_isLead) SapSentChips(order: _order),
             // How much this order has been churned before it reached approval.
             // An order rewritten five times is worth a second look at, and the
             // manager had no way to tell one from an order raised once.

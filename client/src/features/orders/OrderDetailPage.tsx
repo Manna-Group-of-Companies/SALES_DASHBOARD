@@ -70,6 +70,7 @@ import { money } from '@/components/common/format';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import { AgingBoxes } from '@/components/common/AgingBoxes';
 import { StatusPill } from '@/components/common/StatusPill';
+import { SapSentLine } from '@/components/common/SapSentLine';
 import { CommitmentThread } from './CommitmentThread';
 import { TemporaryCreditNote } from '@/features/credit/TemporaryCreditNote';
 import { getOrderRoute, giveCommitment, type OrderRoute } from '@/api/paymentCommitments';
@@ -471,6 +472,7 @@ export function OrderDetailPage() {
               orderId
             )}
           </div>
+          {order && <SapSentLine order={order} className="page-head__sub" />}
         </div>
         <div className="cal__nav ordhead__actions">
           {/* When SAP was last read is on the header's Sync button (11 Oct 2026). */}

@@ -30,6 +30,7 @@ import { money } from '@/components/common/format';
 import { Tile } from '@/components/common/Tile';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import { StatusPill } from '@/components/common/StatusPill';
+import { SapSentLine } from '@/components/common/SapSentLine';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import './orders.css';
@@ -210,14 +211,9 @@ export function GmFollowUpPage() {
                           factory, the delivery note and the invoice carry. The
                           ERPNext name stays underneath, small, for support.
                         */}
-                        {f.order.sapSalesOrder ? (
-                          <b className="mono">SAP {f.order.sapSalesOrder}</b>
-                        ) : f.order.mtSalesOrder ? (
-                          // In Manna Treads SAP only: "Not in SAP" would be false.
-                          <b className="mono">Manna Treads SAP {f.order.mtSalesOrder}</b>
-                        ) : (
-                          <span className="dim">Not in SAP</span>
-                        )}
+                        {/* Sent to SAP, who approved it, and both companies' numbers (26 Nov 2026). */}
+                        <SapSentLine compact order={f.order} />
+                        {!f.order.sapSalesOrder && !f.order.mtSalesOrder && <span className="dim">Not in SAP</span>}
                         <div className="tiny dim mono">{f.order.id}</div>
                         {f.order.sapInvoice && (
                           <div className="tiny">

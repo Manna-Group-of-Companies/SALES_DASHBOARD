@@ -20,6 +20,7 @@ import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/gm_status.dart';
+import 'package:manna_field_sales/widgets/sap_sent_chips.dart';
 
 class OrderDetailScreen extends StatefulWidget {
   final String orderName;
@@ -715,6 +716,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             else
               _statusRow('Approval',
                   orderApprovalLabel(po, SapOrderState.fromOrder(_order))),
+            // Sent to SAP, who approved it, SAP's numbers (26 Nov 2026).
+            SapSentChips(order: _order),
             _followUpCard(),
             TemporaryCreditStrip(orderName: widget.orderName),
             if (ratesLocked(_order)) _statusRow('Rates', 'Locked by manager'),

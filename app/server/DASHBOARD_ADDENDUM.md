@@ -827,3 +827,28 @@ order screen, as tread rubber is, which takes the old I-14068/I-14069 off it
 The six SAP solution codes (SM/SR/SV 010001 and 030001) were added to ERPNext
 that day. The dashboard does not take SAP prices at all, so nothing changes
 there.
+
+## Sent to SAP, who approved it, and SAP's numbers (26 Nov 2026)
+
+The user asked that every Sales Order, once approved and pushed, always say
+so wherever it is listed or opened, on the phone and the dashboard: **Sent to
+SAP**, **GM Approved** or **Manager Approved**, and SAP's order number. One
+rule, `sapSent` (`client/src/domain/sapSent.ts`, `app/lib/core/sap_sent.dart`),
+pinned by `shared/fixtures/sap_sent.json`:
+
+- **Sent to SAP** only once SAP has written a number back:
+  `custom_mt_sales_order` (Manna Treads, PASS M) or `custom_sap_sales_order`
+  (Hi-Tech). An approved order with neither reads **Waiting for SAP** — the
+  push button only asks the order sync, it does not prove SAP got it.
+- **GM Approved** when an approved order carries `custom_gm_approved_by`
+  (the GM's approve or approve-and-push stamps it, the manager's push keeps
+  it); otherwise **Manager Approved**. No other status claims an approver —
+  an order the sync sent early was approved by nobody.
+- Both numbers when both companies hold the order: "Manna Treads SO 591 ·
+  Hi-Tech SO 599".
+
+No new ERPNext field: all three already existed. Drawn by `SapSentLine`
+(dashboard: Team Orders, the order page, the GM's order and follow-up pages)
+and `SapSentChips` (phone: My Orders, the order page, Team Orders, the
+manager's review). The phone's My Orders and Team Orders queries now also
+fetch `custom_mt_sales_order` and `custom_gm_approved_by`.

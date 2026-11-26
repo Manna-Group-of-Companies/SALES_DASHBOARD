@@ -45,6 +45,7 @@ import { money } from '@/components/common/format';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import { AgingBoxes } from '@/components/common/AgingBoxes';
 import { StatusPill } from '@/components/common/StatusPill';
+import { SapSentLine } from '@/components/common/SapSentLine';
 import { CommitmentThread } from './CommitmentThread';
 import { getOrderRoute, giveCommitment, type OrderRoute } from '@/api/paymentCommitments';
 import { PC_MESSAGES, pcCheckApproval } from '@/domain/paymentCommitment';
@@ -455,6 +456,7 @@ export function GmOrderPage() {
               orderId
             )}
           </div>
+          {order && <SapSentLine order={order} className="page-head__sub" />}
         </div>
         <div className="cal__nav">
           {order && <StatusPill status={order.poStatus} sapStatus={order.sapSalesOrderStatus} />}

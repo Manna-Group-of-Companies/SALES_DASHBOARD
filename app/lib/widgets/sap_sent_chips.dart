@@ -1,0 +1,60 @@
+import 'package:flutter/material.dart';
+import 'package:manna_field_sales/core/sap_sent.dart';
+
+/// What a Sales Order says about SAP, on every order list and order page:
+/// Sent to SAP (or Waiting for SAP), who approved it, and SAP's numbers.
+/// The rule is `core/sap_sent.dart`; the dashboard draws the same line.
+///
+/// Draws nothing when there is nothing to say, so a caller need not check.
+class SapSentChips extends StatelessWidget {
+  final Map<String, dynamic> order;
+  const SapSentChips({super.key, required this.order});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = SapSent.fromOrder(order);
+    if (s.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          if (s.label.isNotEmpty)
+            _chip(
+              s.label,
+              s.sent ? const Color(0xFF2E7D32) : const Color(0xFFE65100),
+              s.sent ? Icons.cloud_done_rounded : Icons.schedule_rounded,
+            ),
+          if (s.approvedBy.isNotEmpty)
+            _chip(
+              s.approvedBy,
+              s.approvedBy == kGmApproved
+                  ? const Color(0xFF6A1B9A)
+                  : const Color(0xFF1565C0),
+              Icons.verified_rounded,
+            ),
+          if (s.numbers.isNotEmpty)
+            Text(s.numbers,
+                style: const TextStyle(
+                    fontSize: 12.5, fontWeight: FontWeight.w700)),
+        ],
+      ),
+    );
+  }
+
+  Widget _chip(String label, Color color, IconData icon) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(20)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 4),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 11.5, fontWeight: FontWeight.w600, color: color)),
+        ]),
+      );
+}

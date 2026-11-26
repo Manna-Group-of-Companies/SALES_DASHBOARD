@@ -48,6 +48,7 @@ import { Alert, Badge, Empty, Input, Select } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { StatusPill, CompletionTick } from '@/components/common/StatusPill';
 import { RefreshButton } from '@/components/common/RefreshButton';
+import { SapSentLine } from '@/components/common/SapSentLine';
 import { ExportButton } from '@/features/reports/ExportButton';
 import { OrderTrackLine, trackOf, usePickListsByOrder } from './OrderTrack';
 import { responsibleText } from '@/domain/orderTrack';
@@ -73,6 +74,9 @@ interface Row {
   sapSalesOrder?: string;
   /** SAP's own status, so a cancelled order stops reading as approved. */
   sapSalesOrderStatus?: string;
+  /** Manna Treads SAP's number, and the GM's stamp: for the Sent to SAP line. */
+  mtSalesOrder?: string;
+  gmApprovedBy?: string;
   /** Which of the four filter buckets this row is in. See `orderBucket`. */
   bucket: OrderBucket;
   /** The customer, for their outstanding; empty on a lead. */
@@ -243,6 +247,8 @@ export function OrdersListPage() {
         undecided: awaitingManager(o.poStatus),
         sapSalesOrder: o.sapSalesOrder,
         sapSalesOrderStatus: o.sapSalesOrderStatus,
+        mtSalesOrder: o.mtSalesOrder,
+        gmApprovedBy: o.gmApprovedBy,
         customer: o.customer,
         // The two doctypes disagree on what approved means, so each passes its
         // own answer — see `orderBucket`.
@@ -489,6 +495,19 @@ export function OrdersListPage() {
                     <> · Outstanding {money(owed[r.customer], 0)}</>
                   )}
                 </div>
+
+                {r.kind === 'sales' && (
+                  <SapSentLine
+                    compact
+                    className="ordrow__meta"
+                    order={{
+                      poStatus: r.status,
+                      gmApprovedBy: r.gmApprovedBy,
+                      mtSalesOrder: r.mtSalesOrder,
+                      sapSalesOrder: r.sapSalesOrder,
+                    }}
+                  />
+                )}
 
                 <div className="ordrow__status">
                   {/*

@@ -35,6 +35,7 @@ import { Alert, Badge, Button, Card, Empty, Textarea } from '@/components/ui';
 import { money } from '@/components/common/format';
 import { RefreshButton } from '@/components/common/RefreshButton';
 import { StatusPill } from '@/components/common/StatusPill';
+import { SapSentLine } from '@/components/common/SapSentLine';
 import '@/components/layout/layout.css';
 import '@/features/hr/attendance.css';
 import './orders.css';
@@ -194,6 +195,7 @@ export function GmFollowUpOrderPage() {
               orderId
             )}
           </div>
+          {order && <SapSentLine order={order} className="page-head__sub" />}
         </div>
         <div className="cal__nav">
           {order && <StatusPill status={order.poStatus} sapStatus={order.sapSalesOrderStatus} />}
