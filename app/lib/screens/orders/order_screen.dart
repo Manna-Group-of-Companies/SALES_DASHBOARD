@@ -505,9 +505,9 @@ class _OrderScreenState extends State<OrderScreen> {
   String? _validate() {
     if (_picked.isEmpty) return 'Add at least one product.';
     if (_deliveryDate == null) return 'Pick a required delivery date.';
-    if (_transportMode == null) {
-      return 'Choose the mode of delivery: By Road, By KSRTC or By Railway.';
-    }
+    // Mode of delivery is no longer asked (27 Nov 2026, the user). An old
+    // order being edited keeps whatever it had: _transportMode is still
+    // loaded from it and sent back unchanged.
     if (_deliveryMode == null) return 'Choose the freight: Paid or To Pay.';
     final unpriced =
         _picked.where((l) => l.needsRate && !_sapPriceLater(l)).toList();
@@ -1429,17 +1429,13 @@ class _OrderScreenState extends State<OrderScreen> {
     final d = _deliveryDate;
     return SafeArea(
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        // Both asked on every order (14 Nov 2026, the user): how it travels,
-        // and who pays the freight.
+        // Who pays the freight, asked on every order (14 Nov 2026). Mode of
+        // delivery (By Road / KSRTC / Railway) was asked beside it until the
+        // user had it removed on 27 Nov 2026.
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: Column(children: [
-            _choice('Mode of delivery', kTransportModes, _transportMode,
-                (v) => _transportMode = v),
-            const SizedBox(height: 6),
-            _choice('Freight', kDeliveryModes, _deliveryMode,
-                (v) => _deliveryMode = v),
-          ]),
+          child: _choice('Freight', kDeliveryModes, _deliveryMode,
+              (v) => _deliveryMode = v),
         ),
         Container(
           width: double.infinity,
