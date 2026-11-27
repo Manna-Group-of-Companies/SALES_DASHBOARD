@@ -48,7 +48,9 @@ Widget _totalLine(double amount, int count) => Row(children: [
       Expanded(
         child: Text(
             count == 0
-                ? 'Nothing to collect - no open invoice in SAP'
+                // Says what SAP sent, not "nothing to collect": until the
+                // invoices sync writes, the mirror is empty for everyone.
+                ? 'No open invoice from SAP'
                 : 'To collect: ${inr(amount)}  ·  $count open invoice${count == 1 ? '' : 's'}',
             style: const TextStyle(fontWeight: FontWeight.bold)),
       ),
