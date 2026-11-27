@@ -51,6 +51,9 @@ import 'package:manna_field_sales/core/session.dart';
 import 'package:manna_field_sales/core/sync_scope.dart';
 import 'package:manna_field_sales/services/api.dart';
 
+/// Whether the bar offers Reload. See the note in `build`.
+const bool kOfferCreditReload = false;
+
 /// Statuses where a run is in flight.
 const Set<String> _busy = {'Queued', 'Running'};
 
@@ -187,7 +190,14 @@ class _SapSyncBarState extends State<SapSyncBar> {
     // a rep in it or the manager over it — and the GM, since 25 Sep 2026 (see
     // core/sync_scope.dart). Anyone else would only ever get "Not permitted",
     // and a button that always fails is worse than no button.
-    final mayAsk = syncsForSession(Session.I).contains(SyncKind.credit);
+    //
+    // Not offered at all since 27 Nov 2026: the button raises the office
+    // poller's credit flag, and that poller has not run a credit sync since
+    // 20 Oct - B1iF has written the figures every 15 minutes since 13 Nov. A
+    // Reload that queues a run nobody serves only ever reads "Fetching…".
+    // Turn [kOfferCreditReload] back on if the poller is ever run again.
+    final mayAsk = kOfferCreditReload &&
+        syncsForSession(Session.I).contains(SyncKind.credit);
 
     // Only the freshness line and the button. The last run's summary used to
     // sit beneath them; it was removed on 11 Oct 2026 as not wanted by reps.
