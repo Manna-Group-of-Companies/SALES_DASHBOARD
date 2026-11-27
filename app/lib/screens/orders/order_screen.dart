@@ -508,7 +508,8 @@ class _OrderScreenState extends State<OrderScreen> {
     // Mode of delivery is no longer asked (27 Nov 2026, the user). An old
     // order being edited keeps whatever it had: _transportMode is still
     // loaded from it and sent back unchanged.
-    if (_deliveryMode == null) return 'Choose the freight: Paid or To Pay.';
+    // Freight (Paid / To Pay) is no longer asked either (27 Nov 2026, the
+    // user); an old order being edited keeps what it had, as above.
     final unpriced =
         _picked.where((l) => l.needsRate && !_sapPriceLater(l)).toList();
     if (unpriced.isNotEmpty) {
@@ -1386,39 +1387,6 @@ class _OrderScreenState extends State<OrderScreen> {
         ])),
       );
 
-  /// One row of choices, none picked until the rep picks one.
-  Widget _choice(String label, List<String> options, String? selected,
-          void Function(String?) set) =>
-      Row(children: [
-        SizedBox(
-          width: 84,
-          child: Text(label,
-              style: const TextStyle(fontSize: 12.5, color: Colors.black54)),
-        ),
-        Expanded(
-          child: SegmentedButton<String>(
-            showSelectedIcon: false,
-            emptySelectionAllowed: true,
-            segments: [
-              for (final o in options)
-                ButtonSegment(
-                    value: o,
-                    label: Text(o,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 12.5))),
-            ],
-            selected: {?selected},
-            onSelectionChanged: _submitting
-                ? null
-                : (s) => setState(() => set(s.isEmpty ? null : s.first)),
-            style: const ButtonStyle(
-                visualDensity: VisualDensity.compact,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-          ),
-        ),
-      ]);
-
   /// The item count and total on a strip of their own, then the delivery
   /// date and the send button side by side — the billing-app layout the reps
   /// asked for (19 Nov 2026). The date is still required; it just no longer
@@ -1429,14 +1397,8 @@ class _OrderScreenState extends State<OrderScreen> {
     final d = _deliveryDate;
     return SafeArea(
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        // Who pays the freight, asked on every order (14 Nov 2026). Mode of
-        // delivery (By Road / KSRTC / Railway) was asked beside it until the
-        // user had it removed on 27 Nov 2026.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: _choice('Freight', kDeliveryModes, _deliveryMode,
-              (v) => _deliveryMode = v),
-        ),
+        // Mode of delivery and Freight (Paid / To Pay) were asked here from
+        // 14 Nov 2026 until the user had both removed on 27 Nov 2026.
         Container(
           width: double.infinity,
           color: const Color(0xFFF0F0F0),
