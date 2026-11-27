@@ -143,6 +143,9 @@ class OrderCard extends StatelessWidget {
               // Both companies' numbers (26 Nov 2026), so an order in
               // Manna Treads SAP only no longer reads "Not in SAP yet".
               if (sapNo.isNotEmpty) sapNo else 'Not in SAP yet',
+              // The exact order (27 Nov 2026): SAP's numbers restart every
+              // year; this one is also SAP's Customer Ref. No.
+              textOf(r['name']),
               textOf(r['custom_sales_person']),
               shortDate(r['transaction_date']),
               if (r['_outstanding'] is num) 'Outstanding ${money(numOf(r['_outstanding']))}',

@@ -81,7 +81,9 @@ class SapSentChips extends StatelessWidget {
 }
 
 /// An order page's title: both SAP numbers once SAP has the order, else
-/// [fallback]. Shrinks to fit rather than wrapping out of the app bar.
+/// [fallback], with the ERPNext number under it (the user, 27 Nov 2026: SAP's
+/// numbers restart every year, and the ERPNext one is in SAP's Customer Ref.
+/// No.). Shrinks to fit rather than wrapping out of the app bar.
 class SapOrderTitle extends StatelessWidget {
   final Map order;
   final String fallback;
@@ -90,10 +92,20 @@ class SapOrderTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final n = sapNumbersOf(order);
-    if (n.isEmpty) return Text(fallback);
-    return FittedBox(
-        fit: BoxFit.scaleDown,
-        alignment: Alignment.centerLeft,
-        child: Text(n));
+    final raw = '${order['name'] ?? ''}'.trim();
+    final name = raw == 'null' ? '' : raw;
+    Widget fit(Widget w) => FittedBox(
+        fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: w);
+    final head = fit(Text(n.isEmpty ? fallback : n));
+    if (name.isEmpty) return head;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        head,
+        fit(Text(name,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400))),
+      ],
+    );
   }
 }

@@ -97,6 +97,7 @@ void main() {
       ),
     ));
     expect(t.takeException(), isNull);
-    expect(find.text('Hi-Tech SO 485 · Amjad Pr · 11 Oct'), findsOneWidget);
+    expect(find.text('Hi-Tech SO 485 · SAL-ORD-2026-00155 · Amjad Pr · 11 Oct'),
+        findsOneWidget);
   });
 }

@@ -154,7 +154,11 @@ class MyOrdersScreen extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('${r['transaction_date'] ?? ''}$ddText\n$statusLine'
+              // The ERPNext number first (the user, 27 Nov 2026): SAP's
+              // numbers restart every year - Manna Treads SO 595 exists four
+              // times - and the sync puts this one in SAP's Customer Ref. No.,
+              // so it finds the exact order in both.
+              Text('${r['name'] ?? ''}  ·  ${r['transaction_date'] ?? ''}$ddText\n$statusLine'
                   '${combined.isEmpty ? '' : '\nIn a week order'}'
                   // The delivery is what a rep repeats to a customer, so it
                   // gets its own line rather than being run into the status.
