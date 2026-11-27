@@ -93,6 +93,25 @@ String? punchOutRefusal(List<RunningTrip> running) {
       'End them first, then punch out.';
 }
 
+/// What the rep is told when the trips could not be read at all, so the
+/// punch-out is held (the user, 27 Nov 2026: "punch out only once the trip is
+/// ended, never otherwise"). Said without naming the network - nothing on
+/// screen may say it is gone.
+const String kPunchOutTripsUnknown =
+    'Could not check whether your trip has been ended. '
+    'Try again in a moment. End Trip first if a trip is still running.';
+
+/// The trips that hold a punch-out, when the rep's trips could not be read.
+///
+/// [recordingOnThisPhone] is the trip TripTracker is recording, if any: that
+/// one is certainly running, so it is named. With nothing known the answer is
+/// null - not "none" - and the punch-out is held. Until 27 Nov 2026 an
+/// unreadable list let the punch-out through; the user asked for no way past.
+List<RunningTrip>? tripsWhenUnreadable(String? recordingOnThisPhone) {
+  final t = (recordingOnThisPhone ?? '').trim();
+  return t.isEmpty || t == 'null' ? null : [RunningTrip(name: t)];
+}
+
 /// Trips still running from a day before [today] (`YYYY-MM-DD`), oldest first.
 ///
 /// The one-trip rule stops a second trip being started; it does nothing about

@@ -191,4 +191,28 @@ void main() {
           'in progress');
     });
   });
+
+  group('punch-out when the trips cannot be read', () {
+    // 27 Nov 2026: the user asked that punch-out happen only after End
+    // Trip, with no way round it. Until then an unreadable list let it through.
+    test('with nothing known the punch-out is held, not let through', () {
+      expect(tripsWhenUnreadable(null), isNull);
+      expect(tripsWhenUnreadable(''), isNull);
+      expect(tripsWhenUnreadable('null'), isNull);
+    });
+
+    test('a trip this phone is recording is named as the one in the way', () {
+      final r = tripsWhenUnreadable('TRIP-2026-00042');
+      expect(r, isNotNull);
+      expect(r!.single.name, 'TRIP-2026-00042');
+      expect(punchOutRefusal(r), contains('End the trip first'));
+    });
+
+    test('the held message never says the network is gone', () {
+      final m = kPunchOutTripsUnknown.toLowerCase();
+      for (final w in ['network', 'internet', 'offline', 'signal', 'connection']) {
+        expect(m.contains(w), isFalse, reason: w);
+      }
+    });
+  });
 }

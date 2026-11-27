@@ -358,16 +358,16 @@ class _HomeDashboardState extends State<HomeDashboard>
   /// read with what the phone is holding laid over it, so a trip ended with
   /// no signal no longer counts.
   ///
-  /// Rounded towards letting the punch-out through when the trips cannot be
-  /// read at all — not even a kept copy: a rep refused a punch-out loses the
-  /// day's hours over a lookup, and the red old-trip card still says which
-  /// trip is open.
-  Future<List<RunningTrip>> _tripsBlockingPunchOut() async {
+  /// Null when they cannot be read at all, not even a kept copy, and this
+  /// phone is recording none: the punch-out is then held, not let through
+  /// (the user, 27 Nov 2026 - punch out only after End Trip, no way round
+  /// it). See `tripsWhenUnreadable`.
+  Future<List<RunningTrip>?> _tripsBlockingPunchOut() async {
     if (Session.I.salesPerson == null) return const [];
     try {
       return await Api.getActiveTrips();
     } catch (_) {
-      return const [];
+      return tripsWhenUnreadable(TripTracker.I.activeTrip.value);
     }
   }
 
@@ -413,6 +413,21 @@ class _HomeDashboardState extends State<HomeDashboard>
     final running = await _tripsBlockingPunchOut();
     if (!mounted) return;
     setState(() => _attBusy = false);
+    if (running == null) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Punch out not done'),
+          content: const Text(kPunchOutTripsUnknown),
+          actions: [
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
     if (running.isNotEmpty) return _refusePunchOut(running);
     final again = att['punch_out_time'] != null;
     // Never on one tap (13 Nov 2026): see punchOutQuestion. Asked before
