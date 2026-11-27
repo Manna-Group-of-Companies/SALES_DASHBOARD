@@ -3709,6 +3709,47 @@ class Api {
               filters: _mineFilter(),
               limit: 50));
 
+  // -------- What SAP says is to collect (27 Nov 2026) --------
+  //
+  // Manna Treads' A/R invoices and incoming payments, mirrored by B1iF into
+  // `SAP Invoice` and `SAP Payment` (sap-b1if/erpnext/manna_sap_invoices.py,
+  // manna_sap_payments.py). Read-only here; Sales User may read both.
+
+  static const _sapInvoiceFields =
+      '["name","customer","invoice_no","posting_date","due_date","total",'
+      '"paid","balance","status"]';
+
+  /// The open invoices of [customers] - what is left to collect.
+  static Future<List<Map<String, dynamic>>> getOpenSapInvoices(
+      List<String> customers) async {
+    if (customers.isEmpty) return const [];
+    return _list('SAP Invoice',
+        fields: _sapInvoiceFields,
+        filters: '[["customer","in",${_inList(customers)}],'
+            '["status","=","Open"]]',
+        orderBy: 'due_date asc',
+        limit: 500);
+  }
+
+  /// One customer's invoices, newest first, open and closed.
+  static Future<List<Map<String, dynamic>>> getSapInvoicesFor(
+          String customer) =>
+      _list('SAP Invoice',
+          fields: _sapInvoiceFields,
+          filters: '[["customer","=",${jsonEncode(customer)}]]',
+          orderBy: 'posting_date desc',
+          limit: 30);
+
+  /// One customer's payments received in SAP, newest first.
+  static Future<List<Map<String, dynamic>>> getSapPaymentsFor(
+          String customer) =>
+      _list('SAP Payment',
+          fields: '["name","payment_no","posting_date","amount","mode",'
+              '"status","invoices"]',
+          filters: '[["customer","=",${jsonEncode(customer)}]]',
+          orderBy: 'posting_date desc',
+          limit: 20);
+
   /// The ERPNext Company this rep's orders belong to.
   ///
   /// This used to return whichever Company was created most recently, which

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/share_service.dart';
 import 'package:manna_field_sales/widgets/history_list.dart';
+import 'package:manna_field_sales/widgets/sap_collection.dart';
 
 class MyCollectionsScreen extends StatelessWidget {
   const MyCollectionsScreen({super.key});
@@ -13,6 +14,9 @@ class MyCollectionsScreen extends StatelessWidget {
       title: 'My Collections',
       loader: Api.getMyCollections,
       cacheKey: CacheKeys.collections,
+      // What SAP says is still to collect, above what the rep has recorded
+      // (27 Nov 2026).
+      header: (_) => const SapToCollectCard(),
       tileBuilder: (ctx, r, _) => ListTile(
         leading: const Icon(Icons.payments),
         title: Text(r['customer'] ?? r['name']),

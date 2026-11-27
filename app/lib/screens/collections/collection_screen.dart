@@ -8,6 +8,7 @@ import 'package:manna_field_sales/core/utils.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/services/location_service.dart';
 import 'package:manna_field_sales/services/outbox.dart';
+import 'package:manna_field_sales/widgets/sap_collection.dart';
 
 class CollectionScreen extends StatefulWidget {
   final Map<String, dynamic> customer;
@@ -109,6 +110,9 @@ class _CollectionScreenState extends State<CollectionScreen> {
           return Padding(
             padding: const EdgeInsets.all(20),
             child: ListView(children: [
+              // This customer's open SAP invoices and payments, above the
+              // form (27 Nov 2026).
+              SapCustomerCollection(customer: '${widget.customer['name']}'),
               DropdownButtonFormField<String>(
                 value: _rep,
                 decoration: const InputDecoration(
