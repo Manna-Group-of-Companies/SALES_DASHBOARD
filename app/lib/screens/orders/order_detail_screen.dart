@@ -20,6 +20,7 @@ import 'package:manna_field_sales/models/order_ref.dart';
 import 'package:manna_field_sales/models/product_category.dart';
 import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/gm_status.dart';
+import 'package:manna_field_sales/core/sap_sent.dart';
 import 'package:manna_field_sales/widgets/sap_sent_chips.dart';
 
 class OrderDetailScreen extends StatefulWidget {
@@ -693,7 +694,13 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             _itemsCard(items),
             _statusRow('Order placed', _placedAt),
             _statusRow('Proforma', pf),
-            if (approvalTicks(po, _order['custom_manager_seen_on']) case final t?)
+            // In SAP while ERPNext still waits: Manager Approved, not the
+            // "waiting" ticks (27 Nov 2026).
+            if (SapSent.fromOrder(_order).sent &&
+                SapSent.fromOrder(_order).approvedBy.isNotEmpty &&
+                po != 'PO Approved - Ready for SAP')
+              _statusRow('Approval', SapSent.fromOrder(_order).approvedBy)
+            else if (approvalTicks(po, _order['custom_manager_seen_on']) case final t?)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Row(

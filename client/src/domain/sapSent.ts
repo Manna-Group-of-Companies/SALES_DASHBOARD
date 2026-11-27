@@ -62,6 +62,9 @@ function sapStatusOf(o: SapSentInput, sent: boolean): string {
   return sent ? 'In SAP' : '';
 }
 
+/** Statuses still waiting on an approver, read as Manager Approved once SAP has the order. */
+const WAITING_IN_SAP: string[] = [PO_STATUS.pending, PO_STATUS.poUploaded, PO_STATUS.pendingRate, PO_STATUS.pendingGm];
+
 const clean = (v: string | null | undefined): string => {
   const s = (v ?? '').trim();
   return s === 'null' || s === 'undefined' ? '' : s;
@@ -75,11 +78,13 @@ export function sapSent(o: SapSentInput): SapSent {
   const numbers = [mt && `Manna Treads SO ${mt}`, ht && `Hi-Tech SO ${ht}`].filter(Boolean).join(' · ');
 
   // The GM's stamp survives the manager's push, so a GM-approved order stays
-  // GM Approved whoever pressed the push. No other status claims an approver:
-  // an order the sync sent early was approved by nobody, and Pending Final
-  // Approval already reads GM Approved on its stage pill.
+  // GM Approved whoever pressed the push. An order SAP already has while
+  // ERPNext still waits for the manager or the GM reads Manager Approved (the
+  // user, 27 Nov 2026): it reached SAP, so the manager's approval is taken as
+  // given. Pending Final Approval already reads GM Approved on its stage pill.
   let approvedBy: ApprovedByLabel = '';
   if (po === PO_STATUS.approved) approvedBy = clean(o.gmApprovedBy) ? 'GM Approved' : 'Manager Approved';
+  else if (sent && WAITING_IN_SAP.includes(po)) approvedBy = 'Manager Approved';
 
   const label: SapSentLabel = sent ? 'Sent to SAP' : po === PO_STATUS.approved ? 'Waiting for SAP' : '';
   return { sent, label, approvedBy, numbers, status: sapStatusOf(o, sent) };

@@ -14,7 +14,7 @@
     "either_company_is_enough": "On the Manna Treads first route Manna Treads' order is made first and Hi-Tech's later by B1if, so either number alone means SAP has the order.",
     "both_numbers_are_shown": "When both companies hold the order, both numbers are shown, Manna Treads first. Neither is derived from the other: DocNum series differ by company.",
     "gm_approved_is_the_gm_stamp": "An approved order (PO Approved - Ready for SAP) reads 'GM Approved' when custom_gm_approved_by is set - the GM approved it, whether the GM or the sales manager then pushed it - and 'Manager Approved' when it is not. Pending Final Approval claims nothing here: the GM has approved and the manager has yet to push, and both apps already say 'GM Approved' for that status on their own stage pill.",
-    "no_approver_without_an_approval": "Any status but PO Approved - Ready for SAP claims no approver here, even when SAP has the order. An order the sync sent before it was approved (18 and 23 Nov 2026) is not approved by anybody; the dashboard's track flags it in red.",
+    "no_approver_without_an_approval": "Rejected, Pending Final Approval and an order not yet sent for approval claim no approver here. Changed 27 Nov 2026 by the user: an order SAP already has while ERPNext still says Pending Approval, PO Uploaded - Pending Approval, Pending Rate Approval or Pending GM Approval reads Manager Approved - it reached SAP, so the manager's approval is taken as given (and for Pending GM the manager did pass it on); the With manager / With GM tag is no longer shown on it. Without a SAP number those statuses still claim nothing. The dashboard's track still flags such an order as sent before approval.",
     "unset_reads_three_ways": "An unset field reads back as null, '' or the string 'null'. All three are empty.",
     "status_is_sap_s_word": "Asked for by the user on 26 Nov 2026: the order shows where it is in SAP. Cancelled first, from either field, because it is the terminal fact. Then B1iF's order status as B1iF wrote it. Before B1iF has reported, Hi-Tech's document state in words - Open, Closed - and any other value SAP sends verbatim. An order SAP has with neither field yet reads In SAP; one SAP does not have reads nothing."
   },
@@ -148,7 +148,7 @@
       "sap_sales_order_status": ""
     },
     {
-      "why": "an order the sync sent before approval is in SAP but approved by nobody",
+      "why": "an order SAP has while ERPNext still waits for the GM reads Manager Approved: the manager passed it on",
       "po_status": "Pending GM Approval",
       "gm_approved_by": "",
       "mt_sales_order": "578",
@@ -156,7 +156,7 @@
       "expect": {
         "sent": true,
         "label": "Sent to SAP",
-        "approved_by": "",
+        "approved_by": "Manager Approved",
         "numbers": "Manna Treads SO 578",
         "status": "In SAP"
       },
@@ -289,6 +289,38 @@
         "approved_by": "Manager Approved",
         "numbers": "Manna Treads SO 588 · Hi-Tech SO 614",
         "status": "Cancelled"
+      }
+    },
+    {
+      "why": "an order SAP has while ERPNext still waits for the manager reads Manager Approved (the user, 27 Nov 2026)",
+      "po_status": "Pending Approval",
+      "gm_approved_by": "",
+      "mt_sales_order": "595",
+      "sap_sales_order": "603",
+      "sap_order_status": "Dispatched",
+      "sap_sales_order_status": "bost_Open",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "Manna Treads SO 595 · Hi-Tech SO 603",
+        "status": "Dispatched"
+      }
+    },
+    {
+      "why": "a PO uploaded and waiting for the manager, already in SAP, reads Manager Approved too",
+      "po_status": "PO Uploaded - Pending Approval",
+      "gm_approved_by": "",
+      "mt_sales_order": "595",
+      "sap_sales_order": "603",
+      "sap_order_status": "Dispatched",
+      "sap_sales_order_status": "bost_Open",
+      "expect": {
+        "sent": true,
+        "label": "Sent to SAP",
+        "approved_by": "Manager Approved",
+        "numbers": "Manna Treads SO 595 · Hi-Tech SO 603",
+        "status": "Dispatched"
       }
     }
   ],

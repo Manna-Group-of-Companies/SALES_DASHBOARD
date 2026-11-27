@@ -11,6 +11,15 @@
 // `client/src/domain/sapSent.ts`.
 const String kPoApprovedForSap = 'PO Approved - Ready for SAP';
 
+/// Statuses still waiting on an approver, read as Manager Approved once SAP
+/// has the order (the user, 27 Nov 2026).
+const Set<String> _waitingInSap = {
+  'Pending Approval',
+  'PO Uploaded - Pending Approval',
+  'Pending Rate Approval',
+  'Pending GM Approval',
+};
+
 const String kSentToSap = 'Sent to SAP';
 const String kWaitingForSap = 'Waiting for SAP';
 const String kGmApproved = 'GM Approved';
@@ -108,6 +117,11 @@ SapSent sapSent({
   if (po == kPoApprovedForSap) {
     approvedBy =
         _clean(gmApprovedBy).isNotEmpty ? kGmApproved : kManagerApproved;
+  } else if (sent && _waitingInSap.contains(po)) {
+    // SAP already has it while ERPNext still waits for the manager or the
+    // GM: it reached SAP, so the manager's approval is taken as given (the
+    // user, 27 Nov 2026; for Pending GM the manager did pass it on).
+    approvedBy = kManagerApproved;
   }
 
   final label = sent

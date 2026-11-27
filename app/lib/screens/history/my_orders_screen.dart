@@ -11,6 +11,7 @@ import 'package:manna_field_sales/services/api.dart';
 import 'package:manna_field_sales/widgets/history_list.dart';
 import 'package:manna_field_sales/widgets/order_complete_tick.dart';
 import 'package:manna_field_sales/widgets/gm_status.dart';
+import 'package:manna_field_sales/core/sap_sent.dart';
 import 'package:manna_field_sales/widgets/sap_sent_chips.dart';
 
 class MyOrdersScreen extends StatelessWidget {
@@ -79,7 +80,10 @@ class MyOrdersScreen extends StatelessWidget {
           statusLine = 'Lead order  ·  ${r['status'] ?? ''}';
         } else {
           final po = '${r['custom_po_status'] ?? '—'}';
-          final approved = po == 'PO Approved - Ready for SAP';
+          // An order SAP already has reads as approved even while ERPNext
+          // still waits for an approver (the user, 27 Nov 2026).
+          final approved = po == 'PO Approved - Ready for SAP' ||
+              SapSent.fromOrder(r).sent;
           /*
            * Once approved, the order is SAP's to report.
            *
@@ -135,7 +139,9 @@ class MyOrdersScreen extends StatelessWidget {
               color: isLead ? const Color(0xFF5C6BC0) : null),
           title: Row(children: [
             Expanded(child: Text(r['customer'] ?? r['name'])),
-            if (!isLead)
+            // Not once SAP has it: "With manager" on an order already in SAP
+            // read as still waiting (27 Nov 2026); it reads Manager Approved.
+            if (!isLead && !SapSent.fromOrder(r).sent)
               GmPill(
                   poStatus: '${r['custom_po_status'] ?? ''}',
                   commitment: r['custom_credit_commitment']),
